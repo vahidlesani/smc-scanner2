@@ -1,3 +1,4 @@
+# force redeploy v2
 import time
 import schedule
 import os
@@ -58,7 +59,6 @@ def analyze_symbol(symbol):
     if df_4h is None or df_15m is None:
         return signals, None
     
-    # HTF Bias
     sh_4h, sl_4h = find_swing_points(df_4h, lookback=5)
     structure = classify_structure(sh_4h, sl_4h)
     htf_bias = structure["bias"]
@@ -68,7 +68,6 @@ def analyze_symbol(symbol):
     
     current_price = df_15m["close"].iloc[-1]
     
-    # SMC
     obs = find_order_blocks(df_4h, htf_bias, lookback=50)
     sh_15m, sl_15m = find_swing_points(df_15m, lookback=3)
     liquidity = detect_liquidity(df_15m, sh_15m, sl_15m)
@@ -104,7 +103,6 @@ def analyze_symbol(symbol):
                 "bias": htf_bias, "trade_params": trade
             })
     
-    # RTM
     rtm = get_rtm_signal(df_4h, htf_bias)
     if rtm:
         sl = (rtm["base_bottom"] * 0.997 if rtm["direction"] == "LONG"
@@ -123,7 +121,6 @@ def analyze_symbol(symbol):
                 "bias": htf_bias, "trade_params": trade
             })
     
-    # ICT
     ict = get_ict_signal(df_4h, df_15m, df_1d, htf_bias)
     if ict:
         entry = (ict["entry_top"] + ict["entry_bottom"]) / 2
@@ -153,7 +150,6 @@ def analyze_symbol(symbol):
 def run_scan():
     print(f"[{datetime.utcnow().strftime('%H:%M')}] Scanning...")
     
-    # چک سیگنال‌های باز
     closed = check_open_signals()
     for c in closed:
         emoji = "✅ WIN" if c["result"] == "WIN" else "❌ LOSS"
@@ -166,18 +162,13 @@ def run_scan():
             signals, df_15m = analyze_symbol(symbol)
             
             for sig in signals:
-                # چک تکراری نبودن
                 if was_signal_sent_recently(
                     symbol, sig["source"], sig["direction"], hours=4
                 ):
                     continue
                 
-                # ذخیره در DB
                 save_signal(sig)
-                
-                # ارسال با چارت
                 send_signal_with_chart(sig, df_15m)
-                
                 time.sleep(2)
                 
         except Exception as e:
@@ -187,7 +178,6 @@ def run_scan():
 
 
 def run_daily_report():
-    """گزارش روزانه ساعت 8 صبح UTC"""
     stats = get_performance_stats()
     send_performance_report(stats)
 
@@ -196,13 +186,9 @@ def main():
     init_db()
     send_message("🚀 <b>Scanner v2 Started</b>\n📊 SMC | 🔷 RTM | 💎 ICT\n⏱ Scan: 15min")
     
-    # اسکن هر 15 دقیقه
     schedule.every(15).minutes.do(run_scan)
-    
-    # گزارش روزانه
     schedule.every().day.at("08:00").do(run_daily_report)
     
-    # اجرای اولیه
     run_scan()
     
     while True:
