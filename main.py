@@ -1,0 +1,214 @@
+import time
+import schedule
+import os
+from datetime import datetime
+
+from data.fetcher import get_multi_tf, get_klines
+from analysis.structure import find_swing_points, classify_structure, detect_bos_choch
+from analysis.smc import find_order_blocks, find_fvg, detect_liquidity
+from analysis.rtm import get_rtm_signal
+from analysis.ict import get_ict_signal
+from bot.telegram_bot import send_signal_with_chart, send_message, send_performance_report
+from database.db import (init_db, save_signal, was_signal_sent_recently,
+                          get_performance_stats, check_open_signals)
+
+ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
+RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
+
+SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+    "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "NEARUSDT",
+    "APTUSDT", "ARBUSDT", "OPUSDT", "SUIUSDT"
+]
+
+
+def calculate_trade_params(entry, sl, direction):
+    sl_distance = abs(entry - sl)
+    sl_pct = sl_distance / entry
+    if sl_pct == 0:
+        return None
+    
+    risk_amount = ACCOUNT_SIZE * (RISK_PERCENT / 100)
+    position_size = risk_amount / sl_distance
+    
+    if direction == "LONG":
+        tp1 = entry + sl_distance * 2
+        tp2 = entry + sl_distance * 3
+    else:
+        tp1 = entry - sl_distance * 2
+        tp2 = entry - sl_distance * 3
+    
+    return {
+        "sl_pct": sl_pct * 100,
+        "risk_amount": risk_amount,
+        "position_size": position_size,
+        "tp1": tp1,
+        "tp2": tp2
+    }
+
+
+def analyze_symbol(symbol):
+    signals = []
+    tf_data = get_multi_tf(symbol)
+    
+    df_1d = tf_data.get("1d")
+    df_4h = tf_data.get("4h")
+    df_15m = tf_data.get("15m")
+    
+    if df_4h is None or df_15m is None:
+        return signals, None
+    
+    # HTF Bias
+    sh_4h, sl_4h = find_swing_points(df_4h, lookback=5)
+    structure = classify_structure(sh_4h, sl_4h)
+    htf_bias = structure["bias"]
+    
+    if not htf_bias or "NEUTRAL" in htf_bias:
+        return signals, df_15m
+    
+    current_price = df_15m["close"].iloc[-1]
+    
+    # SMC
+    obs = find_order_blocks(df_4h, htf_bias, lookback=50)
+    sh_15m, sl_15m = find_swing_points(df_15m, lookback=3)
+    liquidity = detect_liquidity(df_15m, sh_15m, sl_15m)
+    bos_15m = detect_bos_choch(df_15m, sh_15m, sl_15m)
+    
+    for ob in obs[:2]:
+        price_near_ob = abs(current_price - ob.top) / current_price < 0.015
+        if not price_near_ob:
+            continue
+        
+        confirmations = []
+        has_sweep = (
+            (htf_bias == "BULLISH" and liquidity["sweep_type"] == "SWEEP_LOW") or
+            (htf_bias == "BEARISH" and liquidity["sweep_type"] == "SWEEP_HIGH")
+        )
+        has_bos = bos_15m and bos_15m.direction == htf_bias
+        
+        confirmations.append("✅ Sweep" if has_sweep else "⚠️ No Sweep")
+        confirmations.append("✅ CHoCH" if has_bos else "⚠️ No CHoCH")
+        
+        direction = "LONG" if htf_bias == "BULLISH" else "SHORT"
+        sl = ob.bottom * 0.998 if direction == "LONG" else ob.top * 1.002
+        trade = calculate_trade_params(current_price, sl, direction)
+        
+        if trade:
+            signals.append({
+                "source": "SMC", "symbol": symbol,
+                "direction": direction, "entry": current_price,
+                "sl": sl, "tp1": trade["tp1"], "tp2": trade["tp2"],
+                "ob_zone": f"{ob.bottom:.4f}-{ob.top:.4f}",
+                "ob_strength": f"{ob.strength:.1f}x",
+                "confirmations": confirmations,
+                "bias": htf_bias, "trade_params": trade
+            })
+    
+    # RTM
+    rtm = get_rtm_signal(df_4h, htf_bias)
+    if rtm:
+        sl = (rtm["base_bottom"] * 0.997 if rtm["direction"] == "LONG"
+              else rtm["base_top"] * 1.003)
+        trade = calculate_trade_params(current_price, sl, rtm["direction"])
+        if trade:
+            signals.append({
+                "source": "RTM", "symbol": symbol,
+                "direction": rtm["direction"], "entry": current_price,
+                "sl": sl, "tp1": trade["tp1"], "tp2": trade["tp2"],
+                "pattern": rtm["pattern"],
+                "base_zone": f"{rtm['base_bottom']:.4f}-{rtm['base_top']:.4f}",
+                "strength": rtm["strength"],
+                "confirmations": [f"Pattern: {rtm['pattern']}", 
+                                  f"Strength: {rtm['strength']}"],
+                "bias": htf_bias, "trade_params": trade
+            })
+    
+    # ICT
+    ict = get_ict_signal(df_4h, df_15m, df_1d, htf_bias)
+    if ict:
+        entry = (ict["entry_top"] + ict["entry_bottom"]) / 2
+        sl = (ict["entry_bottom"] * 0.997 if ict["direction"] == "LONG"
+              else ict["entry_top"] * 1.003)
+        trade = calculate_trade_params(entry, sl, ict["direction"])
+        if trade:
+            kz = ict.get("killzone", "None")
+            mss = ict.get("mss_confirmed", False)
+            signals.append({
+                "source": "ICT", "symbol": symbol,
+                "direction": ict["direction"], "entry": entry,
+                "sl": sl, "tp1": trade["tp1"], "tp2": trade["tp2"],
+                "ote_zone": f"{ict['entry_bottom']:.4f}-{ict['entry_top']:.4f}",
+                "killzone": kz, "in_killzone": kz != "None",
+                "mss": mss, "pdh": ict.get("pdh"), "pdl": ict.get("pdl"),
+                "confirmations": [
+                    f"{'✅' if kz else '⚠️'} KZ: {kz}",
+                    f"{'✅' if mss else '⚠️'} MSS"
+                ],
+                "bias": htf_bias, "trade_params": trade
+            })
+    
+    return signals, df_15m
+
+
+def run_scan():
+    print(f"[{datetime.utcnow().strftime('%H:%M')}] Scanning...")
+    
+    # چک سیگنال‌های باز
+    closed = check_open_signals()
+    for c in closed:
+        emoji = "✅ WIN" if c["result"] == "WIN" else "❌ LOSS"
+        send_message(
+            f"{emoji}\n{c['symbol']} | PnL: {c['pnl']:.2f}%"
+        )
+    
+    for symbol in SYMBOLS:
+        try:
+            signals, df_15m = analyze_symbol(symbol)
+            
+            for sig in signals:
+                # چک تکراری نبودن
+                if was_signal_sent_recently(
+                    symbol, sig["source"], sig["direction"], hours=4
+                ):
+                    continue
+                
+                # ذخیره در DB
+                save_signal(sig)
+                
+                # ارسال با چارت
+                send_signal_with_chart(sig, df_15m)
+                
+                time.sleep(2)
+                
+        except Exception as e:
+            print(f"Error {symbol}: {e}")
+    
+    print("Scan done.")
+
+
+def run_daily_report():
+    """گزارش روزانه ساعت 8 صبح UTC"""
+    stats = get_performance_stats()
+    send_performance_report(stats)
+
+
+def main():
+    init_db()
+    send_message("🚀 <b>Scanner v2 Started</b>\n📊 SMC | 🔷 RTM | 💎 ICT\n⏱ Scan: 15min")
+    
+    # اسکن هر 15 دقیقه
+    schedule.every(15).minutes.do(run_scan)
+    
+    # گزارش روزانه
+    schedule.every().day.at("08:00").do(run_daily_report)
+    
+    # اجرای اولیه
+    run_scan()
+    
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+
+if __name__ == "__main__":
+    main()
