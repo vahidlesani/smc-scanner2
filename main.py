@@ -2,6 +2,7 @@
 import time
 import schedule
 import os
+import pandas as pd
 from datetime import datetime
 
 from data.fetcher import get_multi_tf, get_klines
@@ -9,14 +10,10 @@ from analysis.structure import find_swing_points, classify_structure, detect_bos
 from analysis.smc import find_order_blocks, find_fvg, detect_liquidity
 from analysis.rtm import get_rtm_signal
 from analysis.ict import get_ict_signal
-from bot.telegram_bot import send_signal_with_chart, send_message, send_performance_report
-from database.db import (init_db, save_signal, was_signal_sent_recently,
-                          get_performance_stats, check_open_signals,
-                          update_market_memory, get_market_memory)
-
-ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
-RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
-
+from bot.telegram_bot import (
+    send_signal_with_chart, send_message,
+    send_performance_report
+)
 from database.db import (
     init_db, save_signal, save_active_signal,
     was_signal_sent_recently, get_performance_stats,
@@ -24,30 +21,27 @@ from database.db import (
     get_market_memory, get_active_signals,
     cancel_active_signal, confirm_active_signal
 )
-from bot.telegram_bot import (
-    send_signal_with_chart, send_message,
-    send_performance_report
-)
-from data.fetcher import get_multi_tf, get_klines
 
+ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
+RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
 CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")
 CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
 
-SYMBOLS = [
+SYMBOLS = list(set([
     # بزرگ‌ها
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-    "PAXGUSDT.P", "XAGUSDT", "BNBUSDT.P", "PAXGUSDT", "XAGUSDT",
-    "LINKUSDT", "LDOUSDT", "ICPUSDT", "BCHUSDT", "DOGEUSDT",
+    "PAXGUSDT", "XAGUSDT", "LINKUSDT", "LDOUSDT", "ICPUSDT",
+    "BCHUSDT", "DOGEUSDT",
     # لایه ۱
     "ADAUSDT", "AVAXUSDT", "DOTUSDT", "ATOMUSDT", "NEARUSDT",
     # لایه ۲
-    "LINKUSDT", "LTCUSDT", "MATICUSDT", "INJUSDT", "APTUSDT",
+    "LTCUSDT", "MATICUSDT", "INJUSDT", "APTUSDT",
     # دیفای و جدید
-    "ARBUSDT", "OPUSDT", "SUIUSDT", "TONUSDT", "DOGEUSDT",
+    "ARBUSDT", "OPUSDT", "SUIUSDT", "TONUSDT",
     # اضافه
     "SEIUSDT", "TIAUSDT", "JUPUSDT", "WLDUSDT", "STXUSDT",
-    "FETUSDT", "RENDERUSDT", "RNDRUSDT", "AAVEUSDT", "MKRUSDT",
-]
+    "FETUSDT", "RENDERUSDT", "AAVEUSDT", "MKRUSDT",
+]))
 
 
 def calculate_trade_params(entry, sl, direction):
@@ -247,6 +241,7 @@ def analyze_symbol(symbol):
 
     return signals, df_15m
 
+
 def check_signal_confirmation(sig_data: dict, df_15m: pd.DataFrame) -> bool:
     """
     چک میکنه آیا پوزیشن تایید ورود گرفته
@@ -281,7 +276,6 @@ def check_signal_cancellation(sig_data: dict, df_15m: pd.DataFrame) -> bool:
 
     sl_distance = abs(entry - sl)
 
-    # اگه قیمت بیشتر از ۵۰٪ فاصله SL در جهت مخالف رفت → باطل
     if direction == "LONG":
         cancel_level = entry - (sl_distance * 0.5)
         return current_close < cancel_level
@@ -308,7 +302,8 @@ def monitor_active_signals():
             if df_15m is None:
                 continue
 
-            # چک تایید ورود
+            target_chat = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
+
             if check_signal_confirmation(sig_data, df_15m):
                 confirm_active_signal(signal_id)
                 send_message(
@@ -319,11 +314,9 @@ def monitor_active_signals():
                     f"📍 Entry confirmed at "
                     f"<b>{df_15m['close'].iloc[-1]:.4f}</b>\n"
                     f"✅ پوزیشن تایید شد - میتوانید وارد شوید!",
-                    chat_id=CHAT_ID_SIGNALS if CHAT_ID_SIGNALS
-                    else CHAT_ID_ADMIN
+                    chat_id=target_chat
                 )
 
-            # چک باطل شدن
             elif check_signal_cancellation(sig_data, df_15m):
                 cancel_active_signal(signal_id)
                 send_message(
@@ -333,8 +326,7 @@ def monitor_active_signals():
                     f"🪙 <b>{symbol}</b> | {sig_data['direction']}\n"
                     f"⚠️ قیمت در جهت مخالف حرکت کرد.\n"
                     f"❌ این سیگنال باطل شد - وارد نشوید!",
-                    chat_id=CHAT_ID_SIGNALS if CHAT_ID_SIGNALS
-                    else CHAT_ID_ADMIN
+                    chat_id=target_chat
                 )
 
         except Exception as e:
@@ -414,7 +406,7 @@ def main():
         print(f"DB init error: {e}")
 
     send_message(
-        "🚀 <b>Scanner v3 Started</b>\n"
+        "🚀 <b>Scanner v4 Started</b>\n"
         "📊 SMC | 🔷 RTM | 💎 ICT\n"
         "🧠 Smart Memory Active\n"
         f"📌 {len(SYMBOLS)} Symbols\n"
