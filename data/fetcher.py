@@ -1,3 +1,4 @@
+psycopg2-binary
 import requests
 import pandas as pd
 
