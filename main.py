@@ -520,6 +520,8 @@ def run_scan():
             print(f"Monitor active signals error: {e}")
 
         # اسکن نمادها
+        MIN_SCORE_TO_SEND = 7  # فقط سیگنال‌های بالای امتیاز ۷ بفرست
+        
         for symbol in SYMBOLS:
             try:
                 signals, df_15m = analyze_symbol(symbol)
@@ -533,10 +535,18 @@ def run_scan():
                             continue
 
                         attach_money_management(sig)
+                        
+                        # ذخیره در دیتابیس (همه سیگنال‌ها)
                         save_signal(sig)
                         save_active_signal(sig)
-                        send_signal_with_chart(sig, df_15m)
-                        time.sleep(2)
+                        
+                        # فقط سیگنال‌های با امتیاز بالای ۷ به کانال بفرست
+                        score = sig.get("score", 0)
+                        if score >= MIN_SCORE_TO_SEND:
+                            send_signal_with_chart(sig, df_15m)
+                            time.sleep(2)
+                        else:
+                            print(f"[{symbol}] Score {score} < {MIN_SCORE_TO_SEND}, skipped sending")
 
                     except Exception as e:
                         print(f"Signal send error {symbol}: {e}")
@@ -586,7 +596,8 @@ def main():
         f"🆔 IDs start with: viva-\n"
         f"🧠 Smart Memory Active\n"
         f"📌 {len(SYMBOLS)} Symbols\n"
-        f"🤖 Commands: /help /stats /backtest /strategies"
+        f"🤖 Commands: /help /stats /backtest /strategies\n"
+        f"🎯 Min Score to Send: 7/10"
     )
 
     # شروع گوش دادن به دستورات تلگرام
