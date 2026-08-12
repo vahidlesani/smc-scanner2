@@ -3,9 +3,11 @@ import requests
 import io
 import os
 import pandas as pd
-import mplfinance as mpf
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use("Agg")
+import mplfinance as mpf
+
+from analysis.risk import calculate_position
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")
@@ -16,36 +18,74 @@ ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
 RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
 
 
-def send_message(text: str, chat_id: str = None):
+def _split_telegram_text(text: str, limit: int = 4000):
+    if len(text) <= limit:
+        return [text]
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= limit:
+            chunks.append(remaining)
+            break
+        cut = remaining.rfind("\n", 0, limit)
+        if cut < limit // 2:
+            cut = limit
+        chunks.append(remaining[:cut])
+        remaining = remaining[cut:].lstrip("\n")
+    return chunks
+
+
+def send_message(text: str, chat_id: str = None) -> bool:
     if not chat_id:
         chat_id = CHAT_ID_ADMIN
+    if not TOKEN or not chat_id:
+        print("Message skipped: missing TELEGRAM_TOKEN or chat_id")
+        return False
+
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    ok = True
     try:
-        requests.post(url, data={
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "HTML"
-        }, timeout=10)
+        for chunk in _split_telegram_text(text):
+            r = requests.post(url, data={
+                "chat_id": chat_id,
+                "text": chunk,
+                "parse_mode": "HTML"
+            }, timeout=10)
+            if not r.ok:
+                print(f"Message error {r.status_code}: {r.text[:200]}")
+                ok = False
     except Exception as e:
         print(f"Message error: {e}")
+        return False
+    return ok
 
 
-def send_photo(image_bytes: bytes, caption: str, chat_id: str = None):
+def send_photo(image_bytes: bytes, caption: str, chat_id: str = None) -> bool:
     if not chat_id:
         chat_id = CHAT_ID_ADMIN
+    if not TOKEN or not chat_id:
+        print("Photo skipped: missing TELEGRAM_TOKEN or chat_id")
+        return False
+
     url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
     try:
-        requests.post(url,
+        r = requests.post(
+            url,
             data={
                 "chat_id": chat_id,
-                "caption": caption,
+                "caption": caption[:1024],
                 "parse_mode": "HTML"
             },
             files={"photo": ("chart.png", image_bytes, "image/png")},
             timeout=30
         )
+        if not r.ok:
+            print(f"Photo error {r.status_code}: {r.text[:200]}")
+            return False
+        return True
     except Exception as e:
         print(f"Photo error: {e}")
+        return False
 
 
 def generate_chart(df: pd.DataFrame, sig: dict) -> bytes:
@@ -196,51 +236,45 @@ def calculate_score(sig: dict) -> dict:
 
 
 def calculate_money_management(sig: dict, score: int) -> dict:
-    leverage_map = {
-        10: 20, 9: 20, 8: 15,
-        7: 12, 6: 10, 5: 8,
-        4: 6, 3: 5, 2: 5, 1: 5
-    }
-    leverage = leverage_map.get(score, 5)
-
-    margin_pct_map = {
-        10: 5.0, 9: 5.0, 8: 4.0,
-        7: 3.5, 6: 3.0, 5: 2.5,
-        4: 2.0, 3: 1.5, 2: 1.0, 1: 1.0
-    }
-    margin_pct = margin_pct_map.get(score, 1.0)
-
-    margin_usd = ACCOUNT_SIZE * (margin_pct / 100)
-    position_size_usd = margin_usd * leverage
-
     entry = sig["entry"]
     sl = sig["sl"]
-    sl_distance = abs(entry - sl)
-    sl_pct = (sl_distance / entry) * 100
-    if sl_pct == 0:
-        sl_pct = 1.0
+    pos = calculate_position(entry, sl, sig["direction"], score, ACCOUNT_SIZE)
 
-    risk_amount = position_size_usd * (sl_pct / 100)
-    risk_pct_of_account = (risk_amount / ACCOUNT_SIZE) * 100
-
-    # ✅ از _get_tp استفاده میکنه - بدون KeyError
     tp1 = _get_tp(sig, "tp1")
     tp2 = _get_tp(sig, "tp2")
 
-    if sig["direction"] == "LONG":
-        tp1_pct = ((tp1 - entry) / entry) * 100
-        tp2_pct = ((tp2 - entry) / entry) * 100
+    if pos:
+        leverage = pos["leverage"]
+        margin_usd = pos["margin"]
+        margin_pct = pos["margin_pct"]
+        position_size_usd = pos["position_size"]
+        risk_amount = pos["risk_amount"]
+        risk_pct_of_account = pos["risk_pct"]
+        sl_pct = pos["sl_pct"]
+        if not tp1:
+            tp1 = pos["tp1"]
+        if not tp2:
+            tp2 = pos["tp2"]
     else:
-        tp1_pct = ((entry - tp1) / entry) * 100
-        tp2_pct = ((entry - tp2) / entry) * 100
+        leverage = 5
+        margin_usd = ACCOUNT_SIZE * 0.01
+        margin_pct = 1.0
+        position_size_usd = margin_usd * leverage
+        sl_pct = abs(entry - sl) / entry * 100 if entry else 1.0
+        risk_amount = position_size_usd * (sl_pct / 100)
+        risk_pct_of_account = (risk_amount / ACCOUNT_SIZE) * 100 if ACCOUNT_SIZE else 0
+
+    if sig["direction"] == "LONG":
+        tp1_pct = ((tp1 - entry) / entry) * 100 if entry else 0
+        tp2_pct = ((tp2 - entry) / entry) * 100 if entry else 0
+        mart_point = sl * 0.995
+    else:
+        tp1_pct = ((entry - tp1) / entry) * 100 if entry else 0
+        tp2_pct = ((entry - tp2) / entry) * 100 if entry else 0
+        mart_point = sl * 1.005
 
     tp1_profit = position_size_usd * (tp1_pct / 100)
     tp2_profit = position_size_usd * (tp2_pct / 100)
-
-    if sig["direction"] == "LONG":
-        mart_point = sl * 0.995
-    else:
-        mart_point = sl * 1.005
 
     return {
         "leverage": leverage,
@@ -256,6 +290,20 @@ def calculate_money_management(sig: dict, score: int) -> dict:
         "tp2_profit": round(tp2_profit, 2),
         "mart_point": round(mart_point, 4),
     }
+
+
+def attach_money_management(sig: dict) -> dict:
+    """قبل از ذخیره در DB، اهرم و مارجین واقعی را روی سیگنال می‌گذارد."""
+    score = calculate_score(sig)["score"]
+    mm = calculate_money_management(sig, score)
+    sig["score"] = score
+    sig["leverage"] = mm["leverage"]
+    sig["margin_usd"] = mm["margin_usd"]
+    if not sig.get("tp1"):
+        sig["tp1"] = _get_tp(sig, "tp1")
+    if not sig.get("tp2"):
+        sig["tp2"] = _get_tp(sig, "tp2")
+    return mm
 
 
 def build_signal_reason(sig: dict) -> str:
@@ -346,7 +394,7 @@ def build_signal_reason(sig: dict) -> str:
 
     elif source == "ICT":
         ote_zone = sig.get("ote_zone", "")
-        killzone = sig.get("killzone", "None")
+        killzone = sig.get("killzone")
         mss = sig.get("mss", False)
         pdh = sig.get("pdh")
         pdl = sig.get("pdl")
@@ -355,6 +403,7 @@ def build_signal_reason(sig: dict) -> str:
             "London": "لندن (۱۰:۳۰ تا ۱۳:۳۰)",
             "NewYork": "نیویورک (۱۶:۳۰ تا ۱۹:۳۰)",
             "Asian": "آسیا (۳:۳۰ تا ۶:۳۰)",
+            "LondonClose": "کلوز لندن (۱۸:۳۰ تا ۲۰:۳۰)",
         }.get(killzone, killzone)
 
         reason = (
@@ -364,7 +413,7 @@ def build_signal_reason(sig: dict) -> str:
             f"محدوده ناحیه: <code>{ote_zone}</code>\n\n"
         )
 
-        if killzone != "None":
+        if killzone:
             reason += (
                 f"الان در ساعت طلایی {kz_fa} هستیم که "
                 f"بهترین زمان برای ورود به معامله است.\n\n"
@@ -487,6 +536,11 @@ def send_signal_with_chart(sig: dict, df_15m: pd.DataFrame):
 
     target = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
     caption = build_full_caption(sig, signal_id)
+    short_caption = (
+        f"{sig['symbol']} | {sig['source']} | {sig['direction']}\n"
+        f"Entry {sig['entry']:.4f}  SL {sig['sl']:.4f}\n"
+        f"<code>{signal_id}</code>"
+    )
 
     try:
         chart_bytes = None
@@ -494,7 +548,10 @@ def send_signal_with_chart(sig: dict, df_15m: pd.DataFrame):
             chart_bytes = generate_chart(df_15m, sig)
 
         if chart_bytes:
-            send_photo(chart_bytes, caption, chat_id=target)
+            photo_ok = send_photo(chart_bytes, short_caption, chat_id=target)
+            send_message(caption, chat_id=target)
+            if not photo_ok:
+                print(f"Chart send failed for {signal_id}")
         else:
             send_message(caption, chat_id=target)
 
