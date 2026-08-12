@@ -1,4 +1,4 @@
-# smc-scanner v5 - strategies + viva IDs + dual channel
+# smc-scanner v6 - MTF + 5min scan + partial TP + approaching alerts
 import time
 import schedule
 import os
@@ -11,17 +11,20 @@ from analysis.smc import find_order_blocks, detect_liquidity
 from analysis.rtm import get_rtm_signal
 from analysis.ict import get_ict_signal
 from analysis.strategies import run_all_strategies, StrategySignal
+from analysis.mtf import analyze_mtf_swing, analyze_mtf_scalp, get_mtf_confirmation_text
 from bot.telegram_bot import (
     send_signal_with_chart, send_message,
     send_performance_report, attach_money_management,
     send_confirmation_signal, send_cancellation_signal,
+    send_approaching_alert, send_tp1_hit_signal,
 )
 from database.db import (
     init_db, save_signal, save_active_signal,
     was_signal_sent_recently, get_performance_stats,
     check_open_signals, update_market_memory,
     get_market_memory, get_active_signals,
-    cancel_active_signal, confirm_active_signal
+    cancel_active_signal, confirm_active_signal,
+    mark_approaching_sent, mark_tp1_hit, mark_sl_moved_to_be,
 )
 
 ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
@@ -29,7 +32,7 @@ RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
 CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")
 CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
 
-CHANNEL_NAME = "vivaanalyst-Chanel"
+CHANNEL_NAME = "vivasignalyst-Chanel"
 
 SYMBOLS = sorted(set([
     # بزرگ‌ها
@@ -75,8 +78,15 @@ def calculate_trade_params(entry, sl, direction):
 
 def analyze_symbol(symbol):
     signals = []
-    tf_data = get_multi_tf(symbol)
+    
+    # ─── MTF Swing: 4H → 1H → 15M ───
+    mtf_swing = analyze_mtf_swing(symbol)
+    htf_bias = mtf_swing.get("bias")
+    
+    if not htf_bias or "NEUTRAL" in (htf_bias or ""):
+        return signals, None
 
+    tf_data = get_multi_tf(symbol)
     df_1d = tf_data.get("1d")
     df_4h = tf_data.get("4h")
     df_15m = tf_data.get("15m")
@@ -84,24 +94,13 @@ def analyze_symbol(symbol):
     if df_4h is None or df_15m is None:
         return signals, None
 
-    # HTF Bias
-    sh_4h, sl_4h = find_swing_points(df_4h, lookback=5)
-    structure = classify_structure(sh_4h, sl_4h)
-    htf_bias = structure["bias"]
-
-    if not htf_bias or "NEUTRAL" in htf_bias:
-        return signals, df_15m
-
     current_price = df_15m["close"].iloc[-1]
-
-    # وضعیت قبلی از حافظه
     prev_memory = get_market_memory(symbol)
+    
+    mtf_text = get_mtf_confirmation_text(mtf_swing)
+    mtf_confirmed = mtf_swing.get("htf_confirmed", False)
 
-    # ─────────────────────────────────────────────
-    # استراتژی‌های اصلی (SMC, RTM, ICT)
-    # ─────────────────────────────────────────────
-
-    # SMC
+    # ─── SMC ───
     obs = find_order_blocks(df_4h, htf_bias, lookback=50)
     sh_15m, sl_15m = find_swing_points(df_15m, lookback=3)
     liquidity = detect_liquidity(df_15m, sh_15m, sl_15m)
@@ -134,7 +133,6 @@ def analyze_symbol(symbol):
             (htf_bias == "BEARISH" and
              liquidity["sweep_type"] == "SWEEP_HIGH")
         )
-        # CHoCH واقعی: شکست خلاف ساختار فعلی LTF، هم‌جهت با HTF
         has_choch = bool(
             bos_15m
             and bos_15m.direction == htf_bias
@@ -153,12 +151,10 @@ def analyze_symbol(symbol):
         confirmations.append("✅ Sweep" if has_sweep else "⚠️ No Sweep")
         confirmations.append("✅ CHoCH" if has_choch else "⚠️ No CHoCH")
 
-        if new_sweep:
-            confirmations.append("🆕 Sweep جدید!")
-        if new_choch:
-            confirmations.append("🆕 CHoCH جدید!")
-        if just_entered_ob:
-            confirmations.append("🆕 ورود به OB!")
+        if new_sweep: confirmations.append("🆕 Sweep جدید!")
+        if new_choch: confirmations.append("🆕 CHoCH جدید!")
+        if just_entered_ob: confirmations.append("🆕 ورود به OB!")
+        if mtf_confirmed: confirmations.append("✅ تایید MTF")
 
         should_signal = new_sweep or new_choch or just_entered_ob
 
@@ -170,15 +166,19 @@ def analyze_symbol(symbol):
             signals.append({
                 "source": "SMC", "symbol": symbol,
                 "direction": direction, "entry": current_price,
-                "sl": sl, "tp1": trade["tp1"], "tp2": trade["tp2"],
+                "sl": sl, "sl_original": sl,
+                "tp1": trade["tp1"], "tp2": trade["tp2"],
                 "ob_zone": f"{ob_bottom:.4f}-{ob_top:.4f}",
                 "ob_strength": f"{ob_strength:.1f}x",
                 "confirmations": confirmations,
                 "bias": htf_bias, "trade_params": trade,
-                "strategy_fa": "اسمارت مانی"
+                "strategy_fa": "اسمارت مانی",
+                "mtf_text": mtf_text,
+                "mtf_confirmed": mtf_confirmed,
+                "trade_style": "SWING",
             })
 
-    # RTM
+    # ─── RTM ───
     rtm = get_rtm_signal(df_4h, htf_bias)
     rtm_pattern = ""
     rtm_fresh = False
@@ -196,20 +196,25 @@ def analyze_symbol(symbol):
             signals.append({
                 "source": "RTM", "symbol": symbol,
                 "direction": rtm["direction"], "entry": current_price,
-                "sl": sl, "tp1": trade["tp1"], "tp2": trade["tp2"],
+                "sl": sl, "sl_original": sl,
+                "tp1": trade["tp1"], "tp2": trade["tp2"],
                 "pattern": rtm["pattern"],
                 "base_zone": f"{rtm['base_bottom']:.4f}-{rtm['base_top']:.4f}",
                 "strength": rtm["strength"],
                 "confirmations": [
                     f"Pattern: {rtm['pattern']}",
                     f"Strength: {rtm['strength']}",
-                    "🆕 Pattern جدید!"
+                    "🆕 Pattern جدید!",
+                    *([ "✅ تایید MTF"] if mtf_confirmed else [])
                 ],
                 "bias": htf_bias, "trade_params": trade,
-                "strategy_fa": "RTM"
+                "strategy_fa": "RTM",
+                "mtf_text": mtf_text,
+                "mtf_confirmed": mtf_confirmed,
+                "trade_style": "SWING",
             })
 
-    # ICT
+    # ─── ICT ───
     ict = get_ict_signal(df_4h, df_15m, df_1d, htf_bias)
     ict_in_ote = False
     ict_in_kz = False
@@ -230,27 +235,28 @@ def analyze_symbol(symbol):
             signals.append({
                 "source": "ICT", "symbol": symbol,
                 "direction": ict["direction"], "entry": entry,
-                "sl": sl, "tp1": trade["tp1"], "tp2": trade["tp2"],
+                "sl": sl, "sl_original": sl,
+                "tp1": trade["tp1"], "tp2": trade["tp2"],
                 "ote_zone": f"{ict['entry_bottom']:.4f}-{ict['entry_top']:.4f}",
                 "killzone": kz, "in_killzone": ict_in_kz,
                 "mss": mss, "pdh": ict.get("pdh"), "pdl": ict.get("pdl"),
                 "confirmations": [
                     f"{'✅' if ict_in_kz else '⚠️'} KZ: {kz or 'None'}",
                     f"{'✅' if mss else '⚠️'} MSS",
-                    "🆕 ورود به OTE!"
+                    "🆕 ورود به OTE!",
+                    *([ "✅ تایید MTF"] if mtf_confirmed else [])
                 ],
                 "bias": htf_bias, "trade_params": trade,
-                "strategy_fa": "ICT"
+                "strategy_fa": "ICT",
+                "mtf_text": mtf_text,
+                "mtf_confirmed": mtf_confirmed,
+                "trade_style": "SWING",
             })
 
-    # ─────────────────────────────────────────────
-    # استراتژی‌های جدید (QM, Engulfing, PinBar, FVG, IFVG, etc.)
-    # ─────────────────────────────────────────────
-
+    # ─── استراتژی‌های جدید ───
     new_strategies = run_all_strategies(df_15m, htf_bias)
     
     for strat_signal in new_strategies:
-        # چک کن قبلاً سیگنال مشابه نفرستاده باشیم
         if was_signal_sent_recently(
             symbol, strat_signal.strategy,
             strat_signal.direction, hours=4
@@ -262,27 +268,35 @@ def analyze_symbol(symbol):
         )
         
         if trade:
+            confirmations = strat_signal.confirmations.copy()
+            if mtf_confirmed:
+                confirmations.append("✅ تایید MTF")
+            
             signals.append({
                 "source": strat_signal.strategy,
                 "symbol": symbol,
                 "direction": strat_signal.direction,
                 "entry": strat_signal.entry,
                 "sl": strat_signal.sl,
+                "sl_original": strat_signal.sl,
                 "tp1": strat_signal.tp1,
                 "tp2": strat_signal.tp2,
                 "zone_top": strat_signal.zone_top,
                 "zone_bottom": strat_signal.zone_bottom,
                 "strength": strat_signal.strength,
-                "confirmations": strat_signal.confirmations,
+                "confirmations": confirmations,
                 "description": strat_signal.description,
                 "entry_conditions": strat_signal.entry_conditions,
                 "score_bonus": strat_signal.score_bonus,
                 "bias": htf_bias,
                 "trade_params": trade,
-                "strategy_fa": strat_signal.strategy_fa
+                "strategy_fa": strat_signal.strategy_fa,
+                "mtf_text": mtf_text,
+                "mtf_confirmed": mtf_confirmed,
+                "trade_style": "SWING",
             })
 
-    # ذخیره وضعیت فعلی در حافظه
+    # ذخیره حافظه
     update_market_memory(symbol, {
         "bias": htf_bias,
         "near_ob": near_ob,
@@ -301,11 +315,40 @@ def analyze_symbol(symbol):
     return signals, df_15m
 
 
+def check_approaching_entry(sig_data: dict, df_15m: pd.DataFrame) -> bool:
+    """چک میکنه آیا قیمت 80% به Entry نزدیک شده"""
+    if df_15m is None:
+        return False
+    
+    current_price = df_15m["close"].iloc[-1]
+    entry = sig_data["entry"]
+    sl = sig_data["sl"]
+    direction = sig_data["direction"]
+    
+    # محاسبه فاصله فعلی از Entry
+    distance = abs(current_price - entry)
+    sl_distance = abs(entry - sl)
+    
+    if sl_distance == 0:
+        return False
+    
+    # اگه قیمت 80% مسیر به Entry رو طی کرده
+    if direction == "LONG":
+        # قیمت باید پایین Entry باشه و داره بالا میاد
+        if current_price < entry:
+            progress = 1 - (distance / sl_distance)
+            return progress >= 0.8
+    else:
+        # قیمت باید بالای Entry باشه و داره پایین میاد
+        if current_price > entry:
+            progress = 1 - (distance / sl_distance)
+            return progress >= 0.8
+    
+    return False
+
+
 def check_signal_confirmation(sig_data: dict, df_15m: pd.DataFrame) -> bool:
-    """
-    چک میکنه آیا پوزیشن تایید ورود گرفته
-    یعنی قیمت از Entry رد شده
-    """
+    """چک میکنه آیا پوزیشن تایید ورود گرفته"""
     if df_15m is None:
         return False
 
@@ -321,10 +364,7 @@ def check_signal_confirmation(sig_data: dict, df_15m: pd.DataFrame) -> bool:
 
 
 def check_signal_cancellation(sig_data: dict, df_15m: pd.DataFrame) -> bool:
-    """
-    چک میکنه آیا سیگنال باطل شده
-    یعنی قیمت برگشته و ساختار خراب شده
-    """
+    """چک میکنه آیا سیگنال باطل شده"""
     if df_15m is None:
         return False
 
@@ -345,10 +385,11 @@ def check_signal_cancellation(sig_data: dict, df_15m: pd.DataFrame) -> bool:
 
 def monitor_active_signals():
     """
-    هر اسکن این رو صدا میزنیم:
-    ۱. سیگنال‌های تایید نشده رو چک میکنه
-    ۲. اگه تایید شد → اعلام میکنه
-    ۳. اگه برگشت → باطل اعلام میکنه
+    مانیتورینگ سیگنال‌های فعال:
+    ۱. هشدار نزدیک شدن (80%)
+    ۲. تایید ورود
+    ۳. باطل شدن
+    ۴. TP1 hit + SL to BE
     """
     active = get_active_signals()
 
@@ -361,11 +402,20 @@ def monitor_active_signals():
             if df_15m is None:
                 continue
 
+            current_price = df_15m['close'].iloc[-1]
+
+            # ۱. هشدار نزدیک شدن (80%)
+            if not sig_data.get("approaching_sent"):
+                if check_approaching_entry(sig_data, df_15m):
+                    mark_approaching_sent(signal_id)
+                    send_approaching_alert(sig_data, signal_id, current_price)
+
+            # ۲. تایید ورود
             if check_signal_confirmation(sig_data, df_15m):
                 confirm_active_signal(signal_id)
-                current_price = df_15m['close'].iloc[-1]
                 send_confirmation_signal(sig_data, signal_id, current_price)
 
+            # ۳. باطل شدن
             elif check_signal_cancellation(sig_data, df_15m):
                 cancel_active_signal(signal_id)
                 send_cancellation_signal(sig_data, signal_id)
@@ -379,7 +429,7 @@ def run_scan():
         print(f"[{datetime.utcnow().strftime('%H:%M')}] "
               f"Scanning {len(SYMBOLS)} symbols...")
 
-        # چک سیگنال‌های باز (WIN/LOSS)
+        # چک سیگنال‌های باز (WIN/LOSS + TP1)
         try:
             closed = check_open_signals()
             for c in closed:
@@ -395,7 +445,7 @@ def run_scan():
         except Exception as e:
             print(f"Check closed signals error: {e}")
 
-        # چک تایید/باطل شدن سیگنال‌های فعال
+        # مانیتورینگ سیگنال‌های فعال
         try:
             monitor_active_signals()
         except Exception as e:
@@ -451,7 +501,7 @@ def main():
         print(f"DB init error: {e}")
 
     send_message(
-        f"🚀 <b>Scanner v5 Started</b>\n"
+        f"🚀 <b>Scanner v6 Started</b>\n"
         f"📢 کانال: <b>{CHANNEL_NAME}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📊 SMC | 🔷 RTM | 💎 ICT\n"
@@ -460,13 +510,19 @@ def main():
         f"💥 Breakout | 🧱 OB | ⚡ CHoCH\n"
         f"🎯 Return to Area\n"
         f"━━━━━━━━━━━━━━━━━━\n"
+        f"🔄 Multi-Timeframe: 4H → 1H → 15M\n"
+        f"⏱ Scan: 5min (24/7)\n"
+        f"📊 Partial TP: 60% TP1 + 40% TP2\n"
+        f"🔒 SL to Breakeven after TP1\n"
+        f"🔔 3-Phase Alerts: Initial → Approaching → Confirmed\n"
+        f"🆔 IDs start with: viva-\n"
         f"🧠 Smart Memory Active\n"
-        f"📌 {len(SYMBOLS)} Symbols\n"
-        f"⏱ Scan: 15min\n"
-        f"🆔 IDs start with: viva-"
+        f"📌 {len(SYMBOLS)} Symbols"
     )
 
-    schedule.every(15).minutes.do(run_scan)
+    # هر 5 دقیقه اسکن
+    schedule.every(5).minutes.do(run_scan)
+    # گزارش روزانه
     schedule.every().day.at("08:00").do(run_daily_report)
 
     run_scan()
@@ -474,10 +530,10 @@ def main():
     while True:
         try:
             schedule.run_pending()
-            time.sleep(60)
+            time.sleep(30)
         except Exception as e:
             print(f"Scheduler error: {e}")
-            time.sleep(60)
+            time.sleep(30)
 
 
 if __name__ == "__main__":

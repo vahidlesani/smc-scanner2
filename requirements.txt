@@ -5,3 +5,4 @@ schedule
 mplfinance
 matplotlib
 psycopg2-binary
+flask>=2.0.0
