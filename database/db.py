@@ -12,6 +12,7 @@ def init_db():
     c.execute("""
         CREATE TABLE IF NOT EXISTS signals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            signal_code TEXT,
             symbol TEXT,
             source TEXT,
             direction TEXT,
@@ -21,11 +22,27 @@ def init_db():
             tp2 REAL,
             bias TEXT,
             confirmations TEXT,
+            score INTEGER DEFAULT 0,
+            leverage INTEGER DEFAULT 5,
+            margin_pct REAL DEFAULT 0,
+            risk_pct REAL DEFAULT 0,
             result TEXT DEFAULT 'PENDING',
             pnl_pct REAL DEFAULT 0,
             created_at TEXT,
             closed_at TEXT
         )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS counters (
+            name TEXT PRIMARY KEY,
+            value INTEGER DEFAULT 99
+        )
+    """)
+
+    c.execute("""
+        INSERT OR IGNORE INTO counters (name, value)
+        VALUES ('signal', 99)
     """)
 
     c.execute("""
@@ -49,14 +66,37 @@ def init_db():
         )
     """)
 
+    # مهاجرت ستون‌های قدیمی
+    for col in [
+        "signal_code TEXT",
+        "score INTEGER DEFAULT 0",
+        "leverage INTEGER DEFAULT 5",
+        "margin_pct REAL DEFAULT 0",
+        "risk_pct REAL DEFAULT 0"
+    ]:
+        try:
+            c.execute(f"ALTER TABLE signals ADD COLUMN {col}")
+        except:
+            pass
+
     conn.commit()
     conn.close()
+
+
+def next_signal_code() -> str:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE counters SET value = value + 1 WHERE name='signal'")
+    c.execute("SELECT value FROM counters WHERE name='signal'")
+    num = c.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return f"VIVA{num:04d}"
 
 
 def update_market_memory(symbol: str, data: dict):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-
     c.execute("""
         INSERT INTO market_memory
         (symbol, bias, near_ob, ob_top, ob_bottom, ob_strength,
@@ -93,7 +133,6 @@ def update_market_memory(symbol: str, data: dict):
         data.get("current_price", 0),
         datetime.utcnow().isoformat()
     ))
-
     conn.commit()
     conn.close()
 
@@ -101,20 +140,16 @@ def update_market_memory(symbol: str, data: dict):
 def get_market_memory(symbol: str) -> dict:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-
     c.execute("""
         SELECT bias, near_ob, ob_top, ob_bottom, has_sweep,
                has_choch, rtm_pattern, ict_in_ote, ict_in_killzone,
                current_price, updated_at
         FROM market_memory WHERE symbol=?
     """, (symbol,))
-
     row = c.fetchone()
     conn.close()
-
     if not row:
         return {}
-
     return {
         "bias": row[0],
         "near_ob": bool(row[1]),
@@ -133,20 +168,23 @@ def get_market_memory(symbol: str) -> dict:
 def save_signal(sig: dict) -> int:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-
     c.execute("""
         INSERT INTO signals
-        (symbol, source, direction, entry, sl, tp1, tp2,
-         bias, confirmations, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (signal_code, symbol, source, direction, entry, sl, tp1, tp2,
+         bias, confirmations, score, leverage, margin_pct, risk_pct, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
+        sig.get("signal_code", ""),
         sig["symbol"], sig["source"], sig["direction"],
         sig["entry"], sig["sl"], sig["tp1"], sig["tp2"],
         sig.get("bias", ""),
         json.dumps(sig.get("confirmations", [])),
+        sig.get("score", 0),
+        sig.get("leverage", 5),
+        sig.get("margin_pct", 0),
+        sig.get("risk_pct", 0),
         datetime.utcnow().isoformat()
     ))
-
     signal_id = c.lastrowid
     conn.commit()
     conn.close()
@@ -157,14 +195,12 @@ def was_signal_sent_recently(symbol: str, source: str,
                               direction: str, hours: int = 4) -> bool:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-
     c.execute("""
         SELECT created_at FROM signals
         WHERE symbol=? AND source=? AND direction=?
         AND created_at > datetime('now', ?)
         ORDER BY created_at DESC LIMIT 1
     """, (symbol, source, direction, f'-{hours} hours'))
-
     row = c.fetchone()
     conn.close()
     return row is not None
@@ -173,7 +209,6 @@ def was_signal_sent_recently(symbol: str, source: str,
 def get_performance_stats() -> dict:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-
     c.execute("""
         SELECT source, COUNT(*) as total,
         SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) as wins,
@@ -182,7 +217,6 @@ def get_performance_stats() -> dict:
         FROM signals WHERE result != 'PENDING'
         GROUP BY source
     """)
-
     rows = c.fetchall()
     conn.close()
 
@@ -203,12 +237,10 @@ def get_performance_stats() -> dict:
 def update_signal_result(signal_id: int, result: str, pnl_pct: float):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-
     c.execute("""
         UPDATE signals SET result=?, pnl_pct=?, closed_at=?
         WHERE id=?
     """, (result, pnl_pct, datetime.utcnow().isoformat(), signal_id))
-
     conn.commit()
     conn.close()
 
@@ -218,18 +250,18 @@ def check_open_signals():
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-
     c.execute("""
-        SELECT id, symbol, direction, entry, sl, tp1, tp2
+        SELECT id, signal_code, symbol, source, direction,
+               entry, sl, tp1, tp2, score
         FROM signals WHERE result='PENDING'
     """)
-
     open_signals = c.fetchall()
     conn.close()
     results = []
 
     for sig in open_signals:
-        sig_id, symbol, direction, entry, sl, tp1, tp2 = sig
+        (sig_id, code, symbol, source, direction,
+         entry, sl, tp1, tp2, score) = sig
         try:
             df = get_klines(symbol, "15m", 5)
             if df is None:
@@ -237,41 +269,34 @@ def check_open_signals():
 
             curr_h = df["high"].iloc[-1]
             curr_l = df["low"].iloc[-1]
+            closed = None
 
             if direction == "LONG":
                 if curr_l <= sl:
                     pnl = ((sl - entry) / entry) * 100
-                    update_signal_result(sig_id, "LOSS", pnl)
-                    results.append({
-                        "symbol": symbol,
-                        "result": "LOSS",
-                        "pnl": pnl
-                    })
+                    closed = "LOSS"
                 elif curr_h >= tp1:
                     pnl = ((tp1 - entry) / entry) * 100
-                    update_signal_result(sig_id, "WIN", pnl)
-                    results.append({
-                        "symbol": symbol,
-                        "result": "WIN",
-                        "pnl": pnl
-                    })
+                    closed = "WIN"
             else:
                 if curr_h >= sl:
                     pnl = ((entry - sl) / entry) * 100
-                    update_signal_result(sig_id, "LOSS", pnl)
-                    results.append({
-                        "symbol": symbol,
-                        "result": "LOSS",
-                        "pnl": pnl
-                    })
+                    closed = "LOSS"
                 elif curr_l <= tp1:
                     pnl = ((entry - tp1) / entry) * 100
-                    update_signal_result(sig_id, "WIN", pnl)
-                    results.append({
-                        "symbol": symbol,
-                        "result": "WIN",
-                        "pnl": pnl
-                    })
+                    closed = "WIN"
+
+            if closed:
+                update_signal_result(sig_id, closed, pnl)
+                results.append({
+                    "signal_code": code or f"ID{sig_id}",
+                    "symbol": symbol,
+                    "source": source,
+                    "direction": direction,
+                    "result": closed,
+                    "pnl": pnl,
+                    "score": score or 0
+                })
         except:
             continue
 
