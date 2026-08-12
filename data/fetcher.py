@@ -9,6 +9,7 @@ TF_MAP = {
     "4h": "240",
     "1h": "60",
     "15m": "15",
+    "5m": "5",
 }
 
 _SESSION = requests.Session()
