@@ -49,14 +49,13 @@ def quality_plan(score: int) -> dict:
 def max_safe_leverage(sl_pct: float) -> int:
     """
     اهرمی که قبل از رسیدن به SL لیکویید نکند.
-    20٪ بافر ایمنی روی فاصله SL می‌گذارد.
+    sl_pct به صورت اعشار است (مثلاً 0.01 = 1%).
     """
     if sl_pct <= 0:
         return 5
 
-    # مثلا SL=1% → تئوری 100x ، با بافر حدود 80x
     theoretical = 1.0 / sl_pct
-    safe = int(theoretical * 0.35)  # خیلی محافظه‌کار
+    safe = int(theoretical * 0.35)
     return _clamp(safe, 5, 20)
 
 
@@ -64,52 +63,3 @@ def suggested_leverage(score: int, sl_pct: float) -> int:
     plan = quality_plan(score)
     safe = max_safe_leverage(sl_pct)
 
-    # اهرم بالاتر فقط اگر SL تنگ باشد
-    if sl_pct <= 0.008:
-        wanted = plan["lev_max"]
-    elif sl_pct <= 0.015:
-        wanted = int((plan["lev_min"] + plan["lev_max"]) / 2)
-    else:
-        wanted = plan["lev_min"]
-
-    return _clamp(min(wanted, safe), 5, 20)
-
-
-def calculate_position(entry: float, sl: float, direction: str,
-                       score: int, account: float) -> dict:
-    sl_distance = abs(entry - sl)
-    sl_pct = sl_distance / entry if entry else 0
-    if sl_pct <= 0:
-        return None
-
-    plan = quality_plan(score)
-    risk_pct = plan["risk_pct"]
-    risk_amount = account * (risk_pct / 100.0)
-
-    # حجم از روی ریسک واقعی، نه اهرم
-    notional = risk_amount / sl_pct
-    leverage = suggested_leverage(score, sl_pct)
-    margin = notional / leverage
-    margin_pct = (margin / account) * 100 if account else 0
-
-    if direction == "LONG":
-        tp1 = entry + sl_distance * 2
-        tp2 = entry + sl_distance * 3
-    else:
-        tp1 = entry - sl_distance * 2
-        tp2 = entry - sl_distance * 3
-
-    return {
-        "sl_pct": sl_pct * 100,
-        "risk_amount": risk_amount,
-        "risk_pct": risk_pct,
-        "position_size": notional,
-        "leverage": leverage,
-        "margin": margin,
-        "margin_pct": margin_pct,
-        "tp1": tp1,
-        "tp2": tp2,
-        "quality": plan["quality"],
-        "style": plan["style"],
-        "max_safe_leverage": max_safe_leverage(sl_pct)
-  }
