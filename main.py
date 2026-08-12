@@ -18,6 +18,7 @@ from bot.telegram_bot import (
     send_confirmation_signal, send_cancellation_signal,
     send_approaching_alert, send_tp1_hit_signal,
 )
+from bot.commands import start_command_listener
 from database.db import (
     init_db, save_signal, save_active_signal,
     was_signal_sent_recently, get_performance_stats,
@@ -35,19 +36,29 @@ CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
 CHANNEL_NAME = "vivasignalyst-Chanel"
 
 SYMBOLS = sorted(set([
-    # بزرگ‌ها
+    # بزرگ‌ها (Majors)
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
     "PAXGUSDT", "XAGUSDT", "LINKUSDT", "LDOUSDT", "ICPUSDT",
-    "BCHUSDT", "DOGEUSDT",
-    # لایه ۱
-    "ADAUSDT", "AVAXUSDT", "DOTUSDT", "ATOMUSDT", "NEARUSDT",
-    # لایه ۲
-    "LTCUSDT", "POLUSDT", "INJUSDT", "APTUSDT",
-    # دیفای و جدید
-    "ARBUSDT", "OPUSDT", "SUIUSDT",
-    # اضافه
-    "SEIUSDT", "TIAUSDT", "JUPUSDT", "WLDUSDT", "STXUSDT",
-    "FETUSDT", "RENDERUSDT", "AAVEUSDT", "MKRUSDT",
+    "BCHUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT",
+    "TRXUSDT", "TONUSDT",
+    # لایه ۱ (Layer 1)
+    "ATOMUSDT", "NEARUSDT", "FTMUSDT", "ALGOUSDT", "EGLDUSDT",
+    "KAVAUSDT", "ROSEUSDT", "ONEUSDT", "IOTXUSDT",
+    # لایه ۲ (Layer 2)
+    "LTCUSDT", "POLUSDT", "INJUSDT", "APTUSDT", "SUIUSDT",
+    "ARBUSDT", "OPUSDT", "IMXUSDT", "MINAUSDT",
+    # دیفای (DeFi)
+    "AAVEUSDT", "MKRUSDT", "COMPUSDT", "SNXUSDT", "CRVUSDT",
+    "UNIUSDT", "SUSHIUSDT", "DYDXUSDT", "1INCHUSDT",
+    # هوش مصنوعی (AI)
+    "FETUSDT", "RENDERUSDT", "AGIXUSDT", "OCEANUSDT",
+    "WLDUSDT", "ARKMUSDT", "AIUSDT",
+    # جدید و محبوب
+    "SEIUSDT", "TIAUSDT", "JUPUSDT", "STXUSDT",
+    "PYTHUSDT", "JTOUSDT", "WUSDT", "ENSUSDT",
+    "PENDLEUSDT", "BLURUSDT", "HNTUSDT", "FILUSDT",
+    "THETAUSDT", "APEUSDT", "GALAUSDT", "MANAUSDT",
+    "SANDUSDT", "AXSUSDT",
 ]))
 
 
@@ -574,8 +585,16 @@ def main():
         f"🔔 3-Phase Alerts: Initial → Approaching → Confirmed\n"
         f"🆔 IDs start with: viva-\n"
         f"🧠 Smart Memory Active\n"
-        f"📌 {len(SYMBOLS)} Symbols"
+        f"📌 {len(SYMBOLS)} Symbols\n"
+        f"🤖 Commands: /help /stats /backtest /strategies"
     )
+
+    # شروع گوش دادن به دستورات تلگرام
+    try:
+        start_command_listener()
+        print("🤖 Telegram commands active: /help /stats /backtest /strategies")
+    except Exception as e:
+        print(f"Command listener error: {e}")
 
     # هر 5 دقیقه اسکن
     schedule.every(5).minutes.do(run_scan)
