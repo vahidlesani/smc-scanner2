@@ -15,13 +15,6 @@ CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
 ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
 RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
 
-_signal_counter = [100]
-
-
-def generate_signal_id() -> str:
-    _signal_counter[0] += 1
-    return f"VIVA{_signal_counter[0]:04d}"
-
 
 def send_message(text: str, chat_id: str = None):
     if not chat_id:
@@ -74,12 +67,10 @@ def generate_chart(df: pd.DataFrame, sig: dict) -> bytes:
         score = calculate_score(sig)["score"]
         sig_type = detect_signal_type(sig)
 
-        hlines = [
-            sig["entry"],
-            sig["sl"],
-            sig["trade_params"]["tp1"],
-            sig["trade_params"]["tp2"]
-        ]
+        tp1 = _get_tp(sig, "tp1")
+        tp2 = _get_tp(sig, "tp2")
+
+        hlines = [sig["entry"], sig["sl"], tp1, tp2]
         colors = ['#ffffff', '#ff4444', '#00ff88', '#00aa55']
 
         buf = io.BytesIO()
@@ -89,7 +80,8 @@ def generate_chart(df: pd.DataFrame, sig: dict) -> bytes:
             style=style,
             title=(
                 f"\n{sig['symbol']} | {sig['source']} "
-                f"| {sig['direction']} | Score: {score}/10 | {sig_type}"
+                f"| {sig['direction']} "
+                f"| Score: {score}/10 | {sig_type}"
             ),
             ylabel='Price (USDT)',
             hlines=dict(
@@ -109,19 +101,18 @@ def generate_chart(df: pd.DataFrame, sig: dict) -> bytes:
         return None
 
 
+def _get_tp(sig: dict, key: str) -> float:
+    """tp1/tp2 رو از هر جایی که باشه میگیره"""
+    if sig.get(key) is not None:
+        return sig[key]
+    return (sig.get("trade_params") or {}).get(key, 0)
+
+
 def detect_signal_type(sig: dict) -> str:
-    """
-    تشخیص نوع سیگنال: Swing یا Scalp
-    بر اساس فاصله SL
-    """
     entry = sig["entry"]
     sl = sig["sl"]
     sl_pct = abs(entry - sl) / entry * 100
-
-    if sl_pct >= 1.5:
-        return "📊 Swing"
-    else:
-        return "⚡ Scalp"
+    return "📊 Swing" if sl_pct >= 1.5 else "⚡ Scalp"
 
 
 def calculate_score(sig: dict) -> dict:
@@ -172,11 +163,13 @@ def calculate_score(sig: dict) -> dict:
 
     if source == "SMC":
         try:
-            s = float(str(sig.get("ob_strength", "1")).replace("x", ""))
+            s = float(
+                str(sig.get("ob_strength", "1")).replace("x", "")
+            )
             if s >= 3:
                 score += 1
                 details.append("💪 +1 OB بسیار قوی")
-        except:
+        except Exception:
             pass
 
     score = max(1, min(10, score))
@@ -203,13 +196,6 @@ def calculate_score(sig: dict) -> dict:
 
 
 def calculate_money_management(sig: dict, score: int) -> dict:
-    """
-    مدیریت سرمایه اصلاح شده:
-    - حداکثر مارجین ۵٪ برای بهترین سیگنال
-    - حداقل مارجین ۱٪ برای ضعیف‌ترین
-    - لوریج متناسب با کیفیت
-    """
-    # لوریج بر اساس امتیاز
     leverage_map = {
         10: 20, 9: 20, 8: 15,
         7: 12, 6: 10, 5: 8,
@@ -217,7 +203,6 @@ def calculate_money_management(sig: dict, score: int) -> dict:
     }
     leverage = leverage_map.get(score, 5)
 
-    # درصد مارجین بر اساس امتیاز (حداکثر ۵٪)
     margin_pct_map = {
         10: 5.0, 9: 5.0, 8: 4.0,
         7: 3.5, 6: 3.0, 5: 2.5,
@@ -225,13 +210,9 @@ def calculate_money_management(sig: dict, score: int) -> dict:
     }
     margin_pct = margin_pct_map.get(score, 1.0)
 
-    # مارجین واقعی
     margin_usd = ACCOUNT_SIZE * (margin_pct / 100)
-
-    # حجم پوزیشن
     position_size_usd = margin_usd * leverage
 
-    # ریسک واقعی بر اساس SL
     entry = sig["entry"]
     sl = sig["sl"]
     sl_distance = abs(entry - sl)
@@ -239,12 +220,12 @@ def calculate_money_management(sig: dict, score: int) -> dict:
     if sl_pct == 0:
         sl_pct = 1.0
 
-    # ریسک واقعی
     risk_amount = position_size_usd * (sl_pct / 100)
     risk_pct_of_account = (risk_amount / ACCOUNT_SIZE) * 100
 
-    tp1 = sig["trade_params"]["tp1"]
-    tp2 = sig["trade_params"]["tp2"]
+    # ✅ از _get_tp استفاده میکنه - بدون KeyError
+    tp1 = _get_tp(sig, "tp1")
+    tp2 = _get_tp(sig, "tp2")
 
     if sig["direction"] == "LONG":
         tp1_pct = ((tp1 - entry) / entry) * 100
@@ -253,12 +234,9 @@ def calculate_money_management(sig: dict, score: int) -> dict:
         tp1_pct = ((entry - tp1) / entry) * 100
         tp2_pct = ((entry - tp2) / entry) * 100
 
-    # سود واقعی
     tp1_profit = position_size_usd * (tp1_pct / 100)
     tp2_profit = position_size_usd * (tp2_pct / 100)
 
-    # نقطه Mart: جایی که ستاپ باطل میشه
-    # معمولاً ۵٪ فراتر از SL
     if sig["direction"] == "LONG":
         mart_point = sl * 0.995
     else:
@@ -281,9 +259,6 @@ def calculate_money_management(sig: dict, score: int) -> dict:
 
 
 def build_signal_reason(sig: dict) -> str:
-    """
-    توضیح کامل فارسی - بدون اصطلاحات انگلیسی در متن
-    """
     source = sig["source"]
     direction = sig["direction"]
     bias = sig.get("bias", "")
@@ -291,7 +266,6 @@ def build_signal_reason(sig: dict) -> str:
 
     bias_fa = "صعودی" if bias == "BULLISH" else "نزولی"
     dir_fa = "خرید" if direction == "LONG" else "فروش"
-    opp_fa = "حمایت" if direction == "LONG" else "مقاومت"
 
     if source == "SMC":
         has_sweep = any(
@@ -311,8 +285,8 @@ def build_signal_reason(sig: dict) -> str:
 
         if has_sweep:
             reason += (
-                f"نقدینگی بازار قبل از این ناحیه جمع‌آوری و "
-                f"جذب شده است که نشانه آمادگی بازار برای "
+                f"نقدینگی بازار قبل از این ناحیه جمع‌آوری "
+                f"و جذب شده است که نشانه آمادگی بازار برای "
                 f"حرکت {bias_fa} است.\n\n"
             )
         else:
@@ -335,7 +309,8 @@ def build_signal_reason(sig: dict) -> str:
         reason += (
             f"🔑 <b>شرط ورود به پوزیشن:</b>\n"
             f"• مشاهده کندل تاییدیه {dir_fa} در ناحیه\n"
-            f"• بسته شدن کندل {'بالای' if direction=='LONG' else 'زیر'} "
+            f"• بسته شدن کندل "
+            f"{'بالای' if direction == 'LONG' else 'زیر'} "
             f"سطح تغییر ساختار\n"
             f"• افزایش حجم معاملات\n"
         )
@@ -447,6 +422,9 @@ def build_full_caption(sig: dict, signal_id: str) -> str:
         f"   {d}" for d in score_data["details"]
     )
 
+    tp1 = _get_tp(sig, "tp1")
+    tp2 = _get_tp(sig, "tp2")
+
     caption = (
         f"✨ <b>New Signal</b> ✨\n"
         f"━━━━━━━━━━━━━━━━━━\n"
@@ -455,7 +433,7 @@ def build_full_caption(sig: dict, signal_id: str) -> str:
         f"🪙 <b>{sig['symbol']}</b>  |  "
         f"<b>{sig['direction']}</b> {dir_emoji}\n"
         f"📈 Trend: <b>"
-        f"{'Bullish 🟢' if sig.get('bias')=='BULLISH' else 'Bearish 🔴'}"
+        f"{'Bullish 🟢' if sig.get('bias') == 'BULLISH' else 'Bearish 🔴'}"
         f"</b>  |  {sig_type}\n\n"
 
         f"⭐ <b>Signal Score:</b> "
@@ -481,9 +459,9 @@ def build_full_caption(sig: dict, signal_id: str) -> str:
         f"├ 🛑 SL:      {sig['sl']:.4f}  "
         f"(-{mm['sl_pct']}%)\n"
         f"├ ⛔ Mart:    {mm['mart_point']:.4f}\n"
-        f"├ 🥇 TP1:     {sig['trade_params']['tp1']:.4f}  "
+        f"├ 🥇 TP1:     {tp1:.4f}  "
         f"(+{mm['tp1_pct']}%)\n"
-        f"└ 🥈 TP2:     {sig['trade_params']['tp2']:.4f}  "
+        f"└ 🥈 TP2:     {tp2:.4f}  "
         f"(+{mm['tp2_pct']}%)\n\n"
 
         f"💹 <b>Potential P&L</b>\n"
@@ -500,8 +478,12 @@ def build_full_caption(sig: dict, signal_id: str) -> str:
 
 
 def send_signal_with_chart(sig: dict, df_15m: pd.DataFrame):
-    signal_id = generate_signal_id()
-    sig["signal_id"] = signal_id
+    # ✅ signal_id رو از sig میگیره، اگه نبود میسازه
+    signal_id = sig.get("signal_id")
+    if not signal_id:
+        from database.db import generate_signal_id
+        signal_id = generate_signal_id(sig["symbol"], sig["source"])
+        sig["signal_id"] = signal_id
 
     target = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
     caption = build_full_caption(sig, signal_id)
@@ -520,7 +502,7 @@ def send_signal_with_chart(sig: dict, df_15m: pd.DataFrame):
         print(f"Send signal error: {e}")
         try:
             send_message(caption, chat_id=target)
-        except:
+        except Exception:
             pass
 
 
@@ -538,7 +520,7 @@ def send_result_to_channel(symbol: str, signal_id: str,
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🆔 Code: <code>{signal_id}</code>\n"
         f"🪙 Symbol: <b>{symbol}</b>\n"
-        f"📊 Result: <b>{'WIN' if result=='WIN' else 'LOSS'}</b> "
+        f"📊 Result: <b>{'WIN' if result == 'WIN' else 'LOSS'}</b> "
         f"{result_emoji}\n"
         f"⚡ Leverage: <b>{leverage}x</b>\n"
         f"💰 P&L: <b>{sign}${abs(profit_usd):.2f}</b>\n"
