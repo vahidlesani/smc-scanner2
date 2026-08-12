@@ -86,6 +86,12 @@ def analyze_symbol(symbol):
     if not htf_bias or "NEUTRAL" in (htf_bias or ""):
         return signals, None
 
+    # ─── MTF Scalp: 1H → 15M → 5M ───
+    mtf_scalp = analyze_mtf_scalp(symbol)
+    scalp_bias = mtf_scalp.get("bias")
+    scalp_confirmed = mtf_scalp.get("htf_confirmed", False)
+    scalp_ready = mtf_scalp.get("ltf_ready", False)
+
     tf_data = get_multi_tf(symbol)
     df_1d = tf_data.get("1d")
     df_4h = tf_data.get("4h")
@@ -253,7 +259,58 @@ def analyze_symbol(symbol):
                 "trade_style": "SWING",
             })
 
-    # ─── استراتژی‌های جدید ───
+    # ─── اسکلپ سیگنال‌ها (5M) ───
+    if scalp_bias and scalp_confirmed and scalp_ready:
+        df_5m = get_klines(symbol, "5m", 100)
+        if df_5m is not None:
+            scalp_strategies = run_all_strategies(df_5m, scalp_bias)
+            scalp_mtf_text = get_mtf_confirmation_text(mtf_scalp)
+            
+            for strat_signal in scalp_strategies:
+                if was_signal_sent_recently(
+                    symbol, strat_signal.strategy,
+                    strat_signal.direction, hours=2
+                ):
+                    continue
+                
+                trade = calculate_trade_params(
+                    strat_signal.entry, strat_signal.sl,
+                    strat_signal.direction
+                )
+                
+                if trade:
+                    confirmations = strat_signal.confirmations.copy()
+                    confirmations.append("✅ تایید MTF Scalp")
+                    
+                    # فقط اسکلپ واقعی (SL کمتر از 0.5%)
+                    sl_pct = abs(strat_signal.entry - strat_signal.sl) / strat_signal.entry * 100
+                    if sl_pct < 0.5:
+                        signals.append({
+                            "source": strat_signal.strategy,
+                            "symbol": symbol,
+                            "direction": strat_signal.direction,
+                            "entry": strat_signal.entry,
+                            "sl": strat_signal.sl,
+                            "sl_original": strat_signal.sl,
+                            "tp1": strat_signal.tp1,
+                            "tp2": strat_signal.tp2,
+                            "zone_top": strat_signal.zone_top,
+                            "zone_bottom": strat_signal.zone_bottom,
+                            "strength": strat_signal.strength,
+                            "confirmations": confirmations,
+                            "description": strat_signal.description,
+                            "entry_conditions": strat_signal.entry_conditions,
+                            "score_bonus": strat_signal.score_bonus,
+                            "bias": scalp_bias,
+                            "trade_params": trade,
+                            "strategy_fa": strat_signal.strategy_fa,
+                            "mtf_text": scalp_mtf_text,
+                            "mtf_confirmed": True,
+                            "trade_style": "SCALP",
+                            "scalp_tf": "5m",
+                        })
+
+    # ─── استراتژی‌های جدید (Swing) ───
     new_strategies = run_all_strategies(df_15m, htf_bias)
     
     for strat_signal in new_strategies:
@@ -510,7 +567,7 @@ def main():
         f"💥 Breakout | 🧱 OB | ⚡ CHoCH\n"
         f"🎯 Return to Area\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"🔄 Multi-Timeframe: 4H → 1H → 15M\n"
+        f"🔄 Multi-Timeframe: 4H→1H→15M (Swing) | 1H→15M→5M (Scalp)\n"
         f"⏱ Scan: 5min (24/7)\n"
         f"📊 Partial TP: 60% TP1 + 40% TP2\n"
         f"🔒 SL to Breakeven after TP1\n"
