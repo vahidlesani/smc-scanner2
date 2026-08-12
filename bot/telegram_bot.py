@@ -1,4 +1,4 @@
-# bot/telegram_bot.py - Professional Signal Bot v4
+# bot/telegram_bot.py - Professional Signal Bot v5
 import requests
 import io
 import os
@@ -72,6 +72,7 @@ def generate_chart(df: pd.DataFrame, sig: dict) -> bytes:
         )
 
         score = calculate_score(sig)["score"]
+        sig_type = detect_signal_type(sig)
 
         hlines = [
             sig["entry"],
@@ -88,7 +89,7 @@ def generate_chart(df: pd.DataFrame, sig: dict) -> bytes:
             style=style,
             title=(
                 f"\n{sig['symbol']} | {sig['source']} "
-                f"| {sig['direction']} | Score: {score}/10"
+                f"| {sig['direction']} | Score: {score}/10 | {sig_type}"
             ),
             ylabel='Price (USDT)',
             hlines=dict(
@@ -108,6 +109,21 @@ def generate_chart(df: pd.DataFrame, sig: dict) -> bytes:
         return None
 
 
+def detect_signal_type(sig: dict) -> str:
+    """
+    تشخیص نوع سیگنال: Swing یا Scalp
+    بر اساس فاصله SL
+    """
+    entry = sig["entry"]
+    sl = sig["sl"]
+    sl_pct = abs(entry - sl) / entry * 100
+
+    if sl_pct >= 1.5:
+        return "📊 Swing"
+    else:
+        return "⚡ Scalp"
+
+
 def calculate_score(sig: dict) -> dict:
     score = 0
     details = []
@@ -118,14 +134,12 @@ def calculate_score(sig: dict) -> dict:
     has_choch = any("CHoCH" in c and "✅" in c for c in confirmations)
     is_new = any("جدید" in c for c in confirmations)
 
-    # ساختار HTF
     if sig.get("bias") in ["BULLISH", "BEARISH"]:
         score += 2
         details.append("✅ +2 ساختار HTF مشخص")
     else:
         details.append("❌ +0 ساختار HTF نامشخص")
 
-    # OB / Base / OTE
     if source == "SMC" and sig.get("ob_zone"):
         score += 2
         details.append("✅ +2 قیمت داخل Order Block")
@@ -136,21 +150,18 @@ def calculate_score(sig: dict) -> dict:
         score += 2
         details.append("✅ +2 قیمت در OTE Zone")
 
-    # Liquidity Sweep
     if has_sweep:
         score += 2
         details.append("✅ +2 Liquidity Sweep تایید")
     else:
         details.append("⚠️ +0 Sweep هنوز نشده")
 
-    # CHoCH / MSS
     if has_choch or sig.get("mss"):
         score += 2
         details.append("✅ +2 CHoCH/MSS تایید")
     else:
         details.append("⚠️ +0 CHoCH هنوز تایید نشده")
 
-    # بونوس‌ها
     if is_new:
         score += 1
         details.append("🆕 +1 تغییر جدید در بازار")
@@ -192,6 +203,13 @@ def calculate_score(sig: dict) -> dict:
 
 
 def calculate_money_management(sig: dict, score: int) -> dict:
+    """
+    مدیریت سرمایه اصلاح شده:
+    - حداکثر مارجین ۵٪ برای بهترین سیگنال
+    - حداقل مارجین ۱٪ برای ضعیف‌ترین
+    - لوریج متناسب با کیفیت
+    """
+    # لوریج بر اساس امتیاز
     leverage_map = {
         10: 20, 9: 20, 8: 15,
         7: 12, 6: 10, 5: 8,
@@ -199,8 +217,21 @@ def calculate_money_management(sig: dict, score: int) -> dict:
     }
     leverage = leverage_map.get(score, 5)
 
-    risk_amount = ACCOUNT_SIZE * (RISK_PERCENT / 100)
+    # درصد مارجین بر اساس امتیاز (حداکثر ۵٪)
+    margin_pct_map = {
+        10: 5.0, 9: 5.0, 8: 4.0,
+        7: 3.5, 6: 3.0, 5: 2.5,
+        4: 2.0, 3: 1.5, 2: 1.0, 1: 1.0
+    }
+    margin_pct = margin_pct_map.get(score, 1.0)
 
+    # مارجین واقعی
+    margin_usd = ACCOUNT_SIZE * (margin_pct / 100)
+
+    # حجم پوزیشن
+    position_size_usd = margin_usd * leverage
+
+    # ریسک واقعی بر اساس SL
     entry = sig["entry"]
     sl = sig["sl"]
     sl_distance = abs(entry - sl)
@@ -208,9 +239,9 @@ def calculate_money_management(sig: dict, score: int) -> dict:
     if sl_pct == 0:
         sl_pct = 1.0
 
-    position_size_usd = risk_amount / (sl_pct / 100)
-    margin_required = position_size_usd / leverage
-    margin_pct = (margin_required / ACCOUNT_SIZE) * 100
+    # ریسک واقعی
+    risk_amount = position_size_usd * (sl_pct / 100)
+    risk_pct_of_account = (risk_amount / ACCOUNT_SIZE) * 100
 
     tp1 = sig["trade_params"]["tp1"]
     tp2 = sig["trade_params"]["tp2"]
@@ -222,77 +253,120 @@ def calculate_money_management(sig: dict, score: int) -> dict:
         tp1_pct = ((entry - tp1) / entry) * 100
         tp2_pct = ((entry - tp2) / entry) * 100
 
-    tp1_profit = risk_amount * 2
-    tp2_profit = risk_amount * 3
+    # سود واقعی
+    tp1_profit = position_size_usd * (tp1_pct / 100)
+    tp2_profit = position_size_usd * (tp2_pct / 100)
+
+    # نقطه Mart: جایی که ستاپ باطل میشه
+    # معمولاً ۵٪ فراتر از SL
+    if sig["direction"] == "LONG":
+        mart_point = sl * 0.995
+    else:
+        mart_point = sl * 1.005
 
     return {
         "leverage": leverage,
-        "margin_required": round(margin_required, 2),
+        "margin_usd": round(margin_usd, 2),
         "margin_pct": round(margin_pct, 1),
         "position_size_usd": round(position_size_usd, 0),
         "risk_amount": round(risk_amount, 2),
-        "risk_pct": RISK_PERCENT,
+        "risk_pct": round(risk_pct_of_account, 2),
         "sl_pct": round(sl_pct, 2),
         "tp1_pct": round(tp1_pct, 2),
         "tp2_pct": round(tp2_pct, 2),
         "tp1_profit": round(tp1_profit, 2),
         "tp2_profit": round(tp2_profit, 2),
+        "mart_point": round(mart_point, 4),
     }
 
 
-def build_signal_reason(sig: dict, signal_id: str) -> str:
+def build_signal_reason(sig: dict) -> str:
+    """
+    توضیح کامل فارسی - بدون اصطلاحات انگلیسی در متن
+    """
     source = sig["source"]
     direction = sig["direction"]
     bias = sig.get("bias", "")
-    bias_fa = "📈 صعودی" if bias == "BULLISH" else "📉 نزولی"
-    dir_fa = "LONG 🟢" if direction == "LONG" else "SHORT 🔴"
     confirmations = sig.get("confirmations", [])
 
+    bias_fa = "صعودی" if bias == "BULLISH" else "نزولی"
+    dir_fa = "خرید" if direction == "LONG" else "فروش"
+    opp_fa = "حمایت" if direction == "LONG" else "مقاومت"
+
     if source == "SMC":
-        has_sweep = any("Sweep" in c and "✅" in c for c in confirmations)
-        has_choch = any("CHoCH" in c and "✅" in c for c in confirmations)
+        has_sweep = any(
+            "Sweep" in c and "✅" in c for c in confirmations)
+        has_choch = any(
+            "CHoCH" in c and "✅" in c for c in confirmations)
         ob_zone = sig.get("ob_zone", "")
         ob_strength = sig.get("ob_strength", "")
 
         reason = (
-            f"📋 <b>دلیل صدور سیگنال:</b>\n"
-            f"استراتژی <b>SMC</b> شناسایی کرد:\n\n"
-            f"۱. ساختار ۴ ساعته <b>{bias_fa}</b> (HH/HL)\n"
-            f"۲. قیمت وارد <b>Order Block</b> قدرت {ob_strength} شد\n"
-            f"   📌 محدوده: <code>{ob_zone}</code>\n"
-            f"۳. {'✅ Liquidity Sweep تایید شد' if has_sweep else '⚠️ انتظار Sweep'}\n"
-            f"۴. {'✅ CHoCH در ۱۵m تایید شد' if has_choch else '⚠️ انتظار CHoCH'}\n\n"
-            f"🔑 <b>شرط ورود:</b>\n"
-            f"• کندل تاییدیه {dir_fa} در OB\n"
-            f"• بسته شدن "
-            f"{'بالای' if direction == 'LONG' else 'زیر'} سطح CHoCH\n"
-            f"• حجم بالاتر از میانگین\n"
+            f"📋 <b>دلیل صدور سیگنال:</b>\n\n"
+            f"ساختار بازار در تایم‌فریم چهار ساعته {bias_fa} "
+            f"تشخیص داده شد. قیمت به ناحیه سفارشات بزرگ "
+            f"با قدرت {ob_strength} رسیده است.\n"
+            f"محدوده ناحیه: <code>{ob_zone}</code>\n\n"
+        )
+
+        if has_sweep:
+            reason += (
+                f"نقدینگی بازار قبل از این ناحیه جمع‌آوری و "
+                f"جذب شده است که نشانه آمادگی بازار برای "
+                f"حرکت {bias_fa} است.\n\n"
+            )
+        else:
+            reason += (
+                f"نقدینگی بازار هنوز جمع‌آوری نشده. "
+                f"بهتر است صبر کنید تا این مرحله تکمیل شود.\n\n"
+            )
+
+        if has_choch:
+            reason += (
+                f"در تایم‌فریم پانزده دقیقه، ساختار بازار "
+                f"تغییر کرده و جهت {dir_fa} تایید شده است.\n\n"
+            )
+        else:
+            reason += (
+                f"تغییر ساختار در تایم‌فریم کوچک هنوز "
+                f"تایید نشده است. این شرط مهم را دنبال کنید.\n\n"
+            )
+
+        reason += (
+            f"🔑 <b>شرط ورود به پوزیشن:</b>\n"
+            f"• مشاهده کندل تاییدیه {dir_fa} در ناحیه\n"
+            f"• بسته شدن کندل {'بالای' if direction=='LONG' else 'زیر'} "
+            f"سطح تغییر ساختار\n"
+            f"• افزایش حجم معاملات\n"
         )
 
     elif source == "RTM":
         pattern = sig.get("pattern", "")
         base_zone = sig.get("base_zone", "")
         strength = sig.get("strength", "")
+
         patterns_fa = {
-            "RBR": ("Rally-Base-Rally", "ادامه صعود"),
-            "DBD": ("Drop-Base-Drop", "ادامه نزول"),
-            "RBD": ("Rally-Base-Drop", "برگشت نزولی"),
-            "DBR": ("Drop-Base-Rally", "برگشت صعودی"),
+            "RBR": "حرکت صعودی، تجمیع، ادامه صعود",
+            "DBD": "حرکت نزولی، تجمیع، ادامه نزول",
+            "RBD": "حرکت صعودی، تجمیع، برگشت نزولی",
+            "DBR": "حرکت نزولی، تجمیع، برگشت صعودی",
         }
-        p_en, p_fa = patterns_fa.get(pattern, (pattern, "ستاپ ترکیبی"))
+        p_fa = patterns_fa.get(pattern, "الگوی ترکیبی")
 
         reason = (
-            f"📋 <b>دلیل صدور سیگنال:</b>\n"
-            f"استراتژی <b>RTM</b> شناسایی کرد:\n\n"
-            f"۱. الگوی <b>{p_en}</b> ({p_fa})\n"
-            f"۲. ساختار کلی {bias_fa}\n"
-            f"۳. ناحیه Base: <code>{base_zone}</code>\n"
-            f"۴. قدرت ستاپ: <b>{strength}</b>\n"
-            f"۵. ✅ ناحیه هنوز <b>Fresh</b> است\n\n"
-            f"🔑 <b>شرط ورود:</b>\n"
-            f"• برگشت قیمت به Base\n"
-            f"• کندل تاییدیه {dir_fa}\n"
-            f"• ترجیحاً در Killzone لندن/نیویورک\n"
+            f"📋 <b>دلیل صدور سیگنال:</b>\n\n"
+            f"الگوی {pattern} شناسایی شد. این الگو نشان‌دهنده "
+            f"{p_fa} است.\n\n"
+            f"بازار یک حرکت قوی داشته، سپس وارد فاز تجمیع "
+            f"و آرامش شده. این ناحیه تجمیع هنوز تست نشده و "
+            f"تازه است. قدرت الگو: {strength}\n"
+            f"محدوده ناحیه: <code>{base_zone}</code>\n\n"
+            f"ساختار کلی بازار {bias_fa} است و این الگو "
+            f"در هم‌راستا با روند اصلی قرار دارد.\n\n"
+            f"🔑 <b>شرط ورود به پوزیشن:</b>\n"
+            f"• برگشت قیمت به ناحیه تجمیع\n"
+            f"• مشاهده کندل تاییدیه {dir_fa}\n"
+            f"• ترجیحاً در ساعات لندن یا نیویورک\n"
         )
 
     elif source == "ICT":
@@ -302,28 +376,57 @@ def build_signal_reason(sig: dict, signal_id: str) -> str:
         pdh = sig.get("pdh")
         pdl = sig.get("pdl")
 
+        kz_fa = {
+            "London": "لندن (۱۰:۳۰ تا ۱۳:۳۰)",
+            "NewYork": "نیویورک (۱۶:۳۰ تا ۱۹:۳۰)",
+            "Asian": "آسیا (۳:۳۰ تا ۶:۳۰)",
+        }.get(killzone, killzone)
+
         reason = (
-            f"📋 <b>دلیل صدور سیگنال:</b>\n"
-            f"استراتژی <b>ICT</b> شناسایی کرد:\n\n"
-            f"۱. ساختار {bias_fa}\n"
-            f"۲. قیمت در <b>OTE</b> (فیبو ۶۲٪-۷۹٪)\n"
-            f"   📌 محدوده: <code>{ote_zone}</code>\n"
-            f"۳. {'✅ Killzone: ' + killzone if killzone != 'None' else '⚠️ خارج Killzone'}\n"
-            f"۴. {'✅ MSS تایید شد' if mss else '⚠️ انتظار MSS'}\n"
+            f"📋 <b>دلیل صدور سیگنال:</b>\n\n"
+            f"قیمت وارد ناحیه بهینه ورود بر اساس فیبوناچی "
+            f"شصت و دو تا هفتاد و نه درصد شده است.\n"
+            f"محدوده ناحیه: <code>{ote_zone}</code>\n\n"
         )
+
+        if killzone != "None":
+            reason += (
+                f"الان در ساعت طلایی {kz_fa} هستیم که "
+                f"بهترین زمان برای ورود به معامله است.\n\n"
+            )
+        else:
+            reason += (
+                f"در حال حاضر خارج از ساعات طلایی هستیم. "
+                f"با احتیاط بیشتری عمل کنید.\n\n"
+            )
+
+        if mss:
+            reason += (
+                f"ساختار بازار در تایم‌فریم کوچک تغییر کرده "
+                f"و جهت {dir_fa} تایید شده است.\n\n"
+            )
+        else:
+            reason += (
+                f"تغییر ساختار در تایم‌فریم کوچک هنوز "
+                f"تایید نشده. صبر کنید.\n\n"
+            )
+
         if pdh and pdl:
             reason += (
-                f"۵. PDH: <code>{pdh:.4f}</code> | "
-                f"PDL: <code>{pdl:.4f}</code>\n"
+                f"سطوح مهم روز قبل:\n"
+                f"بالاترین: <code>{pdh:.4f}</code>  |  "
+                f"پایین‌ترین: <code>{pdl:.4f}</code>\n\n"
             )
+
         reason += (
-            f"\n🔑 <b>شرط ورود:</b>\n"
-            f"• تایید MSS در ۵ یا ۱۵ دقیقه\n"
-            f"• ورود در Killzone\n"
-            f"• هدف: PDH یا PDL روز قبل\n"
+            f"🔑 <b>شرط ورود به پوزیشن:</b>\n"
+            f"• تایید تغییر ساختار در تایم پانزده دقیقه\n"
+            f"• ورود در ساعت طلایی\n"
+            f"• هدف: سطوح مهم روز قبل\n"
         )
+
     else:
-        reason = "📋 تحلیل ترکیبی چند استراتژی."
+        reason = "📋 <b>دلیل:</b> تحلیل ترکیبی چند روش."
 
     return reason
 
@@ -332,7 +435,8 @@ def build_full_caption(sig: dict, signal_id: str) -> str:
     score_data = calculate_score(sig)
     score = score_data["score"]
     mm = calculate_money_management(sig, score)
-    reason = build_signal_reason(sig, signal_id)
+    reason = build_signal_reason(sig)
+    sig_type = detect_signal_type(sig)
 
     source_emoji = {
         "SMC": "📊", "RTM": "🔷", "ICT": "💎"
@@ -344,16 +448,18 @@ def build_full_caption(sig: dict, signal_id: str) -> str:
     )
 
     caption = (
-        f"✨ <b>سیگنال جدید</b> ✨\n"
+        f"✨ <b>New Signal</b> ✨\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"{source_emoji} <b>{sig['source']}</b>  •  "
         f"<code>{signal_id}</code>  {dir_emoji}\n"
         f"🪙 <b>{sig['symbol']}</b>  |  "
-        f"{'LONG 🟢' if sig['direction']=='LONG' else 'SHORT 🔴'}\n"
-        f"📈 روند: <b>"
-        f"{'صعودی' if sig.get('bias')=='BULLISH' else 'نزولی'}</b>\n\n"
+        f"<b>{sig['direction']}</b> {dir_emoji}\n"
+        f"📈 Trend: <b>"
+        f"{'Bullish 🟢' if sig.get('bias')=='BULLISH' else 'Bearish 🔴'}"
+        f"</b>  |  {sig_type}\n\n"
 
-        f"⭐ <b>امتیاز:</b> {score_data['bar']} {score}/10\n"
+        f"⭐ <b>Signal Score:</b> "
+        f"{score_data['bar']} {score}/10\n"
         f"🏷 {score_data['label']}\n"
         f"{details_text}\n\n"
 
@@ -361,28 +467,29 @@ def build_full_caption(sig: dict, signal_id: str) -> str:
         f"{reason}\n"
         f"━━━━━━━━━━━━━━━━━━\n\n"
 
-        f"💼 <b>مدیریت سرمایه</b>\n"
-        f"├ 💰 سرمایه: ${ACCOUNT_SIZE:,.0f}\n"
-        f"├ ⚡ لوریج پیشنهادی: <b>{mm['leverage']}x</b>\n"
-        f"├ 📊 مارجین: <b>{mm['margin_pct']}%</b> "
-        f"= ${mm['margin_required']}\n"
-        f"├ ⚠️ ریسک: <b>{mm['risk_pct']}%</b> "
+        f"💼 <b>Money Management</b>\n"
+        f"├ 💰 Account: ${ACCOUNT_SIZE:,.0f}\n"
+        f"├ ⚡ Leverage: <b>{mm['leverage']}x</b>\n"
+        f"├ 📊 Margin: <b>{mm['margin_pct']}%</b> "
+        f"= ${mm['margin_usd']}\n"
+        f"├ ⚠️ Real Risk: <b>{mm['risk_pct']}%</b> "
         f"= ${mm['risk_amount']}\n"
-        f"└ 📦 حجم پوزیشن: ~${mm['position_size_usd']:,.0f}\n\n"
+        f"└ 📦 Position Size: ~${mm['position_size_usd']:,.0f}\n\n"
 
-        f"📌 <b>نقاط معاملاتی</b>\n"
-        f"├ 📍 ورود:   <b>{sig['entry']:.4f}</b>\n"
-        f"├ 🛑 استاپ:  {sig['sl']:.4f}  "
+        f"📌 <b>Trade Levels</b>\n"
+        f"├ 📍 Entry:   <b>{sig['entry']:.4f}</b>\n"
+        f"├ 🛑 SL:      {sig['sl']:.4f}  "
         f"(-{mm['sl_pct']}%)\n"
-        f"├ 🥇 هدف ۱: {sig['trade_params']['tp1']:.4f}  "
+        f"├ ⛔ Mart:    {mm['mart_point']:.4f}\n"
+        f"├ 🥇 TP1:     {sig['trade_params']['tp1']:.4f}  "
         f"(+{mm['tp1_pct']}%)\n"
-        f"└ 🥈 هدف ۲: {sig['trade_params']['tp2']:.4f}  "
+        f"└ 🥈 TP2:     {sig['trade_params']['tp2']:.4f}  "
         f"(+{mm['tp2_pct']}%)\n\n"
 
-        f"💹 <b>سود/زیان احتمالی</b>\n"
-        f"├ ✅ سود هدف ۱: +${mm['tp1_profit']}\n"
-        f"├ ✅ سود هدف ۲: +${mm['tp2_profit']}\n"
-        f"└ ❌ زیان: -${mm['risk_amount']}\n\n"
+        f"💹 <b>Potential P&L</b>\n"
+        f"├ ✅ Profit TP1: +${mm['tp1_profit']}\n"
+        f"├ ✅ Profit TP2: +${mm['tp2_profit']}\n"
+        f"└ ❌ Max Loss:   -${mm['risk_amount']}\n\n"
 
         f"━━━━━━━━━━━━━━━━━━\n"
         f"⚠️ <i>همیشه چارت را خودتان بررسی کنید!</i>\n"
@@ -419,25 +526,25 @@ def send_signal_with_chart(sig: dict, df_15m: pd.DataFrame):
 
 def send_result_to_channel(symbol: str, signal_id: str,
                             result: str, pnl: float,
-                            leverage: int, risk_amount: float):
+                            leverage: int, margin_usd: float):
     target = CHAT_ID_RESULTS if CHAT_ID_RESULTS else CHAT_ID_ADMIN
 
-    profit_usd = abs(risk_amount * (pnl / 1.5))
+    profit_usd = margin_usd * leverage * (abs(pnl) / 100)
     result_emoji = "✅" if result == "WIN" else "❌"
-    result_fa = "برد" if result == "WIN" else "باخت"
     sign = "+" if result == "WIN" else "-"
 
     msg = (
-        f"{result_emoji} <b>نتیجه سیگنال</b>\n"
+        f"{result_emoji} <b>Signal Result</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"🆔 کد: <code>{signal_id}</code>\n"
-        f"🪙 {symbol}\n"
-        f"📊 نتیجه: <b>{result_fa}</b> {result_emoji}\n"
-        f"⚡ لوریج: {leverage}x\n"
-        f"💰 سود/زیان: <b>{sign}${abs(profit_usd):.2f}</b>\n"
-        f"📈 PnL: <b>{sign}{abs(pnl):.2f}%</b>\n"
+        f"🆔 Code: <code>{signal_id}</code>\n"
+        f"🪙 Symbol: <b>{symbol}</b>\n"
+        f"📊 Result: <b>{'WIN' if result=='WIN' else 'LOSS'}</b> "
+        f"{result_emoji}\n"
+        f"⚡ Leverage: <b>{leverage}x</b>\n"
+        f"💰 P&L: <b>{sign}${abs(profit_usd):.2f}</b>\n"
+        f"📈 Return: <b>{sign}{abs(pnl):.2f}%</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"⚠️ <i>بر اساس مدیریت سرمایه پیشنهادی</i>"
+        f"⚠️ <i>بر اساس مدیریت سرمایه پیشنهادی محاسبه شده</i>"
     )
     send_message(msg, chat_id=target)
 
@@ -447,7 +554,7 @@ def send_performance_report(stats: dict):
 
     if not stats:
         send_message(
-            "📊 <b>گزارش روزانه</b>\n\n"
+            "📊 <b>Daily Report</b>\n\n"
             "هنوز سیگنال بسته‌ای نداریم.",
             chat_id=target
         )
@@ -459,7 +566,7 @@ def send_performance_report(stats: dict):
     wr = (tw / total * 100) if total > 0 else 0
 
     lines = [
-        "📊 <b>گزارش روزانه وین‌ریت</b>",
+        "📊 <b>Daily Winrate Report</b>",
         "━━━━━━━━━━━━━━━━━━\n"
     ]
 
@@ -467,16 +574,17 @@ def send_performance_report(stats: dict):
         e = {"SMC": "📊", "RTM": "🔷", "ICT": "💎"}.get(source, "📌")
         lines.append(
             f"{e} <b>{source}</b>\n"
-            f"├ ✅ برد: {data['wins']}\n"
-            f"├ ❌ باخت: {data['losses']}\n"
-            f"├ 📈 وین‌ریت: <b>{data['winrate']:.1f}%</b>\n"
-            f"└ 💰 میانگین PnL: {data['avg_pnl']:.2f}%\n"
+            f"├ ✅ Win: {data['wins']}\n"
+            f"├ ❌ Loss: {data['losses']}\n"
+            f"├ 📈 Winrate: <b>{data['winrate']:.1f}%</b>\n"
+            f"└ 💰 Avg PnL: {data['avg_pnl']:.2f}%\n"
         )
 
     lines.append(
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"🏆 مجموع: {total} سیگنال\n"
-        f"🎯 وین‌ریت کل: <b>{wr:.1f}%</b>"
+        f"🏆 Total Signals: {total}\n"
+        f"🎯 Overall Winrate: <b>{wr:.1f}%</b>\n\n"
+        f"⚠️ <i>نتایج بر اساس مدیریت سرمایه پیشنهادی</i>"
     )
 
     send_message("\n".join(lines), chat_id=target)
