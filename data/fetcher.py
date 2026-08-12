@@ -1,4 +1,4 @@
-psycopg2-binary
+import psycopg2-binary
 import requests
 import pandas as pd
 
