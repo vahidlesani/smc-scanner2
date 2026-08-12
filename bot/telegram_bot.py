@@ -1,4 +1,5 @@
-# bot/telegram_bot.py - Professional Signal Bot v5
+# bot/telegram_bot.py - Professional Signal Bot v6
+# کانال: vivaanalyst-Chanel
 import requests
 import io
 import os
@@ -16,6 +17,8 @@ CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
 
 ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
 RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
+
+CHANNEL_NAME = "vivaanalyst-Chanel"
 
 
 def _split_telegram_text(text: str, limit: int = 4000):
@@ -113,6 +116,8 @@ def generate_chart(df: pd.DataFrame, sig: dict) -> bytes:
         hlines = [sig["entry"], sig["sl"], tp1, tp2]
         colors = ['#ffffff', '#ff4444', '#00ff88', '#00aa55']
 
+        dir_emoji = "🟢" if sig["direction"] == "LONG" else "🔴"
+
         buf = io.BytesIO()
         mpf.plot(
             chart_df,
@@ -120,7 +125,7 @@ def generate_chart(df: pd.DataFrame, sig: dict) -> bytes:
             style=style,
             title=(
                 f"\n{sig['symbol']} | {sig['source']} "
-                f"| {sig['direction']} "
+                f"| {sig['direction']} {dir_emoji} "
                 f"| Score: {score}/10 | {sig_type}"
             ),
             ylabel='Price (USDT)',
@@ -163,44 +168,63 @@ def calculate_score(sig: dict) -> dict:
 
     has_sweep = any("Sweep" in c and "✅" in c for c in confirmations)
     has_choch = any("CHoCH" in c and "✅" in c for c in confirmations)
-    is_new = any("جدید" in c for c in confirmations)
+    is_new = any("جدید" in c or "جدید" in c for c in confirmations)
 
+    # ساختار HTF
     if sig.get("bias") in ["BULLISH", "BEARISH"]:
         score += 2
         details.append("✅ +2 ساختار HTF مشخص")
     else:
         details.append("❌ +0 ساختار HTF نامشخص")
 
-    if source == "SMC" and sig.get("ob_zone"):
-        score += 2
-        details.append("✅ +2 قیمت داخل Order Block")
-    elif source == "RTM" and sig.get("base_zone"):
-        score += 2
-        details.append("✅ +2 قیمت در ناحیه Base")
-    elif source == "ICT" and sig.get("ote_zone"):
-        score += 2
-        details.append("✅ +2 قیمت در OTE Zone")
+    # ناحیه مناسب
+    source_scores = {
+        "SMC": ("ob_zone", "قیمت داخل Order Block"),
+        "RTM": ("base_zone", "قیمت در ناحیه Base"),
+        "ICT": ("ote_zone", "قیمت در OTE Zone"),
+        "QM": ("zone_top", "قیمت در ناحیه QM"),
+        "ENGULFING": ("zone_top", "کندل پوششی فعال"),
+        "PINBAR": ("zone_top", "پین بار فعال"),
+        "FVG": ("zone_top", "قیمت در FVG"),
+        "IFVG": ("zone_top", "قیمت در IFVG"),
+        "FLIPZONE": ("zone_top", "قیمت در فیلیپ زون"),
+        "BREAKOUT": ("zone_top", "شکست سطح تأیید شد"),
+        "ORDERBLOCK": ("zone_top", "قیمت در اوردر بلاک"),
+        "CHOCH": ("zone_top", "تغییر ساختار تأیید شد"),
+        "RETURN_AREA": ("zone_top", "بازگشت به ناحیه"),
+    }
 
+    if source in source_scores:
+        zone_key, desc = source_scores[source]
+        if sig.get(zone_key):
+            score += 2
+            details.append(f"✅ +2 {desc}")
+
+    # Sweep
     if has_sweep:
         score += 2
         details.append("✅ +2 Liquidity Sweep تایید")
     else:
         details.append("⚠️ +0 Sweep هنوز نشده")
 
+    # CHoCH/MSS
     if has_choch or sig.get("mss"):
         score += 2
         details.append("✅ +2 CHoCH/MSS تایید")
     else:
         details.append("⚠️ +0 CHoCH هنوز تایید نشده")
 
+    # تغییر جدید
     if is_new:
         score += 1
         details.append("🆕 +1 تغییر جدید در بازار")
 
+    # Killzone (فقط ICT)
     if source == "ICT" and sig.get("in_killzone"):
         score += 1
         details.append("⏰ +1 در Killzone هستیم")
 
+    # قدرت OB
     if source == "SMC":
         try:
             s = float(
@@ -211,6 +235,11 @@ def calculate_score(sig: dict) -> dict:
                 details.append("💪 +1 OB بسیار قوی")
         except Exception:
             pass
+
+    # امتیاز اضافی استراتژی
+    if sig.get("score_bonus"):
+        score += sig["score_bonus"]
+        details.append(f"⭐ +{sig['score_bonus']} امتیاز استراتژی {source}")
 
     score = max(1, min(10, score))
 
@@ -315,6 +344,19 @@ def build_signal_reason(sig: dict) -> str:
     bias_fa = "صعودی" if bias == "BULLISH" else "نزولی"
     dir_fa = "خرید" if direction == "LONG" else "فروش"
 
+    # اگه استراتژی توضیحات آموزشی داره، از اون استفاده کن
+    if sig.get("description"):
+        reason = f"📋 <b>دلیل صدور سیگنال:</b>\n\n"
+        reason += f"{sig['description']}\n\n"
+        
+        if sig.get("entry_conditions"):
+            reason += f"🔑 <b>شرط ورود به پوزیشن:</b>\n"
+            for cond in sig["entry_conditions"]:
+                reason += f"• {cond}\n"
+        
+        return reason
+
+    # توضیحات پیش‌فرض بر اساس source
     if source == "SMC":
         has_sweep = any(
             "Sweep" in c and "✅" in c for c in confirmations)
@@ -463,8 +505,13 @@ def build_full_caption(sig: dict, signal_id: str) -> str:
     sig_type = detect_signal_type(sig)
 
     source_emoji = {
-        "SMC": "📊", "RTM": "🔷", "ICT": "💎"
+        "SMC": "📊", "RTM": "🔷", "ICT": "💎",
+        "QM": "🔮", "ENGULFING": "🔥", "PINBAR": "📌",
+        "FVG": "📐", "IFVG": "🔄", "FLIPZONE": "🔁",
+        "BREAKOUT": "💥", "ORDERBLOCK": "🧱",
+        "CHOCH": "⚡", "RETURN_AREA": "🎯"
     }.get(sig["source"], "📌")
+
     dir_emoji = "🟢" if sig["direction"] == "LONG" else "🔴"
 
     details_text = "\n".join(
@@ -474,10 +521,12 @@ def build_full_caption(sig: dict, signal_id: str) -> str:
     tp1 = _get_tp(sig, "tp1")
     tp2 = _get_tp(sig, "tp2")
 
+    # ساخت کپشن با فرمت بهبود یافته
     caption = (
         f"✨ <b>New Signal</b> ✨\n"
+        f"📢 کانال: <b>{CHANNEL_NAME}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"{source_emoji} <b>{sig['source']}</b>  •  "
+        f"{source_emoji} <b>{sig.get('strategy_fa', sig['source'])}</b>  •  "
         f"<code>{signal_id}</code>  {dir_emoji}\n"
         f"🪙 <b>{sig['symbol']}</b>  |  "
         f"<b>{sig['direction']}</b> {dir_emoji}\n"
@@ -504,25 +553,63 @@ def build_full_caption(sig: dict, signal_id: str) -> str:
         f"└ 📦 Position Size: ~${mm['position_size_usd']:,.0f}\n\n"
 
         f"📌 <b>Trade Levels</b>\n"
-        f"├ 📍 Entry:   <b>{sig['entry']:.4f}</b>\n"
-        f"├ 🛑 SL:      {sig['sl']:.4f}  "
+        f"├ 🎯 Entry:   <b>{sig['entry']:.4f}</b>\n"
+        f"├ 🛑 SL:      <b>{sig['sl']:.4f}</b>  "
         f"(-{mm['sl_pct']}%)\n"
-        f"├ ⛔ Mart:    {mm['mart_point']:.4f}\n"
-        f"├ 🥇 TP1:     {tp1:.4f}  "
+        f"├ ⛔ Mart:    <b>{mm['mart_point']:.4f}</b>\n"
+        f"├ 🥇 TP1:     <b>{tp1:.4f}</b>  "
         f"(+{mm['tp1_pct']}%)\n"
-        f"└ 🥈 TP2:     {tp2:.4f}  "
+        f"└ 🥈 TP2:     <b>{tp2:.4f}</b>  "
         f"(+{mm['tp2_pct']}%)\n\n"
 
         f"💹 <b>Potential P&L</b>\n"
-        f"├ ✅ Profit TP1: +${mm['tp1_profit']}\n"
-        f"├ ✅ Profit TP2: +${mm['tp2_profit']}\n"
-        f"└ ❌ Max Loss:   -${mm['risk_amount']}\n\n"
+        f"├ ✅ Profit TP1: <b>+${mm['tp1_profit']}</b>\n"
+        f"├ ✅ Profit TP2: <b>+${mm['tp2_profit']}</b>\n"
+        f"└ ❌ Max Loss:   <b>-${mm['risk_amount']}</b>\n\n"
 
         f"━━━━━━━━━━━━━━━━━━\n"
         f"⚠️ <i>همیشه چارت را خودتان بررسی کنید!</i>\n"
-        f"🆔 <code>{signal_id}</code>"
+        f"🆔 <code>{signal_id}</code>\n"
+        f"📢 <b>{CHANNEL_NAME}</b>"
     )
 
+    return caption
+
+
+def build_confirmation_caption(sig: dict, signal_id: str,
+                                current_price: float) -> str:
+    """کپشن سیگنال تایید شده"""
+    dir_emoji = "🟢" if sig["direction"] == "LONG" else "🔴"
+    
+    caption = (
+        f"✅ <b>Signal Confirmed!</b> ✅\n"
+        f"📢 کانال: <b>{CHANNEL_NAME}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🆔 <code>{signal_id}</code>\n"
+        f"🪙 <b>{sig['symbol']}</b> | {sig['direction']} {dir_emoji}\n"
+        f"🎯 Entry confirmed at <b>{current_price:.4f}</b>\n\n"
+        f"✅ پوزیشن تایید شد!\n"
+        f"📍 میتوانید وارد شوید.\n\n"
+        f"⚠️ <i>مدیریت سرمایه را رعایت کنید</i>\n"
+        f"📢 <b>{CHANNEL_NAME}</b>"
+    )
+    return caption
+
+
+def build_cancellation_caption(sig: dict, signal_id: str) -> str:
+    """کپشن سیگنال باطل شده"""
+    dir_emoji = "🟢" if sig["direction"] == "LONG" else "🔴"
+    
+    caption = (
+        f"❌ <b>Signal Cancelled!</b> ❌\n"
+        f"📢 کانال: <b>{CHANNEL_NAME}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🆔 <code>{signal_id}</code>\n"
+        f"🪙 <b>{sig['symbol']}</b> | {sig['direction']} {dir_emoji}\n\n"
+        f"⚠️ قیمت در جهت مخالف حرکت کرد.\n"
+        f"❌ این سیگنال باطل شد - وارد نشوید!\n\n"
+        f"📢 <b>{CHANNEL_NAME}</b>"
+    )
     return caption
 
 
@@ -534,12 +621,36 @@ def send_signal_with_chart(sig: dict, df_15m: pd.DataFrame):
         signal_id = generate_signal_id(sig["symbol"], sig["source"])
         sig["signal_id"] = signal_id
 
+    # اضافه کردن strategy_fa اگه نبود
+    if not sig.get("strategy_fa"):
+        strategy_names = {
+            "SMC": "اسمارت مانی",
+            "RTM": "RTM",
+            "ICT": "ICT",
+            "QM": "کوآزیمودو",
+            "ENGULFING": "کندل پوششی",
+            "PINBAR": "پین بار",
+            "FVG": "شکاف قیمتی",
+            "IFVG": "معکوس شکاف",
+            "FLIPZONE": "فیلیپ زون",
+            "BREAKOUT": "شکست سطح",
+            "ORDERBLOCK": "اوردر بلاک",
+            "CHOCH": "تغییر ساختار",
+            "RETURN_AREA": "بازگشت به ناحیه"
+        }
+        sig["strategy_fa"] = strategy_names.get(sig["source"], sig["source"])
+
     target = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
     caption = build_full_caption(sig, signal_id)
+    
+    # کپشن کوتاه برای عکس
+    dir_emoji = "🟢" if sig["direction"] == "LONG" else "🔴"
     short_caption = (
-        f"{sig['symbol']} | {sig['source']} | {sig['direction']}\n"
-        f"Entry {sig['entry']:.4f}  SL {sig['sl']:.4f}\n"
-        f"<code>{signal_id}</code>"
+        f"{sig['symbol']} | {sig.get('strategy_fa', sig['source'])} "
+        f"| {sig['direction']} {dir_emoji}\n"
+        f"🎯 Entry {sig['entry']:.4f}  🛑 SL {sig['sl']:.4f}\n"
+        f"🆔 <code>{signal_id}</code>\n"
+        f"📢 {CHANNEL_NAME}"
     )
 
     try:
@@ -563,6 +674,21 @@ def send_signal_with_chart(sig: dict, df_15m: pd.DataFrame):
             pass
 
 
+def send_confirmation_signal(sig_data: dict, signal_id: str,
+                              current_price: float):
+    """ارسال سیگنال تایید شده"""
+    target = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
+    caption = build_confirmation_caption(sig_data, signal_id, current_price)
+    send_message(caption, chat_id=target)
+
+
+def send_cancellation_signal(sig_data: dict, signal_id: str):
+    """ارسال سیگنال باطل شده"""
+    target = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
+    caption = build_cancellation_caption(sig_data, signal_id)
+    send_message(caption, chat_id=target)
+
+
 def send_result_to_channel(symbol: str, signal_id: str,
                             result: str, pnl: float,
                             leverage: int, margin_usd: float):
@@ -574,6 +700,7 @@ def send_result_to_channel(symbol: str, signal_id: str,
 
     msg = (
         f"{result_emoji} <b>Signal Result</b>\n"
+        f"📢 کانال: <b>{CHANNEL_NAME}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🆔 Code: <code>{signal_id}</code>\n"
         f"🪙 Symbol: <b>{symbol}</b>\n"
@@ -583,7 +710,8 @@ def send_result_to_channel(symbol: str, signal_id: str,
         f"💰 P&L: <b>{sign}${abs(profit_usd):.2f}</b>\n"
         f"📈 Return: <b>{sign}{abs(pnl):.2f}%</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"⚠️ <i>بر اساس مدیریت سرمایه پیشنهادی محاسبه شده</i>"
+        f"⚠️ <i>بر اساس مدیریت سرمایه پیشنهادی محاسبه شده</i>\n"
+        f"📢 <b>{CHANNEL_NAME}</b>"
     )
     send_message(msg, chat_id=target)
 
@@ -593,7 +721,8 @@ def send_performance_report(stats: dict):
 
     if not stats:
         send_message(
-            "📊 <b>Daily Report</b>\n\n"
+            f"📊 <b>Daily Report</b>\n"
+            f"📢 کانال: <b>{CHANNEL_NAME}</b>\n\n"
             "هنوز سیگنال بسته‌ای نداریم.",
             chat_id=target
         )
@@ -605,12 +734,21 @@ def send_performance_report(stats: dict):
     wr = (tw / total * 100) if total > 0 else 0
 
     lines = [
-        "📊 <b>Daily Winrate Report</b>",
+        f"📊 <b>Daily Winrate Report</b>",
+        f"📢 کانال: <b>{CHANNEL_NAME}</b>",
         "━━━━━━━━━━━━━━━━━━\n"
     ]
 
+    source_emojis = {
+        "SMC": "📊", "RTM": "🔷", "ICT": "💎",
+        "QM": "🔮", "ENGULFING": "🔥", "PINBAR": "📌",
+        "FVG": "📐", "IFVG": "🔄", "FLIPZONE": "🔁",
+        "BREAKOUT": "💥", "ORDERBLOCK": "🧱",
+        "CHOCH": "⚡", "RETURN_AREA": "🎯"
+    }
+
     for source, data in stats.items():
-        e = {"SMC": "📊", "RTM": "🔷", "ICT": "💎"}.get(source, "📌")
+        e = source_emojis.get(source, "📌")
         lines.append(
             f"{e} <b>{source}</b>\n"
             f"├ ✅ Win: {data['wins']}\n"
@@ -623,7 +761,8 @@ def send_performance_report(stats: dict):
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🏆 Total Signals: {total}\n"
         f"🎯 Overall Winrate: <b>{wr:.1f}%</b>\n\n"
-        f"⚠️ <i>نتایج بر اساس مدیریت سرمایه پیشنهادی</i>"
+        f"⚠️ <i>نتایج بر اساس مدیریت سرمایه پیشنهادی</i>\n"
+        f"📢 <b>{CHANNEL_NAME}</b>"
     )
 
     send_message("\n".join(lines), chat_id=target)

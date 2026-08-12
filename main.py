@@ -1,4 +1,4 @@
-# smc-scanner v4 - codes + risk + dual channel
+# smc-scanner v5 - strategies + viva IDs + dual channel
 import time
 import schedule
 import os
@@ -10,9 +10,11 @@ from analysis.structure import find_swing_points, classify_structure, detect_bos
 from analysis.smc import find_order_blocks, detect_liquidity
 from analysis.rtm import get_rtm_signal
 from analysis.ict import get_ict_signal
+from analysis.strategies import run_all_strategies, StrategySignal
 from bot.telegram_bot import (
     send_signal_with_chart, send_message,
     send_performance_report, attach_money_management,
+    send_confirmation_signal, send_cancellation_signal,
 )
 from database.db import (
     init_db, save_signal, save_active_signal,
@@ -26,6 +28,8 @@ ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
 RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
 CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")
 CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
+
+CHANNEL_NAME = "vivaanalyst-Chanel"
 
 SYMBOLS = sorted(set([
     # بزرگ‌ها
@@ -92,6 +96,10 @@ def analyze_symbol(symbol):
 
     # وضعیت قبلی از حافظه
     prev_memory = get_market_memory(symbol)
+
+    # ─────────────────────────────────────────────
+    # استراتژی‌های اصلی (SMC, RTM, ICT)
+    # ─────────────────────────────────────────────
 
     # SMC
     obs = find_order_blocks(df_4h, htf_bias, lookback=50)
@@ -166,7 +174,8 @@ def analyze_symbol(symbol):
                 "ob_zone": f"{ob_bottom:.4f}-{ob_top:.4f}",
                 "ob_strength": f"{ob_strength:.1f}x",
                 "confirmations": confirmations,
-                "bias": htf_bias, "trade_params": trade
+                "bias": htf_bias, "trade_params": trade,
+                "strategy_fa": "اسمارت مانی"
             })
 
     # RTM
@@ -196,7 +205,8 @@ def analyze_symbol(symbol):
                     f"Strength: {rtm['strength']}",
                     "🆕 Pattern جدید!"
                 ],
-                "bias": htf_bias, "trade_params": trade
+                "bias": htf_bias, "trade_params": trade,
+                "strategy_fa": "RTM"
             })
 
     # ICT
@@ -229,7 +239,47 @@ def analyze_symbol(symbol):
                     f"{'✅' if mss else '⚠️'} MSS",
                     "🆕 ورود به OTE!"
                 ],
-                "bias": htf_bias, "trade_params": trade
+                "bias": htf_bias, "trade_params": trade,
+                "strategy_fa": "ICT"
+            })
+
+    # ─────────────────────────────────────────────
+    # استراتژی‌های جدید (QM, Engulfing, PinBar, FVG, IFVG, etc.)
+    # ─────────────────────────────────────────────
+
+    new_strategies = run_all_strategies(df_15m, htf_bias)
+    
+    for strat_signal in new_strategies:
+        # چک کن قبلاً سیگنال مشابه نفرستاده باشیم
+        if was_signal_sent_recently(
+            symbol, strat_signal.strategy,
+            strat_signal.direction, hours=4
+        ):
+            continue
+        
+        trade = calculate_trade_params(
+            strat_signal.entry, strat_signal.sl, strat_signal.direction
+        )
+        
+        if trade:
+            signals.append({
+                "source": strat_signal.strategy,
+                "symbol": symbol,
+                "direction": strat_signal.direction,
+                "entry": strat_signal.entry,
+                "sl": strat_signal.sl,
+                "tp1": strat_signal.tp1,
+                "tp2": strat_signal.tp2,
+                "zone_top": strat_signal.zone_top,
+                "zone_bottom": strat_signal.zone_bottom,
+                "strength": strat_signal.strength,
+                "confirmations": strat_signal.confirmations,
+                "description": strat_signal.description,
+                "entry_conditions": strat_signal.entry_conditions,
+                "score_bonus": strat_signal.score_bonus,
+                "bias": htf_bias,
+                "trade_params": trade,
+                "strategy_fa": strat_signal.strategy_fa
             })
 
     # ذخیره وضعیت فعلی در حافظه
@@ -311,32 +361,14 @@ def monitor_active_signals():
             if df_15m is None:
                 continue
 
-            target_chat = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
-
             if check_signal_confirmation(sig_data, df_15m):
                 confirm_active_signal(signal_id)
-                send_message(
-                    f"✅ <b>Signal Confirmed!</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"🆔 <code>{signal_id}</code>\n"
-                    f"🪙 <b>{symbol}</b> | {sig_data['direction']}\n"
-                    f"📍 Entry confirmed at "
-                    f"<b>{df_15m['close'].iloc[-1]:.4f}</b>\n"
-                    f"✅ پوزیشن تایید شد - میتوانید وارد شوید!",
-                    chat_id=target_chat
-                )
+                current_price = df_15m['close'].iloc[-1]
+                send_confirmation_signal(sig_data, signal_id, current_price)
 
             elif check_signal_cancellation(sig_data, df_15m):
                 cancel_active_signal(signal_id)
-                send_message(
-                    f"❌ <b>Signal Cancelled!</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"🆔 <code>{signal_id}</code>\n"
-                    f"🪙 <b>{symbol}</b> | {sig_data['direction']}\n"
-                    f"⚠️ قیمت در جهت مخالف حرکت کرد.\n"
-                    f"❌ این سیگنال باطل شد - وارد نشوید!",
-                    chat_id=target_chat
-                )
+                send_cancellation_signal(sig_data, signal_id)
 
         except Exception as e:
             print(f"Monitor error {sig_data.get('signal_id')}: {e}")
@@ -419,11 +451,19 @@ def main():
         print(f"DB init error: {e}")
 
     send_message(
-        "🚀 <b>Scanner v4 Started</b>\n"
-        "📊 SMC | 🔷 RTM | 💎 ICT\n"
-        "🧠 Smart Memory Active\n"
+        f"🚀 <b>Scanner v5 Started</b>\n"
+        f"📢 کانال: <b>{CHANNEL_NAME}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📊 SMC | 🔷 RTM | 💎 ICT\n"
+        f"🔮 QM | 🔥 Engulfing | 📌 PinBar\n"
+        f"📐 FVG | 🔄 IFVG | 🔁 FlipZone\n"
+        f"💥 Breakout | 🧱 OB | ⚡ CHoCH\n"
+        f"🎯 Return to Area\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🧠 Smart Memory Active\n"
         f"📌 {len(SYMBOLS)} Symbols\n"
-        "⏱ Scan: 15min"
+        f"⏱ Scan: 15min\n"
+        f"🆔 IDs start with: viva-"
     )
 
     schedule.every(15).minutes.do(run_scan)

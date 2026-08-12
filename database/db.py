@@ -26,10 +26,11 @@ def _ph() -> str:
 
 
 def generate_signal_id(symbol: str, source: str) -> str:
+    """ساخت شناسه یکتا با پیشوند viva"""
     ts = datetime.utcnow().strftime("%m%d%H%M")
     rand = uuid.uuid4().hex[:4].upper()
     clean = symbol.replace("USDT", "").replace(".P", "")
-    return f"{clean}-{source}-{ts}-{rand}"
+    return f"viva-{clean}-{source}-{ts}-{rand}"
 
 
 def get_conn():
