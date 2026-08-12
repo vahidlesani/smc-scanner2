@@ -1,4 +1,4 @@
-# smc-scanner v3 - with memory
+# smc-scanner v4 - codes + risk + dual channel
 import time
 import schedule
 import os
@@ -16,6 +16,22 @@ from database.db import (init_db, save_signal, was_signal_sent_recently,
 
 ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
 RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
+
+from database.db import (
+    init_db, save_signal, save_active_signal,
+    was_signal_sent_recently, get_performance_stats,
+    check_open_signals, update_market_memory,
+    get_market_memory, get_active_signals,
+    cancel_active_signal, confirm_active_signal
+)
+from bot.telegram_bot import (
+    send_signal_with_chart, send_message,
+    send_performance_report
+)
+from data.fetcher import get_multi_tf, get_klines
+
+CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")
+CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
 
 SYMBOLS = [
     # بزرگ‌ها
@@ -231,19 +247,128 @@ def analyze_symbol(symbol):
 
     return signals, df_15m
 
+def check_signal_confirmation(sig_data: dict, df_15m: pd.DataFrame) -> bool:
+    """
+    چک میکنه آیا پوزیشن تایید ورود گرفته
+    یعنی قیمت از Entry رد شده
+    """
+    if df_15m is None:
+        return False
+
+    current_close = df_15m["close"].iloc[-1]
+    entry = sig_data["entry"]
+    direction = sig_data["direction"]
+
+    if direction == "LONG" and current_close > entry * 1.001:
+        return True
+    if direction == "SHORT" and current_close < entry * 0.999:
+        return True
+    return False
+
+
+def check_signal_cancellation(sig_data: dict, df_15m: pd.DataFrame) -> bool:
+    """
+    چک میکنه آیا سیگنال باطل شده
+    یعنی قیمت برگشته و ساختار خراب شده
+    """
+    if df_15m is None:
+        return False
+
+    current_close = df_15m["close"].iloc[-1]
+    entry = sig_data["entry"]
+    sl = sig_data["sl"]
+    direction = sig_data["direction"]
+
+    sl_distance = abs(entry - sl)
+
+    # اگه قیمت بیشتر از ۵۰٪ فاصله SL در جهت مخالف رفت → باطل
+    if direction == "LONG":
+        cancel_level = entry - (sl_distance * 0.5)
+        return current_close < cancel_level
+    else:
+        cancel_level = entry + (sl_distance * 0.5)
+        return current_close > cancel_level
+
+
+def monitor_active_signals():
+    """
+    هر اسکن این رو صدا میزنیم:
+    ۱. سیگنال‌های تایید نشده رو چک میکنه
+    ۲. اگه تایید شد → اعلام میکنه
+    ۳. اگه برگشت → باطل اعلام میکنه
+    """
+    active = get_active_signals()
+
+    for sig_data in active:
+        try:
+            symbol = sig_data["symbol"]
+            signal_id = sig_data["signal_id"]
+
+            df_15m = get_klines(symbol, "15m", 10)
+            if df_15m is None:
+                continue
+
+            # چک تایید ورود
+            if check_signal_confirmation(sig_data, df_15m):
+                confirm_active_signal(signal_id)
+                send_message(
+                    f"✅ <b>Signal Confirmed!</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"🆔 <code>{signal_id}</code>\n"
+                    f"🪙 <b>{symbol}</b> | {sig_data['direction']}\n"
+                    f"📍 Entry confirmed at "
+                    f"<b>{df_15m['close'].iloc[-1]:.4f}</b>\n"
+                    f"✅ پوزیشن تایید شد - میتوانید وارد شوید!",
+                    chat_id=CHAT_ID_SIGNALS if CHAT_ID_SIGNALS
+                    else CHAT_ID_ADMIN
+                )
+
+            # چک باطل شدن
+            elif check_signal_cancellation(sig_data, df_15m):
+                cancel_active_signal(signal_id)
+                send_message(
+                    f"❌ <b>Signal Cancelled!</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"🆔 <code>{signal_id}</code>\n"
+                    f"🪙 <b>{symbol}</b> | {sig_data['direction']}\n"
+                    f"⚠️ قیمت در جهت مخالف حرکت کرد.\n"
+                    f"❌ این سیگنال باطل شد - وارد نشوید!",
+                    chat_id=CHAT_ID_SIGNALS if CHAT_ID_SIGNALS
+                    else CHAT_ID_ADMIN
+                )
+
+        except Exception as e:
+            print(f"Monitor error {sig_data.get('signal_id')}: {e}")
+
 
 def run_scan():
     try:
-        print(f"[{datetime.utcnow().strftime('%H:%M')}] Scanning {len(SYMBOLS)} symbols...")
+        print(f"[{datetime.utcnow().strftime('%H:%M')}] "
+              f"Scanning {len(SYMBOLS)} symbols...")
 
+        # چک سیگنال‌های باز (WIN/LOSS)
         try:
             closed = check_open_signals()
             for c in closed:
-                emoji = "✅ WIN" if c["result"] == "WIN" else "❌ LOSS"
-                send_message(f"{emoji}\n{c['symbol']} | PnL: {c['pnl']:.2f}%")
+                from bot.telegram_bot import send_result_to_channel
+                send_result_to_channel(
+                    symbol=c["symbol"],
+                    signal_id=c.get("signal_id", "N/A"),
+                    result=c["result"],
+                    pnl=c["pnl"],
+                    leverage=c.get("leverage", 5),
+                    margin_usd=c.get("margin_usd", 0)
+                )
         except Exception as e:
-            print(f"Check signals error: {e}")
+            print(f"Check closed signals error: {e}")
 
+        # چک تایید/باطل شدن سیگنال‌های فعال
+        try:
+            monitor_active_signals()
+        except Exception as e:
+            print(f"Monitor active signals error: {e}")
+
+        # اسکن نمادها
         for symbol in SYMBOLS:
             try:
                 signals, df_15m = analyze_symbol(symbol)
@@ -251,11 +376,13 @@ def run_scan():
                 for sig in signals:
                     try:
                         if was_signal_sent_recently(
-                            symbol, sig["source"], sig["direction"], hours=4
+                            symbol, sig["source"],
+                            sig["direction"], hours=4
                         ):
                             continue
 
                         save_signal(sig)
+                        save_active_signal(sig)
                         send_signal_with_chart(sig, df_15m)
                         time.sleep(2)
 
