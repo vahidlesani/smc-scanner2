@@ -496,66 +496,94 @@ def update_signal_result(signal_id: str, result: str, pnl_pct: float):
         """, (result, pnl_pct, _now(), signal_id))
 
 
+def _parse_created_at(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    text = str(value).replace("T", " ").split(".")[0]
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def check_open_signals():
     from data.fetcher import get_klines
 
     with db_cursor() as c:
         c.execute("""
             SELECT signal_id, symbol, direction, entry, sl, tp1, tp2,
-                   leverage, margin_usd
+                   leverage, margin_usd, created_at
             FROM signals WHERE result='PENDING'
         """)
         open_signals = c.fetchall()
 
     results = []
     for sig in open_signals:
-        sig_id, symbol, direction, entry, sl, tp1, tp2, lev, margin = sig
+        (sig_id, symbol, direction, entry, sl, tp1, tp2,
+         lev, margin, created_at) = sig
         if not sig_id:
             continue
         try:
-            df = get_klines(symbol, "15m", 5)
-            if df is None:
+            df = get_klines(symbol, "15m", 80, closed_only=False)
+            if df is None or df.empty:
                 continue
 
-            curr_h = df["high"].iloc[-1]
-            curr_l = df["low"].iloc[-1]
-
-            if direction == "LONG":
-                if curr_l <= sl:
-                    pnl = ((sl - entry) / entry) * 100
-                    update_signal_result(sig_id, "LOSS", pnl)
-                    results.append({
-                        "signal_id": sig_id, "symbol": symbol,
-                        "result": "LOSS", "pnl": pnl,
-                        "leverage": lev, "margin_usd": margin,
-                    })
-                elif curr_h >= tp1:
-                    pnl = ((tp1 - entry) / entry) * 100
-                    update_signal_result(sig_id, "WIN", pnl)
-                    results.append({
-                        "signal_id": sig_id, "symbol": symbol,
-                        "result": "WIN", "pnl": pnl,
-                        "leverage": lev, "margin_usd": margin,
-                    })
+            created = _parse_created_at(created_at)
+            if created is not None:
+                ts = pd_to_naive(df["timestamp"])
+                after = df[ts >= created]
+                if after.empty:
+                    after = df.tail(1)
             else:
-                if curr_h >= sl:
+                after = df.tail(8)
+
+            hit_sl = False
+            hit_tp = False
+            if direction == "LONG":
+                hit_sl = bool((after["low"] <= sl).any())
+                hit_tp = bool((after["high"] >= tp1).any())
+            else:
+                hit_sl = bool((after["high"] >= sl).any())
+                hit_tp = bool((after["low"] <= tp1).any())
+
+            # اگر در یک کندل هر دو خورده، SL اول (محافظه‌کار)
+            if hit_sl:
+                if direction == "LONG":
+                    pnl = ((sl - entry) / entry) * 100
+                else:
                     pnl = ((entry - sl) / entry) * 100
-                    update_signal_result(sig_id, "LOSS", pnl)
-                    results.append({
-                        "signal_id": sig_id, "symbol": symbol,
-                        "result": "LOSS", "pnl": pnl,
-                        "leverage": lev, "margin_usd": margin,
-                    })
-                elif curr_l <= tp1:
+                update_signal_result(sig_id, "LOSS", pnl)
+                results.append({
+                    "signal_id": sig_id, "symbol": symbol,
+                    "result": "LOSS", "pnl": pnl,
+                    "leverage": lev or 5, "margin_usd": margin or 0,
+                })
+            elif hit_tp:
+                if direction == "LONG":
+                    pnl = ((tp1 - entry) / entry) * 100
+                else:
                     pnl = ((entry - tp1) / entry) * 100
-                    update_signal_result(sig_id, "WIN", pnl)
-                    results.append({
-                        "signal_id": sig_id, "symbol": symbol,
-                        "result": "WIN", "pnl": pnl,
-                        "leverage": lev, "margin_usd": margin,
-                    })
+                update_signal_result(sig_id, "WIN", pnl)
+                results.append({
+                    "signal_id": sig_id, "symbol": symbol,
+                    "result": "WIN", "pnl": pnl,
+                    "leverage": lev or 5, "margin_usd": margin or 0,
+                })
         except Exception as e:
             print(f"check_open_signals error {symbol}: {e}")
             continue
 
     return results
+
+
+def pd_to_naive(series):
+    import pandas as pd
+    ts = pd.to_datetime(series)
+    if getattr(ts.dt, "tz", None) is not None:
+        ts = ts.dt.tz_convert("UTC").dt.tz_localize(None)
+    return ts
+
