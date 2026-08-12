@@ -7,12 +7,12 @@ from datetime import datetime
 
 from data.fetcher import get_multi_tf, get_klines
 from analysis.structure import find_swing_points, classify_structure, detect_bos_choch
-from analysis.smc import find_order_blocks, find_fvg, detect_liquidity
+from analysis.smc import find_order_blocks, detect_liquidity
 from analysis.rtm import get_rtm_signal
 from analysis.ict import get_ict_signal
 from bot.telegram_bot import (
     send_signal_with_chart, send_message,
-    send_performance_report
+    send_performance_report, attach_money_management,
 )
 from database.db import (
     init_db, save_signal, save_active_signal,
@@ -27,7 +27,7 @@ RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
 CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")
 CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
 
-SYMBOLS = list(set([
+SYMBOLS = sorted(set([
     # بزرگ‌ها
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
     "PAXGUSDT", "XAGUSDT", "LINKUSDT", "LDOUSDT", "ICPUSDT",
@@ -35,9 +35,9 @@ SYMBOLS = list(set([
     # لایه ۱
     "ADAUSDT", "AVAXUSDT", "DOTUSDT", "ATOMUSDT", "NEARUSDT",
     # لایه ۲
-    "LTCUSDT", "MATICUSDT", "INJUSDT", "APTUSDT",
+    "LTCUSDT", "POLUSDT", "INJUSDT", "APTUSDT",
     # دیفای و جدید
-    "ARBUSDT", "OPUSDT", "SUIUSDT", "TONUSDT",
+    "ARBUSDT", "OPUSDT", "SUIUSDT",
     # اضافه
     "SEIUSDT", "TIAUSDT", "JUPUSDT", "WLDUSDT", "STXUSDT",
     "FETUSDT", "RENDERUSDT", "AAVEUSDT", "MKRUSDT",
@@ -107,8 +107,12 @@ def analyze_symbol(symbol):
     has_choch = False
 
     for ob in obs[:2]:
-        price_near_ob = abs(current_price - ob.top) / current_price < 0.015
-        if not price_near_ob:
+        in_zone = ob.bottom <= current_price <= ob.top
+        near_zone = (
+            abs(current_price - ob.top) / current_price < 0.015
+            or abs(current_price - ob.bottom) / current_price < 0.015
+        )
+        if not (in_zone or near_zone):
             continue
 
         near_ob = True
@@ -122,7 +126,12 @@ def analyze_symbol(symbol):
             (htf_bias == "BEARISH" and
              liquidity["sweep_type"] == "SWEEP_HIGH")
         )
-        has_choch = bool(bos_15m and bos_15m.direction == htf_bias)
+        # CHoCH واقعی: شکست خلاف ساختار فعلی LTF، هم‌جهت با HTF
+        has_choch = bool(
+            bos_15m
+            and bos_15m.direction == htf_bias
+            and bos_15m.type == "CHoCH"
+        )
 
         prev_had_sweep = prev_memory.get("has_sweep", False)
         prev_had_choch = prev_memory.get("has_choch", False)
@@ -203,8 +212,8 @@ def analyze_symbol(symbol):
         sl = (ict["entry_bottom"] * 0.997 if ict["direction"] == "LONG"
               else ict["entry_top"] * 1.003)
         trade = calculate_trade_params(entry, sl, ict["direction"])
-        kz = ict.get("killzone", "None")
-        ict_in_kz = kz != "None"
+        kz = ict.get("killzone")
+        ict_in_kz = bool(kz)
         mss = ict.get("mss_confirmed", False)
 
         if trade and not prev_in_ote:
@@ -216,7 +225,7 @@ def analyze_symbol(symbol):
                 "killzone": kz, "in_killzone": ict_in_kz,
                 "mss": mss, "pdh": ict.get("pdh"), "pdl": ict.get("pdl"),
                 "confirmations": [
-                    f"{'✅' if ict_in_kz else '⚠️'} KZ: {kz}",
+                    f"{'✅' if ict_in_kz else '⚠️'} KZ: {kz or 'None'}",
                     f"{'✅' if mss else '⚠️'} MSS",
                     "🆕 ورود به OTE!"
                 ],
@@ -298,7 +307,7 @@ def monitor_active_signals():
             symbol = sig_data["symbol"]
             signal_id = sig_data["signal_id"]
 
-            df_15m = get_klines(symbol, "15m", 10)
+            df_15m = get_klines(symbol, "15m", 10, closed_only=False)
             if df_15m is None:
                 continue
 
@@ -373,6 +382,7 @@ def run_scan():
                         ):
                             continue
 
+                        attach_money_management(sig)
                         save_signal(sig)
                         save_active_signal(sig)
                         send_signal_with_chart(sig, df_15m)
@@ -400,6 +410,9 @@ def run_daily_report():
 
 
 def main():
+    if not os.environ.get("TELEGRAM_TOKEN"):
+        print("WARNING: TELEGRAM_TOKEN is not set")
+
     try:
         init_db()
     except Exception as e:
