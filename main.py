@@ -105,7 +105,6 @@ def analyze_symbol(symbol):
         )
         has_choch = bool(bos_15m and bos_15m.direction == htf_bias)
 
-        # مقایسه با حافظه - فقط تغییرات جدید
         prev_had_sweep = prev_memory.get("has_sweep", False)
         prev_had_choch = prev_memory.get("has_choch", False)
         prev_near_ob = prev_memory.get("near_ob", False)
@@ -125,7 +124,6 @@ def analyze_symbol(symbol):
         if just_entered_ob:
             confirmations.append("🆕 ورود به OB!")
 
-        # سیگنال فقط وقتی تغییر جدیدی هست
         should_signal = new_sweep or new_choch or just_entered_ob
 
         direction = "LONG" if htf_bias == "BULLISH" else "SHORT"
@@ -157,7 +155,6 @@ def analyze_symbol(symbol):
               else rtm["base_top"] * 1.003)
         trade = calculate_trade_params(current_price, sl, rtm["direction"])
 
-        # فقط اگه pattern جدیده سیگنال بده
         if trade and rtm_pattern != prev_rtm:
             signals.append({
                 "source": "RTM", "symbol": symbol,
@@ -191,7 +188,6 @@ def analyze_symbol(symbol):
         ict_in_kz = kz != "None"
         mss = ict.get("mss_confirmed", False)
 
-        # فقط اگه تازه وارد OTE شده سیگنال بده
         if trade and not prev_in_ote:
             signals.append({
                 "source": "ICT", "symbol": symbol,
@@ -228,40 +224,59 @@ def analyze_symbol(symbol):
 
 
 def run_scan():
-    print(f"[{datetime.utcnow().strftime('%H:%M')}] Scanning {len(SYMBOLS)} symbols...")
+    try:
+        print(f"[{datetime.utcnow().strftime('%H:%M')}] Scanning {len(SYMBOLS)} symbols...")
 
-    closed = check_open_signals()
-    for c in closed:
-        emoji = "✅ WIN" if c["result"] == "WIN" else "❌ LOSS"
-        send_message(f"{emoji}\n{c['symbol']} | PnL: {c['pnl']:.2f}%")
-
-    for symbol in SYMBOLS:
         try:
-            signals, df_15m = analyze_symbol(symbol)
-
-            for sig in signals:
-                if was_signal_sent_recently(
-                    symbol, sig["source"], sig["direction"], hours=4
-                ):
-                    continue
-
-                save_signal(sig)
-                send_signal_with_chart(sig, df_15m)
-                time.sleep(2)
-
+            closed = check_open_signals()
+            for c in closed:
+                emoji = "✅ WIN" if c["result"] == "WIN" else "❌ LOSS"
+                send_message(f"{emoji}\n{c['symbol']} | PnL: {c['pnl']:.2f}%")
         except Exception as e:
-            print(f"Error {symbol}: {e}")
+            print(f"Check signals error: {e}")
 
-    print(f"[{datetime.utcnow().strftime('%H:%M')}] Scan done.")
+        for symbol in SYMBOLS:
+            try:
+                signals, df_15m = analyze_symbol(symbol)
+
+                for sig in signals:
+                    try:
+                        if was_signal_sent_recently(
+                            symbol, sig["source"], sig["direction"], hours=4
+                        ):
+                            continue
+
+                        save_signal(sig)
+                        send_signal_with_chart(sig, df_15m)
+                        time.sleep(2)
+
+                    except Exception as e:
+                        print(f"Signal send error {symbol}: {e}")
+
+            except Exception as e:
+                print(f"Error {symbol}: {e}")
+
+        print(f"[{datetime.utcnow().strftime('%H:%M')}] Scan done.")
+
+    except Exception as e:
+        print(f"Critical scan error: {e}")
 
 
 def run_daily_report():
-    stats = get_performance_stats()
-    send_performance_report(stats)
+    try:
+        stats = get_performance_stats()
+        send_performance_report(stats)
+    except Exception as e:
+        print(f"Daily report error: {e}")
+        send_message("📊 گزارش روزانه: هنوز سیگنال بسته‌ای نداریم.")
 
 
 def main():
-    init_db()
+    try:
+        init_db()
+    except Exception as e:
+        print(f"DB init error: {e}")
+
     send_message(
         "🚀 <b>Scanner v3 Started</b>\n"
         "📊 SMC | 🔷 RTM | 💎 ICT\n"
@@ -276,8 +291,12 @@ def main():
     run_scan()
 
     while True:
-        schedule.run_pending()
-        time.sleep(60)
+        try:
+            schedule.run_pending()
+            time.sleep(60)
+        except Exception as e:
+            print(f"Scheduler error: {e}")
+            time.sleep(60)
 
 
 if __name__ == "__main__":
