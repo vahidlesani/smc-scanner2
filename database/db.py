@@ -16,6 +16,33 @@ else:
     DB_PATH = os.environ.get("DB_PATH", "/tmp/signals.db")
 
 
+def _safe_float(val, default=0):
+    """تبدیل numpy float64 به Python float"""
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(val, default=0):
+    """تبدیل numpy int به Python int"""
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_bool(val):
+    """تبدیل به Python bool"""
+    if val is None:
+        return False
+    return bool(val)
+
+
 def _now() -> str:
     return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -360,7 +387,7 @@ def save_active_signal(sig: dict):
 
 def update_market_memory(symbol: str, data: dict):
     p = _ph()
-    current_price = data.get("current_price", 0)
+    current_price = _safe_float(data.get("current_price", 0))
 
     with db_cursor() as c:
         c.execute(
@@ -368,7 +395,7 @@ def update_market_memory(symbol: str, data: dict):
             (symbol,),
         )
         row = c.fetchone()
-        prev_price = row[0] if row else 0
+        prev_price = _safe_float(row[0]) if row else 0
 
         price_change_pct = 0
         if prev_price and prev_price > 0:
@@ -378,17 +405,21 @@ def update_market_memory(symbol: str, data: dict):
 
         if USE_POSTGRES:
             vals = (
-                symbol, data.get("bias", ""),
-                bool(data.get("near_ob")),
-                data.get("ob_top", 0), data.get("ob_bottom", 0),
-                data.get("ob_strength", 0),
-                bool(data.get("has_sweep")),
-                bool(data.get("has_choch")),
-                data.get("rtm_pattern", ""),
-                bool(data.get("rtm_fresh")),
-                bool(data.get("ict_in_ote")),
-                bool(data.get("ict_in_killzone")),
-                current_price, prev_price, price_change_pct, _now(),
+                symbol, str(data.get("bias", "")),
+                _safe_bool(data.get("near_ob")),
+                _safe_float(data.get("ob_top", 0)),
+                _safe_float(data.get("ob_bottom", 0)),
+                _safe_float(data.get("ob_strength", 0)),
+                _safe_bool(data.get("has_sweep")),
+                _safe_bool(data.get("has_choch")),
+                str(data.get("rtm_pattern", "")),
+                _safe_bool(data.get("rtm_fresh")),
+                _safe_bool(data.get("ict_in_ote")),
+                _safe_bool(data.get("ict_in_killzone")),
+                _safe_float(current_price),
+                _safe_float(prev_price),
+                _safe_float(price_change_pct),
+                _now(),
             )
             c.execute(f"""
                 INSERT INTO market_memory
@@ -417,17 +448,21 @@ def update_market_memory(symbol: str, data: dict):
             """, vals)
         else:
             vals = (
-                symbol, data.get("bias", ""),
-                1 if data.get("near_ob") else 0,
-                data.get("ob_top", 0), data.get("ob_bottom", 0),
-                data.get("ob_strength", 0),
-                1 if data.get("has_sweep") else 0,
-                1 if data.get("has_choch") else 0,
-                data.get("rtm_pattern", ""),
-                1 if data.get("rtm_fresh") else 0,
-                1 if data.get("ict_in_ote") else 0,
-                1 if data.get("ict_in_killzone") else 0,
-                current_price, prev_price, price_change_pct, _now(),
+                symbol, str(data.get("bias", "")),
+                1 if _safe_bool(data.get("near_ob")) else 0,
+                _safe_float(data.get("ob_top", 0)),
+                _safe_float(data.get("ob_bottom", 0)),
+                _safe_float(data.get("ob_strength", 0)),
+                1 if _safe_bool(data.get("has_sweep")) else 0,
+                1 if _safe_bool(data.get("has_choch")) else 0,
+                str(data.get("rtm_pattern", "")),
+                1 if _safe_bool(data.get("rtm_fresh")) else 0,
+                1 if _safe_bool(data.get("ict_in_ote")) else 0,
+                1 if _safe_bool(data.get("ict_in_killzone")) else 0,
+                _safe_float(current_price),
+                _safe_float(prev_price),
+                _safe_float(price_change_pct),
+                _now(),
             )
             c.execute(f"""
                 INSERT INTO market_memory
