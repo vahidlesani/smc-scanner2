@@ -375,6 +375,7 @@ def build_initial_caption(sig: dict, signal_id: str) -> str:
 
     dir_emoji = "🟢" if sig["direction"] == "LONG" else "🔴"
     trade_style = sig.get("trade_style", "SWING")
+    is_golden = sig.get("is_golden", False)
 
     details_text = "\n".join(f"   {d}" for d in score_data["details"])
 
@@ -384,8 +385,16 @@ def build_initial_caption(sig: dict, signal_id: str) -> str:
     partial_tp1 = sig.get("partial_tp1_pct", 60)
     partial_tp2 = sig.get("partial_tp2_pct", 40)
 
+    # لیبل ویژه طلایی
+    golden_label = ""
+    if is_golden:
+        golden_label = (
+            f"\n🏆✨ <b>SIGNAL ویژه طلایی</b> ✨🏆\n"
+            f"تعداد استراتژی‌های تأیید کننده: <b>{sig.get('strategy_count', 1)}</b>\n\n"
+        )
+
     caption = (
-        f"🔔 <b>New Setup Detected</b> 🔔\n"
+        f"{'🏆✨' if is_golden else '🔔'} <b>{'SIGNAL ویژه طلایی' if is_golden else 'New Setup Detected'}</b> {'✨🏆' if is_golden else '🔔'}\n"
         f"📢 کانال: <b>{CHANNEL_NAME}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"{source_emoji} <b>{sig.get('strategy_fa', sig['source'])}</b>  •  "
@@ -395,6 +404,8 @@ def build_initial_caption(sig: dict, signal_id: str) -> str:
         f"📈 Trend: <b>"
         f"{'Bullish 🟢' if sig.get('bias') == 'BULLISH' else 'Bearish 🔴'}"
         f"</b>  |  {sig_type}  |  📊 {trade_style}\n\n"
+
+        f"{golden_label}"
 
         f"⭐ <b>Signal Score:</b> "
         f"{score_data['bar']} {score}/10\n"

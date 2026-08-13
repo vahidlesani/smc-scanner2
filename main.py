@@ -534,27 +534,76 @@ def run_scan():
             try:
                 signals, df_15m = analyze_symbol(symbol)
 
+                # ─── ترکیب سیگنال‌های هم‌جهت ───
+                # اگه چند استراتژی یه نماد رو تشخیص بدن، ترکیب کن
+                combined = {}
                 for sig in signals:
+                    key = f"{symbol}_{sig['direction']}"
+                    if key not in combined:
+                        combined[key] = {
+                            "signals": [],
+                            "strategies": []
+                        }
+                    combined[key]["signals"].append(sig)
+                    combined[key]["strategies"].append(sig["source"])
+                
+                for key, data in combined.items():
                     try:
+                        sig_list = data["signals"]
+                        strategies = data["strategies"]
+                        
+                        # سیگنال اصلی (اولین)
+                        main_sig = sig_list[0]
+                        
+                        # چک تکراری نبودن
                         if was_signal_sent_recently(
-                            symbol, sig["source"],
-                            sig["direction"], hours=4
+                            symbol, main_sig["source"],
+                            main_sig["direction"], hours=8
                         ):
                             continue
-
-                        attach_money_management(sig)
                         
-                        # ذخیره در دیتابیس (همه سیگنال‌ها)
-                        save_signal(sig)
-                        save_active_signal(sig)
+                        # اگه چند استراتژی تشخیص دادن → سیگنال ویژه
+                        if len(sig_list) > 1:
+                            # ترکیب تأییدات
+                            all_confirmations = []
+                            for s in sig_list:
+                                all_confirmations.extend(s.get("confirmations", []))
+                            
+                            # حذف تکراری
+                            unique_confirmations = list(dict.fromkeys(all_confirmations))
+                            
+                            # اضافه کردن تأیید چند استراتژی
+                            strat_names = " + ".join(strategies)
+                            unique_confirmations.insert(0, f"🏆 تأیید چند استراتژی: {strat_names}")
+                            
+                            main_sig["confirmations"] = unique_confirmations
+                            main_sig["multi_strategy"] = True
+                            main_sig["strategy_count"] = len(sig_list)
+                            main_sig["strategy_fa"] = f"🏆 {strat_names}"
+                            
+                            # امتیاز ویژه (حداقل ۹)
+                            main_sig["score_bonus"] = main_sig.get("score_bonus", 0) + 3
+                            main_sig["is_golden"] = True
+                        
+                        attach_money_management(main_sig)
+                        
+                        # ذخیره در دیتابیس
+                        save_signal(main_sig)
+                        save_active_signal(main_sig)
                         
                         # فقط سیگنال‌های با امتیاز بالای ۷ به کانال بفرست
-                        score = sig.get("score", 0)
+                        score = main_sig.get("score", 0)
+                        
+                        # سیگنال ویژه همیشه بالای ۹ هست
+                        if main_sig.get("is_golden"):
+                            score = max(score, 9)
+                            main_sig["score"] = score
+                        
                         if score >= MIN_SCORE_TO_SEND:
-                            send_signal_with_chart(sig, df_15m)
+                            send_signal_with_chart(main_sig, df_15m)
                             time.sleep(2)
                         else:
-                            print(f"[{symbol}] Score {score} < {MIN_SCORE_TO_SEND}, skipped sending")
+                            print(f"[{symbol}] Score {score} < {MIN_SCORE_TO_SEND}, skipped")
 
                     except Exception as e:
                         print(f"Signal send error {symbol}: {e}")
