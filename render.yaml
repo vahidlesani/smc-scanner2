@@ -1,0 +1,53 @@
+services:
+  - type: worker
+    name: viva-signal-worker
+    runtime: python
+    region: frankfurt
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: FULL_SCAN_MINUTES
+        value: "15"
+      - key: MONITOR_MINUTES
+        value: "5"
+      - key: EDUCATIONAL_MIN_SCORE
+        value: "6"
+      - key: EXECUTION_MIN_SCORE
+        value: "7"
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: CHAT_ID_SIGNALS
+        sync: false
+      - key: CHAT_ID_APPROACHING
+        sync: false
+      - key: CHAT_ID_RESULTS
+        sync: false
+      - key: CHAT_ID
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: BYBIT_PROXY_URL
+        sync: false
+      - key: ACCOUNT_SIZE
+        value: "1000"
+
+  - type: web
+    name: viva-signal-dashboard
+    runtime: python
+    region: frankfurt
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 dashboard.app:app
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DASHBOARD_PORT
+        value: "10000"
+      - key: DATABASE_URL
+        sync: false

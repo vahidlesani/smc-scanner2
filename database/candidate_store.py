@@ -1,0 +1,170 @@
+"""Local, transient candidate state.
+
+Unconfirmed educational setups are deliberately NOT written to Supabase.
+This SQLite store is operational state only and can be placed on a Render
+persistent disk with CANDIDATE_DB_PATH if restart durability is desired.
+"""
+from __future__ import annotations
+
+import os
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional
+
+from analysis.models import SignalCandidate, iso_now
+
+DB_PATH = os.getenv("CANDIDATE_DB_PATH", "/tmp/viva_candidates.db")
+
+
+@contextmanager
+def _connection():
+    conn = sqlite3.connect(DB_PATH, timeout=20)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def init_candidate_store() -> None:
+    with _connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS signal_candidates (
+                signal_id TEXT PRIMARY KEY,
+                dedupe_key TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                style TEXT NOT NULL,
+                setup_code TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                score INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                approaching_sent INTEGER DEFAULT 0,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_active ON signal_candidates(status, expires_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_dedupe ON signal_candidates(dedupe_key, status)")
+
+
+def _dedupe_key(candidate: SignalCandidate) -> str:
+    return ":".join((candidate.symbol, candidate.style, candidate.setup_code, candidate.direction))
+
+
+def find_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
+    now = iso_now()
+    with _connection() as conn:
+        row = conn.execute(
+            """
+            SELECT payload FROM signal_candidates
+            WHERE dedupe_key=?
+              AND expires_at>?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (_dedupe_key(candidate), now),
+        ).fetchone()
+    return SignalCandidate.from_json(row["payload"]) if row else None
+
+
+def add_candidate(candidate: SignalCandidate) -> bool:
+    if find_similar(candidate):
+        return False
+    now = iso_now()
+    with _connection() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO signal_candidates
+            (signal_id, dedupe_key, symbol, style, setup_code, direction,
+             score, status, approaching_sent, payload, created_at, updated_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                candidate.signal_id,
+                _dedupe_key(candidate),
+                candidate.symbol,
+                candidate.style,
+                candidate.setup_code,
+                candidate.direction,
+                candidate.score,
+                candidate.status,
+                int(candidate.approaching_sent),
+                candidate.to_json(),
+                candidate.created_at,
+                now,
+                candidate.expires_at,
+            ),
+        )
+        return conn.total_changes > 0
+
+
+def update_candidate(candidate: SignalCandidate, status: Optional[str] = None) -> None:
+    if status:
+        candidate.status = status
+    with _connection() as conn:
+        conn.execute(
+            """
+            UPDATE signal_candidates
+            SET score=?, status=?, approaching_sent=?, payload=?, updated_at=?, expires_at=?
+            WHERE signal_id=?
+            """,
+            (
+                candidate.score,
+                candidate.status,
+                int(candidate.approaching_sent),
+                candidate.to_json(),
+                iso_now(),
+                candidate.expires_at,
+                candidate.signal_id,
+            ),
+        )
+
+
+def get_active_candidates() -> List[SignalCandidate]:
+    now = iso_now()
+    with _connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT payload FROM signal_candidates
+            WHERE status IN ('EDUCATIONAL', 'APPROACHING') AND expires_at>?
+            ORDER BY created_at
+            """,
+            (now,),
+        ).fetchall()
+    return [SignalCandidate.from_json(row["payload"]) for row in rows]
+
+
+def set_status(signal_id: str, status: str) -> None:
+    with _connection() as conn:
+        row = conn.execute("SELECT payload FROM signal_candidates WHERE signal_id=?", (signal_id,)).fetchone()
+        if not row:
+            return
+        candidate = SignalCandidate.from_json(row["payload"])
+        candidate.status = status
+        conn.execute(
+            "UPDATE signal_candidates SET status=?, payload=?, updated_at=? WHERE signal_id=?",
+            (status, candidate.to_json(), iso_now(), signal_id),
+        )
+
+
+def cleanup_candidates(retention_days: int = 7) -> int:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat(timespec="seconds")
+    now = iso_now()
+    with _connection() as conn:
+        conn.execute(
+            "UPDATE signal_candidates SET status='EXPIRED', updated_at=? WHERE expires_at<=? AND status IN ('EDUCATIONAL','APPROACHING')",
+            (now, now),
+        )
+        cursor = conn.execute(
+            "DELETE FROM signal_candidates WHERE updated_at<? AND status IN ('CONFIRMED','CANCELLED','EXPIRED')",
+            (cutoff,),
+        )
+        return cursor.rowcount

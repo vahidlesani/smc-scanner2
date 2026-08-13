@@ -1,347 +1,338 @@
-# analysis/backtest.py - Backtest Module
-# بک‌تست استراتژی‌ها روی داده‌های تاریخی
+"""Walk-forward, no-lookahead backtest using the same v7 setup engine as live.
 
-import pandas as pd
+The old implementation applied today's final HTF bias to the whole history.
+This version slices every timeframe at each historical timestamp, waits for a
+future retest/closed-candle confirmation, and uses conservative intrabar rules.
+"""
+from __future__ import annotations
+
+import os
+from dataclasses import asdict, dataclass
+from datetime import timedelta
+from typing import Dict, List, Optional, Tuple
+
 import numpy as np
-from typing import List, Dict, Optional
-from dataclasses import dataclass, field
-from datetime import datetime
+import pandas as pd
 
-from data.fetcher import get_klines
-from analysis.strategies import (
-    detect_quasimodo, detect_engulfing, detect_pinbar,
-    detect_fvg_signal, detect_ifvg_signal, detect_flipzone,
-    detect_breakout, detect_orderblock_signal,
-    detect_structure_change, detect_return_to_area
-)
-from analysis.structure import find_swing_points, classify_structure
+from analysis.models import SignalCandidate
+from analysis.quality_engine import evaluate_confirmation
+from analysis.setups_v7 import scan_setups
+from config import get_settings
+from data.fetcher import MarketBundle, get_klines_paginated
+
+SETTINGS = get_settings()
 
 
 @dataclass
 class BacktestTrade:
-    strategy: str
+    signal_id: str
+    setup: str
+    style: str
     symbol: str
     direction: str
+    score: int
+    detected_at: str
+    confirmed_at: str
     entry: float
     sl: float
     tp1: float
     tp2: float
-    entry_bar: int
-    result: str = "PENDING"  # WIN, LOSS, TIMEOUT
-    pnl_pct: float = 0
-    bars_held: int = 0
-    max_drawdown: float = 0
-    exit_bar: int = 0
-    exit_price: float = 0
+    result: str
+    pnl_pct: float
+    gross_pnl_pct: float
+    bars_held: int
+    max_drawdown: float
+    exit_price: float
+    exit_reason: str
 
 
-def backtest_strategy(strategy_func, df: pd.DataFrame, htf_bias: str,
-                      symbol: str, start_bar: int = 50,
-                      partial_tp1: float = 60,
-                      move_sl_to_be: bool = True) -> List[BacktestTrade]:
-    """
-    بک‌تست یک استراتژی روی داده‌های تاریخی
-    
-    منطق:
-    ۱. هر کندل رو چک میکنه
-    ۲. اگه سیگنال صادر شد → ورود
-    ۳. TP1 → partial close (60%) + SL to BE
-    ۴. TP2 → close remaining (40%)
-    ۵. SL → loss
-    """
-    trades = []
-    in_trade = False
-    current_trade = None
-    
-    for i in range(start_bar, len(df)):
-        window = df.iloc[:i+1].copy().reset_index(drop=True)
-        
-        if not in_trade:
-            # دنبال سیگنال بگرد
-            try:
-                signal = strategy_func(window, htf_bias)
-                if signal:
-                    trade = BacktestTrade(
-                        strategy=signal.strategy,
-                        symbol=symbol,
-                        direction=signal.direction,
-                        entry=signal.entry,
-                        sl=signal.sl,
-                        tp1=signal.tp1,
-                        tp2=signal.tp2,
-                        entry_bar=i
-                    )
-                    current_trade = trade
-                    in_trade = True
-            except Exception:
-                continue
-        
-        else:
-            # چک کردن TP/SL
-            candle = df.iloc[i]
-            high = candle["high"]
-            low = candle["low"]
-            
-            direction = current_trade.direction
-            entry = current_trade.entry
-            sl = current_trade.sl
-            tp1 = current_trade.tp1
-            tp2 = current_trade.tp2
-            
-            # محاسبه drawdown
-            if direction == "LONG":
-                dd = (entry - low) / entry * 100
-            else:
-                dd = (high - entry) / entry * 100
-            current_trade.max_drawdown = max(
-                current_trade.max_drawdown, dd
-            )
-            
-            hit_sl = False
-            hit_tp1 = False
-            hit_tp2 = False
-            
-            if direction == "LONG":
-                hit_sl = low <= sl
-                hit_tp1 = high >= tp1
-                hit_tp2 = high >= tp2
-            else:
-                hit_sl = high >= sl
-                hit_tp1 = low <= tp1
-                hit_tp2 = low <= tp2
-            
-            current_trade.bars_held += 1
-            
-            # Timeout: بیش از 100 کندل
-            if current_trade.bars_held > 100:
-                current_trade.result = "TIMEOUT"
-                current_trade.exit_bar = i
-                current_trade.exit_price = candle["close"]
-                if direction == "LONG":
-                    current_trade.pnl_pct = (
-                        (candle["close"] - entry) / entry * 100
-                    )
-                else:
-                    current_trade.pnl_pct = (
-                        (entry - candle["close"]) / entry * 100
-                    )
-                trades.append(current_trade)
-                in_trade = False
-                current_trade = None
-                continue
-            
-            # SL خورده (اگه TP1 قبلاً خورده → BE)
-            if hit_sl:
-                if current_trade.result == "TP1_HIT":
-                    # SL breakeven → partial win
-                    tp1_pnl = partial_tp1 / 100 * (
-                        (abs(tp1 - entry) / entry * 100)
-                    )
-                    current_trade.pnl_pct = tp1_pnl
-                    current_trade.result = "WIN"
-                else:
-                    if direction == "LONG":
-                        current_trade.pnl_pct = (
-                            (sl - entry) / entry * 100
-                        )
-                    else:
-                        current_trade.pnl_pct = (
-                            (entry - sl) / entry * 100
-                        )
-                    current_trade.result = "LOSS"
-                
-                current_trade.exit_bar = i
-                current_trade.exit_price = sl
-                trades.append(current_trade)
-                in_trade = False
-                current_trade = None
-                continue
-            
-            # TP1 خورده
-            if hit_tp1 and current_trade.result != "TP1_HIT":
-                current_trade.result = "TP1_HIT"
-                if move_sl_to_be:
-                    current_trade.sl = entry  # SL به breakeven
-            
-            # TP2 خورده
-            if hit_tp2:
-                remaining = 100 - partial_tp1
-                if direction == "LONG":
-                    pnl_1 = partial_tp1 / 100 * (
-                        (tp1 - entry) / entry * 100
-                    )
-                    pnl_2 = remaining / 100 * (
-                        (tp2 - entry) / entry * 100
-                    )
-                else:
-                    pnl_1 = partial_tp1 / 100 * (
-                        (entry - tp1) / entry * 100
-                    )
-                    pnl_2 = remaining / 100 * (
-                        (entry - tp2) / entry * 100
-                    )
-                current_trade.pnl_pct = pnl_1 + pnl_2
-                current_trade.result = "WIN"
-                current_trade.exit_bar = i
-                current_trade.exit_price = tp2
-                trades.append(current_trade)
-                in_trade = False
-                current_trade = None
-                continue
-    
-    # اگه ترید باز مونده
-    if in_trade and current_trade:
-        last_close = df["close"].iloc[-1]
-        if current_trade.direction == "LONG":
-            current_trade.pnl_pct = (
-                (last_close - current_trade.entry) / current_trade.entry * 100
-            )
-        else:
-            current_trade.pnl_pct = (
-                (current_trade.entry - last_close) / current_trade.entry * 100
-            )
-        current_trade.result = "OPEN"
-        current_trade.exit_bar = len(df) - 1
-        current_trade.exit_price = last_close
-        trades.append(current_trade)
-    
-    return trades
+def _slice(frame: Optional[pd.DataFrame], timestamp, minimum: int = 0) -> Optional[pd.DataFrame]:
+    if frame is None:
+        return None
+    result = frame.loc[pd.to_datetime(frame["timestamp"]) <= pd.Timestamp(timestamp)].copy().reset_index(drop=True)
+    return result if len(result) >= minimum else None
 
 
-def run_full_backtest(symbol: str = "BTCUSDT",
-                      days: int = 30) -> Dict:
-    """
-    بک‌تست کامل همه استراتژی‌ها روی یک نماد
-    """
-    # دریافت داده
-    df_4h = get_klines(symbol, "4h", days * 6)
-    df_15m = get_klines(symbol, "15m", days * 96)
-    
-    if df_4h is None or df_15m is None:
-        return {"error": "No data available"}
-    
-    # بایاس کلی
-    sh_4h, sl_4h = find_swing_points(df_4h, lookback=5)
-    structure = classify_structure(sh_4h, sl_4h)
-    htf_bias = structure["bias"]
-    
-    if not htf_bias or "NEUTRAL" in htf_bias:
-        # اگه bias نداریم، هر دو رو تست کن
-        biases = ["BULLISH", "BEARISH"]
+def _historical_ticker(daily: Optional[pd.DataFrame], timestamp) -> Dict:
+    available = _slice(daily, timestamp)
+    turnover = float(available["turnover"].iloc[-1]) if available is not None and not available.empty and "turnover" in available else 100_000_000
+    baseline = float(available["turnover"].tail(7).median()) if available is not None and len(available) >= 3 and "turnover" in available else turnover
+    return {
+        "turnover24h": turnover,
+        "relative_volume": turnover / baseline if baseline > 0 else 1.0,
+        "spread_pct": 0.06,  # conservative configurable historical proxy
+    }
+
+
+def _load_frames(symbol: str, style: str, days: int) -> Tuple[Dict[str, pd.DataFrame], str]:
+    if style == "SWING":
+        counts = {
+            "1d": max(150, days + 120),
+            "4h": days * 6 + 180,
+            "1h": days * 24 + 240,
+            "15m": days * 96 + 300,
+        }
+        trigger_tf = "15m"
     else:
-        biases = [htf_bias]
-    
-    strategies = [
-        ("QM", detect_quasimodo),
-        ("ENGULFING", detect_engulfing),
-        ("PINBAR", detect_pinbar),
-        ("FVG", detect_fvg_signal),
-        ("IFVG", detect_ifvg_signal),
-        ("FLIPZONE", detect_flipzone),
-        ("BREAKOUT", detect_breakout),
-        ("ORDERBLOCK", detect_orderblock_signal),
-        ("CHOCH", detect_structure_change),
-        ("RETURN_AREA", detect_return_to_area),
-    ]
-    
-    all_results = {}
-    
-    for bias in biases:
-        for name, func in strategies:
-            try:
-                trades = backtest_strategy(
-                    func, df_15m, bias, symbol
-                )
-                
-                if trades:
-                    wins = sum(1 for t in trades if t.result == "WIN")
-                    losses = sum(1 for t in trades if t.result == "LOSS")
-                    total = wins + losses
-                    
-                    all_results[f"{name}_{bias}"] = {
-                        "strategy": name,
-                        "bias": bias,
-                        "total_trades": len(trades),
-                        "wins": wins,
-                        "losses": losses,
-                        "winrate": (wins / total * 100) if total > 0 else 0,
-                        "avg_pnl": np.mean([t.pnl_pct for t in trades]),
-                        "total_pnl": sum(t.pnl_pct for t in trades),
-                        "best_trade": max(t.pnl_pct for t in trades),
-                        "worst_trade": min(t.pnl_pct for t in trades),
-                        "avg_bars": np.mean([t.bars_held for t in trades]),
-                        "max_dd": max(t.max_drawdown for t in trades),
-                        "trades": [
-                            {
-                                "entry": t.entry,
-                                "sl": t.sl,
-                                "tp1": t.tp1,
-                                "result": t.result,
-                                "pnl": round(t.pnl_pct, 2),
-                                "bars": t.bars_held,
-                                "dd": round(t.max_drawdown, 2),
-                            }
-                            for t in trades[:10]  # آخرین ۱۰ ترید
-                        ]
-                    }
-            except Exception as e:
-                print(f"Backtest error {name}: {e}")
+        counts = {
+            "1d": max(120, days + 90),
+            "1h": days * 24 + 240,
+            "15m": days * 96 + 300,
+            "5m": days * 288 + 400,
+        }
+        trigger_tf = "5m"
+    frames: Dict[str, pd.DataFrame] = {}
+    for timeframe, count in counts.items():
+        frame = get_klines_paginated(symbol, timeframe, count, closed_only=True)
+        if frame is None or frame.empty:
+            raise RuntimeError(f"No {timeframe} history for {symbol}")
+        frames[timeframe] = frame
+    return frames, trigger_tf
+
+
+def _candidate_key(candidate: SignalCandidate) -> Tuple:
+    return (
+        candidate.style,
+        candidate.setup_code,
+        candidate.direction,
+        int(candidate.metadata.get("impulse_index", -1)),
+        round(float(candidate.metadata.get("structure_level", 0)), 8),
+    )
+
+
+def _wait_for_confirmation(
+    candidate: SignalCandidate,
+    trigger: pd.DataFrame,
+    detection_index: int,
+) -> Tuple[Optional[int], SignalCandidate]:
+    max_bars = (36 * 4) if candidate.style == "SWING" else (6 * 12)
+    end = min(len(trigger), detection_index + max_bars + 1)
+    for index in range(detection_index + 1, end):
+        candle = trigger.iloc[index]
+        if candidate.direction == "LONG" and float(candle["low"]) <= candidate.sl:
+            return None, candidate
+        if candidate.direction == "SHORT" and float(candle["high"]) >= candidate.sl:
+            return None, candidate
+        confirmed, candidate, _ = evaluate_confirmation(candidate, trigger.iloc[: index + 1].copy())
+        if confirmed:
+            candidate.confirmed_at = pd.Timestamp(candle["timestamp"]).isoformat()
+            return index, candidate
+    return None, candidate
+
+
+def _simulate_trade(candidate: SignalCandidate, trigger: pd.DataFrame, confirmed_index: int) -> BacktestTrade:
+    tp1_hit = False
+    bars_held = 0
+    max_drawdown = 0.0
+    entry, sl, tp1, tp2 = candidate.planned_entry, candidate.sl, candidate.tp1, candidate.tp2
+    max_hold = 7 * 24 * 4 if candidate.style == "SWING" else 24 * 12
+    result, gross, exit_price, reason = "TIMEOUT", 0.0, entry, "Time expiry"
+
+    for index in range(confirmed_index + 1, min(len(trigger), confirmed_index + max_hold + 1)):
+        row = trigger.iloc[index]
+        high, low, close = float(row["high"]), float(row["low"]), float(row["close"])
+        bars_held += 1
+        adverse = (entry - low) / entry * 100 if candidate.direction == "LONG" else (high - entry) / entry * 100
+        max_drawdown = max(max_drawdown, adverse)
+        if candidate.direction == "LONG":
+            stop_hit = low <= (entry if tp1_hit else sl)
+            first_hit, final_hit = high >= tp1, high >= tp2
+        else:
+            stop_hit = high >= (entry if tp1_hit else sl)
+            first_hit, final_hit = low <= tp1, low <= tp2
+
+        # Conservative: unknown tick sequence means stop wins same-candle ambiguity.
+        if stop_hit:
+            if tp1_hit:
+                move1 = abs(tp1 - entry) / entry * 100
+                gross = move1 * SETTINGS.partial_tp1_percent / 100
+                result, exit_price, reason = "WIN", entry, "TP1 then Breakeven"
+            else:
+                gross = -abs(sl - entry) / entry * 100
+                result, exit_price, reason = "LOSS", sl, "Stop Loss"
+            break
+        if final_hit:
+            move1 = abs(tp1 - entry) / entry * 100
+            move2 = abs(tp2 - entry) / entry * 100
+            gross = move1 * SETTINGS.partial_tp1_percent / 100 + move2 * SETTINGS.partial_tp2_percent / 100
+            result, exit_price, reason = "WIN", tp2, "TP2"
+            break
+        if first_hit:
+            tp1_hit = True
+        if bars_held >= max_hold:
+            gross = (close - entry) / entry * 100 if candidate.direction == "LONG" else (entry - close) / entry * 100
+            exit_price = close
+
+    roundtrip_cost = 2 * (SETTINGS.fee_rate_percent + SETTINGS.slippage_percent)
+    net = gross - roundtrip_cost
+    if result == "TIMEOUT":
+        result = "WIN" if net > 0 else "LOSS"
+    return BacktestTrade(
+        signal_id=candidate.signal_id,
+        setup=candidate.setup_code,
+        style=candidate.style,
+        symbol=candidate.symbol,
+        direction=candidate.direction,
+        score=candidate.score,
+        detected_at=candidate.created_at,
+        confirmed_at=candidate.confirmed_at,
+        entry=entry,
+        sl=sl,
+        tp1=tp1,
+        tp2=tp2,
+        result=result,
+        pnl_pct=net,
+        gross_pnl_pct=gross,
+        bars_held=bars_held,
+        max_drawdown=max_drawdown,
+        exit_price=exit_price,
+        exit_reason=reason,
+    )
+
+
+def _metrics(trades: List[BacktestTrade]) -> Dict:
+    if not trades:
+        return {
+            "total": 0, "wins": 0, "losses": 0, "winrate": 0.0,
+            "avg_pnl": 0.0, "total_pnl": 0.0, "expectancy": 0.0,
+            "profit_factor": 0.0, "max_drawdown": 0.0, "avg_bars": 0.0,
+        }
+    ordered = sorted(trades, key=lambda trade: trade.confirmed_at)
+    returns = np.array([trade.pnl_pct for trade in ordered], dtype=float)
+    wins = int(np.sum(returns > 0))
+    losses = len(returns) - wins
+    gross_profit = float(returns[returns > 0].sum())
+    gross_loss = abs(float(returns[returns <= 0].sum()))
+    equity = np.cumsum(returns)
+    peaks = np.maximum.accumulate(np.concatenate(([0.0], equity)))
+    drawdowns = peaks[1:] - equity
+    return {
+        "total": len(ordered),
+        "wins": wins,
+        "losses": losses,
+        "winrate": wins / len(ordered) * 100,
+        "avg_pnl": float(returns.mean()),
+        "total_pnl": float(returns.sum()),
+        "expectancy": float(returns.mean()),
+        "profit_factor": gross_profit / gross_loss if gross_loss > 0 else (999.0 if gross_profit > 0 else 0.0),
+        "max_drawdown": float(drawdowns.max()) if len(drawdowns) else 0.0,
+        "avg_bars": float(np.mean([trade.bars_held for trade in ordered])),
+    }
+
+
+def run_style_backtest(symbol: str, style: str, days: int = 14) -> Dict:
+    style = style.upper()
+    frames, trigger_tf = _load_frames(symbol, style, days)
+    trigger = frames[trigger_tf]
+    warmup = 180 if style == "SWING" else 240
+    seen = set()
+    trades: List[BacktestTrade] = []
+    # End early enough to leave future bars for confirmation and result simulation.
+    for index in range(warmup, len(trigger) - 5):
+        timestamp = trigger["timestamp"].iloc[index]
+        sliced = {timeframe: _slice(frame, timestamp) for timeframe, frame in frames.items()}
+        if style == "SWING" and any(sliced.get(tf) is None for tf in ("4h", "1h", "15m")):
+            continue
+        if style == "SCALP" and any(sliced.get(tf) is None for tf in ("1h", "15m", "5m")):
+            continue
+        bundle = MarketBundle(
+            symbol=symbol,
+            frames=sliced,
+            ticker=_historical_ticker(sliced.get("1d"), timestamp),
+        )
+        for candidate in scan_setups(bundle, style):
+            key = _candidate_key(candidate)
+            if key in seen:
                 continue
-    
-    return all_results
+            seen.add(key)
+            candidate.created_at = pd.Timestamp(timestamp).isoformat()
+            expiry = pd.Timestamp(timestamp) + (timedelta(hours=36) if style == "SWING" else timedelta(hours=6))
+            candidate.expires_at = expiry.isoformat()
+            confirmed_index, candidate = _wait_for_confirmation(candidate, trigger, index)
+            if confirmed_index is None:
+                continue
+            trades.append(_simulate_trade(candidate, trigger, confirmed_index))
+
+    overall = _metrics(trades)
+    by_setup = {}
+    for setup in sorted({trade.setup for trade in trades}):
+        by_setup[setup] = _metrics([trade for trade in trades if trade.setup == setup])
+    return {
+        "symbol": symbol,
+        "style": style,
+        "days": days,
+        "metrics": overall,
+        "by_setup": by_setup,
+        "trades": [asdict(trade) for trade in trades],
+        "methodology": {
+            "lookahead": False,
+            "closed_candle_confirmation": True,
+            "same_candle_rule": "stop_first_conservative",
+            "fees_percent_roundtrip": 2 * SETTINGS.fee_rate_percent,
+            "slippage_percent_roundtrip": 2 * SETTINGS.slippage_percent,
+            "strategy_version": SETTINGS.strategy_version,
+        },
+    }
+
+
+def run_full_backtest(symbol: str = "BTCUSDT", days: int = 14, style: str = "BOTH") -> Dict:
+    symbol = symbol.upper()
+    if not symbol.endswith("USDT"):
+        symbol += "USDT"
+    styles = ["SWING", "SCALP"] if style.upper() == "BOTH" else [style.upper()]
+    output = {"symbol": symbol, "days": days, "styles": {}, "error": ""}
+    for item in styles:
+        try:
+            style_result = run_style_backtest(symbol, item, days)
+            output["styles"][item] = style_result
+            if os.getenv("PERSIST_BACKTEST_RESULTS", "true").lower() in {"1", "true", "yes"}:
+                try:
+                    from database.repository_v7 import init_v7_schema, save_backtest_run
+                    init_v7_schema()
+                    save_backtest_run(style_result)
+                except Exception as persist_error:
+                    print(f"Backtest persistence warning: {persist_error}")
+        except Exception as exc:
+            output["styles"][item] = {"error": str(exc), "metrics": _metrics([]), "by_setup": {}, "trades": []}
+    if not output["styles"]:
+        output["error"] = "No backtest data available"
+    return output
 
 
 def generate_backtest_report(results: Dict) -> str:
-    """گزارش بک‌تست به فرمت متن"""
-    if not results or "error" in results:
-        return "❌ داده‌ای برای بک‌تست موجود نیست"
-    
+    if not results or (results.get("error") and not results.get("styles")):
+        return f"❌ بک‌تست قابل اجرا نبود: {results.get('error', 'No data')}"
     lines = [
-        "📊 <b>Backtest Report</b>",
-        "━━━━━━━━━━━━━━━━━━\n"
+        "🧪 <b>Viva Walk-Forward Backtest v7</b>",
+        f"🪙 {results.get('symbol')} • {results.get('days')} days",
+        f"🧠 Strategy: {SETTINGS.strategy_version}",
+        "━━━━━━━━━━━━━━━━━━━━",
     ]
-    
-    # مرتب‌سازی بر اساس winrate
-    sorted_results = sorted(
-        results.items(),
-        key=lambda x: x[1].get("winrate", 0),
-        reverse=True
-    )
-    
-    for key, data in sorted_results:
-        strategy = data["strategy"]
-        bias = data["bias"]
-        winrate = data["winrate"]
-        total = data["total_trades"]
-        wins = data["wins"]
-        losses = data["losses"]
-        avg_pnl = data["avg_pnl"]
-        total_pnl = data["total_pnl"]
-        max_dd = data["max_dd"]
-        
-        emoji = "🏆" if winrate >= 70 else "⭐" if winrate >= 55 else "⚠️" if winrate >= 40 else "❌"
-        
-        lines.append(
-            f"{emoji} <b>{strategy}</b> ({bias})\n"
-            f"├ 📈 Trades: {total} (W:{wins} L:{losses})\n"
-            f"├ 🎯 Winrate: {winrate:.1f}%\n"
-            f"├ 💰 Avg PnL: {avg_pnl:+.2f}%\n"
-            f"├ 📊 Total PnL: {total_pnl:+.2f}%\n"
-            f"└ 📉 Max DD: {max_dd:.2f}%\n"
-        )
-    
-    # خلاصه
-    all_wins = sum(d["wins"] for d in results.values())
-    all_losses = sum(d["losses"] for d in results.values())
-    all_total = all_wins + all_losses
-    overall_wr = (all_wins / all_total * 100) if all_total > 0 else 0
-    
+    for style, data in results.get("styles", {}).items():
+        if data.get("error"):
+            lines.append(f"\n❌ <b>{style}</b>: {data['error']}")
+            continue
+        metric = data["metrics"]
+        lines.extend([
+            f"\n📊 <b>{style}</b>",
+            f"├ Confirmed trades: {metric['total']}",
+            f"├ Win/Loss: {metric['wins']}/{metric['losses']}",
+            f"├ Win Rate: <b>{metric['winrate']:.1f}%</b>",
+            f"├ Expectancy: <b>{metric['expectancy']:+.3f}%</b>",
+            f"├ Profit Factor: <b>{metric['profit_factor']:.2f}</b>",
+            f"├ Total PnL: <b>{metric['total_pnl']:+.2f}%</b>",
+            f"└ Max Drawdown: <b>{metric['max_drawdown']:.2f}%</b>",
+        ])
+        for setup, setup_metric in data.get("by_setup", {}).items():
+            lines.append(
+                f"   • {setup}: {setup_metric['total']} trade • "
+                f"WR {setup_metric['winrate']:.1f}% • PF {setup_metric['profit_factor']:.2f}"
+            )
     lines.extend([
-        "━━━━━━━━━━━━━━━━━━",
-        f"🏆 <b>Overall</b>",
-        f"├ Total Trades: {all_total}",
-        f"├ Winrate: {overall_wr:.1f}%",
-        f"└ Best: {max(results.values(), key=lambda x: x.get('winrate', 0))['strategy']}",
+        "\n━━━━━━━━━━━━━━━━━━━━",
+        "✅ Bias در هر نقطه تاریخی محاسبه شده است.",
+        "✅ فقط کندل بسته‌شده تأیید ایجاد می‌کند.",
+        "✅ کارمزد و Slippage لحاظ شده‌اند.",
+        "⚠️ نتیجه گذشته تضمین عملکرد آینده نیست.",
     ])
-    
     return "\n".join(lines)

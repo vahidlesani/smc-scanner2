@@ -1,695 +1,290 @@
-# smc-scanner v6 - MTF + 5min scan + partial TP + approaching alerts
-import time
-import schedule
-import os
-import pandas as pd
-from datetime import datetime
+"""Viva Signal Bot v7 entry point.
 
-from data.fetcher import get_multi_tf, get_klines
-from analysis.structure import find_swing_points, classify_structure, detect_bos_choch
-from analysis.smc import find_order_blocks, detect_liquidity
-from analysis.rtm import get_rtm_signal
-from analysis.ict import get_ict_signal
-from analysis.strategies import run_all_strategies, StrategySignal
-from analysis.mtf import analyze_mtf_swing, analyze_mtf_scalp, get_mtf_confirmation_text
-from bot.telegram_bot import (
-    send_signal_with_chart, send_message,
-    send_performance_report, attach_money_management,
-    send_confirmation_signal, send_cancellation_signal,
-    send_approaching_alert, send_tp1_hit_signal,
+Quality-first architecture:
+- dynamic high-liquidity Bybit universe
+- one cached data bundle per symbol
+- aligned 15-minute discovery scans
+- independent Swing and Scalp engines
+- local educational candidate lifecycle
+- Supabase persistence only after closed-candle confirmation
+"""
+from __future__ import annotations
+
+import os
+import signal
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Tuple
+
+import pandas as pd
+
+from analysis.models import SignalCandidate
+from analysis.quality_engine import (
+    approaching_entry,
+    evaluate_confirmation,
+    is_expired,
+    is_invalidated,
+    scan_bundle,
 )
 from bot.commands import start_command_listener
-from database.db import (
-    init_db, save_signal, save_active_signal,
-    was_signal_sent_recently, get_performance_stats,
-    check_open_signals, update_market_memory,
-    get_market_memory, get_active_signals,
-    cancel_active_signal, confirm_active_signal,
-    mark_approaching_sent, mark_tp1_hit, mark_sl_moved_to_be,
+from bot.messages_v7 import (
+    send_approaching,
+    send_candidate_cancelled,
+    send_confirmed,
+    send_educational_setup,
+    send_message,
+    send_startup_message,
+    send_tp1_event,
+    send_trade_result,
+)
+from config import get_settings
+from data.fetcher import get_klines, get_market_bundle
+from data.universe import UNIVERSE
+from database.candidate_store import (
+    add_candidate,
+    cleanup_candidates,
+    get_active_candidates,
+    init_candidate_store,
+    update_candidate,
+)
+from database.repository_v7 import (
+    init_v7_schema,
+    monitor_confirmed_trades,
+    save_confirmed_signal,
 )
 
-ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
-RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
-CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")
-CHAT_ID_APPROACHING = os.environ.get("CHAT_ID_APPROACHING", "")  # کانال هشدار نزدیک شدن
-CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
-
-CHANNEL_NAME = "vivasignalyst-Chanel"
-
-SYMBOLS = sorted(set([
-    # بزرگ‌ها (Majors)
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-    "PAXGUSDT", "XAGUSDT", "LINKUSDT", "LDOUSDT", "ICPUSDT",
-    "BCHUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT",
-    "TRXUSDT", "TONUSDT",
-    # لایه ۱ (Layer 1)
-    "ATOMUSDT", "NEARUSDT", "FTMUSDT", "ALGOUSDT", "EGLDUSDT",
-    "KAVAUSDT", "ROSEUSDT", "ONEUSDT", "IOTXUSDT",
-    # لایه ۲ (Layer 2)
-    "LTCUSDT", "POLUSDT", "INJUSDT", "APTUSDT", "SUIUSDT",
-    "ARBUSDT", "OPUSDT", "IMXUSDT", "MINAUSDT",
-    # دیفای (DeFi)
-    "AAVEUSDT", "MKRUSDT", "COMPUSDT", "SNXUSDT", "CRVUSDT",
-    "UNIUSDT", "SUSHIUSDT", "DYDXUSDT", "1INCHUSDT",
-    # هوش مصنوعی (AI)
-    "FETUSDT", "RENDERUSDT", "AGIXUSDT", "OCEANUSDT",
-    "WLDUSDT", "ARKMUSDT", "AIUSDT",
-    # جدید و محبوب
-    "SEIUSDT", "TIAUSDT", "JUPUSDT", "STXUSDT",
-    "PYTHUSDT", "JTOUSDT", "WUSDT", "ENSUSDT",
-    "PENDLEUSDT", "BLURUSDT", "HNTUSDT", "FILUSDT",
-    "THETAUSDT", "APEUSDT", "GALAUSDT", "MANAUSDT",
-    "SANDUSDT", "AXSUSDT",
-]))
+SETTINGS = get_settings()
+_SHUTDOWN = False
 
 
-def calculate_trade_params(entry, sl, direction):
-    sl_distance = abs(entry - sl)
-    sl_pct = sl_distance / entry
-    if sl_pct == 0:
-        return None
-
-    risk_amount = ACCOUNT_SIZE * (RISK_PERCENT / 100)
-    position_size = risk_amount / sl_distance
-
-    if direction == "LONG":
-        tp1 = entry + sl_distance * 2
-        tp2 = entry + sl_distance * 3
-    else:
-        tp1 = entry - sl_distance * 2
-        tp2 = entry - sl_distance * 3
-
-    return {
-        "sl_pct": sl_pct * 100,
-        "risk_amount": risk_amount,
-        "position_size": position_size,
-        "tp1": tp1,
-        "tp2": tp2
-    }
+def _request_shutdown(signum, _frame) -> None:
+    global _SHUTDOWN
+    print(f"Received signal {signum}; shutting down after current task")
+    _SHUTDOWN = True
 
 
-def analyze_symbol(symbol):
-    signals = []
-    
-    # ─── MTF Swing: 4H → 1H → 15M ───
-    mtf_swing = analyze_mtf_swing(symbol)
-    htf_bias = mtf_swing.get("bias")
-    
-    if not htf_bias or "NEUTRAL" in (htf_bias or ""):
-        return signals, None
+def _chart_frame(candidate: SignalCandidate, bundle) -> pd.DataFrame:
+    timeframe = candidate.trigger_timeframe
+    return bundle.get(timeframe)
 
-    # ─── MTF Scalp: 1H → 15M → 5M ───
-    mtf_scalp = analyze_mtf_scalp(symbol)
-    scalp_bias = mtf_scalp.get("bias")
-    scalp_confirmed = mtf_scalp.get("htf_confirmed", False)
-    scalp_ready = mtf_scalp.get("ltf_ready", False)
 
-    tf_data = get_multi_tf(symbol)
-    df_1d = tf_data.get("1d")
-    df_4h = tf_data.get("4h")
-    df_15m = tf_data.get("15m")
-
-    if df_4h is None or df_15m is None:
-        return signals, None
-
-    current_price = df_15m["close"].iloc[-1]
-    prev_memory = get_market_memory(symbol)
-    
-    mtf_text = get_mtf_confirmation_text(mtf_swing)
-    mtf_confirmed = mtf_swing.get("htf_confirmed", False)
-
-    # ─── SMC ───
-    obs = find_order_blocks(df_4h, htf_bias, lookback=50)
-    sh_15m, sl_15m = find_swing_points(df_15m, lookback=3)
-    liquidity = detect_liquidity(df_15m, sh_15m, sl_15m)
-    bos_15m = detect_bos_choch(df_15m, sh_15m, sl_15m)
-
-    near_ob = False
-    ob_top = 0
-    ob_bottom = 0
-    ob_strength = 0
-    has_sweep = False
-    has_choch = False
-
-    for ob in obs[:2]:
-        in_zone = ob.bottom <= current_price <= ob.top
-        near_zone = (
-            abs(current_price - ob.top) / current_price < 0.015
-            or abs(current_price - ob.bottom) / current_price < 0.015
-        )
-        if not (in_zone or near_zone):
-            continue
-
-        near_ob = True
-        ob_top = ob.top
-        ob_bottom = ob.bottom
-        ob_strength = ob.strength
-
-        has_sweep = (
-            (htf_bias == "BULLISH" and
-             liquidity["sweep_type"] == "SWEEP_LOW") or
-            (htf_bias == "BEARISH" and
-             liquidity["sweep_type"] == "SWEEP_HIGH")
-        )
-        has_choch = bool(
-            bos_15m
-            and bos_15m.direction == htf_bias
-            and bos_15m.type == "CHoCH"
-        )
-
-        prev_had_sweep = prev_memory.get("has_sweep", False)
-        prev_had_choch = prev_memory.get("has_choch", False)
-        prev_near_ob = prev_memory.get("near_ob", False)
-
-        new_sweep = has_sweep and not prev_had_sweep
-        new_choch = has_choch and not prev_had_choch
-        just_entered_ob = near_ob and not prev_near_ob
-
-        confirmations = []
-        confirmations.append("✅ Sweep" if has_sweep else "⚠️ No Sweep")
-        confirmations.append("✅ CHoCH" if has_choch else "⚠️ No CHoCH")
-
-        if new_sweep: confirmations.append("🆕 Sweep جدید!")
-        if new_choch: confirmations.append("🆕 CHoCH جدید!")
-        if just_entered_ob: confirmations.append("🆕 ورود به OB!")
-        if mtf_confirmed: confirmations.append("✅ تایید MTF")
-
-        should_signal = new_sweep or new_choch or just_entered_ob
-
-        direction = "LONG" if htf_bias == "BULLISH" else "SHORT"
-        sl = ob_bottom * 0.998 if direction == "LONG" else ob_top * 1.002
-        trade = calculate_trade_params(current_price, sl, direction)
-
-        if trade and should_signal:
-            signals.append({
-                "source": "SMC", "symbol": symbol,
-                "direction": direction, "entry": current_price,
-                "sl": sl, "sl_original": sl,
-                "tp1": trade["tp1"], "tp2": trade["tp2"],
-                "ob_zone": f"{ob_bottom:.4f}-{ob_top:.4f}",
-                "ob_strength": f"{ob_strength:.1f}x",
-                "confirmations": confirmations,
-                "bias": htf_bias, "trade_params": trade,
-                "strategy_fa": "اسمارت مانی",
-                "mtf_text": mtf_text,
-                "mtf_confirmed": mtf_confirmed,
-                "trade_style": "SWING",
-            })
-
-    # ─── RTM ───
-    rtm = get_rtm_signal(df_4h, htf_bias)
-    rtm_pattern = ""
-    rtm_fresh = False
-
-    if rtm:
-        rtm_pattern = rtm["pattern"]
-        rtm_fresh = True
-        prev_rtm = prev_memory.get("rtm_pattern", "")
-
-        sl = (rtm["base_bottom"] * 0.997 if rtm["direction"] == "LONG"
-              else rtm["base_top"] * 1.003)
-        trade = calculate_trade_params(current_price, sl, rtm["direction"])
-
-        if trade and rtm_pattern != prev_rtm:
-            signals.append({
-                "source": "RTM", "symbol": symbol,
-                "direction": rtm["direction"], "entry": current_price,
-                "sl": sl, "sl_original": sl,
-                "tp1": trade["tp1"], "tp2": trade["tp2"],
-                "pattern": rtm["pattern"],
-                "base_zone": f"{rtm['base_bottom']:.4f}-{rtm['base_top']:.4f}",
-                "strength": rtm["strength"],
-                "confirmations": [
-                    f"Pattern: {rtm['pattern']}",
-                    f"Strength: {rtm['strength']}",
-                    "🆕 Pattern جدید!",
-                    *([ "✅ تایید MTF"] if mtf_confirmed else [])
-                ],
-                "bias": htf_bias, "trade_params": trade,
-                "strategy_fa": "RTM",
-                "mtf_text": mtf_text,
-                "mtf_confirmed": mtf_confirmed,
-                "trade_style": "SWING",
-            })
-
-    # ─── ICT ───
-    ict = get_ict_signal(df_4h, df_15m, df_1d, htf_bias)
-    ict_in_ote = False
-    ict_in_kz = False
-
-    if ict:
-        ict_in_ote = True
-        prev_in_ote = prev_memory.get("ict_in_ote", False)
-
-        entry = (ict["entry_top"] + ict["entry_bottom"]) / 2
-        sl = (ict["entry_bottom"] * 0.997 if ict["direction"] == "LONG"
-              else ict["entry_top"] * 1.003)
-        trade = calculate_trade_params(entry, sl, ict["direction"])
-        kz = ict.get("killzone")
-        ict_in_kz = bool(kz)
-        mss = ict.get("mss_confirmed", False)
-
-        if trade and not prev_in_ote:
-            signals.append({
-                "source": "ICT", "symbol": symbol,
-                "direction": ict["direction"], "entry": entry,
-                "sl": sl, "sl_original": sl,
-                "tp1": trade["tp1"], "tp2": trade["tp2"],
-                "ote_zone": f"{ict['entry_bottom']:.4f}-{ict['entry_top']:.4f}",
-                "killzone": kz, "in_killzone": ict_in_kz,
-                "mss": mss, "pdh": ict.get("pdh"), "pdl": ict.get("pdl"),
-                "confirmations": [
-                    f"{'✅' if ict_in_kz else '⚠️'} KZ: {kz or 'None'}",
-                    f"{'✅' if mss else '⚠️'} MSS",
-                    "🆕 ورود به OTE!",
-                    *([ "✅ تایید MTF"] if mtf_confirmed else [])
-                ],
-                "bias": htf_bias, "trade_params": trade,
-                "strategy_fa": "ICT",
-                "mtf_text": mtf_text,
-                "mtf_confirmed": mtf_confirmed,
-                "trade_style": "SWING",
-            })
-
-    # ─── اسکلپ سیگنال‌ها (5M) ───
-    if scalp_bias and scalp_confirmed and scalp_ready:
-        df_5m = get_klines(symbol, "5m", 100)
-        if df_5m is not None:
-            scalp_strategies = run_all_strategies(df_5m, scalp_bias)
-            scalp_mtf_text = get_mtf_confirmation_text(mtf_scalp)
-            
-            for strat_signal in scalp_strategies:
-                if was_signal_sent_recently(
-                    symbol, strat_signal.strategy,
-                    strat_signal.direction, hours=2
-                ):
+def run_discovery_scan() -> Dict[str, int]:
+    """Find educational setups; never writes unconfirmed rows to Supabase."""
+    started = time.monotonic()
+    symbols, metrics = UNIVERSE.get()
+    stats = {"symbols": len(symbols), "detected": 0, "new": 0, "errors": 0}
+    print(
+        f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC] "
+        f"Discovery scan started for {len(symbols)} dynamic symbols"
+    )
+    for index, symbol in enumerate(symbols, start=1):
+        if _SHUTDOWN:
+            break
+        try:
+            bundle = get_market_bundle(symbol, ticker=metrics.get(symbol, {}))
+            candidates = scan_bundle(bundle)
+            stats["detected"] += len(candidates)
+            for candidate in candidates:
+                if candidate.score < SETTINGS.educational_min_score:
                     continue
-                
-                trade = calculate_trade_params(
-                    strat_signal.entry, strat_signal.sl,
-                    strat_signal.direction
-                )
-                
-                if trade:
-                    confirmations = strat_signal.confirmations.copy()
-                    confirmations.append("✅ تایید MTF Scalp")
-                    
-                    # فقط اسکلپ واقعی (SL کمتر از 0.5%)
-                    sl_pct = abs(strat_signal.entry - strat_signal.sl) / strat_signal.entry * 100
-                    if sl_pct < 0.5:
-                        signals.append({
-                            "source": strat_signal.strategy,
-                            "symbol": symbol,
-                            "direction": strat_signal.direction,
-                            "entry": strat_signal.entry,
-                            "sl": strat_signal.sl,
-                            "sl_original": strat_signal.sl,
-                            "tp1": strat_signal.tp1,
-                            "tp2": strat_signal.tp2,
-                            "zone_top": strat_signal.zone_top,
-                            "zone_bottom": strat_signal.zone_bottom,
-                            "strength": strat_signal.strength,
-                            "confirmations": confirmations,
-                            "description": strat_signal.description,
-                            "entry_conditions": strat_signal.entry_conditions,
-                            "score_bonus": strat_signal.score_bonus,
-                            "bias": scalp_bias,
-                            "trade_params": trade,
-                            "strategy_fa": strat_signal.strategy_fa,
-                            "mtf_text": scalp_mtf_text,
-                            "mtf_confirmed": True,
-                            "trade_style": "SCALP",
-                            "scalp_tf": "5m",
-                        })
+                if add_candidate(candidate):
+                    stats["new"] += 1
+                    send_educational_setup(candidate, _chart_frame(candidate, bundle))
+            if index % 10 == 0:
+                print(f"  scanned {index}/{len(symbols)} • new educational setups: {stats['new']}")
+        except Exception as exc:
+            stats["errors"] += 1
+            print(f"Discovery error {symbol}: {exc}")
+    cleanup_candidates()
+    duration = time.monotonic() - started
+    print(
+        f"Discovery scan finished in {duration:.1f}s • "
+        f"detected={stats['detected']} new={stats['new']} errors={stats['errors']}"
+    )
+    return stats
 
-    # ─── استراتژی‌های جدید (Swing) ───
-    new_strategies = run_all_strategies(df_15m, htf_bias)
-    
-    for strat_signal in new_strategies:
-        if was_signal_sent_recently(
-            symbol, strat_signal.strategy,
-            strat_signal.direction, hours=4
-        ):
+
+def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataFrame, pd.DataFrame, float]]:
+    """One Bybit request per active symbol/style for monitor and confirmation."""
+    frames: Dict[Tuple[str, str], Tuple[pd.DataFrame, pd.DataFrame, float]] = {}
+    for candidate in candidates:
+        key = (candidate.symbol, candidate.trigger_timeframe)
+        if key in frames:
             continue
-        
-        trade = calculate_trade_params(
-            strat_signal.entry, strat_signal.sl, strat_signal.direction
+        live = get_klines(
+            candidate.symbol,
+            candidate.trigger_timeframe,
+            140,
+            closed_only=False,
+            use_cache=False,
         )
-        
-        if trade:
-            confirmations = strat_signal.confirmations.copy()
-            if mtf_confirmed:
-                confirmations.append("✅ تایید MTF")
-            
-            signals.append({
-                "source": strat_signal.strategy,
-                "symbol": symbol,
-                "direction": strat_signal.direction,
-                "entry": strat_signal.entry,
-                "sl": strat_signal.sl,
-                "sl_original": strat_signal.sl,
-                "tp1": strat_signal.tp1,
-                "tp2": strat_signal.tp2,
-                "zone_top": strat_signal.zone_top,
-                "zone_bottom": strat_signal.zone_bottom,
-                "strength": strat_signal.strength,
-                "confirmations": confirmations,
-                "description": strat_signal.description,
-                "entry_conditions": strat_signal.entry_conditions,
-                "score_bonus": strat_signal.score_bonus,
-                "bias": htf_bias,
-                "trade_params": trade,
-                "strategy_fa": strat_signal.strategy_fa,
-                "mtf_text": mtf_text,
-                "mtf_confirmed": mtf_confirmed,
-                "trade_style": "SWING",
-            })
-
-    # ذخیره حافظه
-    update_market_memory(symbol, {
-        "bias": htf_bias,
-        "near_ob": near_ob,
-        "ob_top": ob_top,
-        "ob_bottom": ob_bottom,
-        "ob_strength": ob_strength,
-        "has_sweep": has_sweep,
-        "has_choch": has_choch,
-        "rtm_pattern": rtm_pattern,
-        "rtm_fresh": rtm_fresh,
-        "ict_in_ote": ict_in_ote,
-        "ict_in_killzone": ict_in_kz,
-        "current_price": current_price
-    })
-
-    return signals, df_15m
+        if live is None or len(live) < 20:
+            continue
+        # Bybit's newest row is forming; only prior rows may confirm an entry.
+        closed = live.iloc[:-1].reset_index(drop=True)
+        current_price = float(live["close"].iloc[-1])
+        frames[key] = (live, closed, current_price)
+    return frames
 
 
-def check_approaching_entry(sig_data: dict, df_15m: pd.DataFrame) -> bool:
-    """چک میکنه آیا قیمت 80% به Entry نزدیک شده"""
-    if df_15m is None:
-        return False
-    
-    current_price = df_15m["close"].iloc[-1]
-    entry = sig_data["entry"]
-    sl = sig_data["sl"]
-    direction = sig_data["direction"]
-    
-    # محاسبه فاصله فعلی از Entry
-    distance = abs(current_price - entry)
-    sl_distance = abs(entry - sl)
-    
-    if sl_distance == 0:
-        return False
-    
-    # اگه قیمت 80% مسیر به Entry رو طی کرده
-    if direction == "LONG":
-        # قیمت باید پایین Entry باشه و داره بالا میاد
-        if current_price < entry:
-            progress = 1 - (distance / sl_distance)
-            return progress >= 0.8
-    else:
-        # قیمت باید بالای Entry باشه و داره پایین میاد
-        if current_price > entry:
-            progress = 1 - (distance / sl_distance)
-            return progress >= 0.8
-    
-    return False
-
-
-def check_signal_confirmation(sig_data: dict, df_15m: pd.DataFrame) -> bool:
-    """چک میکنه آیا پوزیشن تایید ورود گرفته"""
-    if df_15m is None:
-        return False
-
-    current_close = df_15m["close"].iloc[-1]
-    entry = sig_data["entry"]
-    direction = sig_data["direction"]
-
-    if direction == "LONG" and current_close > entry * 1.001:
-        return True
-    if direction == "SHORT" and current_close < entry * 0.999:
-        return True
-    return False
-
-
-def check_signal_cancellation(sig_data: dict, df_15m: pd.DataFrame) -> bool:
-    """چک میکنه آیا سیگنال باطل شده"""
-    if df_15m is None:
-        return False
-
-    current_close = df_15m["close"].iloc[-1]
-    entry = sig_data["entry"]
-    sl = sig_data["sl"]
-    direction = sig_data["direction"]
-
-    sl_distance = abs(entry - sl)
-
-    if direction == "LONG":
-        cancel_level = entry - (sl_distance * 0.5)
-        return current_close < cancel_level
-    else:
-        cancel_level = entry + (sl_distance * 0.5)
-        return current_close > cancel_level
-
-
-def monitor_active_signals():
-    """
-    مانیتورینگ سیگنال‌های فعال:
-    ۱. هشدار نزدیک شدن (80%) → کانال اصلی
-    ۲. تایید ورود → کانال اصلی (فرمت کامل + چارت)
-    ۳. باطل شدن:
-       - اگه قبلاً تایید شده → کانال اصلی (با دلیل و ضرر)
-       - اگه تایید نشده → کانال نتایج (فقط اطلاع)
-    ۴. TP1 hit + SL to BE
-    """
-    active = get_active_signals()
-
-    for sig_data in active:
+def monitor_candidates() -> Dict[str, int]:
+    """Approaching → closed-candle confirmation → confirmed persistence."""
+    candidates = get_active_candidates()
+    stats = {"active": len(candidates), "approaching": 0, "confirmed": 0, "cancelled": 0}
+    if not candidates:
+        return stats
+    frames = _candidate_market_frames(candidates)
+    for candidate in candidates:
+        key = (candidate.symbol, candidate.trigger_timeframe)
+        market_data = frames.get(key)
+        if not market_data:
+            continue
+        live, closed, current_price = market_data
         try:
-            symbol = sig_data["symbol"]
-            signal_id = sig_data["signal_id"]
-
-            df_15m = get_klines(symbol, "15m", 10, closed_only=False)
-            if df_15m is None:
+            if is_expired(candidate):
+                candidate.status = "EXPIRED"
+                update_candidate(candidate)
+                send_candidate_cancelled(candidate, "زمان اعتبار Setup به پایان رسید و تأیید ورود تشکیل نشد.")
+                stats["cancelled"] += 1
                 continue
-
-            current_price = df_15m['close'].iloc[-1]
-
-            # فقط سیگنال‌های بالای امتیاز ۷ رو مانیتور کن
-            score = sig_data.get("score", 0)
-            if score < 7:
-                continue
-
-            # ۱. هشدار نزدیک شدن (80%) → کانال اصلی
-            if not sig_data.get("approaching_sent"):
-                if check_approaching_entry(sig_data, df_15m):
-                    mark_approaching_sent(signal_id)
-                    from bot.telegram_bot import send_approaching_alert_to_channel
-                    send_approaching_alert_to_channel(sig_data, signal_id, current_price)
-
-            # ۲. تایید ورود → کانال اصلی
-            if check_signal_confirmation(sig_data, df_15m):
-                confirm_active_signal(signal_id)
-                from bot.telegram_bot import send_confirmation_to_alert_channel
-                send_confirmation_to_alert_channel(sig_data, signal_id, current_price, df_15m)
-
-            # ۳. باطل شدن
-            elif check_signal_cancellation(sig_data, df_15m):
-                is_confirmed = sig_data.get("approaching_sent", False)
-                
-                if is_confirmed:
-                    # قبلاً تایید شده بود → کنسل با ضرر → کانال اصلی
-                    cancel_active_signal(signal_id)
-                    from bot.telegram_bot import send_confirmed_cancellation_to_main
-                    send_confirmed_cancellation_to_main(sig_data, signal_id, current_price)
-                else:
-                    # تایید نشده بود → فقط اطلاع → کانال نتایج
-                    cancel_active_signal(signal_id)
-                    from bot.telegram_bot import send_unconfirmed_cancellation
-                    send_unconfirmed_cancellation(sig_data, signal_id)
-
-        except Exception as e:
-            print(f"Monitor error {sig_data.get('signal_id')}: {e}")
-
-
-def run_scan():
-    try:
-        print(f"[{datetime.utcnow().strftime('%H:%M')}] "
-              f"Scanning {len(SYMBOLS)} symbols...")
-
-        # چک سیگنال‌های باز (WIN/LOSS + TP1)
-        try:
-            closed = check_open_signals()
-            for c in closed:
-                from bot.telegram_bot import send_result_to_channel
-                send_result_to_channel(
-                    symbol=c["symbol"],
-                    signal_id=c.get("signal_id", "N/A"),
-                    result=c["result"],
-                    pnl=c["pnl"],
-                    leverage=c.get("leverage", 5),
-                    margin_usd=c.get("margin_usd", 0)
+            if is_invalidated(candidate, current_price):
+                candidate.status = "CANCELLED"
+                update_candidate(candidate)
+                send_candidate_cancelled(
+                    candidate,
+                    f"قیمت پیش از تأیید از سطح ابطال {candidate.sl} عبور کرد.",
                 )
-        except Exception as e:
-            print(f"Check closed signals error: {e}")
+                stats["cancelled"] += 1
+                continue
 
-        # مانیتورینگ سیگنال‌های فعال
-        try:
-            monitor_active_signals()
-        except Exception as e:
-            print(f"Monitor active signals error: {e}")
+            is_near, distance_atr = approaching_entry(candidate, current_price)
+            if is_near and not candidate.approaching_sent:
+                if send_approaching(candidate, current_price, distance_atr):
+                    candidate.approaching_sent = True
+                    candidate.status = "APPROACHING"
+                    stats["approaching"] += 1
 
-        # اسکن نمادها
-        MIN_SCORE_TO_SEND = 7  # فقط سیگنال‌های بالای امتیاز ۷ بفرست
-        
-        for symbol in SYMBOLS:
-            try:
-                signals, df_15m = analyze_symbol(symbol)
-
-                # ─── ترکیب سیگنال‌های هم‌جهت ───
-                # اگه چند استراتژی یه نماد رو تشخیص بدن، ترکیب کن
-                combined = {}
-                for sig in signals:
-                    key = f"{symbol}_{sig['direction']}"
-                    if key not in combined:
-                        combined[key] = {
-                            "signals": [],
-                            "strategies": []
-                        }
-                    combined[key]["signals"].append(sig)
-                    combined[key]["strategies"].append(sig["source"])
-                
-                for key, data in combined.items():
-                    try:
-                        sig_list = data["signals"]
-                        strategies = data["strategies"]
-                        
-                        # سیگنال اصلی (اولین)
-                        main_sig = sig_list[0]
-                        
-                        # چک تکراری نبودن
-                        if was_signal_sent_recently(
-                            symbol, main_sig["source"],
-                            main_sig["direction"], hours=8
-                        ):
-                            continue
-                        
-                        # اگه چند استراتژی تشخیص دادن → سیگنال ویژه
-                        if len(sig_list) > 1:
-                            # ترکیب تأییدات
-                            all_confirmations = []
-                            for s in sig_list:
-                                all_confirmations.extend(s.get("confirmations", []))
-                            
-                            # حذف تکراری
-                            unique_confirmations = list(dict.fromkeys(all_confirmations))
-                            
-                            # اضافه کردن تأیید چند استراتژی
-                            strat_names = " + ".join(strategies)
-                            unique_confirmations.insert(0, f"🏆 تأیید چند استراتژی: {strat_names}")
-                            
-                            main_sig["confirmations"] = unique_confirmations
-                            main_sig["multi_strategy"] = True
-                            main_sig["strategy_count"] = len(sig_list)
-                            main_sig["strategy_fa"] = f"🏆 {strat_names}"
-                            
-                            # امتیاز ویژه (حداقل ۹)
-                            main_sig["score_bonus"] = main_sig.get("score_bonus", 0) + 3
-                            main_sig["is_golden"] = True
-                        
-                        attach_money_management(main_sig)
-                        
-                        # ذخیره در دیتابیس
-                        save_signal(main_sig)
-                        save_active_signal(main_sig)
-                        
-                        # فقط سیگنال‌های با امتیاز بالای ۷ به کانال بفرست
-                        score = main_sig.get("score", 0)
-                        
-                        # سیگنال ویژه همیشه بالای ۹ هست
-                        if main_sig.get("is_golden"):
-                            score = max(score, 9)
-                            main_sig["score"] = score
-                        
-                        if score >= MIN_SCORE_TO_SEND:
-                            send_signal_with_chart(main_sig, df_15m)
-                            time.sleep(2)
-                        else:
-                            print(f"[{symbol}] Score {score} < {MIN_SCORE_TO_SEND}, skipped")
-
-                    except Exception as e:
-                        print(f"Signal send error {symbol}: {e}")
-
-            except Exception as e:
-                print(f"Error {symbol}: {e}")
-
-        print(f"[{datetime.utcnow().strftime('%H:%M')}] Scan done.")
-
-    except Exception as e:
-        print(f"Critical scan error: {e}")
+            confirmed, candidate, reason = evaluate_confirmation(candidate, closed)
+            if confirmed:
+                try:
+                    # Persist first. A portfolio guard failure must not publish an
+                    # executable confirmation that was not accepted into history.
+                    if save_confirmed_signal(candidate):
+                        send_confirmed(candidate, closed)
+                        stats["confirmed"] += 1
+                    candidate.status = "CONFIRMED"
+                except Exception as exc:
+                    candidate.status = "CANCELLED"
+                    send_candidate_cancelled(candidate, f"تأیید تکنیکال ایجاد شد اما کنترل ریسک اجازه اجرا نداد: {exc}")
+                    stats["cancelled"] += 1
+            update_candidate(candidate)
+        except Exception as exc:
+            print(f"Candidate monitor error {candidate.signal_id}: {exc}")
+    return stats
 
 
-def run_daily_report():
+def monitor_confirmed_results() -> int:
+    events = monitor_confirmed_trades()
+    for event in events:
+        if event.get("event") == "TP1":
+            send_tp1_event(event)
+        elif event.get("event") == "CLOSED":
+            send_trade_result(event)
+    return len(events)
+
+
+def run_monitor_cycle() -> None:
     try:
-        stats = get_performance_stats()
-        send_performance_report(stats)
-    except Exception as e:
-        print(f"Daily report error: {e}")
-        send_message("📊 گزارش روزانه: هنوز سیگنال بسته‌ای نداریم.")
+        trade_events = monitor_confirmed_results()
+    except Exception as exc:
+        print(f"Confirmed trade monitor error: {exc}")
+        trade_events = 0
+    try:
+        stats = monitor_candidates()
+        if stats["active"] or trade_events:
+            print(
+                f"Monitor • candidates={stats['active']} approaching={stats['approaching']} "
+                f"confirmed={stats['confirmed']} cancelled={stats['cancelled']} trade_events={trade_events}"
+            )
+    except Exception as exc:
+        print(f"Candidate monitor cycle error: {exc}")
 
 
-def main():
-    if not os.environ.get("TELEGRAM_TOKEN"):
+def _next_aligned_scan(now: datetime) -> datetime:
+    """Next :01/:16/:31/:46 UTC, shortly after a 15m candle closes."""
+    interval = max(1, SETTINGS.full_scan_minutes)
+    offset = SETTINGS.scan_offset_minute % interval
+    base = now.replace(second=0, microsecond=0)
+    minute = base.minute
+    next_minute = ((minute - offset) // interval + 1) * interval + offset
+    if next_minute >= 60:
+        return (base.replace(minute=offset) + timedelta(hours=1))
+    candidate = base.replace(minute=next_minute)
+    return candidate if candidate > now else candidate + timedelta(minutes=interval)
+
+
+def _daily_report() -> None:
+    try:
+        from database.db import get_dashboard_summary, get_strategy_performance
+        summary = get_dashboard_summary()
+        strategies = get_strategy_performance()[:5]
+        lines = [
+            "📊 <b>گزارش روزانه سیگنال‌های Confirmed</b>",
+            f"کل: {summary['total_signals']} • Win: {summary['wins']} • Loss: {summary['losses']}",
+            f"Win Rate: <b>{summary['winrate']}%</b> • Avg PnL: <b>{summary['avg_pnl']:+.2f}%</b>",
+            "",
+            "🏆 <b>عملکرد Setupها</b>",
+        ]
+        for item in strategies:
+            lines.append(
+                f"• {item['strategy_fa']}: {item['wins']}W/{item['losses']}L • {item['winrate']:.1f}%"
+            )
+        send_message("\n".join(lines))
+    except Exception as exc:
+        print(f"Daily report error: {exc}")
+
+
+def main() -> None:
+    signal.signal(signal.SIGTERM, _request_shutdown)
+    signal.signal(signal.SIGINT, _request_shutdown)
+    if not os.getenv("TELEGRAM_TOKEN"):
         print("WARNING: TELEGRAM_TOKEN is not set")
 
-    try:
-        init_db()
-    except Exception as e:
-        print(f"DB init error: {e}")
-
-    send_message(
-        f"🚀 <b>Scanner v6 Started</b>\n"
-        f"📢 کانال: <b>{CHANNEL_NAME}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"📊 SMC | 🔷 RTM | 💎 ICT\n"
-        f"🔮 QM | 🔥 Engulfing | 📌 PinBar\n"
-        f"📐 FVG | 🔄 IFVG | 🔁 FlipZone\n"
-        f"💥 Breakout | 🧱 OB | ⚡ CHoCH\n"
-        f"🎯 Return to Area\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"🔄 Multi-Timeframe: 4H→1H→15M (Swing) | 1H→15M→5M (Scalp)\n"
-        f"⏱ Scan: 5min (24/7)\n"
-        f"📊 Partial TP: 60% TP1 + 40% TP2\n"
-        f"🔒 SL to Breakeven after TP1\n"
-        f"🔔 3-Phase Alerts: Initial → Approaching → Confirmed\n"
-        f"🆔 IDs start with: viva-\n"
-        f"🧠 Smart Memory Active\n"
-        f"📌 {len(SYMBOLS)} Symbols\n"
-        f"🤖 Commands: /help /stats /backtest /strategies\n"
-        f"🎯 Min Score to Send: 7/10"
-    )
-
-    # شروع گوش دادن به دستورات تلگرام
+    init_candidate_store()
+    init_v7_schema()
+    symbols, _ = UNIVERSE.get()
+    send_startup_message(len(symbols))
     try:
         start_command_listener()
-        print("🤖 Telegram commands active: /help /stats /backtest /strategies")
-    except Exception as e:
-        print(f"Command listener error: {e}")
+        print("🤖 Telegram command listener active")
+    except Exception as exc:
+        print(f"Command listener error: {exc}")
 
-    # هر 5 دقیقه اسکن
-    schedule.every(5).minutes.do(run_scan)
-    # گزارش روزانه
-    schedule.every().day.at("08:00").do(run_daily_report)
+    now = datetime.now(timezone.utc)
+    if SETTINGS.run_scan_on_start:
+        run_discovery_scan()
+    next_scan = _next_aligned_scan(datetime.now(timezone.utc))
+    next_monitor = datetime.now(timezone.utc)
+    last_daily_report = ""
+    print(
+        f"Scheduler active • next discovery {next_scan.isoformat(timespec='minutes')} • "
+        f"monitor every {SETTINGS.monitor_minutes} minutes"
+    )
 
-    run_scan()
-
-    while True:
-        try:
-            schedule.run_pending()
-            time.sleep(30)
-        except Exception as e:
-            print(f"Scheduler error: {e}")
-            time.sleep(30)
+    while not _SHUTDOWN:
+        now = datetime.now(timezone.utc)
+        if now >= next_monitor:
+            run_monitor_cycle()
+            next_monitor = now + timedelta(minutes=SETTINGS.monitor_minutes)
+        if now >= next_scan:
+            run_discovery_scan()
+            next_scan = _next_aligned_scan(datetime.now(timezone.utc))
+        report_key = now.strftime("%Y-%m-%d")
+        if now.hour == 8 and now.minute < 2 and report_key != last_daily_report:
+            _daily_report()
+            last_daily_report = report_key
+        time.sleep(5)
+    print("Viva Signal Bot stopped cleanly")
 
 
 if __name__ == "__main__":

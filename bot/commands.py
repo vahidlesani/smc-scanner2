@@ -5,11 +5,13 @@ import requests
 import threading
 import time
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+from config import get_settings
 
+SETTINGS = get_settings()
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
-CHANNEL_NAME = "vivasignalyst-Chanel"
+CHANNEL_NAME = SETTINGS.channel_name
 
 
 def api_call(method, params=None, files=None):
@@ -129,36 +131,29 @@ def backtest_symbols_keyboard():
 
 
 def strategy_list_keyboard():
-    """لیست استراتژی‌ها"""
+    """ستاپ‌های اصلی v7 و تأییدهای کمکی."""
     return {
         "inline_keyboard": [
             [
-                {"text": "📊 SMC", "callback_data": "strat_SMC"},
-                {"text": "🔷 RTM", "callback_data": "strat_RTM"},
-                {"text": "💎 ICT", "callback_data": "strat_ICT"}
+                {"text": "💧 Sweep + MSS", "callback_data": "strat_LSR"},
+                {"text": "📈 BOS First Pullback", "callback_data": "strat_BOS1"},
+            ],
+            [
+                {"text": "📐 Trendline Retest", "callback_data": "strat_TLR"},
+                {"text": "🏦 Supply/Demand", "callback_data": "strat_SDR"},
+            ],
+            [
+                {"text": "🔄 Breaker / IFVG", "callback_data": "strat_IFVG"},
+                {"text": "💎 ICT / OTE", "callback_data": "strat_ICT"},
             ],
             [
                 {"text": "🔮 QM", "callback_data": "strat_QM"},
-                {"text": "🔥 Engulfing", "callback_data": "strat_ENGULFING"},
-                {"text": "📌 PinBar", "callback_data": "strat_PINBAR"}
+                {"text": "🔷 RTM", "callback_data": "strat_RTM"},
             ],
             [
-                {"text": "📐 FVG", "callback_data": "strat_FVG"},
-                {"text": "🔄 IFVG", "callback_data": "strat_IFVG"},
-                {"text": "🔁 FlipZone", "callback_data": "strat_FLIPZONE"}
+                {"text": "📊 همه نتایج Setupها", "callback_data": "strategies"},
+                {"text": "◀️ بازگشت", "callback_data": "main_menu"},
             ],
-            [
-                {"text": "💥 Breakout", "callback_data": "strat_BREAKOUT"},
-                {"text": "🧱 OB", "callback_data": "strat_ORDERBLOCK"},
-                {"text": "⚡ CHoCH", "callback_data": "strat_CHOCH"}
-            ],
-            [
-                {"text": "🎯 Return Area", "callback_data": "strat_RETURN_AREA"}
-            ],
-            [
-                {"text": "📊 همه استراتژی‌ها", "callback_data": "strategies"},
-                {"text": "◀️ بازگشت", "callback_data": "main_menu"}
-            ]
         ]
     }
 
@@ -171,12 +166,13 @@ def handle_start(chat_id):
         "🤖 <b>به Viva Signal Bot خوش آمدید!</b>\n"
         f"📢 کانال: <b>{CHANNEL_NAME}</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "🔮 <b>۱۳ استراتژی پیشرفته</b>\n"
-        "📊 SMC | 🔷 RTM | 💎 ICT\n"
-        "🔮 QM | 🔥 Engulfing | 📌 PinBar\n"
-        "📐 FVG | 🔄 IFVG | 🔁 FlipZone\n"
-        "💥 Breakout | 🧱 OB | ⚡ CHoCH\n"
-        "🎯 Return to Area\n\n"
+        "🧠 <b>موتور کیفیت SMC v7</b>\n"
+        "💧 Liquidity Sweep + MSS\n"
+        "📈 BOS + First Pullback\n"
+        "📐 Trendline Break + Retest\n"
+        "🏦 Supply/Demand Break + Retest\n"
+        "🔄 Breaker / IFVG\n"
+        "📌 RSI، Engulfing و PinBar فقط تأیید کمکی هستند\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "از دکمه‌های زیر استفاده کنید:"
     )
@@ -253,18 +249,21 @@ def handle_strategies(chat_id):
         send_message(f"❌ خطا: {e}", chat_id)
 
 
-def handle_backtest(chat_id, symbol):
-    """بک‌تست"""
+def handle_backtest(chat_id, symbol, style="BOTH"):
+    """بک‌تست Walk-forward؛ style می‌تواند SWING، SCALP یا BOTH باشد."""
     from analysis.backtest import run_full_backtest, generate_backtest_report
-    
+
+    style = style.upper() if style else "BOTH"
+    if style not in {"SWING", "SCALP", "BOTH"}:
+        style = "BOTH"
     try:
         send_message(
-            f"🧪 <b>در حال بک‌تست {symbol}...</b>\n"
-            "لطفاً ۳۰-۶۰ ثانیه صبر کنید.",
+            f"🧪 <b>در حال بک‌تست {symbol} • {style}...</b>\n"
+            "Bias تاریخی، تأیید کندل بسته، Fee و Slippage بررسی می‌شوند؛ لطفاً صبر کنید.",
             chat_id
         )
-        
-        results = run_full_backtest(symbol, days=14)
+
+        results = run_full_backtest(symbol, days=14, style=style)
         report = generate_backtest_report(results)
         
         send_message(report, chat_id, main_menu_keyboard())
@@ -365,14 +364,15 @@ def handle_status(chat_id):
             f"📢 کانال: <b>{CHANNEL_NAME}</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n\n"
             f"🟢 <b>ربات فعال است</b>\n"
-            f"⏱ زمان: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n"
-            f"📊 نسخه: v6\n"
-            f"🔄 اسکن: هر ۵ دقیقه\n"
-            f"📈 استراتژی‌ها: ۱۳ عدد\n"
-            f"📌 نمادها: ۶۰+\n"
-            f"📊 کل سیگنال‌ها: {s['total_signals']}\n\n"
+            f"⏱ زمان: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC\n"
+            f"📊 نسخه: {SETTINGS.version}\n"
+            f"🔄 اسکن کامل: هر {SETTINGS.full_scan_minutes} دقیقه\n"
+            f"👀 مانیتور تأیید: هر {SETTINGS.monitor_minutes} دقیقه\n"
+            f"📈 موتور کیفیت: SMC Core + First Retest\n"
+            f"📌 نمادها: Dynamic Volume Watchlist\n"
+            f"📊 کل سیگنال‌های Confirmed: {s['total_signals']}\n\n"
             f"⏰ MTF:\n"
-            f"├ Swing: 4H→1H→15M\n"
+            f"├ Swing: 1D→4H→1H→15M\n"
             f"└ Scalp: 1H→15M→5M\n\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"📢 <b>{CHANNEL_NAME}</b>"
@@ -382,7 +382,7 @@ def handle_status(chat_id):
         send_message(
             f"🤖 <b>وضعیت ربات</b>\n"
             f"🟢 فعال\n"
-            f"⏱ {datetime.utcnow().strftime('%H:%M')} UTC\n"
+            f"⏱ {datetime.now(timezone.utc).strftime('%H:%M')} UTC\n"
             f"❌ خطا در دریافت آمار: {e}",
             chat_id, main_menu_keyboard()
         )
@@ -398,7 +398,7 @@ def handle_help(chat_id):
         f"/start - منوی اصلی\n"
         f"/stats - آمار کلی\n"
         f"/strategies - آمار استراتژی‌ها\n"
-        f"/backtest SYMBOL - بک‌تست\n"
+        f"/backtest SYMBOL [SWING|SCALP|BOTH] - بک‌تست Walk-forward\n"
         f"/signals - آخرین سیگنال‌ها\n"
         f"/active - سیگنال‌های فعال\n"
         f"/status - وضعیت ربات\n\n"
@@ -479,9 +479,13 @@ def handle_callback(callback_query):
 def handle_strategy_detail(chat_id, strategy):
     """جزئیات یک استراتژی"""
     descriptions = {
+        "LSR": ("💧 Liquidity Sweep + MSS", "جمع‌آوری نقدینگی، Displacement، تغییر ساختار و اولین Retest به OB/FVG تازه."),
+        "BOS1": ("📈 BOS First Pullback", "شکست ساختار با Close و Displacement؛ فقط اولین پولبک به ناحیه مبدأ معامله می‌شود."),
+        "TLR": ("📐 Trendline Break + Retest", "خط ساخته‌شده از حداقل سه Pivot، شکست معتبر و اولین پولبک؛ نه هر خط روند دلخواه."),
+        "SDR": ("🏦 Supply/Demand Break", "شکست ناحیه چندواکنشی عرضه/تقاضا و اولین Retest به Flip Zone."),
         "SMC": ("📊 اسمارت مانی", "Order Block + Liquidity Sweep + CHoCH"),
         "RTM": ("🔷 RTM", "Rally-Base-Drop, Drop-Base-Rally"),
-        "ICT": ("💎 ICT", "OTE Zone + Killzone + MSS"),
+        "ICT": ("💎 ICT", "OTE فقط همراه با Liquidity Raid، Premium/Discount و MSS"),
         "QM": ("🔮 کوآزیمودو", "الگوی بازگشتی قوی با Sweep"),
         "ENGULFING": ("🔥 کندل پوششی", "Bullish/Bearish Engulfing"),
         "PINBAR": ("📌 پین بار", "Hammer / Shooting Star"),
@@ -547,7 +551,8 @@ def handle_message(message):
         symbol = args[0].upper() if args else "BTCUSDT"
         if not symbol.endswith("USDT"):
             symbol += "USDT"
-        handle_backtest(chat_id, symbol)
+        style = args[1].upper() if len(args) > 1 else "BOTH"
+        handle_backtest(chat_id, symbol, style)
     elif cmd == "/signals":
         handle_recent_signals(chat_id)
     elif cmd == "/active":

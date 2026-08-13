@@ -1,8 +1,9 @@
-requests
-pandas>=1.5.0
-numpy>=1.21.0
-schedule
-mplfinance
-matplotlib
-psycopg2-binary
-flask>=2.0.0
+requests[socks]>=2.31.0,<3.0
+pandas>=2.1.0,<3.0
+numpy>=1.24.0,<3.0
+mplfinance>=0.12.10b0,<0.13
+matplotlib>=3.7.0,<4.0
+psycopg2-binary>=2.9.9,<3.0
+flask>=3.0.0,<4.0
+gunicorn>=22.0.0,<24.0
+tzdata>=2024.1

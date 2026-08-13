@@ -8,10 +8,17 @@ from database.db import (
     get_dashboard_summary, get_recent_signals,
     get_strategy_performance, get_backtest_stats
 )
+from database.repository_v7 import init_v7_schema
+from config import get_settings
 
+SETTINGS = get_settings()
 app = Flask(__name__)
+CHANNEL_NAME = SETTINGS.channel_name
 
-CHANNEL_NAME = "vivaanalyst-Chanel"
+try:
+    init_v7_schema()
+except Exception as exc:
+    print(f"Dashboard DB initialization warning: {exc}")
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -19,7 +26,7 @@ DASHBOARD_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>📊 Viva Signal Dashboard</title>
+    <title>📊 Viva Confirmed Signals Dashboard v7</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -135,8 +142,8 @@ DASHBOARD_HTML = """
 <body>
     <div class="header">
         <div>
-            <h1>📊 Viva Signal Dashboard</h1>
-            <div class="channel">📢 {{ channel }}</div>
+            <h1>📊 Viva Confirmed Signals • v7</h1>
+            <div class="channel">📢 {{ channel }} • فقط معاملات Confirmed</div>
         </div>
         <div style="text-align: left;">
             <div style="color: #888; font-size: 12px;">Auto-refresh: 60s</div>
@@ -229,7 +236,8 @@ DASHBOARD_HTML = """
                     <tr>
                         <th>شناسه</th>
                         <th>نماد</th>
-                        <th>استراتژی</th>
+                        <th>ستاپ</th>
+                        <th>نوع</th>
                         <th>جهت</th>
                         <th>ورود</th>
                         <th>استاپ</th>
@@ -245,6 +253,7 @@ DASHBOARD_HTML = """
                         <td><code style="font-size:10px;">{{ sig.signal_id }}</code></td>
                         <td><strong>{{ sig.symbol }}</strong></td>
                         <td>{{ sig.strategy_fa }}</td>
+                        <td><span class="badge badge-pending">{{ sig.trade_style }}</span></td>
                         <td>
                             <span class="badge badge-{{ sig.direction|lower }}">
                                 {{ sig.direction }}
@@ -281,6 +290,8 @@ DASHBOARD_HTML = """
                         <th>باخت</th>
                         <th>Win Rate</th>
                         <th>میانگین PnL</th>
+                        <th>Expectancy</th>
+                        <th>Profit Factor</th>
                         <th>میانگین کندل</th>
                         <th>Max DD</th>
                     </tr>
@@ -296,6 +307,8 @@ DASHBOARD_HTML = """
                         <td class="{{ 'pnl-pos' if b.avg_pnl >= 0 else 'pnl-neg' }}">
                             {{ '%+.2f'|format(b.avg_pnl) }}%
                         </td>
+                        <td class="{{ 'pnl-pos' if b.expectancy|default(0) >= 0 else 'pnl-neg' }}">{{ '%+.3f'|format(b.expectancy|default(0)) }}%</td>
+                        <td class="score">{{ '%.2f'|format(b.profit_factor|default(0)) }}</td>
                         <td>{{ '%.0f'|format(b.avg_bars) }}</td>
                         <td class="pnl-neg">{{ '%.2f'|format(b.avg_dd) }}%</td>
                     </tr>
@@ -352,6 +365,11 @@ def api_backtest():
     return jsonify(get_backtest_stats())
 
 
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok", "version": SETTINGS.version, "confirmed_only": True})
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("DASHBOARD_PORT", 8080))
+    port = int(os.environ.get("PORT", os.environ.get("DASHBOARD_PORT", 8080)))
     app.run(host="0.0.0.0", port=port, debug=False)
