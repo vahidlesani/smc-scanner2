@@ -660,6 +660,69 @@ def send_cancellation_signal(sig_data: dict, signal_id: str):
     send_message(caption, chat_id=target)
 
 
+# ─── ارسال کنسلی تایید شده به کانال اصلی (با ضرر) ───
+def send_confirmed_cancellation_to_main(sig_data: dict, signal_id: str, current_price: float):
+    """سیگنالی که تایید شده بود ولی کنسل شده → کانال اصلی"""
+    target = CHAT_ID_APPROACHING if CHAT_ID_APPROACHING else CHAT_ID_ADMIN
+    
+    entry = sig_data.get("entry", 0)
+    direction = sig_data.get("direction", "")
+    
+    # محاسبه ضرر
+    if direction == "LONG":
+        pnl_pct = ((current_price - entry) / entry) * 100
+    else:
+        pnl_pct = ((entry - current_price) / entry) * 100
+    
+    dir_emoji = "🟢" if direction == "LONG" else "🔴"
+    strategy_fa = sig_data.get("strategy_fa", sig_data.get("source", ""))
+    
+    caption = (
+        f"❌ <b>Confirmed Signal Cancelled!</b> ❌\n"
+        f"📢 کانال: <b>{CHANNEL_NAME}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🆔 <code>{signal_id}</code>\n"
+        f"🪙 <b>{sig_data['symbol']}</b> | {direction} {dir_emoji}\n"
+        f"🔮 استراتژی: <b>{strategy_fa}</b>\n\n"
+        
+        f"⚠️ <b>این سیگنال قبلاً تایید شده بود ولی برگشت!</b>\n\n"
+        
+        f"📍 Entry: <b>{entry:.4f}</b>\n"
+        f"📍 قیمت فعلی: <b>{current_price:.4f}</b>\n"
+        f"📊 ضرر: <b>{pnl_pct:+.2f}%</b>\n\n"
+        
+        f"❌ <b>دلیل کنسلی:</b>\n"
+        f"قیمت بعد از تایید، در جهت مخالف حرکت کرد و حد ضرر خورده.\n\n"
+        
+        f"📢 <b>{CHANNEL_NAME}</b>"
+    )
+    send_message(caption, chat_id=target)
+
+
+# ─── ارسال کنسلی تایید نشده به کانال نتایج ───
+def send_unconfirmed_cancellation(sig_data: dict, signal_id: str):
+    """سیگنالی که تایید نشده و کنسل شده → کانال نتایج"""
+    target = CHAT_ID_RESULTS if CHAT_ID_RESULTS else CHAT_ID_ADMIN
+    
+    dir_emoji = "🟢" if sig_data.get("direction") == "LONG" else "🔴"
+    strategy_fa = sig_data.get("strategy_fa", sig_data.get("source", ""))
+    
+    caption = (
+        f"ℹ️ <b>Signal Cancelled (Not Confirmed)</b>\n"
+        f"📢 کانال: <b>{CHANNEL_NAME}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🆔 <code>{signal_id}</code>\n"
+        f"🪙 <b>{sig_data['symbol']}</b> | {sig_data.get('direction')} {dir_emoji}\n"
+        f"🔮 استراتژی: <b>{strategy_fa}</b>\n\n"
+        
+        f"⚠️ این سیگنال تایید نشده بود و کنسل شد.\n"
+        f"📊 جزو آمار محاسبه نمیشود.\n\n"
+        
+        f"📢 <b>{CHANNEL_NAME}</b>"
+    )
+    send_message(caption, chat_id=target)
+
+
 # ─── ارسال نتیجه WIN/LOSS به کانال نتایج ───
 def send_result_to_channel(symbol: str, signal_id: str,
                             result: str, pnl: float,
