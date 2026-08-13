@@ -35,7 +35,7 @@ def _bool(name: str, default: bool) -> bool:
 class Settings:
     version: str = "v7.0-quality"
     strategy_version: str = "smc-core-7.0"
-    channel_name: str = "vivasignalyst-Chanel"
+    channel_name: str = "VivaSignals Pro"
 
     full_scan_minutes: int = 15
     monitor_minutes: int = 5

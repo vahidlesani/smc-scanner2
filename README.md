@@ -4,7 +4,7 @@
 
 > هدف v7 تعداد زیاد سیگنال نیست. هر Setup باید شواهد ساختاری قابل‌اندازه‌گیری داشته باشد و فقط بعد از Retest و بسته‌شدن کندل تأییدی وارد سابقه Supabase شود.
 
-📢 Channel: **vivasignalyst-Chanel**
+📢 Brand: **VivaSignals Pro**
 
 ## جریان کانال‌ها
 
@@ -34,6 +34,19 @@ TP2 / Breakeven / Stop → Results channel
 ```
 
 Setupهای آموزشی وارد تاریخچه اجرایی، Win Rate یا کانال نتایج نمی‌شوند و وضعیت موقت آن‌ها در SQLite محلی (`CANDIDATE_DB_PATH`) است. تأیید تکنیکال ابتدا فقط به‌صورت ردیف داخلی و غیرقابل‌مانیتور با `AWAITING_PUBLICATION` ذخیره می‌شود؛ تا وقتی چارت و متن کامل Confirmed هر دو با موفقیت منتشر نشده‌اند، در Dashboard/آمار/Portfolio دیده نمی‌شود و هیچ TP/SL/Win/Loss برای آن تولید نخواهد شد. ردیف‌های نسخه‌های قدیمی نیز حذف اجباری نمی‌شوند، اما با `strategy_version` از چرخه v7 قرنطینه‌اند.
+
+## هویت بصری چارت
+
+- خروجی ثابت `1440×900` با تم Midnight TradingView-inspired
+- محور قیمت سمت راست با اعداد پرکنتراست و فرمت متناسب با Crypto/Forex
+- پنل Volume کوتاه و کم‌ارتفاع برای اختصاص فضای بیشتر به Price Action
+- کندل صعودی `#00C2A8` و نزولی `#FF5C6C`
+- POI، Liquidity، MSS/BOS و Invalidation با رنگ‌های مستقل و واقعی از فیلدهای محاسبه‌شده
+- Confirmed Chart دارای Risk/Reward box، Entry/Invalidation/TP1/TP2 و مسیر خط‌چین `PROJECTED SCENARIO` است
+- Educational Chart عمداً Entry/TP اجرایی نمایش نمی‌دهد
+- لوگوی PNG شفاف از `CHART_LOGO_PATH` با واترمارک ملایم درج می‌شود؛ پیش‌فرض `assets/vivasignals-logo.png`
+- امضای پیش‌فرض `VivaSignals Pro` و جداکننده بسته‌های پیام `━━━━━━━━━━ 💹 VIVASIGNALS PRO ━━━━━━━━━━` است
+- Divider فقط بین دو بسته پیام قرار می‌گیرد و هرگز عکس و متن همان Confirmed را از هم جدا نمی‌کند
 
 ## موتورهای مستقل
 
@@ -207,6 +220,15 @@ WATCHLIST_MAX_FOREX_SYMBOLS=3
 WATCHLIST_MAX_TRADFI_SYMBOLS=15
 SCALP_MIN_TURNOVER_USD=20000000
 CANDIDATE_DB_PATH=/tmp/viva_candidates.db
+
+CHART_BRAND_NAME="VivaSignals Pro"
+CHART_BRAND_HANDLE=
+CHART_LOGO_PATH=assets/vivasignals-logo.png
+CHART_FIGURE_COLOR="#0B101A"
+CHART_PANEL_COLOR="#111827"
+CHART_BULL_COLOR="#00C2A8"
+CHART_BEAR_COLOR="#FF5C6C"
+SIGNAL_SEPARATOR_TEXT="━━━━━━━━━━ 💹 VIVASIGNALS PRO ━━━━━━━━━━"
 ```
 
 برای دوام Candidateها در Restart، در Render یک Persistent Disk متصل و `CANDIDATE_DB_PATH` روی مسیر آن تنظیم شود. هیچ Token یا Secret نباید داخل Git، README یا فایل `.env` Commit شود.

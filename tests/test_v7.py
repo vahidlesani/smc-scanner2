@@ -73,6 +73,28 @@ class V7ModelTests(unittest.TestCase):
         self.assertIn("مدیریت سرمایه بهینه", text)
         self.assertIn("viva-", text)
 
+    def test_branded_confirmed_chart_is_exact_1440_by_900_png(self):
+        from bot.messages_v7 import generate_chart
+
+        candidate = make_candidate("CONFIRMED", 8)
+        candidate.confirmed_at = iso_now()
+        timestamps = pd.date_range("2026-01-01", periods=100, freq="15min")
+        closes = [99.0 + index * 0.01 for index in range(100)]
+        frame = pd.DataFrame({
+            "timestamp": timestamps,
+            "open": [value - 0.08 for value in closes],
+            "high": [value + 0.22 for value in closes],
+            "low": [value - 0.20 for value in closes],
+            "close": closes,
+            "volume": [1000 + index * 3 for index in range(100)],
+            "turnover": [100000 + index * 100 for index in range(100)],
+        })
+        image = generate_chart(frame, candidate, confirmed=True)
+        self.assertIsNotNone(image)
+        self.assertEqual(image[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(int.from_bytes(image[16:20], "big"), 1440)
+        self.assertEqual(int.from_bytes(image[20:24], "big"), 900)
+
     def test_money_management_caps_margin(self):
         candidate = make_candidate("CONFIRMED", 8)
         plan = build_money_management(candidate, account=1000)
@@ -402,7 +424,8 @@ class V7PersistenceTests(unittest.TestCase):
             self.assertTrue(messages_v7.send_trade_result(valid_event))
             self.assertFalse(messages_v7.send_trade_result({**valid_event, "strategy_version": "v6"}))
             self.assertFalse(messages_v7.send_trade_result({**valid_event, "result": "LOSS"}))
-            self.assertEqual(send_mock.call_count, 1)
+            # One branded divider plus one validated result message.
+            self.assertEqual(send_mock.call_count, 2)
 
     def test_confirmed_publication_resumes_without_duplicate_chart(self):
         from bot import messages_v7
@@ -412,14 +435,15 @@ class V7PersistenceTests(unittest.TestCase):
         with (
             patch.object(messages_v7, "generate_chart", return_value=b"chart") as chart_mock,
             patch.object(messages_v7, "send_photo", return_value=True) as photo_mock,
-            patch.object(messages_v7, "send_message", side_effect=[False, True]) as message_mock,
+            patch.object(messages_v7, "send_message", side_effect=[True, False, True]) as message_mock,
         ):
             self.assertFalse(messages_v7.send_confirmed(candidate, pd.DataFrame({"x": [1]})))
             self.assertTrue(candidate.metadata["confirmation_chart_sent"])
             self.assertTrue(messages_v7.send_confirmed(candidate, pd.DataFrame({"x": [1]})))
             self.assertEqual(chart_mock.call_count, 1)
             self.assertEqual(photo_mock.call_count, 1)
-            self.assertEqual(message_mock.call_count, 2)
+            self.assertEqual(message_mock.call_count, 3)
+            self.assertTrue(candidate.metadata["confirmation_separator_attempted"])
             self.assertTrue(candidate.metadata["confirmation_message_sent"])
 
 

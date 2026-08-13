@@ -4,7 +4,7 @@
 
 - Branch: `arena/v7-quality-engine`
 - Commit نهایی: خروجی `git log -1 --oneline`
-- نام کانال: `vivasignalyst-Chanel`
+- هویت برند: `VivaSignals Pro`
 - شناسه‌ها: `viva-{SYMBOL}-{SW|SC}-{SETUP}-{TIME}-{RANDOM}`
 
 ## ۱. پایداری و Bybit
@@ -79,6 +79,15 @@ OTE، Premium/Discount، RSI regular/hidden divergence، Session، Volume، Engu
 - فقط TP1 و نتیجه معاملات Confirmed
 - Candidate کنسل‌شده در Win Rate حساب نمی‌شود.
 
+### هویت چارت و تفکیک پیام
+
+- تم اختصاصی Midnight با خروجی ثابت 1440×900 و کندل‌های Emerald/Coral اضافه شد.
+- محور قیمت سمت راست پرکنتراست، پنل Volume کوتاه و Wordmark بزرگ `VIVA SIGNALS PRO` اعمال شد.
+- Confirmed دارای Long/Short Risk-Reward box، Entry، Invalidation، TP1/TP2 و فلش‌های سناریوی خط‌چین است.
+- Educational فقط POI، ساختار، نقدینگی و Invalidation تحلیلی را نشان می‌دهد و سطوح اجرایی را افشا نمی‌کند.
+- Footer برند، Wordmark و پشتیبانی از لوگوی PNG شفاف `CHART_LOGO_PATH` اضافه شد.
+- Divider مالی فقط بین بسته‌های کامل پیام قرار می‌گیرد و Chart/Text یک Confirmed را جدا نمی‌کند.
+
 ## ۷. دیتابیس
 
 - Educational Candidate در Supabase ذخیره نمی‌شود.
@@ -131,7 +140,7 @@ OTE، Premium/Discount، RSI regular/hidden divergence، Session، Volume، Engu
 
 - Compile تمام فایل‌ها: موفق
 - Import تمام Moduleها: موفق
-- ۱۹ Unit Test: موفق
+- ۲۰ Unit Test: موفق
 - SQLite migration/persistence و Publication Gate: موفق
 - ممنوعیت نمایش/مانیتور Confirmation منتشرنشده: موفق
 - قرنطینه Legacy از Lifecycle، Dashboard و Statistics: موفق
@@ -141,6 +150,7 @@ OTE، Premium/Discount، RSI regular/hidden divergence، Session، Volume، Engu
 - Invalidation پشت Liquidity + بافر پویا: موفق
 - رزرو سه Forex نقدشونده در Universe: موفق
 - Dedupe کامل Symbol تا نتیجه نهایی: موفق
+- PNG برندشده با ابعاد دقیق 1440×900: موفق
 - TP1 سپس Breakeven به‌ترتیب زمانی: موفق
 - Dashboard و تمام APIها: HTTP 200
 - Main startup/shutdown smoke test: موفق

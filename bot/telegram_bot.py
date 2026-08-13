@@ -12,6 +12,7 @@ matplotlib.use("Agg")
 import mplfinance as mpf
 
 from analysis.risk import calculate_position
+from config import get_settings
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")  # کانال قدیمی (رصد)
@@ -22,7 +23,7 @@ CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
 ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
 RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
 
-CHANNEL_NAME = "vivasignalyst-Chanel"
+CHANNEL_NAME = get_settings().channel_name
 
 
 def _published_lifecycle_allowed(signal_id: str, event_type: str, result: str = None) -> bool:
