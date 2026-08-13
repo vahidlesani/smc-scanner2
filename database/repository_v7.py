@@ -1,0 +1,465 @@
+"""Confirmed-signal repository and safe schema migrations for v7.
+
+Only CONFIRMED trades enter Supabase's signals/active_signals tables. Educational
+candidates live in database.candidate_store (local transient SQLite).
+"""
+from __future__ import annotations
+
+import json
+import uuid
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Tuple
+
+import pandas as pd
+
+from analysis.models import SignalCandidate
+from analysis.risk import build_money_management
+from config import get_settings
+from data.fetcher import get_klines
+from database import db as legacy_db
+
+SETTINGS = get_settings()
+
+SIGNAL_COLUMNS = {
+    "setup_code": "TEXT DEFAULT ''",
+    "setup_name": "TEXT DEFAULT ''",
+    "strategy_version": "TEXT DEFAULT ''",
+    "trigger_timeframe": "TEXT DEFAULT ''",
+    "evidence_json": "TEXT DEFAULT '[]'",
+    "warnings_json": "TEXT DEFAULT '[]'",
+    "mandatory_json": "TEXT DEFAULT '{}'",
+    "market_json": "TEXT DEFAULT '{}'",
+    "entry_zone_bottom": "REAL DEFAULT 0",
+    "entry_zone_top": "REAL DEFAULT 0",
+    "rr_tp1": "REAL DEFAULT 0",
+    "rr_tp2": "REAL DEFAULT 0",
+    "status": "TEXT DEFAULT 'CONFIRMED'",
+    "confirmed_at": "TEXT",
+    "last_checked_at": "TEXT",
+    "session_name": "TEXT DEFAULT ''",
+    "pnl_usd": "REAL DEFAULT 0",
+}
+
+ACTIVE_COLUMNS = {
+    "setup_code": "TEXT DEFAULT ''",
+    "setup_name": "TEXT DEFAULT ''",
+    "strategy_version": "TEXT DEFAULT ''",
+    "style": "TEXT DEFAULT 'SWING'",
+    "trigger_timeframe": "TEXT DEFAULT ''",
+    "entry_zone_bottom": "REAL DEFAULT 0",
+    "entry_zone_top": "REAL DEFAULT 0",
+    "evidence_json": "TEXT DEFAULT '[]'",
+    "status": "TEXT DEFAULT 'CONFIRMED'",
+    "confirmed_at": "TEXT",
+    "last_checked_at": "TEXT",
+}
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ", timespec="seconds")
+
+
+def _bool_value(value: bool):
+    return bool(value) if legacy_db.USE_POSTGRES else int(bool(value))
+
+
+def _table_columns(cursor, table: str) -> set:
+    if legacy_db.USE_POSTGRES:
+        cursor.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=%s",
+            (table,),
+        )
+        return {row[0] for row in cursor.fetchall()}
+    cursor.execute(f"PRAGMA table_info({table})")
+    return {row[1] for row in cursor.fetchall()}
+
+
+def _migrate_columns(cursor, table: str, definitions: Dict[str, str]) -> None:
+    existing = _table_columns(cursor, table)
+    for name, definition in definitions.items():
+        if name not in existing:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+
+def init_v7_schema() -> None:
+    legacy_db.init_db()
+    with legacy_db.db_cursor() as cursor:
+        _migrate_columns(cursor, "signals", SIGNAL_COLUMNS)
+        _migrate_columns(cursor, "active_signals", ACTIVE_COLUMNS)
+        if legacy_db.USE_POSTGRES:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS backtest_runs (
+                    id SERIAL PRIMARY KEY,
+                    run_id TEXT UNIQUE,
+                    symbol TEXT,
+                    style TEXT,
+                    days INTEGER,
+                    strategy_version TEXT,
+                    metrics_json TEXT,
+                    by_setup_json TEXT,
+                    methodology_json TEXT,
+                    created_at TEXT
+                )
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS backtest_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT UNIQUE,
+                    symbol TEXT,
+                    style TEXT,
+                    days INTEGER,
+                    strategy_version TEXT,
+                    metrics_json TEXT,
+                    by_setup_json TEXT,
+                    methodology_json TEXT,
+                    created_at TEXT
+                )
+            """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_signals_confirmed_result ON signals(confirmed, result)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_signals_style_setup ON signals(trade_style, setup_code)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_status ON active_signals(status, is_cancelled)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_backtest_runs_symbol ON backtest_runs(symbol, style, created_at)")
+    print("✅ v7 database migrations applied safely")
+
+
+def confirmed_exists(signal_id: str) -> bool:
+    p = legacy_db._ph()
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(f"SELECT 1 FROM signals WHERE signal_id={p} LIMIT 1", (signal_id,))
+        return cursor.fetchone() is not None
+
+
+def save_backtest_run(result: Dict) -> str:
+    """Persist one aggregate walk-forward run without duplicating every trade."""
+    run_id = f"bt-{result.get('symbol', 'NA')}-{result.get('style', 'NA')}-{uuid.uuid4().hex[:10]}"
+    p = legacy_db._ph()
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"""
+            INSERT INTO backtest_runs
+            (run_id, symbol, style, days, strategy_version,
+             metrics_json, by_setup_json, methodology_json, created_at)
+            VALUES ({','.join([p] * 9)})
+            """,
+            (
+                run_id,
+                str(result.get("symbol", "")),
+                str(result.get("style", "")),
+                int(result.get("days", 0)),
+                SETTINGS.strategy_version,
+                json.dumps(result.get("metrics", {}), ensure_ascii=False),
+                json.dumps(result.get("by_setup", {}), ensure_ascii=False),
+                json.dumps(result.get("methodology", {}), ensure_ascii=False),
+                _now(),
+            ),
+        )
+    return run_id
+
+
+def portfolio_guard(candidate: SignalCandidate) -> Tuple[bool, str]:
+    """Prevent concentration and trading after the configured daily loss cap."""
+    p = legacy_db._ph()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM signals WHERE confirmed=" + ("TRUE" if legacy_db.USE_POSTGRES else "1") + " AND result='PENDING'")
+        open_count = int((cursor.fetchone() or [0])[0] or 0)
+        cursor.execute(
+            f"SELECT COALESCE(SUM(pnl_usd),0) FROM signals WHERE confirmed="
+            + ("TRUE" if legacy_db.USE_POSTGRES else "1")
+            + f" AND result IN ('WIN','LOSS') AND closed_at>={p}",
+            (today + " 00:00:00",),
+        )
+        daily_pnl_usd = float((cursor.fetchone() or [0])[0] or 0)
+        cursor.execute(
+            f"SELECT symbol, direction, source, trade_style FROM signals WHERE confirmed="
+            + ("TRUE" if legacy_db.USE_POSTGRES else "1")
+            + " AND result='PENDING'",
+        )
+        open_rows = cursor.fetchall()
+
+    if open_count >= SETTINGS.max_open_trades:
+        return False, f"حداکثر {SETTINGS.max_open_trades} معامله هم‌زمان فعال است."
+    if any(
+        symbol == candidate.symbol
+        and direction == candidate.direction
+        and source == candidate.setup_code
+        and style == candidate.style
+        for symbol, direction, source, style in open_rows
+    ):
+        return False, "یک معامله Confirmed مشابه روی همین نماد و Setup هنوز باز است."
+    daily_loss_limit_usd = SETTINGS.account_size * SETTINGS.daily_loss_limit_percent / 100
+    if daily_pnl_usd <= -abs(daily_loss_limit_usd):
+        return False, (
+            f"حد ضرر روزانه {SETTINGS.daily_loss_limit_percent}% "
+            f"(${daily_loss_limit_usd:.2f}) فعال شده است."
+        )
+    # Crypto alts generally share market beta. BTC and ETH are treated as separate majors.
+    if candidate.symbol not in {"BTCUSDT", "ETHUSDT"}:
+        correlated = sum(
+            1 for symbol, direction, _source, _style in open_rows
+            if symbol not in {"BTCUSDT", "ETHUSDT"} and direction == candidate.direction
+        )
+        if correlated >= SETTINGS.max_correlated_trades:
+            return False, "سقف معاملات هم‌جهت و همبسته آلت‌کوین‌ها پر شده است."
+    return True, "Portfolio guard passed"
+
+
+def save_confirmed_signal(candidate: SignalCandidate) -> bool:
+    if candidate.status != "CONFIRMED" or not candidate.confirmed_at:
+        raise ValueError("Only a CONFIRMED candidate can be persisted")
+    if candidate.score < SETTINGS.execution_min_score or not candidate.execution_ready:
+        raise ValueError("Candidate does not meet execution quality gates")
+    if confirmed_exists(candidate.signal_id):
+        return False
+
+    allowed, reason = portfolio_guard(candidate)
+    if not allowed:
+        raise RuntimeError(reason)
+    mm = build_money_management(candidate)
+    if not mm:
+        raise RuntimeError("Money-management plan could not be calculated")
+
+    p = legacy_db._ph()
+    created = candidate.confirmed_at.replace("T", " ").replace("+00:00", "")
+    params = (
+        candidate.symbol,
+        candidate.setup_code,
+        candidate.strategy_fa,
+        candidate.direction,
+        float(candidate.planned_entry),
+        float(candidate.sl),
+        float(candidate.sl),
+        float(candidate.tp1),
+        float(candidate.tp2),
+        candidate.bias,
+        json.dumps(candidate.confirmations, ensure_ascii=False),
+        candidate.setup_name,
+        json.dumps([item.detail for item in candidate.evidence], ensure_ascii=False),
+        candidate.signal_id,
+        int(mm["leverage"]),
+        float(mm["margin"]),
+        candidate.style,
+        candidate.trigger_timeframe if candidate.style == "SCALP" else "",
+        "4h" if candidate.style == "SWING" else "1h",
+        str(candidate.metadata.get("htf_4h", "")),
+        str(candidate.metadata.get("htf_1h", "")),
+        str(candidate.metadata.get("htf_15m", "")),
+        int(candidate.score),
+        SETTINGS.partial_tp1_percent,
+        SETTINGS.partial_tp2_percent,
+        _bool_value(True),
+        created,
+        candidate.setup_code,
+        candidate.setup_name,
+        SETTINGS.strategy_version,
+        candidate.trigger_timeframe,
+        json.dumps([item.__dict__ for item in candidate.evidence], ensure_ascii=False, default=str),
+        json.dumps(candidate.warnings, ensure_ascii=False),
+        json.dumps(candidate.mandatory_gates, ensure_ascii=False),
+        json.dumps(candidate.market, ensure_ascii=False, default=str),
+        float(candidate.entry_zone_bottom),
+        float(candidate.entry_zone_top),
+        float(candidate.rr_tp1),
+        float(candidate.rr_tp2),
+        "CONFIRMED",
+        created,
+        created,
+        str(candidate.metadata.get("session", "")),
+    )
+    sql = f"""
+        INSERT INTO signals
+        (symbol, source, strategy_fa, direction, entry, sl, sl_original,
+         tp1, tp2, bias, confirmations, description, entry_conditions,
+         signal_id, leverage, margin_usd, trade_style, scalp_tf, swing_tf,
+         mtf_4h, mtf_1h, mtf_15m, score, partial_tp1_pct, partial_tp2_pct,
+         confirmed, created_at, setup_code, setup_name, strategy_version,
+         trigger_timeframe, evidence_json, warnings_json, mandatory_json,
+         market_json, entry_zone_bottom, entry_zone_top, rr_tp1, rr_tp2,
+         status, confirmed_at, last_checked_at, session_name)
+        VALUES ({','.join([p] * 43)})
+    """
+
+    active_params = (
+        candidate.signal_id,
+        candidate.symbol,
+        candidate.setup_code,
+        candidate.strategy_fa,
+        candidate.direction,
+        float(candidate.planned_entry),
+        float(candidate.sl),
+        float(candidate.sl),
+        float(candidate.tp1),
+        float(candidate.tp2),
+        candidate.bias,
+        int(mm["leverage"]),
+        float(mm["margin"]),
+        int(candidate.score),
+        _bool_value(True),
+        created,
+        candidate.setup_code,
+        candidate.setup_name,
+        SETTINGS.strategy_version,
+        candidate.style,
+        candidate.trigger_timeframe,
+        float(candidate.entry_zone_bottom),
+        float(candidate.entry_zone_top),
+        json.dumps([item.__dict__ for item in candidate.evidence], ensure_ascii=False, default=str),
+        "CONFIRMED",
+        created,
+        created,
+    )
+    active_sql = f"""
+        INSERT INTO active_signals
+        (signal_id, symbol, source, strategy_fa, direction, entry, sl,
+         sl_original, tp1, tp2, bias, leverage, margin_usd, score,
+         is_confirmed, created_at, setup_code, setup_name, strategy_version,
+         style, trigger_timeframe, entry_zone_bottom, entry_zone_top,
+         evidence_json, status, confirmed_at, last_checked_at)
+        VALUES ({','.join([p] * 27)})
+    """
+
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(sql, params)
+        cursor.execute(active_sql, active_params)
+    return True
+
+
+def _naive_timestamp(value) -> Optional[pd.Timestamp]:
+    if not value:
+        return None
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert("UTC").tz_localize(None)
+    return ts
+
+
+def _weighted_win_pct(direction: str, entry: float, tp1: float, tp2: float, partial_only: bool) -> float:
+    move1 = (tp1 - entry) / entry * 100 if direction == "LONG" else (entry - tp1) / entry * 100
+    if partial_only:
+        return move1 * SETTINGS.partial_tp1_percent / 100
+    move2 = (tp2 - entry) / entry * 100 if direction == "LONG" else (entry - tp2) / entry * 100
+    return move1 * SETTINGS.partial_tp1_percent / 100 + move2 * SETTINGS.partial_tp2_percent / 100
+
+
+def monitor_confirmed_trades() -> List[Dict]:
+    """Process each closed candle chronologically; no historical `.any()` shortcuts."""
+    truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(f"""
+            SELECT signal_id, symbol, direction, entry, sl_original, tp1, tp2,
+                   leverage, margin_usd, trade_style, confirmed_at,
+                   last_checked_at, tp1_hit, source, strategy_fa
+            FROM signals
+            WHERE confirmed={truth} AND result='PENDING'
+            ORDER BY confirmed_at
+        """)
+        rows = cursor.fetchall()
+    if not rows:
+        return []
+
+    by_symbol_tf: Dict[Tuple[str, str], pd.DataFrame] = {}
+    events: List[Dict] = []
+    p = legacy_db._ph()
+    for row in rows:
+        (
+            signal_id, symbol, direction, entry, original_sl, tp1, tp2,
+            leverage, margin, style, confirmed_at, last_checked_at,
+            tp1_hit, source, strategy_fa,
+        ) = row
+        timeframe = "5m" if style == "SCALP" else "15m"
+        key = (symbol, timeframe)
+        if key not in by_symbol_tf:
+            by_symbol_tf[key] = get_klines(symbol, timeframe, 300, closed_only=True, use_cache=False)
+        frame = by_symbol_tf[key]
+        if frame is None or frame.empty:
+            continue
+        start = _naive_timestamp(last_checked_at) or _naive_timestamp(confirmed_at)
+        timestamps = pd.to_datetime(frame["timestamp"])
+        if getattr(timestamps.dt, "tz", None) is not None:
+            timestamps = timestamps.dt.tz_convert("UTC").dt.tz_localize(None)
+        pending = frame.loc[timestamps > start].copy() if start is not None else frame.tail(1).copy()
+        if pending.empty:
+            continue
+
+        state_tp1 = bool(tp1_hit)
+        closed_event = None
+        tp1_event = None
+        latest_checked = start
+        for _, candle in pending.iterrows():
+            latest_checked = _naive_timestamp(candle["timestamp"])
+            high, low = float(candle["high"]), float(candle["low"])
+            if direction == "LONG":
+                stop_hit = low <= (entry if state_tp1 else original_sl)
+                first_hit = high >= tp1
+                final_hit = high >= tp2
+            else:
+                stop_hit = high >= (entry if state_tp1 else original_sl)
+                first_hit = low <= tp1
+                final_hit = low <= tp2
+
+            # Conservative ambiguity rule: if stop and target occur in the same
+            # candle, assume the stop happened first because tick order is unknown.
+            if stop_hit:
+                if state_tp1:
+                    pnl = _weighted_win_pct(direction, entry, tp1, tp2, True)
+                    result = "WIN"
+                    reason = "TP1 سپس Breakeven"
+                else:
+                    pnl = ((original_sl - entry) / entry * 100) if direction == "LONG" else ((entry - original_sl) / entry * 100)
+                    result = "LOSS"
+                    reason = "Stop Loss"
+                closed_event = {"result": result, "pnl": pnl, "reason": reason}
+                break
+            if final_hit:
+                pnl = _weighted_win_pct(direction, entry, tp1, tp2, False)
+                closed_event = {"result": "WIN", "pnl": pnl, "reason": "TP2"}
+                break
+            if first_hit and not state_tp1:
+                state_tp1 = True
+                tp1_event = {
+                    "event": "TP1", "signal_id": signal_id, "symbol": symbol,
+                    "style": style, "source": source, "strategy_fa": strategy_fa,
+                }
+
+        with legacy_db.db_cursor() as cursor:
+            if state_tp1 and not tp1_hit:
+                cursor.execute(
+                    f"UPDATE signals SET tp1_hit={truth}, tp1_hit_at={p}, sl_moved_to_be={truth}, sl=entry WHERE signal_id={p}",
+                    (_now(), signal_id),
+                )
+                cursor.execute(
+                    f"UPDATE active_signals SET tp1_hit={truth}, sl_moved_to_be={truth}, sl=entry WHERE signal_id={p}",
+                    (signal_id,),
+                )
+            if latest_checked is not None:
+                checked_text = latest_checked.isoformat(sep=" ", timespec="seconds")
+                cursor.execute(f"UPDATE signals SET last_checked_at={p} WHERE signal_id={p}", (checked_text, signal_id))
+                cursor.execute(f"UPDATE active_signals SET last_checked_at={p} WHERE signal_id={p}", (checked_text, signal_id))
+            if closed_event:
+                notional = float(margin or 0) * int(leverage or 1)
+                gross_pnl = float(closed_event["pnl"])
+                roundtrip_cost = 2 * (SETTINGS.fee_rate_percent + SETTINGS.slippage_percent)
+                net_pnl = gross_pnl - roundtrip_cost
+                closed_event["gross_pnl"] = gross_pnl
+                closed_event["pnl"] = net_pnl
+                closed_event["result"] = "WIN" if net_pnl > 0 else "LOSS"
+                profit_usd = notional * net_pnl / 100
+                cursor.execute(
+                    f"UPDATE signals SET result={p}, status='CLOSED', pnl_pct={p}, pnl_usd={p}, closed_at={p} WHERE signal_id={p}",
+                    (closed_event["result"], net_pnl, profit_usd, _now(), signal_id),
+                )
+                cursor.execute(
+                    f"UPDATE active_signals SET status='CLOSED', is_cancelled={truth} WHERE signal_id={p}",
+                    (signal_id,),
+                )
+                closed_event.update({
+                    "event": "CLOSED", "signal_id": signal_id, "symbol": symbol,
+                    "style": style, "source": source, "strategy_fa": strategy_fa,
+                    "profit_usd": profit_usd,
+                })
+        if tp1_event:
+            events.append(tp1_event)
+        if closed_event:
+            events.append(closed_event)
+    return events

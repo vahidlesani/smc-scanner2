@@ -1,6 +1,23 @@
 # 📋 Viva Signal Bot - خلاصه کامل پروژه
 # این فایل رو توی چت جدید آپلود کن تا من همه چیز یادم بیاد
 
+## ✅ وضعیت فعلی: v7 Quality-First (2026-08-13)
+
+- اسکن Discovery هر ۱۵ دقیقه، هماهنگ با بسته‌شدن کندل 15M
+- مانیتور Approaching/Confirmation هر ۵ دقیقه
+- Watchlist پویا بر اساس Bybit Turnover، Relative Volume و Spread
+- کانال آموزشی: Setupهای ۶+ با توضیح مفصل و برچسب «تأیید ورود نیست»
+- کانال اجرا: فقط Approaching و سپس Confirmed + چارت + مدیریت سرمایه
+- Supabase و کانال نتایج: فقط معاملات Confirmed
+- Candidateهای تأییدنشده: SQLite محلی موقت، خارج از Supabase
+- Swing و Scalp دارای Engine، تایم‌فریم، انقضا و بک‌تست مستقل
+- Core setups: LSR، BOS First Pullback، Trendline First Retest، Supply/Demand First Retest، Breaker/IFVG
+- RSI Divergence، Engulfing و PinBar فقط Confirmation هستند
+- شناسه‌ها با `viva-` و کد SW/SC ادامه دارند
+- Backtest جدید Walk-forward، بدون Look-ahead و با Fee/Slippage
+- فایل‌های اصلی جدید: `config.py`, `analysis/setups_v7.py`, `analysis/quality_engine.py`, `data/universe.py`, `database/repository_v7.py`, `bot/messages_v7.py`
+
+
 ## 👤 کاربر: Viva (ویوا)
 - کانال تلگرام: vivasignalyst-Chanel
 - ریپو: https://github.com/vahidlesani/smc-scanner2.git

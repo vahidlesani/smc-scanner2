@@ -3,7 +3,7 @@
 import os
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -44,7 +44,7 @@ def _safe_bool(val):
 
 
 def _now() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _ph() -> str:
@@ -52,7 +52,7 @@ def _ph() -> str:
 
 
 def generate_signal_id(symbol: str, source: str) -> str:
-    ts = datetime.utcnow().strftime("%m%d%H%M")
+    ts = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%m%d%H%M")
     rand = uuid.uuid4().hex[:4].upper()
     clean = symbol.replace("USDT", "").replace(".P", "")
     return f"viva-{clean}-{source}-{ts}-{rand}"
@@ -548,14 +548,19 @@ def was_signal_sent_recently(symbol: str, source: str,
 
 
 def get_active_signals() -> list:
+    """Return confirmed, still-open trades only.
+
+    Educational candidates are held in the local candidate store and must never
+    appear in Supabase performance/active-trade queries.
+    """
     p = _ph()
-    cutoff = (datetime.utcnow() - timedelta(hours=48)).strftime(
+    cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
     if USE_POSTGRES:
-        cond = "is_confirmed=FALSE AND is_cancelled=FALSE"
+        cond = "is_confirmed=TRUE AND is_cancelled=FALSE"
     else:
-        cond = "is_confirmed=0 AND is_cancelled=0"
+        cond = "is_confirmed=1 AND is_cancelled=0"
 
     with db_cursor() as c:
         c.execute(f"""
@@ -565,6 +570,7 @@ def get_active_signals() -> list:
                    sl_moved_to_be, partial_tp1_pct, partial_tp2_pct
             FROM active_signals
             WHERE {cond} AND created_at > {p}
+              AND COALESCE(status, 'CONFIRMED') NOT IN ('CLOSED', 'CANCELLED')
         """, (cutoff,))
         rows = c.fetchall()
 
@@ -688,7 +694,7 @@ def get_performance_stats() -> dict:
                    SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) as wins,
                    SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) as losses,
                    AVG(pnl_pct) as avg_pnl
-            FROM signals WHERE result IN ('WIN', 'LOSS')
+            FROM signals WHERE confirmed=TRUE AND result IN ('WIN', 'LOSS')
             GROUP BY source
         """)
         rows = c.fetchall()
@@ -721,6 +727,7 @@ def get_strategy_performance() -> list:
                    AVG(score) as avg_score,
                    MAX(created_at) as last_signal
             FROM signals
+            WHERE confirmed=TRUE
             GROUP BY source, strategy_fa
             ORDER BY total DESC
         """)
@@ -771,12 +778,12 @@ def update_strategy_stats(sig: dict, result: str, pnl: float):
                     wins = wins + {1 if result == 'WIN' else 0},
                     losses = losses + {1 if result == 'LOSS' else 0},
                     total_pnl_pct = total_pnl_pct + {p},
-                    best_pnl = GREATEST(best_pnl, {p}),
-                    worst_pnl = LEAST(worst_pnl, {p}),
+                    best_pnl = CASE WHEN best_pnl > {p} THEN best_pnl ELSE {p} END,
+                    worst_pnl = CASE WHEN worst_pnl < {p} THEN worst_pnl ELSE {p} END,
                     last_signal_at = {p},
                     updated_at = {p}
                 WHERE strategy={p}
-            """, (pnl, pnl, _now(), _now(), strategy))
+            """, (pnl, pnl, pnl, pnl, pnl, _now(), _now(), strategy))
         else:
             c.execute(f"""
                 INSERT INTO strategy_stats
@@ -806,6 +813,47 @@ def save_backtest_result(strategy: str, symbol: str, direction: str,
 
 
 def get_backtest_stats() -> list:
+    """Latest aggregate v7 walk-forward runs, with legacy trade fallback."""
+    run_rows = []
+    try:
+        with db_cursor() as c:
+            c.execute("""
+                SELECT symbol, style, by_setup_json, metrics_json, created_at
+                FROM backtest_runs
+                ORDER BY created_at DESC LIMIT 20
+            """)
+            run_rows = c.fetchall()
+    except Exception:
+        run_rows = []
+
+    if run_rows:
+        output = []
+        seen = set()
+        for symbol, style, by_setup_json, metrics_json, _created_at in run_rows:
+            pair = (symbol, style)
+            if pair in seen:
+                continue
+            seen.add(pair)
+            by_setup = json.loads(by_setup_json or "{}")
+            if not by_setup:
+                by_setup = {"ALL": json.loads(metrics_json or "{}")}
+            for setup, metric in by_setup.items():
+                output.append({
+                    "strategy": f"{symbol} {style} {setup}",
+                    "total": metric.get("total", 0),
+                    "wins": metric.get("wins", 0),
+                    "losses": metric.get("losses", 0),
+                    "winrate": metric.get("winrate", 0),
+                    "avg_pnl": round(metric.get("avg_pnl", 0), 2),
+                    "best": 0,
+                    "worst": 0,
+                    "avg_bars": round(metric.get("avg_bars", 0), 1),
+                    "avg_dd": round(metric.get("max_drawdown", 0), 2),
+                    "profit_factor": round(metric.get("profit_factor", 0), 2),
+                    "expectancy": round(metric.get("expectancy", 0), 3),
+                })
+        return output
+
     with db_cursor() as c:
         c.execute("""
             SELECT strategy,
@@ -822,7 +870,6 @@ def get_backtest_stats() -> list:
             ORDER BY avg_pnl DESC
         """)
         rows = c.fetchall()
-
     return [
         {
             "strategy": r[0], "total": r[1],
@@ -846,6 +893,7 @@ def get_recent_signals(limit: int = 50) -> list:
                    entry, sl, tp1, tp2, result, pnl_pct, score,
                    leverage, margin_usd, trade_style, created_at, closed_at
             FROM signals
+            WHERE confirmed=TRUE
             ORDER BY created_at DESC
             LIMIT {limit}
         """)
@@ -879,6 +927,7 @@ def get_dashboard_summary() -> dict:
                 MIN(pnl_pct) as worst_pnl,
                 AVG(score) as avg_score
             FROM signals
+            WHERE confirmed=TRUE
         """)
         row = c.fetchone()
 
@@ -935,7 +984,7 @@ def check_open_signals():
             SELECT signal_id, symbol, direction, entry, sl, tp1, tp2,
                    leverage, margin_usd, created_at,
                    tp1_hit, sl_moved_to_be, partial_tp1_pct, partial_tp2_pct
-            FROM signals WHERE result='PENDING'
+            FROM signals WHERE confirmed=TRUE AND result='PENDING'
         """)
         open_signals = c.fetchall()
 
