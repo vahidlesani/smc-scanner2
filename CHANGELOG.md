@@ -1,5 +1,13 @@
 # Changelog
 
+## v7.0.1 — 2026-08-13
+
+### Fixed
+- PostgreSQL migrations are serialized with an advisory transaction lock and use `ADD COLUMN IF NOT EXISTS`, preventing concurrent dashboard workers from racing on the same column.
+- Railway now starts `combined_service.py`, so one container runs both the Scanner and Dashboard instead of silently running Dashboard only.
+- Combined health response reports scanner-thread liveness; an unexpected scanner crash terminates the container for automatic restart.
+- Render Dashboard uses Gunicorn preload to avoid duplicate import-time migrations.
+
 ## v7.0-quality — 2026-08-13
 
 ### Fixed

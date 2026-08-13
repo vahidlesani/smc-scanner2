@@ -75,6 +75,17 @@ def _table_columns(cursor, table: str) -> set:
 
 
 def _migrate_columns(cursor, table: str, definitions: Dict[str, str]) -> None:
+    if legacy_db.USE_POSTGRES:
+        # Atomic and safe when a web process and scanner start concurrently.
+        # PostgreSQL takes the required schema lock and re-checks existence.
+        for name, definition in definitions.items():
+            cursor.execute(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {definition}"
+            )
+        return
+
+    # SQLite does not support ADD COLUMN IF NOT EXISTS on all deployed
+    # versions, so introspection is retained for the local fallback.
     existing = _table_columns(cursor, table)
     for name, definition in definitions.items():
         if name not in existing:
@@ -84,6 +95,10 @@ def _migrate_columns(cursor, table: str, definitions: Dict[str, str]) -> None:
 def init_v7_schema() -> None:
     legacy_db.init_db()
     with legacy_db.db_cursor() as cursor:
+        if legacy_db.USE_POSTGRES:
+            # Serialize schema migration across scanner/web containers and
+            # Gunicorn workers. The lock is released automatically on commit.
+            cursor.execute("SELECT pg_advisory_xact_lock(866712370)")
         _migrate_columns(cursor, "signals", SIGNAL_COLUMNS)
         _migrate_columns(cursor, "active_signals", ACTIVE_COLUMNS)
         if legacy_db.USE_POSTGRES:

@@ -200,14 +200,26 @@ CANDIDATE_DB_PATH=/tmp/viva_candidates.db
 
 برای دوام Candidateها در Restart، در Render یک Persistent Disk متصل و `CANDIDATE_DB_PATH` روی مسیر آن تنظیم شود. هیچ Token یا Secret نباید داخل Git، README یا فایل `.env` Commit شود.
 
-## Render
+## Deploy
 
-`render.yaml` شامل دو سرویس است:
+### Railway (یک سرویس)
+
+Railway معمولاً فقط Process نوع `web` در Procfile را اجرا می‌کند. به همین دلیل:
+
+```text
+web: python combined_service.py
+```
+
+`combined_service.py` دقیقاً یک Scanner thread و یک Waitress WSGI Dashboard را در همان Container اجرا می‌کند. اگر Scanner به‌طور غیرمنتظره متوقف شود، Container خارج می‌شود تا Railway آن را Restart کند. پاسخ `/health` وضعیت `scanner_alive` را نیز نشان می‌دهد.
+
+### Render (دو سرویس)
+
+`render.yaml` شامل دو سرویس مستقل است:
 
 - `viva-signal-worker`
 - `viva-signal-dashboard`
 
-Secrets باید از پنل Render برای هر سرویس تنظیم شوند. Dashboard فقط آمار سیگنال‌های Confirmed را نمایش می‌دهد و endpoint سلامت آن `/health` است.
+Secrets باید از پنل میزبان برای هر سرویس تنظیم شوند. Dashboard فقط آمار سیگنال‌های Confirmed را نمایش می‌دهد و endpoint سلامت آن `/health` است.
 
 ## هشدار
 

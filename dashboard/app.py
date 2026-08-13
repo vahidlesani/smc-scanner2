@@ -367,7 +367,15 @@ def api_backtest():
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "version": SETTINGS.version, "confirmed_only": True})
+    scanner = app.config.get("VIVA_SCANNER_THREAD")
+    scanner_alive = scanner.is_alive() if scanner is not None else None
+    status = "ok" if scanner_alive is not False else "degraded"
+    return jsonify({
+        "status": status,
+        "version": SETTINGS.version,
+        "confirmed_only": True,
+        "scanner_alive": scanner_alive,
+    }), (200 if status == "ok" else 503)
 
 
 if __name__ == "__main__":

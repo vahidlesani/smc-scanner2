@@ -41,7 +41,7 @@ services:
     region: frankfurt
     plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 dashboard.app:app
+    startCommand: gunicorn --preload --bind 0.0.0.0:$PORT --workers 2 --threads 4 dashboard.app:app
     healthCheckPath: /health
     autoDeploy: true
     envVars:

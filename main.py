@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import signal
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Tuple
@@ -245,8 +246,12 @@ def _daily_report() -> None:
 
 
 def main() -> None:
-    signal.signal(signal.SIGTERM, _request_shutdown)
-    signal.signal(signal.SIGINT, _request_shutdown)
+    # Combined Railway service runs the scanner in a background thread while
+    # Waitress owns the main thread. Python only permits signal handlers in the
+    # process main thread, so register them conditionally.
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, _request_shutdown)
+        signal.signal(signal.SIGINT, _request_shutdown)
     if not os.getenv("TELEGRAM_TOKEN"):
         print("WARNING: TELEGRAM_TOKEN is not set")
 
