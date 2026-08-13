@@ -588,6 +588,7 @@ def get_active_signals() -> list:
 
 
 def cancel_active_signal(signal_id: str):
+    """کنسل کردن سیگنال فعال + ذخیره CANCELLED در signals"""
     if not signal_id:
         return
     p = _ph()
@@ -597,6 +598,12 @@ def cancel_active_signal(signal_id: str):
             f"UPDATE active_signals SET is_cancelled={val} "
             f"WHERE signal_id={p}",
             (signal_id,),
+        )
+        # ذخیره به عنوان CANCELLED (نه LOSS)
+        c.execute(
+            f"UPDATE signals SET result='CANCELLED', closed_at={p} "
+            f"WHERE signal_id={p}",
+            (_now(), signal_id),
         )
 
 
@@ -674,13 +681,14 @@ def mark_sl_moved_to_be(signal_id: str):
 
 
 def get_performance_stats() -> dict:
+    """آمار عملکرد - فقط WIN و LOSS (نه CANCELLED)"""
     with db_cursor() as c:
         c.execute("""
             SELECT source, COUNT(*) as total,
                    SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) as wins,
                    SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) as losses,
                    AVG(pnl_pct) as avg_pnl
-            FROM signals WHERE result != 'PENDING'
+            FROM signals WHERE result IN ('WIN', 'LOSS')
             GROUP BY source
         """)
         rows = c.fetchall()

@@ -1,6 +1,8 @@
-# bot/telegram_bot.py - Professional Signal Bot v7
-# 3-signal flow: Initial → Approaching → Confirmed → Result
-# کانال: vivasignalyst-Chanel
+# bot/telegram_bot.py - Professional Signal Bot v8
+# کانال‌ها:
+#   CHAT_ID_SIGNALS = کانال قدیمی - فقط سیگنال اولیه (رصد) - امتیاز ≥ ۷
+#   CHAT_ID_APPROACHING = کانال اصلی جدید - نزدیک شدن + تایید + سیگنال
+#   CHAT_ID_RESULTS = کانال نتایج - فقط WIN/LOSS
 import requests
 import io
 import os
@@ -12,13 +14,10 @@ import mplfinance as mpf
 from analysis.risk import calculate_position
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")  # کانال قدیمی (دیگه استفاده نمیشه)
+CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")  # کانال قدیمی (رصد)
 CHAT_ID_APPROACHING = os.environ.get("CHAT_ID_APPROACHING", "")  # کانال اصلی جدید
-CHAT_ID_RESULTS = os.environ.get("CHAT_ID_RESULTS", "")
+CHAT_ID_RESULTS = os.environ.get("CHAT_ID_RESULTS", "")  # کانال نتایج
 CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
-
-# کانال اصلی = کانال هشدار (یکی هستن)
-MAIN_CHANNEL = CHAT_ID_APPROACHING if CHAT_ID_APPROACHING else CHAT_ID_SIGNALS
 
 ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
 RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
@@ -178,7 +177,6 @@ def calculate_score(sig: dict) -> dict:
     has_choch = any("CHoCH" in c and "✅" in c for c in confirmations)
     is_new = any("جدید" in c for c in confirmations)
 
-    # MTF تایید
     mtf_confirmed = sig.get("mtf_confirmed", False)
     if mtf_confirmed:
         score += 2
@@ -186,14 +184,12 @@ def calculate_score(sig: dict) -> dict:
     else:
         details.append("⚠️ +0 بدون تایید MTF")
 
-    # ساختار HTF
     if sig.get("bias") in ["BULLISH", "BEARISH"]:
         score += 2
         details.append("✅ +2 ساختار HTF مشخص")
     else:
         details.append("❌ +0 ساختار HTF نامشخص")
 
-    # ناحیه مناسب
     source_scores = {
         "SMC": "قیمت داخل Order Block",
         "RTM": "قیمت در ناحیه Base",
@@ -296,7 +292,6 @@ def calculate_money_management(sig: dict, score: int) -> dict:
         tp2_pct = ((entry - tp2) / entry) * 100 if entry else 0
         mart_point = sl * 1.005
 
-    # Partial TP: 60% at TP1, 40% at TP2
     tp1_profit = position_size_usd * (tp1_pct / 100) * (partial_tp1 / 100)
     tp2_profit = position_size_usd * (tp2_pct / 100) * (partial_tp2 / 100)
     total_profit = tp1_profit + tp2_profit
@@ -340,12 +335,10 @@ def build_signal_reason(sig: dict) -> str:
     bias_fa = "صعودی" if bias == "BULLISH" else "نزولی"
     dir_fa = "خرید" if direction == "LONG" else "فروش"
 
-    # اگه توضیحات آموزشی داره
     if sig.get("description"):
         reason = f"📋 <b>دلیل صدور سیگنال:</b>\n\n"
         reason += f"{sig['description']}\n\n"
         
-        # MTF info
         if sig.get("mtf_text"):
             reason += f"📊 <b>تحلیل چند تایم‌فریمی:</b>\n{sig['mtf_text']}\n\n"
         
@@ -356,12 +349,11 @@ def build_signal_reason(sig: dict) -> str:
         
         return reason
 
-    # پیش‌فرض
     return f"📋 <b>دلیل:</b> تحلیل ترکیبی چند روش.\n🔑 جهت: {dir_fa} ({bias_fa})\n"
 
 
 def build_initial_caption(sig: dict, signal_id: str) -> str:
-    """کپشن سیگنال اولیه (Setup forming)"""
+    """کپشن سیگنال اولیه"""
     score_data = calculate_score(sig)
     score = score_data["score"]
     mm = calculate_money_management(sig, score)
@@ -388,7 +380,6 @@ def build_initial_caption(sig: dict, signal_id: str) -> str:
     partial_tp1 = sig.get("partial_tp1_pct", 60)
     partial_tp2 = sig.get("partial_tp2_pct", 40)
 
-    # لیبل ویژه طلایی
     golden_label = ""
     if is_golden:
         golden_label = (
@@ -455,7 +446,6 @@ def build_initial_caption(sig: dict, signal_id: str) -> str:
 
 def build_approaching_caption(sig_data: dict, signal_id: str,
                                current_price: float, distance_pct: float) -> str:
-    """کپشن هشدار نزدیک شدن به Entry (80%)"""
     dir_emoji = "🟢" if sig_data["direction"] == "LONG" else "🔴"
     entry = sig_data["entry"]
     strategy_fa = sig_data.get("strategy_fa", sig_data.get("source", ""))
@@ -484,7 +474,6 @@ def build_approaching_caption(sig_data: dict, signal_id: str,
 
 def build_confirmation_caption(sig_data: dict, signal_id: str,
                                 current_price: float) -> str:
-    """کپشن سیگنال تایید شده"""
     dir_emoji = "🟢" if sig_data["direction"] == "LONG" else "🔴"
     strategy_fa = sig_data.get("strategy_fa", sig_data.get("source", ""))
     sl = sig_data.get("sl", 0)
@@ -518,7 +507,6 @@ def build_confirmation_caption(sig_data: dict, signal_id: str,
 
 
 def build_cancellation_caption(sig_data: dict, signal_id: str) -> str:
-    """کپشن سیگنال باطل شده"""
     dir_emoji = "🟢" if sig_data["direction"] == "LONG" else "🔴"
     strategy_fa = sig_data.get("strategy_fa", sig_data.get("source", ""))
     
@@ -538,7 +526,6 @@ def build_cancellation_caption(sig_data: dict, signal_id: str) -> str:
 
 def build_tp1_hit_caption(sig_data: dict, signal_id: str,
                            current_price: float) -> str:
-    """کپشن TP1 hit + SL moved to breakeven"""
     dir_emoji = "🟢" if sig_data["direction"] == "LONG" else "🔴"
     strategy_fa = sig_data.get("strategy_fa", sig_data.get("source", ""))
     
@@ -562,6 +549,7 @@ def build_tp1_hit_caption(sig_data: dict, signal_id: str,
     return caption
 
 
+# ─── ارسال سیگنال اولیه به کانال قدیمی (رصد) ───
 def send_signal_with_chart(sig: dict, df_15m: pd.DataFrame):
     signal_id = sig.get("signal_id")
     if not signal_id:
@@ -580,8 +568,8 @@ def send_signal_with_chart(sig: dict, df_15m: pd.DataFrame):
         }
         sig["strategy_fa"] = strategy_names.get(sig["source"], sig["source"])
 
-    # ارسال به کانال اصلی جدید
-    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
+    # ارسال به کانال قدیمی (فقط رصد)
+    target = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
     caption = build_initial_caption(sig, signal_id)
     
     dir_emoji = "🟢" if sig["direction"] == "LONG" else "🔴"
@@ -614,39 +602,32 @@ def send_signal_with_chart(sig: dict, df_15m: pd.DataFrame):
             pass
 
 
-def send_approaching_alert(sig_data: dict, signal_id: str,
-                           current_price: float):
-    """ارسال هشدار نزدیک شدن به Entry"""
-    entry = sig_data["entry"]
-    distance_pct = abs(current_price - entry) / entry * 100
-    
-    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
-    caption = build_approaching_caption(
-        sig_data, signal_id, current_price, distance_pct
-    )
-    send_message(caption, chat_id=target)
-
-
+# ─── ارسال هشدار نزدیک شدن به کانال اصلی جدید ───
 def send_approaching_alert_to_channel(sig_data: dict, signal_id: str,
                                        current_price: float):
-    """ارسال هشدار نزدیک شدن به کانال اصلی"""
     entry = sig_data["entry"]
     distance_pct = abs(current_price - entry) / entry * 100
     
-    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
+    # ارسال به کانال اصلی جدید
+    target = CHAT_ID_APPROACHING if CHAT_ID_APPROACHING else CHAT_ID_ADMIN
     caption = build_approaching_caption(
         sig_data, signal_id, current_price, distance_pct
     )
     send_message(caption, chat_id=target)
 
 
+# ─── ارسال تایید + سیگنال کامل به کانال اصلی جدید ───
 def send_confirmation_to_alert_channel(sig_data: dict, signal_id: str,
                                         current_price: float, df_15m: pd.DataFrame):
-    """ارسال سیگنال تایید شده با فرمت کامل + چارت به کانال اصلی"""
-    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
+    # ارسال به کانال اصلی جدید
+    target = CHAT_ID_APPROACHING if CHAT_ID_APPROACHING else CHAT_ID_ADMIN
     
-    # ساخت فرمت کامل سیگنال
-    caption = build_initial_caption(sig_data, signal_id)
+    # اول پیام تایید
+    confirm_caption = build_confirmation_caption(sig_data, signal_id, current_price)
+    send_message(confirm_caption, chat_id=target)
+    
+    # بعد سیگنال کامل با چارت
+    full_caption = build_initial_caption(sig_data, signal_id)
     
     dir_emoji = "🟢" if sig_data["direction"] == "LONG" else "🔴"
     short_caption = (
@@ -664,37 +645,22 @@ def send_confirmation_to_alert_channel(sig_data: dict, signal_id: str,
 
         if chart_bytes:
             send_photo(chart_bytes, short_caption, chat_id=target)
-            send_message(caption, chat_id=target)
+            send_message(full_caption, chat_id=target)
         else:
-            send_message(caption, chat_id=target)
+            send_message(full_caption, chat_id=target)
     except Exception as e:
-        print(f"Send confirmation to alert channel error: {e}")
-        send_message(caption, chat_id=target)
+        print(f"Send confirmation error: {e}")
+        send_message(full_caption, chat_id=target)
 
 
-def send_confirmation_signal(sig_data: dict, signal_id: str,
-                              current_price: float):
-    """ارسال سیگنال تایید شده"""
-    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
-    caption = build_confirmation_caption(sig_data, signal_id, current_price)
-    send_message(caption, chat_id=target)
-
-
+# ─── ارسال کنسلی به کانال نتایج ───
 def send_cancellation_signal(sig_data: dict, signal_id: str):
-    """ارسال سیگنال باطل شده"""
-    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
+    target = CHAT_ID_RESULTS if CHAT_ID_RESULTS else CHAT_ID_ADMIN
     caption = build_cancellation_caption(sig_data, signal_id)
     send_message(caption, chat_id=target)
 
 
-def send_tp1_hit_signal(sig_data: dict, signal_id: str,
-                         current_price: float):
-    """ارسال اعلان TP1 hit + SL to BE"""
-    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
-    caption = build_tp1_hit_caption(sig_data, signal_id, current_price)
-    send_message(caption, chat_id=target)
-
-
+# ─── ارسال نتیجه WIN/LOSS به کانال نتایج ───
 def send_result_to_channel(symbol: str, signal_id: str,
                             result: str, pnl: float,
                             leverage: int, margin_usd: float):
