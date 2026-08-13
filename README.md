@@ -11,7 +11,7 @@
 | متغیر | کاربرد |
 |---|---|
 | `CHAT_ID_SIGNALS` | کانال آموزشی؛ Setupهای امتیاز ۶+ با توضیح مفصل و برچسب «تأیید ورود نیست» |
-| `CHAT_ID_APPROACHING` | کانال اجرا؛ فقط Approaching و سپس Confirmed + چارت و مدیریت سرمایه |
+| `CHAT_ID_APPROACHING` | کانال اجرا (`vivasignals-pro`، شناسه `-1004315866900`)؛ فقط Approaching و سپس Confirmed + چارت و مدیریت سرمایه |
 | `CHAT_ID_RESULTS` | فقط TP1 و نتیجه معاملات Confirmed |
 | `CHAT_ID` | ادمین و دستورات ربات |
 
@@ -20,16 +20,20 @@ Educational Setup (not an entry)
         ↓
 Approaching Entry Zone (still not confirmed)
         ↓
-Closed-candle Confirmation
+Closed-candle technical confirmation
         ↓
-Supabase signals + active_signals
+Supabase staging: AWAITING_PUBLICATION (monitoring disabled)
+        ↓
+Chart + full Confirmed message both succeed in execution channel
+        ↓
+Atomic publication gate: confirmation_sent=true / status=CONFIRMED
         ↓
 TP1 → 60% close → SL to Breakeven
         ↓
 TP2 / Breakeven / Stop → Results channel
 ```
 
-Setupهای تأییدنشده وارد Supabase، Win Rate و کانال نتایج نمی‌شوند. وضعیت موقت آن‌ها در SQLite محلی (`CANDIDATE_DB_PATH`) نگهداری می‌شود.
+Setupهای آموزشی وارد تاریخچه اجرایی، Win Rate یا کانال نتایج نمی‌شوند و وضعیت موقت آن‌ها در SQLite محلی (`CANDIDATE_DB_PATH`) است. تأیید تکنیکال ابتدا فقط به‌صورت ردیف داخلی و غیرقابل‌مانیتور با `AWAITING_PUBLICATION` ذخیره می‌شود؛ تا وقتی چارت و متن کامل Confirmed هر دو با موفقیت منتشر نشده‌اند، در Dashboard/آمار/Portfolio دیده نمی‌شود و هیچ TP/SL/Win/Loss برای آن تولید نخواهد شد. ردیف‌های نسخه‌های قدیمی نیز حذف اجباری نمی‌شوند، اما با `strategy_version` از چرخه v7 قرنطینه‌اند.
 
 ## موتورهای مستقل
 

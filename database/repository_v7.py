@@ -1,7 +1,8 @@
 """Confirmed-signal repository and safe schema migrations for v7.
 
-Only CONFIRMED trades enter Supabase's signals/active_signals tables. Educational
-candidates live in database.candidate_store (local transient SQLite).
+Educational candidates live only in the local candidate store. A technical
+confirmation is staged in Supabase as AWAITING_PUBLICATION, but remains invisible
+and unmonitorable until its complete Telegram publication is committed.
 """
 from __future__ import annotations
 
@@ -35,6 +36,8 @@ SIGNAL_COLUMNS = {
     "rr_tp2": "REAL DEFAULT 0",
     "status": "TEXT DEFAULT 'CONFIRMED'",
     "confirmed_at": "TEXT",
+    "confirmation_sent": "BOOLEAN DEFAULT FALSE",
+    "confirmation_sent_at": "TEXT",
     "last_checked_at": "TEXT",
     "session_name": "TEXT DEFAULT ''",
     "pnl_usd": "REAL DEFAULT 0",
@@ -49,8 +52,10 @@ ACTIVE_COLUMNS = {
     "entry_zone_bottom": "REAL DEFAULT 0",
     "entry_zone_top": "REAL DEFAULT 0",
     "evidence_json": "TEXT DEFAULT '[]'",
-    "status": "TEXT DEFAULT 'CONFIRMED'",
+    "status": "TEXT DEFAULT 'AWAITING_PUBLICATION'",
     "confirmed_at": "TEXT",
+    "confirmation_sent": "BOOLEAN DEFAULT FALSE",
+    "confirmation_sent_at": "TEXT",
     "last_checked_at": "TEXT",
 }
 
@@ -132,6 +137,10 @@ def init_v7_schema() -> None:
                 )
             """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_signals_confirmed_result ON signals(confirmed, result)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_signals_v7_publication "
+            "ON signals(strategy_version, confirmation_sent, status, result, confirmed_at)"
+        )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_signals_style_setup ON signals(trade_style, setup_code)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_status ON active_signals(status, is_cancelled)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_backtest_runs_symbol ON backtest_runs(symbol, style, created_at)")
@@ -176,20 +185,36 @@ def portfolio_guard(candidate: SignalCandidate) -> Tuple[bool, str]:
     """Prevent concentration and trading after the configured daily loss cap."""
     p = legacy_db._ph()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
     with legacy_db.db_cursor() as cursor:
-        cursor.execute("SELECT COUNT(*) FROM signals WHERE confirmed=" + ("TRUE" if legacy_db.USE_POSTGRES else "1") + " AND result='PENDING'")
+        cursor.execute(
+            f"""
+            SELECT COUNT(*) FROM signals
+            WHERE confirmed={truth} AND confirmation_sent={truth}
+              AND status='CONFIRMED' AND strategy_version={p}
+              AND result='PENDING'
+            """,
+            (SETTINGS.strategy_version,),
+        )
         open_count = int((cursor.fetchone() or [0])[0] or 0)
         cursor.execute(
-            f"SELECT COALESCE(SUM(pnl_usd),0) FROM signals WHERE confirmed="
-            + ("TRUE" if legacy_db.USE_POSTGRES else "1")
-            + f" AND result IN ('WIN','LOSS') AND closed_at>={p}",
-            (today + " 00:00:00",),
+            f"""
+            SELECT COALESCE(SUM(pnl_usd),0) FROM signals
+            WHERE confirmed={truth} AND confirmation_sent={truth}
+              AND strategy_version={p} AND result IN ('WIN','LOSS')
+              AND closed_at>={p}
+            """,
+            (SETTINGS.strategy_version, today + " 00:00:00"),
         )
         daily_pnl_usd = float((cursor.fetchone() or [0])[0] or 0)
         cursor.execute(
-            f"SELECT symbol, direction, source, trade_style FROM signals WHERE confirmed="
-            + ("TRUE" if legacy_db.USE_POSTGRES else "1")
-            + " AND result='PENDING'",
+            f"""
+            SELECT symbol, direction, source, trade_style FROM signals
+            WHERE confirmed={truth} AND confirmation_sent={truth}
+              AND status='CONFIRMED' AND strategy_version={p}
+              AND result='PENDING'
+            """,
+            (SETTINGS.strategy_version,),
         )
         open_rows = cursor.fetchall()
 
@@ -277,8 +302,10 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
         float(candidate.entry_zone_top),
         float(candidate.rr_tp1),
         float(candidate.rr_tp2),
-        "CONFIRMED",
+        "AWAITING_PUBLICATION",
         created,
+        _bool_value(False),
+        None,
         created,
         str(candidate.metadata.get("session", "")),
     )
@@ -291,8 +318,9 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
          confirmed, created_at, setup_code, setup_name, strategy_version,
          trigger_timeframe, evidence_json, warnings_json, mandatory_json,
          market_json, entry_zone_bottom, entry_zone_top, rr_tp1, rr_tp2,
-         status, confirmed_at, last_checked_at, session_name)
-        VALUES ({','.join([p] * 43)})
+         status, confirmed_at, confirmation_sent, confirmation_sent_at,
+         last_checked_at, session_name)
+        VALUES ({','.join([p] * 45)})
     """
 
     active_params = (
@@ -320,8 +348,10 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
         float(candidate.entry_zone_bottom),
         float(candidate.entry_zone_top),
         json.dumps([item.__dict__ for item in candidate.evidence], ensure_ascii=False, default=str),
-        "CONFIRMED",
+        "AWAITING_PUBLICATION",
         created,
+        _bool_value(False),
+        None,
         created,
     )
     active_sql = f"""
@@ -330,14 +360,104 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
          sl_original, tp1, tp2, bias, leverage, margin_usd, score,
          is_confirmed, created_at, setup_code, setup_name, strategy_version,
          style, trigger_timeframe, entry_zone_bottom, entry_zone_top,
-         evidence_json, status, confirmed_at, last_checked_at)
-        VALUES ({','.join([p] * 27)})
+         evidence_json, status, confirmed_at, confirmation_sent,
+         confirmation_sent_at, last_checked_at)
+        VALUES ({','.join([p] * 29)})
     """
 
     with legacy_db.db_cursor() as cursor:
         cursor.execute(sql, params)
         cursor.execute(active_sql, active_params)
     return True
+
+
+def has_published_confirmation(signal_id: str, require_open: bool = False) -> bool:
+    p = legacy_db._ph()
+    truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
+    status_guard = "AND status='CONFIRMED'" if require_open else ""
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT 1 FROM signals
+            WHERE signal_id={p}
+              AND strategy_version={p}
+              AND confirmed_at IS NOT NULL
+              AND confirmation_sent={truth}
+              AND confirmation_sent_at IS NOT NULL
+              {status_guard}
+            LIMIT 1
+            """,
+            (signal_id, SETTINGS.strategy_version),
+        )
+        return cursor.fetchone() is not None
+
+
+def is_confirmation_published(signal_id: str) -> bool:
+    return has_published_confirmation(signal_id, require_open=True)
+
+
+def is_lifecycle_event_publishable(
+    signal_id: str, event_type: str, result: Optional[str] = None
+) -> bool:
+    """Validate that a lifecycle notification matches committed v7 DB state."""
+    p = legacy_db._ph()
+    truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT result, tp1_hit, closed_at FROM signals
+            WHERE signal_id={p}
+              AND strategy_version={p}
+              AND status='CONFIRMED'
+              AND confirmed_at IS NOT NULL
+              AND confirmation_sent={truth}
+              AND confirmation_sent_at IS NOT NULL
+            LIMIT 1
+            """,
+            (signal_id, SETTINGS.strategy_version),
+        )
+        row = cursor.fetchone()
+    if not row:
+        return False
+    db_result, tp1_hit, closed_at = row
+    if event_type == "TP1":
+        return bool(tp1_hit)
+    if event_type == "CLOSED":
+        return result in {"WIN", "LOSS"} and db_result == result and closed_at is not None
+    return False
+
+
+def mark_confirmation_published(signal_id: str) -> None:
+    """Arm result monitoring only after the Telegram confirmation is public."""
+    p = legacy_db._ph()
+    truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
+    published_at = _now()
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"""
+            UPDATE signals
+            SET confirmation_sent={truth}, confirmation_sent_at={p},
+                status='CONFIRMED', last_checked_at={p}
+            WHERE signal_id={p} AND strategy_version={p}
+              AND confirmed_at IS NOT NULL
+              AND status IN ('AWAITING_PUBLICATION', 'CONFIRMED')
+            """,
+            (published_at, published_at, signal_id, SETTINGS.strategy_version),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError(f"Cannot publish unknown or ineligible signal: {signal_id}")
+        cursor.execute(
+            f"""
+            UPDATE active_signals
+            SET confirmation_sent={truth}, confirmation_sent_at={p},
+                status='CONFIRMED', last_checked_at={p}
+            WHERE signal_id={p} AND strategy_version={p}
+              AND status IN ('AWAITING_PUBLICATION', 'CONFIRMED')
+            """,
+            (published_at, published_at, signal_id, SETTINGS.strategy_version),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError(f"Missing active publication row: {signal_id}")
 
 
 def _naive_timestamp(value) -> Optional[pd.Timestamp]:
@@ -364,11 +484,18 @@ def monitor_confirmed_trades() -> List[Dict]:
         cursor.execute(f"""
             SELECT signal_id, symbol, direction, entry, sl_original, tp1, tp2,
                    leverage, margin_usd, trade_style, confirmed_at,
-                   last_checked_at, tp1_hit, source, strategy_fa
+                   last_checked_at, tp1_hit, source, strategy_fa,
+                   strategy_version
             FROM signals
-            WHERE confirmed={truth} AND result='PENDING'
+            WHERE confirmed={truth}
+              AND confirmation_sent={truth}
+              AND status='CONFIRMED'
+              AND confirmed_at IS NOT NULL
+              AND confirmation_sent_at IS NOT NULL
+              AND strategy_version={legacy_db._ph()}
+              AND result='PENDING'
             ORDER BY confirmed_at
-        """)
+        """, (SETTINGS.strategy_version,))
         rows = cursor.fetchall()
     if not rows:
         return []
@@ -380,7 +507,7 @@ def monitor_confirmed_trades() -> List[Dict]:
         (
             signal_id, symbol, direction, entry, original_sl, tp1, tp2,
             leverage, margin, style, confirmed_at, last_checked_at,
-            tp1_hit, source, strategy_fa,
+            tp1_hit, source, strategy_fa, strategy_version,
         ) = row
         timeframe = "5m" if style == "SCALP" else "15m"
         key = (symbol, timeframe)
@@ -435,6 +562,9 @@ def monitor_confirmed_trades() -> List[Dict]:
                 tp1_event = {
                     "event": "TP1", "signal_id": signal_id, "symbol": symbol,
                     "style": style, "source": source, "strategy_fa": strategy_fa,
+                    "strategy_version": strategy_version,
+                    "confirmed_at": str(confirmed_at),
+                    "confirmation_sent": True,
                 }
 
         with legacy_db.db_cursor() as cursor:
@@ -461,7 +591,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                 closed_event["result"] = "WIN" if net_pnl > 0 else "LOSS"
                 profit_usd = notional * net_pnl / 100
                 cursor.execute(
-                    f"UPDATE signals SET result={p}, status='CLOSED', pnl_pct={p}, pnl_usd={p}, closed_at={p} WHERE signal_id={p}",
+                    f"UPDATE signals SET result={p}, pnl_pct={p}, pnl_usd={p}, closed_at={p} WHERE signal_id={p}",
                     (closed_event["result"], net_pnl, profit_usd, _now(), signal_id),
                 )
                 cursor.execute(
@@ -472,6 +602,9 @@ def monitor_confirmed_trades() -> List[Dict]:
                     "event": "CLOSED", "signal_id": signal_id, "symbol": symbol,
                     "style": style, "source": source, "strategy_fa": strategy_fa,
                     "profit_usd": profit_usd,
+                    "strategy_version": strategy_version,
+                    "confirmed_at": str(confirmed_at),
+                    "confirmation_sent": True,
                 })
         if tp1_event:
             events.append(tp1_event)

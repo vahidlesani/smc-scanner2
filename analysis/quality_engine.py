@@ -184,12 +184,15 @@ def evaluate_confirmation(
         f"بدنه کندل {displacement['body_atr']:.2f} برابر ATR بود. بنابراین تأیید بر اساس کندل بسته‌شده صادر شده، "
         f"نه قیمت لحظه‌ای یا Wick موقت."
     )
-    # Replace a previous trigger item if evaluate_confirmation is called twice.
+    # Replace a previous trigger item without inflating score on publication retries.
+    had_trigger = any(item.key == "entry_trigger" for item in candidate.evidence)
     candidate.evidence = [item for item in candidate.evidence if item.key != "entry_trigger"]
     candidate.evidence.append(EvidenceItem("entry_trigger", "کندل تأیید ورود", trigger_detail, True, 1, timeframe=candidate.trigger_timeframe))
-    candidate.score = min(10, candidate.score + 1)
+    if not had_trigger:
+        candidate.score = min(10, candidate.score + 1)
     if candidate.score < SETTINGS.execution_min_score:
         return False, candidate, f"امتیاز نهایی {candidate.score} کمتر از حد اجرای {SETTINGS.execution_min_score} است."
     candidate.status = "CONFIRMED"
-    candidate.confirmed_at = iso_now()
+    candidate.confirmed_at = candidate.confirmed_at or iso_now()
+    candidate.metadata["technical_confirmation_complete"] = True
     return True, candidate, "تأیید ورود با کندل بسته‌شده صادر شد."

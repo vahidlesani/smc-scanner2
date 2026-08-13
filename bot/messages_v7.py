@@ -272,16 +272,32 @@ def send_approaching(candidate: SignalCandidate, current_price: float, distance_
 
 
 def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame]) -> bool:
+    """Publish both required components, resuming a partially completed attempt."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
-    chart = generate_chart(chart_df, candidate, confirmed=True) if chart_df is not None else None
-    if chart:
-        send_photo(
+
+    if not candidate.metadata.get("confirmation_chart_sent"):
+        chart = generate_chart(chart_df, candidate, confirmed=True) if chart_df is not None else None
+        if not chart:
+            print(f"Confirmed publication blocked: chart unavailable for {candidate.signal_id}")
+            return False
+        if not send_photo(
             chart,
             f"✅ CONFIRMED • {_e(candidate.symbol)} • {_e(candidate.style)} • {_e(candidate.direction)}\n"
             f"⭐ {candidate.score}/10\n🆔 <code>{_e(candidate.signal_id)}</code>",
             target,
-        )
-    return send_message(build_confirmed_message(candidate), target)
+        ):
+            return False
+        candidate.metadata["confirmation_chart_sent"] = True
+
+    if not candidate.metadata.get("confirmation_message_sent"):
+        if not send_message(build_confirmed_message(candidate), target):
+            return False
+        candidate.metadata["confirmation_message_sent"] = True
+
+    return bool(
+        candidate.metadata.get("confirmation_chart_sent")
+        and candidate.metadata.get("confirmation_message_sent")
+    )
 
 
 def send_candidate_cancelled(candidate: SignalCandidate, reason: str) -> bool:
@@ -295,19 +311,54 @@ def send_candidate_cancelled(candidate: SignalCandidate, reason: str) -> bool:
     )
 
 
+def _published_lifecycle_event(event: dict) -> bool:
+    """Fail closed: result channels accept only DB-backed current-v7 publications."""
+    signal_id = str(event.get("signal_id") or "")
+    if (
+        not signal_id.startswith("viva-")
+        or event.get("strategy_version") != SETTINGS.strategy_version
+        or event.get("confirmation_sent") is not True
+        or not event.get("confirmed_at")
+    ):
+        print(f"Lifecycle notification blocked: invalid publication proof for {signal_id or 'unknown'}")
+        return False
+    try:
+        # Late import avoids coupling message construction to DB initialization.
+        from database.repository_v7 import is_lifecycle_event_publishable
+        allowed = is_lifecycle_event_publishable(
+            signal_id,
+            str(event.get("event") or ""),
+            str(event.get("result") or "") or None,
+        )
+    except Exception as exc:
+        print(f"Lifecycle notification blocked: publication lookup failed for {signal_id}: {exc}")
+        return False
+    if not allowed:
+        print(f"Lifecycle notification blocked: unpublished signal {signal_id}")
+    return allowed
+
+
 def send_tp1_event(signal: dict) -> bool:
+    if signal.get("event") != "TP1" or not _published_lifecycle_event(signal):
+        return False
     return send_message(
         f"🥇 <b>TP1 HIT</b>\n"
         f"🪙 <b>{_e(signal['symbol'])}</b> • {_e(signal.get('style', ''))}\n"
         f"🆔 <code>{_e(signal['signal_id'])}</code>\n\n"
         f"✅ {SETTINGS.partial_tp1_percent:.0f}% پوزیشن بسته شد.\n"
         f"🔒 حد ضرر {SETTINGS.partial_tp2_percent:.0f}% باقی‌مانده به Breakeven منتقل شد.",
-        CHAT_ID_EXECUTION or CHAT_ID_ADMIN,
+        CHAT_ID_RESULTS or CHAT_ID_ADMIN,
     )
 
 
 def send_trade_result(event: dict) -> bool:
     result = event.get("result", "")
+    if (
+        event.get("event") != "CLOSED"
+        or result not in {"WIN", "LOSS"}
+        or not _published_lifecycle_event(event)
+    ):
+        return False
     emoji = "✅" if result == "WIN" else "❌"
     return send_message(
         f"{emoji} <b>نتیجه سیگنال Confirmed</b>\n"

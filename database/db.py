@@ -6,6 +6,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 
+from config import get_settings
+
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 USE_POSTGRES = bool(DATABASE_URL)
 
@@ -49,6 +51,19 @@ def _now() -> str:
 
 def _ph() -> str:
     return "%s" if USE_POSTGRES else "?"
+
+
+def _published_v7_clause(alias: str = "") -> str:
+    """Authoritative gate for execution history, results and statistics."""
+    prefix = f"{alias}." if alias else ""
+    truth = "TRUE" if USE_POSTGRES else "1"
+    return (
+        f"{prefix}confirmed={truth} "
+        f"AND {prefix}confirmation_sent={truth} "
+        f"AND {prefix}status='CONFIRMED' "
+        f"AND {prefix}confirmed_at IS NOT NULL "
+        f"AND {prefix}strategy_version={_ph()}"
+    )
 
 
 def generate_signal_id(symbol: str, source: str) -> str:
@@ -540,9 +555,9 @@ def was_signal_sent_recently(symbol: str, source: str,
         c.execute(f"""
             SELECT created_at FROM signals
             WHERE symbol={p} AND source={p} AND direction={p}
-              AND result='PENDING'
+              AND {_published_v7_clause()} AND result='PENDING'
             ORDER BY created_at DESC LIMIT 1
-        """, (symbol, source, direction))
+        """, (symbol, source, direction, get_settings().strategy_version))
         row = c.fetchone()
     return row is not None
 
@@ -558,20 +573,22 @@ def get_active_signals() -> list:
         "%Y-%m-%d %H:%M:%S"
     )
     if USE_POSTGRES:
-        cond = "is_confirmed=TRUE AND is_cancelled=FALSE"
+        cond = "a.is_confirmed=TRUE AND a.is_cancelled=FALSE"
     else:
-        cond = "is_confirmed=1 AND is_cancelled=0"
+        cond = "a.is_confirmed=1 AND a.is_cancelled=0"
 
     with db_cursor() as c:
         c.execute(f"""
-            SELECT signal_id, symbol, source, strategy_fa, direction,
-                   entry, sl, sl_original, tp1, tp2, bias, leverage,
-                   margin_usd, score, approaching_sent, tp1_hit,
-                   sl_moved_to_be, partial_tp1_pct, partial_tp2_pct
-            FROM active_signals
-            WHERE {cond} AND created_at > {p}
-              AND COALESCE(status, 'CONFIRMED') NOT IN ('CLOSED', 'CANCELLED')
-        """, (cutoff,))
+            SELECT a.signal_id, a.symbol, a.source, a.strategy_fa, a.direction,
+                   a.entry, a.sl, a.sl_original, a.tp1, a.tp2, a.bias, a.leverage,
+                   a.margin_usd, a.score, a.approaching_sent, a.tp1_hit,
+                   a.sl_moved_to_be, a.partial_tp1_pct, a.partial_tp2_pct
+            FROM active_signals a
+            JOIN signals s ON s.signal_id=a.signal_id
+            WHERE {cond} AND a.created_at > {p}
+              AND a.status='CONFIRMED'
+              AND {_published_v7_clause('s')}
+        """, (cutoff, get_settings().strategy_version))
         rows = c.fetchall()
 
     return [
@@ -689,14 +706,15 @@ def mark_sl_moved_to_be(signal_id: str):
 def get_performance_stats() -> dict:
     """آمار عملکرد - فقط WIN و LOSS (نه CANCELLED)"""
     with db_cursor() as c:
-        c.execute("""
+        c.execute(f"""
             SELECT source, COUNT(*) as total,
                    SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) as wins,
                    SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) as losses,
                    AVG(pnl_pct) as avg_pnl
-            FROM signals WHERE confirmed=TRUE AND result IN ('WIN', 'LOSS')
+            FROM signals
+            WHERE {_published_v7_clause()} AND result IN ('WIN', 'LOSS')
             GROUP BY source
-        """)
+        """, (get_settings().strategy_version,))
         rows = c.fetchall()
 
     stats = {}
@@ -715,7 +733,7 @@ def get_performance_stats() -> dict:
 def get_strategy_performance() -> list:
     """آمار عملکرد هر استراتژی"""
     with db_cursor() as c:
-        c.execute("""
+        c.execute(f"""
             SELECT source, strategy_fa,
                    COUNT(*) as total,
                    SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) as wins,
@@ -727,10 +745,10 @@ def get_strategy_performance() -> list:
                    AVG(score) as avg_score,
                    MAX(created_at) as last_signal
             FROM signals
-            WHERE confirmed=TRUE
+            WHERE {_published_v7_clause()}
             GROUP BY source, strategy_fa
             ORDER BY total DESC
-        """)
+        """, (get_settings().strategy_version,))
         rows = c.fetchall()
 
     result = []
@@ -893,10 +911,10 @@ def get_recent_signals(limit: int = 50) -> list:
                    entry, sl, tp1, tp2, result, pnl_pct, score,
                    leverage, margin_usd, trade_style, created_at, closed_at
             FROM signals
-            WHERE confirmed=TRUE
+            WHERE {_published_v7_clause()}
             ORDER BY created_at DESC
-            LIMIT {limit}
-        """)
+            LIMIT {int(limit)}
+        """, (get_settings().strategy_version,))
         rows = c.fetchall()
 
     return [
@@ -916,7 +934,7 @@ def get_recent_signals(limit: int = 50) -> list:
 def get_dashboard_summary() -> dict:
     """خلاصه آمار برای داشبورد"""
     with db_cursor() as c:
-        c.execute("""
+        c.execute(f"""
             SELECT
                 COUNT(*) as total,
                 SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) as wins,
@@ -927,8 +945,8 @@ def get_dashboard_summary() -> dict:
                 MIN(pnl_pct) as worst_pnl,
                 AVG(score) as avg_score
             FROM signals
-            WHERE confirmed=TRUE
-        """)
+            WHERE {_published_v7_clause()}
+        """, (get_settings().strategy_version,))
         row = c.fetchone()
 
     total = row[0] or 0
@@ -958,8 +976,8 @@ def update_signal_result(signal_id: str, result: str, pnl_pct: float):
         c.execute(f"""
             UPDATE signals
             SET result={p}, pnl_pct={p}, closed_at={p}
-            WHERE signal_id={p}
-        """, (result, pnl_pct, _now(), signal_id))
+            WHERE signal_id={p} AND {_published_v7_clause()}
+        """, (result, pnl_pct, _now(), signal_id, get_settings().strategy_version))
 
 
 def _parse_created_at(value):
@@ -980,12 +998,13 @@ def check_open_signals():
     from data.fetcher import get_klines
 
     with db_cursor() as c:
-        c.execute("""
+        c.execute(f"""
             SELECT signal_id, symbol, direction, entry, sl, tp1, tp2,
                    leverage, margin_usd, created_at,
                    tp1_hit, sl_moved_to_be, partial_tp1_pct, partial_tp2_pct
-            FROM signals WHERE confirmed=TRUE AND result='PENDING'
-        """)
+            FROM signals
+            WHERE {_published_v7_clause()} AND result='PENDING'
+        """, (get_settings().strategy_version,))
         open_signals = c.fetchall()
 
     results = []

@@ -50,6 +50,8 @@ from database.candidate_store import (
 )
 from database.repository_v7 import (
     init_v7_schema,
+    is_confirmation_published,
+    mark_confirmation_published,
     monitor_confirmed_trades,
     save_confirmed_signal,
 )
@@ -138,17 +140,26 @@ def monitor_candidates() -> Dict[str, int]:
     for candidate in candidates:
         key = (candidate.symbol, candidate.trigger_timeframe)
         market_data = frames.get(key)
-        if not market_data:
+        publication_in_progress = bool(
+            candidate.metadata.get("technical_confirmation_complete")
+            and (
+                candidate.metadata.get("confirmation_chart_sent")
+                or candidate.metadata.get("confirmation_message_sent")
+            )
+        )
+        # Once one Confirmed component is public, finish the exact same
+        # confirmation even if market data is temporarily unavailable.
+        if not market_data and not publication_in_progress:
             continue
-        live, closed, current_price = market_data
+        live, closed, current_price = market_data if market_data else (None, None, None)
         try:
-            if is_expired(candidate):
+            if not publication_in_progress and is_expired(candidate):
                 candidate.status = "EXPIRED"
                 update_candidate(candidate)
                 send_candidate_cancelled(candidate, "زمان اعتبار Setup به پایان رسید و تأیید ورود تشکیل نشد.")
                 stats["cancelled"] += 1
                 continue
-            if is_invalidated(candidate, current_price):
+            if not publication_in_progress and is_invalidated(candidate, current_price):
                 candidate.status = "CANCELLED"
                 update_candidate(candidate)
                 send_candidate_cancelled(
@@ -158,26 +169,83 @@ def monitor_candidates() -> Dict[str, int]:
                 stats["cancelled"] += 1
                 continue
 
-            is_near, distance_atr = approaching_entry(candidate, current_price)
-            if is_near and not candidate.approaching_sent:
-                if send_approaching(candidate, current_price, distance_atr):
-                    candidate.approaching_sent = True
-                    candidate.status = "APPROACHING"
-                    stats["approaching"] += 1
+            if not candidate.metadata.get("technical_confirmation_complete"):
+                is_near, distance_atr = approaching_entry(candidate, current_price)
+                if is_near and not candidate.approaching_sent:
+                    if send_approaching(candidate, current_price, distance_atr):
+                        candidate.approaching_sent = True
+                        candidate.status = "APPROACHING"
+                        stats["approaching"] += 1
 
-            confirmed, candidate, reason = evaluate_confirmation(candidate, closed)
+            if (
+                candidate.metadata.get("technical_confirmation_complete")
+                and not candidate.metadata.get("confirmation_sent")
+            ):
+                # Retry publication of the original confirmed setup. Do not move
+                # Entry/confirmed_at to a later candle or inflate its score.
+                candidate.status = "CONFIRMED"
+                confirmed, reason = True, "تلاش مجدد برای تکمیل انتشار"
+            else:
+                confirmed, candidate, reason = evaluate_confirmation(candidate, closed)
+
             if confirmed:
+                was_staged = bool(candidate.metadata.get("persistence_staged"))
                 try:
-                    # Persist first. A portfolio guard failure must not publish an
-                    # executable confirmation that was not accepted into history.
-                    if save_confirmed_signal(candidate):
-                        send_confirmed(candidate, closed)
-                        stats["confirmed"] += 1
-                    candidate.status = "CONFIRMED"
+                    # Stage first, but with AWAITING_PUBLICATION and a false gate.
+                    # Portfolio rejection therefore cannot publish an untracked trade.
+                    save_confirmed_signal(candidate)
+                    candidate.metadata["persistence_staged"] = True
                 except Exception as exc:
-                    candidate.status = "CANCELLED"
-                    send_candidate_cancelled(candidate, f"تأیید تکنیکال ایجاد شد اما کنترل ریسک اجازه اجرا نداد: {exc}")
-                    stats["cancelled"] += 1
+                    if was_staged or publication_in_progress:
+                        candidate.status = "APPROACHING"
+                        candidate.metadata["publication_pending"] = True
+                        print(f"Staged confirmation lookup failed {candidate.signal_id}: {exc}")
+                    else:
+                        candidate.status = "CANCELLED"
+                        send_candidate_cancelled(candidate, f"تأیید تکنیکال ایجاد شد اما کنترل ریسک اجازه اجرا نداد: {exc}")
+                        stats["cancelled"] += 1
+                else:
+                    gate_lookup_ok = True
+                    try:
+                        already_published = is_confirmation_published(candidate.signal_id)
+                    except Exception as exc:
+                        gate_lookup_ok = False
+                        already_published = False
+                        candidate.status = "APPROACHING"
+                        candidate.metadata["publication_pending"] = True
+                        print(f"Confirmation gate lookup failed {candidate.signal_id}: {exc}")
+
+                    if already_published:
+                        candidate.status = "CONFIRMED"
+                        candidate.metadata["confirmation_sent"] = True
+                        candidate.metadata.pop("publication_pending", None)
+                    elif not gate_lookup_ok:
+                        pass  # Fail closed; never republish while DB state is unknown.
+                    elif send_confirmed(candidate, closed):
+                        # send_confirmed sets durable component receipts in metadata;
+                        # result monitoring remains disarmed until this DB update commits.
+                        candidate.status = "APPROACHING"
+                        candidate.metadata["publication_pending"] = True
+                        try:
+                            update_candidate(candidate)
+                            mark_confirmation_published(candidate.signal_id)
+                        except Exception as exc:
+                            print(
+                                f"Confirmation was published but DB gate remains pending "
+                                f"for {candidate.signal_id}: {exc}"
+                            )
+                        else:
+                            candidate.status = "CONFIRMED"
+                            candidate.metadata["confirmation_sent"] = True
+                            candidate.metadata.pop("publication_pending", None)
+                            stats["confirmed"] += 1
+                    else:
+                        candidate.status = "APPROACHING"
+                        candidate.metadata["publication_pending"] = True
+                        print(
+                            f"Confirmation publication pending {candidate.signal_id}; "
+                            "trade results remain disarmed"
+                        )
             update_candidate(candidate)
         except Exception as exc:
             print(f"Candidate monitor error {candidate.signal_id}: {exc}")

@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from datetime import timedelta
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -101,6 +102,43 @@ class V7ModelTests(unittest.TestCase):
         self.assertEqual(candidate.status, "CONFIRMED")
         self.assertGreaterEqual(candidate.score, 8)
 
+        first_score = candidate.score
+        first_confirmed_at = candidate.confirmed_at
+        candidate.status = "APPROACHING"
+        confirmed, candidate, _ = evaluate_confirmation(candidate, frame)
+        self.assertTrue(confirmed)
+        self.assertEqual(candidate.score, first_score)
+        self.assertEqual(candidate.confirmed_at, first_confirmed_at)
+
+
+class V7PublicationFlowTests(unittest.TestCase):
+    def test_failed_telegram_confirmation_never_arms_result_monitoring(self):
+        import main as scanner_main
+
+        candidate = make_candidate("APPROACHING", 8)
+        candidate.confirmed_at = iso_now()
+        candidate.metadata["technical_confirmation_complete"] = True
+        frame = pd.DataFrame({"close": [100.0]})
+        with (
+            patch.object(scanner_main, "get_active_candidates", return_value=[candidate]),
+            patch.object(
+                scanner_main,
+                "_candidate_market_frames",
+                return_value={(candidate.symbol, candidate.trigger_timeframe): (frame, frame, 100.0)},
+            ),
+            patch.object(scanner_main, "save_confirmed_signal", return_value=True),
+            patch.object(scanner_main, "is_confirmation_published", return_value=False),
+            patch.object(scanner_main, "send_confirmed", return_value=False),
+            patch.object(scanner_main, "mark_confirmation_published") as mark_mock,
+            patch.object(scanner_main, "update_candidate"),
+        ):
+            stats = scanner_main.monitor_candidates()
+
+        mark_mock.assert_not_called()
+        self.assertEqual(stats["confirmed"], 0)
+        self.assertEqual(candidate.status, "APPROACHING")
+        self.assertTrue(candidate.metadata["publication_pending"])
+
 
 class V7PersistenceTests(unittest.TestCase):
     def setUp(self):
@@ -122,25 +160,32 @@ class V7PersistenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             save_confirmed_signal(make_candidate("EDUCATIONAL", 7))
 
-    def test_confirmed_enters_signal_and_active_history(self):
-        from database.repository_v7 import save_confirmed_signal
+    def test_staged_confirmation_is_hidden_until_publication_is_committed(self):
+        from database.repository_v7 import mark_confirmation_published, save_confirmed_signal
         from database.db import get_active_signals, get_recent_signals
         candidate = make_candidate("CONFIRMED", 8)
         candidate.confirmed_at = iso_now()
         self.assertTrue(save_confirmed_signal(candidate))
+
+        # Technical confirmation alone is not execution history.
+        self.assertEqual(get_recent_signals(), [])
+        self.assertEqual(get_active_signals(), [])
+
+        mark_confirmation_published(candidate.signal_id)
         self.assertEqual(len(get_recent_signals()), 1)
         self.assertEqual(len(get_active_signals()), 1)
         self.assertTrue(get_recent_signals()[0]["signal_id"].startswith("viva-"))
 
     def test_trade_monitor_processes_tp1_then_breakeven_chronologically(self):
         from database import repository_v7
-        from database.repository_v7 import save_confirmed_signal
+        from database.repository_v7 import mark_confirmation_published, save_confirmed_signal
         from database.db import get_recent_signals
 
         candidate = make_candidate("CONFIRMED", 8)
         confirmed_time = utc_now().replace(microsecond=0)
         candidate.confirmed_at = confirmed_time.isoformat(timespec="seconds")
         self.assertTrue(save_confirmed_signal(candidate))
+        mark_confirmation_published(candidate.signal_id)
 
         frame = pd.DataFrame([
             {
@@ -163,6 +208,94 @@ class V7PersistenceTests(unittest.TestCase):
         self.assertEqual([event["event"] for event in events], ["TP1", "CLOSED"])
         self.assertEqual(events[-1]["result"], "WIN")
         self.assertGreater(get_recent_signals()[0]["pnl_pct"], 0)
+
+    def test_unpublished_and_legacy_rows_are_quarantined_everywhere(self):
+        from config import get_settings
+        from database import db, repository_v7
+        from database.db import get_dashboard_summary, get_recent_signals, get_strategy_performance
+        from database.repository_v7 import save_confirmed_signal
+
+        unpublished = make_candidate("CONFIRMED", 8)
+        unpublished.confirmed_at = iso_now()
+        legacy = make_candidate("CONFIRMED", 8)
+        legacy.confirmed_at = iso_now()
+        self.assertTrue(save_confirmed_signal(unpublished))
+        self.assertTrue(save_confirmed_signal(legacy))
+
+        p = db._ph()
+        truth = "TRUE" if db.USE_POSTGRES else "1"
+        with db.db_cursor() as cursor:
+            cursor.execute(
+                f"""
+                UPDATE signals
+                SET strategy_version={p}, status='CONFIRMED',
+                    confirmation_sent={truth}, confirmation_sent_at={p},
+                    result='WIN', pnl_pct=3.0, closed_at={p}
+                WHERE signal_id={p}
+                """,
+                ("smc-core-6.0", iso_now(), iso_now(), legacy.signal_id),
+            )
+
+        with patch.object(repository_v7, "get_klines") as get_klines_mock:
+            self.assertEqual(repository_v7.monitor_confirmed_trades(), [])
+            get_klines_mock.assert_not_called()
+        self.assertEqual(get_recent_signals(), [])
+        self.assertEqual(get_strategy_performance(), [])
+        self.assertEqual(get_dashboard_summary()["total_signals"], 0)
+        self.assertEqual(get_settings().strategy_version, repository_v7.SETTINGS.strategy_version)
+
+    def test_result_sender_fails_closed_without_matching_publication_proof(self):
+        from config import get_settings
+        from bot import messages_v7
+        from database import db
+        from database.repository_v7 import mark_confirmation_published, save_confirmed_signal
+
+        candidate = make_candidate("CONFIRMED", 8)
+        candidate.confirmed_at = iso_now()
+        save_confirmed_signal(candidate)
+        mark_confirmation_published(candidate.signal_id)
+        with db.db_cursor() as cursor:
+            cursor.execute(
+                f"UPDATE signals SET result='WIN', pnl_pct=2.0, closed_at={db._ph()} "
+                f"WHERE signal_id={db._ph()}",
+                (iso_now(), candidate.signal_id),
+            )
+
+        valid_event = {
+            "event": "CLOSED",
+            "signal_id": candidate.signal_id,
+            "symbol": candidate.symbol,
+            "style": candidate.style,
+            "result": "WIN",
+            "pnl": 2.0,
+            "profit_usd": 20.0,
+            "strategy_version": get_settings().strategy_version,
+            "confirmed_at": candidate.confirmed_at,
+            "confirmation_sent": True,
+        }
+        with patch.object(messages_v7, "send_message", return_value=True) as send_mock:
+            self.assertTrue(messages_v7.send_trade_result(valid_event))
+            self.assertFalse(messages_v7.send_trade_result({**valid_event, "strategy_version": "v6"}))
+            self.assertFalse(messages_v7.send_trade_result({**valid_event, "result": "LOSS"}))
+            self.assertEqual(send_mock.call_count, 1)
+
+    def test_confirmed_publication_resumes_without_duplicate_chart(self):
+        from bot import messages_v7
+
+        candidate = make_candidate("CONFIRMED", 8)
+        candidate.confirmed_at = iso_now()
+        with (
+            patch.object(messages_v7, "generate_chart", return_value=b"chart") as chart_mock,
+            patch.object(messages_v7, "send_photo", return_value=True) as photo_mock,
+            patch.object(messages_v7, "send_message", side_effect=[False, True]) as message_mock,
+        ):
+            self.assertFalse(messages_v7.send_confirmed(candidate, pd.DataFrame({"x": [1]})))
+            self.assertTrue(candidate.metadata["confirmation_chart_sent"])
+            self.assertTrue(messages_v7.send_confirmed(candidate, pd.DataFrame({"x": [1]})))
+            self.assertEqual(chart_mock.call_count, 1)
+            self.assertEqual(photo_mock.call_count, 1)
+            self.assertEqual(message_mock.call_count, 2)
+            self.assertTrue(candidate.metadata["confirmation_message_sent"])
 
 
 if __name__ == "__main__":

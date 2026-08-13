@@ -81,9 +81,11 @@ OTE، Premium/Discount، RSI regular/hidden divergence، Session، Volume، Engu
 
 - Educational Candidate در Supabase ذخیره نمی‌شود.
 - Candidate موقت در SQLite محلی نگهداری می‌شود.
-- فقط بعد از Confirmation در یک Transaction وارد `signals` و `active_signals` می‌شود.
-- Migrationهای Additive و Idempotent برای Supabase اضافه شدند.
-- Dashboard و API فقط `confirmed=TRUE` را گزارش می‌کنند.
+- Confirmation تکنیکال ابتدا با وضعیت داخلی `AWAITING_PUBLICATION` و `confirmation_sent=FALSE` در `signals` و `active_signals` Stage می‌شود؛ این ردیف تاریخچه اجرایی محسوب نمی‌شود.
+- فقط بعد از موفقیت هر دو جزء چارت و متن کامل Telegram، Publication Gate به‌صورت اتمیک به `confirmation_sent=TRUE` و `status='CONFIRMED'` تغییر می‌کند.
+- Migrationهای Additive و Idempotent برای Supabase اضافه شدند؛ داده‌های قدیمی حذف نمی‌شوند.
+- Dashboard، API، Portfolio Guard، Lifecycle Monitor و آمار فقط ردیف دارای نسخه فعلی v7، `confirmed_at`، `status='CONFIRMED'` و `confirmation_sent=TRUE` را می‌پذیرند.
+- ردیف‌های Legacy و Confirmationهای منتشرنشده از مانیتور و آمار v7 قرنطینه‌اند.
 - اسکریپت Dry-run پاک‌سازی داده قدیمی: `scripts/purge_legacy_unconfirmed.py`.
 
 ## ۸. چرخه نتیجه
@@ -125,9 +127,12 @@ OTE، Premium/Discount، RSI regular/hidden divergence، Session، Volume، Engu
 
 - Compile تمام فایل‌ها: موفق
 - Import تمام Moduleها: موفق
-- ۸ Unit Test: موفق
-- SQLite migration/persistence: موفق
-- ممنوعیت ذخیره Unconfirmed: موفق
+- ۱۲ Unit Test: موفق
+- SQLite migration/persistence و Publication Gate: موفق
+- ممنوعیت نمایش/مانیتور Confirmation منتشرنشده: موفق
+- قرنطینه Legacy از Lifecycle، Dashboard و Statistics: موفق
+- Fail-closed بودن Result sender بدون Publication Proof: موفق
+- Retry انتشار بدون تکرار چارت: موفق
 - TP1 سپس Breakeven به‌ترتیب زمانی: موفق
 - Dashboard و تمام APIها: HTTP 200
 - Main startup/shutdown smoke test: موفق

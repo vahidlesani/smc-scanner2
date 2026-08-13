@@ -25,6 +25,16 @@ RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
 CHANNEL_NAME = "vivasignalyst-Chanel"
 
 
+def _published_lifecycle_allowed(signal_id: str, event_type: str, result: str = None) -> bool:
+    """Fail closed for deprecated lifecycle senders retained for compatibility."""
+    try:
+        from database.repository_v7 import is_lifecycle_event_publishable
+        return is_lifecycle_event_publishable(signal_id, event_type, result)
+    except Exception as exc:
+        print(f"Legacy lifecycle notification blocked for {signal_id}: {exc}")
+        return False
+
+
 def _split_telegram_text(text: str, limit: int = 4000):
     if len(text) <= limit:
         return [text]
@@ -655,14 +665,18 @@ def send_confirmation_to_alert_channel(sig_data: dict, signal_id: str,
 
 # ─── ارسال کنسلی به کانال نتایج ───
 def send_cancellation_signal(sig_data: dict, signal_id: str):
-    target = CHAT_ID_RESULTS if CHAT_ID_RESULTS else CHAT_ID_ADMIN
-    caption = build_cancellation_caption(sig_data, signal_id)
-    send_message(caption, chat_id=target)
+    # Deprecated v6 cancellation events have no v7 publication proof and must
+    # never enter the Results channel.
+    print(f"Legacy cancellation notification blocked for {signal_id}")
+    return False
 
 
 # ─── ارسال کنسلی تایید شده به کانال اصلی (با ضرر) ───
 def send_confirmed_cancellation_to_main(sig_data: dict, signal_id: str, current_price: float):
-    """سیگنالی که تایید شده بود ولی کنسل شده → کانال اصلی"""
+    """Compatibility path; only a committed v7 LOSS may pass."""
+    if not _published_lifecycle_allowed(signal_id, "CLOSED", "LOSS"):
+        print(f"Legacy confirmed-cancellation notification blocked for {signal_id}")
+        return False
     target = CHAT_ID_APPROACHING if CHAT_ID_APPROACHING else CHAT_ID_ADMIN
     
     entry = sig_data.get("entry", 0)
@@ -696,37 +710,25 @@ def send_confirmed_cancellation_to_main(sig_data: dict, signal_id: str, current_
         
         f"📢 <b>{CHANNEL_NAME}</b>"
     )
-    send_message(caption, chat_id=target)
+    return send_message(caption, chat_id=target)
 
 
 # ─── ارسال کنسلی تایید نشده به کانال نتایج ───
 def send_unconfirmed_cancellation(sig_data: dict, signal_id: str):
-    """سیگنالی که تایید نشده و کنسل شده → کانال نتایج"""
-    target = CHAT_ID_RESULTS if CHAT_ID_RESULTS else CHAT_ID_ADMIN
-    
-    dir_emoji = "🟢" if sig_data.get("direction") == "LONG" else "🔴"
-    strategy_fa = sig_data.get("strategy_fa", sig_data.get("source", ""))
-    
-    caption = (
-        f"ℹ️ <b>Signal Cancelled (Not Confirmed)</b>\n"
-        f"📢 کانال: <b>{CHANNEL_NAME}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"🆔 <code>{signal_id}</code>\n"
-        f"🪙 <b>{sig_data['symbol']}</b> | {sig_data.get('direction')} {dir_emoji}\n"
-        f"🔮 استراتژی: <b>{strategy_fa}</b>\n\n"
-        
-        f"⚠️ این سیگنال تایید نشده بود و کنسل شد.\n"
-        f"📊 جزو آمار محاسبه نمیشود.\n\n"
-        
-        f"📢 <b>{CHANNEL_NAME}</b>"
-    )
-    send_message(caption, chat_id=target)
+    """Deprecated: unconfirmed candidates are forbidden from Results."""
+    print(f"Unconfirmed Results-channel cancellation blocked for {signal_id}")
+    return False
 
 
 # ─── ارسال نتیجه WIN/LOSS به کانال نتایج ───
 def send_result_to_channel(symbol: str, signal_id: str,
                             result: str, pnl: float,
                             leverage: int, margin_usd: float):
+    if result not in {"WIN", "LOSS"} or not _published_lifecycle_allowed(
+        signal_id, "CLOSED", result
+    ):
+        print(f"Legacy result notification blocked for {signal_id}")
+        return False
     target = CHAT_ID_RESULTS if CHAT_ID_RESULTS else CHAT_ID_ADMIN
 
     profit_usd = margin_usd * leverage * (abs(pnl) / 100)
@@ -747,10 +749,17 @@ def send_result_to_channel(symbol: str, signal_id: str,
         f"⚠️ <i>بر اساس مدیریت سرمایه پیشنهادی محاسبه شده</i>\n"
         f"📢 <b>{CHANNEL_NAME}</b>"
     )
-    send_message(msg, chat_id=target)
+    return send_message(msg, chat_id=target)
 
 
-def send_performance_report(stats: dict):
+def send_performance_report(stats: dict = None):
+    # Never trust a caller-provided legacy aggregate; rebuild from the gated DB.
+    try:
+        from database.db import get_performance_stats
+        stats = get_performance_stats()
+    except Exception as exc:
+        print(f"Performance report blocked: gated statistics unavailable: {exc}")
+        return False
     target = CHAT_ID_RESULTS if CHAT_ID_RESULTS else CHAT_ID_ADMIN
 
     if not stats:
