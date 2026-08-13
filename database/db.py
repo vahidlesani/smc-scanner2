@@ -529,17 +529,20 @@ def get_market_memory(symbol: str) -> dict:
 
 def was_signal_sent_recently(symbol: str, source: str,
                              direction: str, hours: int = 4) -> bool:
+    """
+    چک میکنه آیا سیگنال مشابه فعال هست
+    فقط تا وقتی سیگنال فعاله (PENDING) بلوکه
+    بعد از بسته شدن (WIN/LOSS/CANCELLED) دوباره میتونه بیاد
+    """
     p = _ph()
-    cutoff = (datetime.utcnow() - timedelta(hours=hours)).strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
     with db_cursor() as c:
+        # فقط سیگنال‌های فعال (PENDING) رو چک کن
         c.execute(f"""
             SELECT created_at FROM signals
             WHERE symbol={p} AND source={p} AND direction={p}
-              AND created_at > {p}
+              AND result='PENDING'
             ORDER BY created_at DESC LIMIT 1
-        """, (symbol, source, direction, cutoff))
+        """, (symbol, source, direction))
         row = c.fetchone()
     return row is not None
 
