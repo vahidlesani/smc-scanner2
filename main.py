@@ -31,6 +31,7 @@ from database.db import (
 ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
 RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
 CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")
+CHAT_ID_APPROACHING = os.environ.get("CHAT_ID_APPROACHING", "")  # کانال هشدار نزدیک شدن
 CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
 
 CHANNEL_NAME = "vivasignalyst-Chanel"
@@ -454,9 +455,9 @@ def check_signal_cancellation(sig_data: dict, df_15m: pd.DataFrame) -> bool:
 def monitor_active_signals():
     """
     مانیتورینگ سیگنال‌های فعال:
-    ۱. هشدار نزدیک شدن (80%)
-    ۲. تایید ورود
-    ۳. باطل شدن
+    ۱. هشدار نزدیک شدن (80%) → کانال هشدار
+    ۲. تایید ورود → کانال اصلی
+    ۳. باطل شدن → کانال اصلی
     ۴. TP1 hit + SL to BE
     """
     active = get_active_signals()
@@ -472,18 +473,20 @@ def monitor_active_signals():
 
             current_price = df_15m['close'].iloc[-1]
 
-            # ۱. هشدار نزدیک شدن (80%)
+            # ۱. هشدار نزدیک شدن (80%) → کانال هشدار
             if not sig_data.get("approaching_sent"):
                 if check_approaching_entry(sig_data, df_15m):
                     mark_approaching_sent(signal_id)
-                    send_approaching_alert(sig_data, signal_id, current_price)
+                    # ارسال به کانال هشدار
+                    from bot.telegram_bot import send_approaching_alert_to_channel
+                    send_approaching_alert_to_channel(sig_data, signal_id, current_price)
 
-            # ۲. تایید ورود
+            # ۲. تایید ورود → کانال اصلی
             if check_signal_confirmation(sig_data, df_15m):
                 confirm_active_signal(signal_id)
                 send_confirmation_signal(sig_data, signal_id, current_price)
 
-            # ۳. باطل شدن
+            # ۳. باطل شدن → کانال اصلی
             elif check_signal_cancellation(sig_data, df_15m):
                 cancel_active_signal(signal_id)
                 send_cancellation_signal(sig_data, signal_id)

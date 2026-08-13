@@ -13,6 +13,7 @@ from analysis.risk import calculate_position
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")
+CHAT_ID_APPROACHING = os.environ.get("CHAT_ID_APPROACHING", "")  # کانال هشدار نزدیک شدن
 CHAT_ID_RESULTS = os.environ.get("CHAT_ID_RESULTS", "")
 CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
 
@@ -605,6 +606,20 @@ def send_approaching_alert(sig_data: dict, signal_id: str,
     distance_pct = abs(current_price - entry) / entry * 100
     
     target = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
+    caption = build_approaching_caption(
+        sig_data, signal_id, current_price, distance_pct
+    )
+    send_message(caption, chat_id=target)
+
+
+def send_approaching_alert_to_channel(sig_data: dict, signal_id: str,
+                                       current_price: float):
+    """ارسال هشدار نزدیک شدن به کانال اختصاصی هشدار"""
+    entry = sig_data["entry"]
+    distance_pct = abs(current_price - entry) / entry * 100
+    
+    # ارسال به کانال هشدار اگه تنظیم شده
+    target = CHAT_ID_APPROACHING if CHAT_ID_APPROACHING else (CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN)
     caption = build_approaching_caption(
         sig_data, signal_id, current_price, distance_pct
     )
