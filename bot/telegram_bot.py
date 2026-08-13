@@ -12,10 +12,13 @@ import mplfinance as mpf
 from analysis.risk import calculate_position
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")
-CHAT_ID_APPROACHING = os.environ.get("CHAT_ID_APPROACHING", "")  # کانال هشدار نزدیک شدن
+CHAT_ID_SIGNALS = os.environ.get("CHAT_ID_SIGNALS", "")  # کانال قدیمی (دیگه استفاده نمیشه)
+CHAT_ID_APPROACHING = os.environ.get("CHAT_ID_APPROACHING", "")  # کانال اصلی جدید
 CHAT_ID_RESULTS = os.environ.get("CHAT_ID_RESULTS", "")
 CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
+
+# کانال اصلی = کانال هشدار (یکی هستن)
+MAIN_CHANNEL = CHAT_ID_APPROACHING if CHAT_ID_APPROACHING else CHAT_ID_SIGNALS
 
 ACCOUNT_SIZE = float(os.environ.get("ACCOUNT_SIZE", "1000"))
 RISK_PERCENT = float(os.environ.get("RISK_PERCENT", "1.5"))
@@ -577,7 +580,8 @@ def send_signal_with_chart(sig: dict, df_15m: pd.DataFrame):
         }
         sig["strategy_fa"] = strategy_names.get(sig["source"], sig["source"])
 
-    target = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
+    # ارسال به کانال اصلی جدید
+    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
     caption = build_initial_caption(sig, signal_id)
     
     dir_emoji = "🟢" if sig["direction"] == "LONG" else "🔴"
@@ -616,7 +620,7 @@ def send_approaching_alert(sig_data: dict, signal_id: str,
     entry = sig_data["entry"]
     distance_pct = abs(current_price - entry) / entry * 100
     
-    target = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
+    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
     caption = build_approaching_caption(
         sig_data, signal_id, current_price, distance_pct
     )
@@ -625,12 +629,11 @@ def send_approaching_alert(sig_data: dict, signal_id: str,
 
 def send_approaching_alert_to_channel(sig_data: dict, signal_id: str,
                                        current_price: float):
-    """ارسال هشدار نزدیک شدن به کانال اختصاصی هشدار"""
+    """ارسال هشدار نزدیک شدن به کانال اصلی"""
     entry = sig_data["entry"]
     distance_pct = abs(current_price - entry) / entry * 100
     
-    # ارسال به کانال هشدار اگه تنظیم شده
-    target = CHAT_ID_APPROACHING if CHAT_ID_APPROACHING else (CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN)
+    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
     caption = build_approaching_caption(
         sig_data, signal_id, current_price, distance_pct
     )
@@ -639,8 +642,8 @@ def send_approaching_alert_to_channel(sig_data: dict, signal_id: str,
 
 def send_confirmation_to_alert_channel(sig_data: dict, signal_id: str,
                                         current_price: float, df_15m: pd.DataFrame):
-    """ارسال سیگنال تایید شده با فرمت کامل + چارت به کانال هشدار"""
-    target = CHAT_ID_APPROACHING if CHAT_ID_APPROACHING else (CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN)
+    """ارسال سیگنال تایید شده با فرمت کامل + چارت به کانال اصلی"""
+    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
     
     # ساخت فرمت کامل سیگنال
     caption = build_initial_caption(sig_data, signal_id)
@@ -672,14 +675,14 @@ def send_confirmation_to_alert_channel(sig_data: dict, signal_id: str,
 def send_confirmation_signal(sig_data: dict, signal_id: str,
                               current_price: float):
     """ارسال سیگنال تایید شده"""
-    target = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
+    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
     caption = build_confirmation_caption(sig_data, signal_id, current_price)
     send_message(caption, chat_id=target)
 
 
 def send_cancellation_signal(sig_data: dict, signal_id: str):
     """ارسال سیگنال باطل شده"""
-    target = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
+    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
     caption = build_cancellation_caption(sig_data, signal_id)
     send_message(caption, chat_id=target)
 
@@ -687,7 +690,7 @@ def send_cancellation_signal(sig_data: dict, signal_id: str):
 def send_tp1_hit_signal(sig_data: dict, signal_id: str,
                          current_price: float):
     """ارسال اعلان TP1 hit + SL to BE"""
-    target = CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN
+    target = MAIN_CHANNEL if MAIN_CHANNEL else CHAT_ID_ADMIN
     caption = build_tp1_hit_caption(sig_data, signal_id, current_price)
     send_message(caption, chat_id=target)
 
