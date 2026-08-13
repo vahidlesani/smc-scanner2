@@ -456,7 +456,7 @@ def monitor_active_signals():
     """
     مانیتورینگ سیگنال‌های فعال:
     ۱. هشدار نزدیک شدن (80%) → کانال هشدار
-    ۲. تایید ورود → کانال اصلی
+    ۲. تایید ورود → کانال هشدار (فرمت کامل + چارت)
     ۳. باطل شدن → کانال اصلی
     ۴. TP1 hit + SL to BE
     """
@@ -473,18 +473,23 @@ def monitor_active_signals():
 
             current_price = df_15m['close'].iloc[-1]
 
+            # فقط سیگنال‌های بالای امتیاز ۷ رو مانیتور کن
+            score = sig_data.get("score", 0)
+            if score < 7:
+                continue
+
             # ۱. هشدار نزدیک شدن (80%) → کانال هشدار
             if not sig_data.get("approaching_sent"):
                 if check_approaching_entry(sig_data, df_15m):
                     mark_approaching_sent(signal_id)
-                    # ارسال به کانال هشدار
                     from bot.telegram_bot import send_approaching_alert_to_channel
                     send_approaching_alert_to_channel(sig_data, signal_id, current_price)
 
-            # ۲. تایید ورود → کانال اصلی
+            # ۲. تایید ورود → کانال هشدار (فرمت کامل + چارت)
             if check_signal_confirmation(sig_data, df_15m):
                 confirm_active_signal(signal_id)
-                send_confirmation_signal(sig_data, signal_id, current_price)
+                from bot.telegram_bot import send_confirmation_to_alert_channel
+                send_confirmation_to_alert_channel(sig_data, signal_id, current_price, df_15m)
 
             # ۳. باطل شدن → کانال اصلی
             elif check_signal_cancellation(sig_data, df_15m):

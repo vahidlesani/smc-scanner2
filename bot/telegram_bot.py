@@ -626,6 +626,38 @@ def send_approaching_alert_to_channel(sig_data: dict, signal_id: str,
     send_message(caption, chat_id=target)
 
 
+def send_confirmation_to_alert_channel(sig_data: dict, signal_id: str,
+                                        current_price: float, df_15m: pd.DataFrame):
+    """ارسال سیگنال تایید شده با فرمت کامل + چارت به کانال هشدار"""
+    target = CHAT_ID_APPROACHING if CHAT_ID_APPROACHING else (CHAT_ID_SIGNALS if CHAT_ID_SIGNALS else CHAT_ID_ADMIN)
+    
+    # ساخت فرمت کامل سیگنال
+    caption = build_initial_caption(sig_data, signal_id)
+    
+    dir_emoji = "🟢" if sig_data["direction"] == "LONG" else "🔴"
+    short_caption = (
+        f"✅ {sig_data['symbol']} | {sig_data.get('strategy_fa', sig_data.get('source', ''))} "
+        f"| {sig_data['direction']} {dir_emoji}\n"
+        f"🎯 Entry {current_price:.4f} (CONFIRMED)\n"
+        f"🆔 <code>{signal_id}</code>\n"
+        f"📢 {CHANNEL_NAME}"
+    )
+
+    try:
+        chart_bytes = None
+        if df_15m is not None:
+            chart_bytes = generate_chart(df_15m, sig_data)
+
+        if chart_bytes:
+            send_photo(chart_bytes, short_caption, chat_id=target)
+            send_message(caption, chat_id=target)
+        else:
+            send_message(caption, chat_id=target)
+    except Exception as e:
+        print(f"Send confirmation to alert channel error: {e}")
+        send_message(caption, chat_id=target)
+
+
 def send_confirmation_signal(sig_data: dict, signal_id: str,
                               current_price: float):
     """ارسال سیگنال تایید شده"""
