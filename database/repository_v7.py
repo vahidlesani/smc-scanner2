@@ -106,6 +106,16 @@ def init_v7_schema() -> None:
             cursor.execute("SELECT pg_advisory_xact_lock(866712370)")
         _migrate_columns(cursor, "signals", SIGNAL_COLUMNS)
         _migrate_columns(cursor, "active_signals", ACTIVE_COLUMNS)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS signal_symbol_locks (
+                symbol TEXT PRIMARY KEY,
+                signal_id TEXT NOT NULL,
+                strategy_version TEXT NOT NULL,
+                state TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
         if legacy_db.USE_POSTGRES:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS backtest_runs (
@@ -143,6 +153,7 @@ def init_v7_schema() -> None:
         )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_signals_style_setup ON signals(trade_style, setup_code)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_active_status ON active_signals(status, is_cancelled)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_symbol_locks_expiry ON signal_symbol_locks(state, expires_at)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_backtest_runs_symbol ON backtest_runs(symbol, style, created_at)")
     print("✅ v7 database migrations applied safely")
 
@@ -152,6 +163,129 @@ def confirmed_exists(signal_id: str) -> bool:
     with legacy_db.db_cursor() as cursor:
         cursor.execute(f"SELECT 1 FROM signals WHERE signal_id={p} LIMIT 1", (signal_id,))
         return cursor.fetchone() is not None
+
+
+def acquire_symbol_lock(candidate: SignalCandidate) -> bool:
+    """Atomically persist a cross-restart lock without candidate history."""
+    p = legacy_db._ph()
+    symbol = candidate.symbol.upper()
+    now = _now()
+    expiry = _naive_timestamp(candidate.expires_at)
+    expiry_text = (
+        expiry.isoformat(sep=" ", timespec="seconds")
+        if expiry is not None
+        else now
+    )
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"""
+            INSERT INTO signal_symbol_locks
+                (symbol, signal_id, strategy_version, state, expires_at, updated_at)
+            VALUES ({','.join([p] * 6)})
+            ON CONFLICT(symbol) DO UPDATE SET
+                signal_id=excluded.signal_id,
+                strategy_version=excluded.strategy_version,
+                state=excluded.state,
+                expires_at=excluded.expires_at,
+                updated_at=excluded.updated_at
+            WHERE signal_symbol_locks.strategy_version<>excluded.strategy_version
+               OR signal_symbol_locks.state NOT IN ('EDUCATIONAL','APPROACHING','CONFIRMED')
+               OR signal_symbol_locks.expires_at<=excluded.updated_at
+            """,
+            (
+                symbol,
+                candidate.signal_id,
+                SETTINGS.strategy_version,
+                candidate.status,
+                expiry_text,
+                now,
+            ),
+        )
+        return cursor.rowcount == 1
+
+
+def update_symbol_lock(candidate: SignalCandidate) -> None:
+    p = legacy_db._ph()
+    expiry = _naive_timestamp(candidate.expires_at)
+    expiry_text = expiry.isoformat(sep=" ", timespec="seconds") if expiry is not None else _now()
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"""
+            UPDATE signal_symbol_locks
+            SET state={p}, expires_at={p}, updated_at={p}
+            WHERE symbol={p} AND signal_id={p} AND strategy_version={p}
+            """,
+            (
+                candidate.status,
+                expiry_text,
+                _now(),
+                candidate.symbol.upper(),
+                candidate.signal_id,
+                SETTINGS.strategy_version,
+            ),
+        )
+
+
+def release_symbol_lock(symbol: str, signal_id: str) -> None:
+    p = legacy_db._ph()
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"DELETE FROM signal_symbol_locks "
+            f"WHERE symbol={p} AND signal_id={p} AND strategy_version={p}",
+            (symbol.upper(), signal_id, SETTINGS.strategy_version),
+        )
+
+
+def has_unresolved_symbol(symbol: str, exclude_signal_id: str = "") -> bool:
+    """Block every duplicate confirmed lifecycle on a symbol until its outcome."""
+    p = legacy_db._ph()
+    params = [symbol.upper(), SETTINGS.strategy_version]
+    exclude = ""
+    if exclude_signal_id:
+        exclude = f"AND signal_id<>{p}"
+        params.append(exclude_signal_id)
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT 1 FROM signals
+            WHERE symbol={p} AND strategy_version={p}
+              AND confirmed_at IS NOT NULL
+              AND status IN ('AWAITING_PUBLICATION', 'CONFIRMED')
+              AND result='PENDING'
+              {exclude}
+            LIMIT 1
+            """,
+            tuple(params),
+        )
+        return cursor.fetchone() is not None
+
+
+def cancel_staged_confirmation(signal_id: str) -> None:
+    """Release a symbol when an unpublished staged confirmation is cancelled."""
+    p = legacy_db._ph()
+    false = "FALSE" if legacy_db.USE_POSTGRES else "0"
+    truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"""
+            UPDATE signals SET status='CANCELLED', result='CANCELLED', closed_at={p}
+            WHERE signal_id={p} AND strategy_version={p}
+              AND confirmation_sent={false} AND status='AWAITING_PUBLICATION'
+            """,
+            (_now(), signal_id, SETTINGS.strategy_version),
+        )
+        cursor.execute(
+            f"""
+            UPDATE active_signals SET status='CANCELLED', is_cancelled={truth}
+            WHERE signal_id={p} AND strategy_version={p}
+              AND confirmation_sent={false} AND status='AWAITING_PUBLICATION'
+            """,
+            (signal_id, SETTINGS.strategy_version),
+        )
+        cursor.execute(
+            f"DELETE FROM signal_symbol_locks WHERE signal_id={p} AND strategy_version={p}",
+            (signal_id, SETTINGS.strategy_version),
+        )
 
 
 def save_backtest_run(result: Dict) -> str:
@@ -220,14 +354,8 @@ def portfolio_guard(candidate: SignalCandidate) -> Tuple[bool, str]:
 
     if open_count >= SETTINGS.max_open_trades:
         return False, f"حداکثر {SETTINGS.max_open_trades} معامله هم‌زمان فعال است."
-    if any(
-        symbol == candidate.symbol
-        and direction == candidate.direction
-        and source == candidate.setup_code
-        and style == candidate.style
-        for symbol, direction, source, style in open_rows
-    ):
-        return False, "یک معامله Confirmed مشابه روی همین نماد و Setup هنوز باز است."
+    if any(symbol == candidate.symbol for symbol, _direction, _source, _style in open_rows):
+        return False, "تا تعیین نتیجه معامله فعال قبلی، سیگنال دیگری روی این نماد مجاز نیست."
     daily_loss_limit_usd = SETTINGS.account_size * SETTINGS.daily_loss_limit_percent / 100
     if daily_pnl_usd <= -abs(daily_loss_limit_usd):
         return False, (
@@ -458,6 +586,13 @@ def mark_confirmation_published(signal_id: str) -> None:
         )
         if cursor.rowcount != 1:
             raise RuntimeError(f"Missing active publication row: {signal_id}")
+        cursor.execute(
+            f"""
+            UPDATE signal_symbol_locks SET state='CONFIRMED', updated_at={p}
+            WHERE signal_id={p} AND strategy_version={p}
+            """,
+            (published_at, signal_id, SETTINGS.strategy_version),
+        )
 
 
 def _naive_timestamp(value) -> Optional[pd.Timestamp]:
@@ -597,6 +732,11 @@ def monitor_confirmed_trades() -> List[Dict]:
                 cursor.execute(
                     f"UPDATE active_signals SET status='CLOSED', is_cancelled={truth} WHERE signal_id={p}",
                     (signal_id,),
+                )
+                cursor.execute(
+                    f"DELETE FROM signal_symbol_locks "
+                    f"WHERE symbol={p} AND signal_id={p} AND strategy_version={p}",
+                    (symbol, signal_id, SETTINGS.strategy_version),
                 )
                 closed_event.update({
                     "event": "CLOSED", "signal_id": signal_id, "symbol": symbol,

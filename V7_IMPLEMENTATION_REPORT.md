@@ -21,9 +21,11 @@
 ## ۲. Dynamic Watchlist
 
 - لیست ثابت به Fallback تبدیل شد.
-- قراردادهای فعال Linear USDT از Bybit دریافت می‌شوند.
-- فیلتر سابقه Listing، Turnover، Spread و نقدشوندگی اجرا می‌شود.
-- Top 50 گردش مالی و Top 20 Relative Volume انتخاب می‌شوند.
+- قراردادهای فعال و USDT-settled Linear Perpetual از API رسمی Bybit V5 دریافت می‌شوند.
+- فیلتر سابقه Listing، Spread و نقدشوندگی روز معاملاتی جاری اجرا می‌شود.
+- رتبه‌بندی با Turnover واقعی روز UTC، آهنگ پیش‌بینی‌شده روز و Relative Volume نسبت به ۷ روز تکمیل‌شده انجام می‌شود.
+- حداکثر ۳ Forex و ۱۵ TradFi بسیار نقدشونده رزرو می‌شوند؛ نماد فاقد Instrument/Ticker/Kline رسمی به Scanner راه ندارد.
+- xStocks Spot بدون Short/Leverage با کانال اجرای Perpetual مخلوط نمی‌شود.
 - نمادهای موقتاً پرحجم حتی اگر Major نباشند وارد Watchlist می‌شوند.
 - Scalp دارای حداقل Turnover و حداکثر Spread سخت‌گیرانه‌تر است.
 
@@ -99,10 +101,12 @@ OTE، Premium/Discount، RSI regular/hidden divergence، Session، Volume، Engu
 
 ## ۹. مدیریت سرمایه
 
-- Score فقط Risk Grade را مشخص می‌کند و Leverage را زیاد نمی‌کند.
-- Leverage بر اساس فاصله SL و Style محاسبه می‌شود.
-- سقف Margin، حداکثر معامله باز، محدودیت آلت‌کوین‌های همبسته و Daily Loss Limit اضافه شد.
-- حجم پوزیشن در صورت نیاز برای رعایت سقف Margin کاهش می‌یابد.
+- سقف Margin کیفیت‌محور است: ۳٪ برای Score 7، ۳٫۵٪ برای 8، ۴٪ برای 9 و ۵٪ برای 10.
+- سقف Leverage کیفیت به‌ترتیب 5x/10x/15x/20x است، اما فاصله ابطال، حداکثر Venue و بافر Liquidation می‌توانند آن را کاهش دهند.
+- قیمت ابطال پشت Pivot Liquidity نزدیک و با بافر پویای ATR/Spread محاسبه می‌شود؛ R/R نامناسب کل Setup را رد می‌کند.
+- برای Swing سطح اعلامی مرز ابطال تحلیل است و سفارش Stop/خروج به مدیریت شخصی کاربر واگذار می‌شود.
+- فقط یک Lifecycle حل‌نشده برای هر Symbol مجاز است و Lock پس از Cancel/Expire/Win/Loss آزاد می‌شود.
+- سقف Margin، حداکثر معامله باز، محدودیت آلت‌کوین‌های همبسته و Daily Loss Limit اعمال می‌شود.
 - TPها ساختاری‌اند و در قیمت اجرای واقعی دوباره R/R آن‌ها بررسی می‌شود.
 
 ## ۱۰. بک‌تست
@@ -127,12 +131,16 @@ OTE، Premium/Discount، RSI regular/hidden divergence، Session، Volume، Engu
 
 - Compile تمام فایل‌ها: موفق
 - Import تمام Moduleها: موفق
-- ۱۲ Unit Test: موفق
+- ۱۹ Unit Test: موفق
 - SQLite migration/persistence و Publication Gate: موفق
 - ممنوعیت نمایش/مانیتور Confirmation منتشرنشده: موفق
 - قرنطینه Legacy از Lifecycle، Dashboard و Statistics: موفق
 - Fail-closed بودن Result sender بدون Publication Proof: موفق
 - Retry انتشار بدون تکرار چارت: موفق
+- Margin ۳٪ تا ۵٪ و Leverage ایمن تا 20x: موفق
+- Invalidation پشت Liquidity + بافر پویا: موفق
+- رزرو سه Forex نقدشونده در Universe: موفق
+- Dedupe کامل Symbol تا نتیجه نهایی: موفق
 - TP1 سپس Breakeven به‌ترتیب زمانی: موفق
 - Dashboard و تمام APIها: HTTP 200
 - Main startup/shutdown smoke test: موفق

@@ -38,6 +38,20 @@ def _price(value: float) -> str:
     return f"{value:.6f}"
 
 
+def _market_label(candidate: SignalCandidate) -> str:
+    asset_class = str(candidate.market.get("asset_class") or "CRYPTO").upper()
+    venue = str(candidate.market.get("venue") or "BYBIT").upper()
+    labels = {
+        "FOREX": "فارکس",
+        "METAL": "فلزات",
+        "COMMODITY": "کالا",
+        "EQUITY": "سهام",
+        "TRADFI": "TradFi",
+        "CRYPTO": "کریپتو",
+    }
+    return f"{venue} • {labels.get(asset_class, asset_class)}"
+
+
 def _chunks(text: str, limit: int = 3900) -> List[str]:
     chunks: List[str] = []
     remaining = text.strip()
@@ -176,6 +190,7 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         f"👀 فقط برای رصد بازار و اهداف آموزشی\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}\n"
+        f"🌐 {_e(_market_label(candidate))}\n"
         f"🧭 {_e(direction_fa)}\n"
         f"🎯 ستاپ: <b>{_e(candidate.strategy_fa)}</b>\n"
         f"⭐ امتیاز فعلی: <b>{candidate.score}/10</b>\n"
@@ -201,6 +216,7 @@ def build_approaching_message(candidate: SignalCandidate, current_price: float, 
         f"⛔ <b>هنوز ورود تأیید نشده است</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(candidate.style)} • {_e(candidate.direction)}\n"
+        f"🌐 {_e(_market_label(candidate))}\n"
         f"🎯 {_e(candidate.strategy_fa)}\n"
         f"⭐ {candidate.score}/10\n"
         f"🆔 <code>{_e(candidate.signal_id)}</code>\n\n"
@@ -219,9 +235,20 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
     for index, item in enumerate([item for item in candidate.evidence if item.confirmed], start=1):
         reasons.append(f"<b>{index}. {_e(item.title)}</b>\n{_e(item.detail)}")
     mm_warning = "\n⚠️ حجم به سقف Margin مجاز محدود شده است." if mm.get("margin_capped") else ""
+    invalidation_label = (
+        "قیمت ابطال تحلیل (مرجع محاسبه، نه دستور اجباری Stop)"
+        if candidate.style.upper() == "SWING"
+        else "قیمت ابطال تحلیل / Stop پیشنهادی"
+    )
+    management_note = (
+        "در Swing این سطح مرز ابطال تحلیل است؛ محل سفارش Stop و نحوه خروج باید با مدیریت شخصی معامله‌گر تنظیم شود."
+        if candidate.style.upper() == "SWING"
+        else "Stop و اندازه پوزیشن صرفاً پیشنهاد سیستم‌اند و باید با مدیریت شخصی معامله‌گر تطبیق داده شوند."
+    )
     return (
         f"✅ <b>ENTRY CONFIRMED</b>\n"
         f"📊 <b>{_e(candidate.style)} • {_e(candidate.symbol)} • {_e(candidate.direction)}</b>\n"
+        f"🌐 {_e(_market_label(candidate))}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🎯 ستاپ: <b>{_e(candidate.strategy_fa)}</b>\n"
         f"⭐ کیفیت نهایی: <b>{candidate.score}/10</b> • Grade {mm.get('grade', '-')}\n"
@@ -232,21 +259,23 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
         + f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
         f"📍 <b>سطوح معامله</b>\n"
         f"├ Entry: <b>{_price(candidate.planned_entry)}</b>\n"
-        f"├ Stop Loss: <b>{_price(candidate.sl)}</b>\n"
+        f"├ {_e(invalidation_label)}: <b>{_price(candidate.sl)}</b>\n"
         f"├ TP1: <b>{_price(candidate.tp1)}</b> • {candidate.rr_tp1:.2f}R • بستن {SETTINGS.partial_tp1_percent:.0f}%\n"
         f"└ TP2: <b>{_price(candidate.tp2)}</b> • {candidate.rr_tp2:.2f}R • بستن {SETTINGS.partial_tp2_percent:.0f}%\n\n"
         f"💼 <b>مدیریت سرمایه بهینه</b>\n"
         f"├ اندازه حساب: <b>${mm.get('account', 0):,.0f}</b>\n"
-        f"├ ریسک واقعی: <b>{mm.get('risk_pct', 0):.2f}% = ${mm.get('risk_amount', 0):.2f}</b>\n"
-        f"├ اهرم ایمن پیشنهادی: <b>{mm.get('leverage', 1)}x</b>\n"
-        f"├ Margin: <b>${mm.get('margin', 0):.2f} ({mm.get('margin_pct', 0):.1f}%)</b>\n"
+        f"├ ریسک محاسباتی تا ابطال: <b>{mm.get('risk_pct', 0):.2f}% = ${mm.get('risk_amount', 0):.2f}</b>\n"
+        f"├ اهرم کیفیت‌محور و ایمن: <b>{mm.get('leverage', 1)}x</b> (سقف کیفیت {mm.get('quality_leverage_cap', 1)}x)\n"
+        f"├ Margin پیشنهادی: <b>${mm.get('margin', 0):.2f} ({mm.get('margin_pct', 0):.1f}%)</b>\n"
+        f"├ سقف Margin این کیفیت: <b>{mm.get('margin_limit_pct', 0):.1f}% حساب</b>\n"
         f"├ Position Size: <b>${mm.get('position_size', 0):,.0f}</b>\n"
         f"├ سود تقریبی TP1: <b>${mm.get('tp1_profit', 0):.2f}</b>\n"
         f"├ سود تقریبی TP2: <b>${mm.get('tp2_profit', 0):.2f}</b>\n"
         f"└ هزینه تخمینی Fee/Slippage: <b>${mm.get('estimated_roundtrip_cost', 0):.2f}</b>"
         f"{mm_warning}\n\n"
-        f"📌 بعد از TP1، حد ضرر باقیمانده به Breakeven منتقل می‌شود.\n"
-        f"⚠️ بسته‌شدن معتبر آن‌سوی {_price(candidate.sl)} سناریو را باطل می‌کند.\n"
+        f"📌 پیشنهاد سیستم: بعد از TP1، حد ضرر باقیمانده به Breakeven منتقل شود.\n"
+        f"⚠️ لمس/عبور معتبر از {_price(candidate.sl)} سناریوی تحلیلی را باطل می‌کند.\n"
+        f"🧭 {_e(management_note)}\n"
         f"📢 <b>{_e(SETTINGS.channel_name)}</b>"
     )
 

@@ -13,31 +13,50 @@ def _clamp(value, minimum, maximum):
 
 
 def quality_plan(score: int) -> Dict:
+    """Map quality to risk, margin allocation and a leverage ceiling.
+
+    Margin is posted collateral, not the amount a trader is expected to lose.
+    The invalidation distance remains a second independent risk constraint.
+    """
     score = int(score or 0)
     tiers = {
-        10: (SETTINGS.max_risk_percent, "A+", "فوق‌العاده"),
-        9: (min(1.15, SETTINGS.max_risk_percent), "A", "عالی"),
-        8: (min(1.00, SETTINGS.max_risk_percent), "B+", "بسیار خوب"),
-        7: (min(0.75, SETTINGS.max_risk_percent), "B", "خوب"),
-        6: (min(0.50, SETTINGS.max_risk_percent), "C", "آموزشی/محتاط"),
+        10: (SETTINGS.max_risk_percent, 5.0, 20, "A+", "فوق‌العاده"),
+        9: (min(1.15, SETTINGS.max_risk_percent), 4.0, 15, "A", "عالی"),
+        8: (min(1.00, SETTINGS.max_risk_percent), 3.5, 10, "B+", "بسیار خوب"),
+        7: (min(0.75, SETTINGS.max_risk_percent), 3.0, 5, "B", "خوب"),
+        6: (min(0.50, SETTINGS.max_risk_percent), 0.0, 1, "C", "آموزشی/محتاط"),
     }
-    risk, grade, label = tiers.get(score, (0.0, "REJECTED", "غیرقابل اجرا"))
-    return {"risk_pct": risk, "grade": grade, "quality": label}
+    risk, margin, leverage, grade, label = tiers.get(
+        score, (0.0, 0.0, 1, "REJECTED", "غیرقابل اجرا")
+    )
+    return {
+        "risk_pct": risk,
+        "margin_pct": min(margin, SETTINGS.max_margin_percent),
+        "leverage_cap": leverage,
+        "grade": grade,
+        "quality": label,
+    }
 
 
 def max_safe_leverage(sl_fraction: float, style: str = "SWING") -> int:
-    """Conservative leverage with a liquidation buffer far beyond the stop."""
+    """Keep estimated liquidation distance well beyond analysis invalidation."""
     if sl_fraction <= 0:
         return 1
-    theoretical_liquidation_leverage = 1.0 / sl_fraction
-    safety_adjusted = int(theoretical_liquidation_leverage * 0.22)
-    style_cap = 10 if style.upper() == "SCALP" else 7
-    return _clamp(safety_adjusted, 2, style_cap)
+    # Approximate liquidation distance is 1/leverage. Requiring it to be at
+    # least ~2.5x the invalidation distance leaves a conservative safety gap.
+    safety_adjusted = int(0.40 / sl_fraction)
+    return _clamp(safety_adjusted, 1, 20)
 
 
-def suggested_leverage(score: int, sl_fraction: float, style: str = "SWING") -> int:
-    # Score does not increase leverage. Stop distance and style determine safety.
-    return max_safe_leverage(sl_fraction, style)
+def suggested_leverage(
+    score: int,
+    sl_fraction: float,
+    style: str = "SWING",
+    venue_max_leverage: Optional[float] = None,
+) -> int:
+    quality_cap = int(quality_plan(score)["leverage_cap"])
+    venue_cap = int(float(venue_max_leverage or 20))
+    return max(1, min(quality_cap, max_safe_leverage(sl_fraction, style), venue_cap, 20))
 
 
 def calculate_position(
@@ -47,6 +66,7 @@ def calculate_position(
     score: int,
     account: float,
     style: str = "SWING",
+    venue_max_leverage: Optional[float] = None,
 ) -> Optional[Dict]:
     entry = float(entry)
     sl = float(sl)
@@ -61,10 +81,13 @@ def calculate_position(
     if risk_pct <= 0:
         return None
     desired_risk = account * risk_pct / 100
-    leverage = suggested_leverage(score, sl_fraction, style)
+    leverage = suggested_leverage(score, sl_fraction, style, venue_max_leverage)
     desired_notional = desired_risk / sl_fraction
 
-    max_margin = account * SETTINGS.max_margin_percent / 100
+    target_margin_pct = float(plan["margin_pct"])
+    if target_margin_pct <= 0:
+        return None
+    max_margin = account * target_margin_pct / 100
     max_notional = max_margin * leverage
     notional = min(desired_notional, max_notional)
     margin = notional / leverage
@@ -86,8 +109,10 @@ def calculate_position(
         "position_size": notional,
         "quantity": notional / entry,
         "leverage": leverage,
+        "quality_leverage_cap": plan["leverage_cap"],
         "margin": margin,
         "margin_pct": margin / account * 100,
+        "margin_limit_pct": target_margin_pct,
         "tp1": tp1,
         "tp2": tp2,
         "quality": plan["quality"],
@@ -106,6 +131,7 @@ def build_money_management(candidate, account: Optional[float] = None) -> Dict:
         candidate.score,
         account,
         candidate.style,
+        candidate.market.get("max_leverage"),
     )
     if not position:
         return {}

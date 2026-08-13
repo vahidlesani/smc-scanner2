@@ -110,7 +110,8 @@ class SignalCandidate:
 
 
 def generate_viva_signal_id(symbol: str, style: str, setup_code: str) -> str:
-    clean_symbol = symbol.upper().replace("USDT", "").replace(".P", "")
+    raw_symbol = symbol.upper().replace("USDT", "").replace(".P", "")
+    clean_symbol = "".join(ch for ch in raw_symbol if ch.isalnum())[:16]
     style_code = "SW" if style.upper() == "SWING" else "SC"
     setup = "".join(ch for ch in setup_code.upper() if ch.isalnum())[:8]
     ts = utc_now().strftime("%m%d%H%M")

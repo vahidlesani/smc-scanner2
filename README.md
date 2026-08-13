@@ -93,9 +93,11 @@ Confirmation دیرهنگام که R/R واقعی آن کمتر از 1.3R برا
 
 - قرارداد Linear USDT با وضعیت Trading
 - حداقل سابقه Listing
-- Top symbols by `turnover24h`
-- نمادهای دارای Relative Volume بالا
-- فیلتر Spread و حداقل گردش مالی
+- رتبه‌بندی با گردش مالی واقعی روز جاری UTC و آهنگ پیش‌بینی‌شده همان روز
+- نمادهای دارای Relative Volume بالا نسبت به میانه ۷ روز تکمیل‌شده
+- فیلتر Spread و حداقل نقدشوندگی روز جاری
+- رزرو حداکثر ۳ جفت‌ارز Forex و ۱۵ نماد TradFi بسیار نقدشونده، فقط اگر در API رسمی Bybit V5 به‌صورت Perpetual فعال و دارای OHLCV باشند
+- پوشش خودکار Forex/فلزات/نفت/سهام TradFi قابل معامله در Linear Perpetual؛ xStocks Spot بدون اهرم وارد کانال اجرای دوطرفه نمی‌شود
 - محدودیت سخت‌تر برای Scalp
 
 داده هر تایم‌فریم یک‌بار در هر Scan گرفته و بین تمام Detectorها به اشتراک گذاشته می‌شود. Client دارای Cache، Retry، Backoff، Throttle و Endpoint fallback است.
@@ -112,10 +114,13 @@ SCAN_OFFSET_MINUTE=1
 
 ## مدیریت سرمایه
 
-- ریسک بر اساس Grade کیفیت، با سقف `MAX_RISK_PERCENT`
-- Leverage بر اساس فاصله واقعی SL و سبک معامله؛ Score اهرم را افزایش نمی‌دهد
-- سقف Margin
+- Margin هر پوزیشن بر اساس کیفیت محدود است: Score 7=`3%`، Score 8=`3.5%`، Score 9=`4%`، Score 10=`5%` از Equity حساب
+- این درصد Margin است، نه زیان مجاز؛ ریسک تا قیمت ابطال جداگانه محاسبه و با `MAX_RISK_PERCENT` محدود می‌شود
+- سقف Leverage کیفیت به‌ترتیب `5x/10x/15x/20x` است؛ Leverage نهایی از فاصله ابطال، حداکثر Venue و بافر Liquidation نیز کمتر می‌شود
+- قیمت ابطال پشت Pivot Liquidity نزدیک با بافر پویای ATR/Spread قرار می‌گیرد تا مستقیماً روی استخر نقدینگی آشکار نباشد
+- در Swing قیمت اعلامی مرز ابطال تحلیل است؛ محل سفارش Stop و مدیریت خروج به مدیریت شخصی کاربر واگذار می‌شود
 - حداکثر معاملات هم‌زمان
+- فقط یک Lifecycle حل‌نشده برای هر نماد؛ Lock عملیاتی در Supabase جدا از تاریخچه سیگنال نگهداری می‌شود تا حتی بعد از Restart نیز تا Cancel/Expire/Win/Loss هیچ Scalp، Swing، Setup یا جهت دیگری روی همان نماد صادر نشود
 - محدودیت پوزیشن‌های هم‌جهت و همبسته آلت‌کوین‌ها
 - Daily Loss Limit
 - TPهای ساختاری با حداقل R/R
@@ -184,7 +189,7 @@ DATABASE_URL=postgresql://...
 ACCOUNT_SIZE=1000
 RISK_PERCENT=1.0
 MAX_RISK_PERCENT=1.25
-MAX_MARGIN_PERCENT=25
+MAX_MARGIN_PERCENT=5
 MAX_OPEN_TRADES=5
 MAX_CORRELATED_TRADES=2
 DAILY_LOSS_LIMIT_PERCENT=3
@@ -198,6 +203,8 @@ WATCHLIST_TOP_TURNOVER=50
 WATCHLIST_TOP_RELATIVE_VOLUME=20
 WATCHLIST_MAX_SYMBOLS=70
 WATCHLIST_MIN_TURNOVER_USD=5000000
+WATCHLIST_MAX_FOREX_SYMBOLS=3
+WATCHLIST_MAX_TRADFI_SYMBOLS=15
 SCALP_MIN_TURNOVER_USD=20000000
 CANDIDATE_DB_PATH=/tmp/viva_candidates.db
 ```

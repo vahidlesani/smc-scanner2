@@ -57,7 +57,9 @@ def init_candidate_store() -> None:
 
 
 def _dedupe_key(candidate: SignalCandidate) -> str:
-    return ":".join((candidate.symbol, candidate.style, candidate.setup_code, candidate.direction))
+    # One unresolved lifecycle per symbol. This avoids conflicting Scalp/Swing,
+    # setup or direction messages until the first scenario has a final state.
+    return candidate.symbol.upper()
 
 
 def find_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
@@ -66,11 +68,12 @@ def find_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
         row = conn.execute(
             """
             SELECT payload FROM signal_candidates
-            WHERE dedupe_key=?
+            WHERE symbol=?
+              AND status IN ('EDUCATIONAL', 'APPROACHING', 'CONFIRMED')
               AND expires_at>?
             ORDER BY created_at DESC LIMIT 1
             """,
-            (_dedupe_key(candidate), now),
+            (candidate.symbol.upper(), now),
         ).fetchone()
     return SignalCandidate.from_json(row["payload"]) if row else None
 

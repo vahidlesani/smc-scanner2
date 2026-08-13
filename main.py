@@ -49,11 +49,16 @@ from database.candidate_store import (
     update_candidate,
 )
 from database.repository_v7 import (
+    acquire_symbol_lock,
+    cancel_staged_confirmation,
+    has_unresolved_symbol,
     init_v7_schema,
     is_confirmation_published,
     mark_confirmation_published,
     monitor_confirmed_trades,
+    release_symbol_lock,
     save_confirmed_signal,
+    update_symbol_lock,
 )
 
 SETTINGS = get_settings()
@@ -90,9 +95,20 @@ def run_discovery_scan() -> Dict[str, int]:
             for candidate in candidates:
                 if candidate.score < SETTINGS.educational_min_score:
                     continue
-                if add_candidate(candidate):
-                    stats["new"] += 1
-                    send_educational_setup(candidate, _chart_frame(candidate, bundle))
+                if has_unresolved_symbol(candidate.symbol):
+                    continue
+                if not add_candidate(candidate):
+                    continue
+                try:
+                    locked = acquire_symbol_lock(candidate)
+                except Exception as exc:
+                    locked = False
+                    print(f"Symbol-lock error {candidate.symbol}: {exc}")
+                if not locked:
+                    update_candidate(candidate, "CANCELLED")
+                    continue
+                stats["new"] += 1
+                send_educational_setup(candidate, _chart_frame(candidate, bundle))
             if index % 10 == 0:
                 print(f"  scanned {index}/{len(symbols)} • new educational setups: {stats['new']}")
         except Exception as exc:
@@ -156,12 +172,20 @@ def monitor_candidates() -> Dict[str, int]:
             if not publication_in_progress and is_expired(candidate):
                 candidate.status = "EXPIRED"
                 update_candidate(candidate)
+                try:
+                    cancel_staged_confirmation(candidate.signal_id)
+                except Exception as exc:
+                    print(f"Could not release staged symbol {candidate.signal_id}: {exc}")
                 send_candidate_cancelled(candidate, "زمان اعتبار Setup به پایان رسید و تأیید ورود تشکیل نشد.")
                 stats["cancelled"] += 1
                 continue
             if not publication_in_progress and is_invalidated(candidate, current_price):
                 candidate.status = "CANCELLED"
                 update_candidate(candidate)
+                try:
+                    cancel_staged_confirmation(candidate.signal_id)
+                except Exception as exc:
+                    print(f"Could not release staged symbol {candidate.signal_id}: {exc}")
                 send_candidate_cancelled(
                     candidate,
                     f"قیمت پیش از تأیید از سطح ابطال {candidate.sl} عبور کرد.",
@@ -247,6 +271,13 @@ def monitor_candidates() -> Dict[str, int]:
                             "trade results remain disarmed"
                         )
             update_candidate(candidate)
+            try:
+                if candidate.status in {"EDUCATIONAL", "APPROACHING", "CONFIRMED"}:
+                    update_symbol_lock(candidate)
+                else:
+                    release_symbol_lock(candidate.symbol, candidate.signal_id)
+            except Exception as exc:
+                print(f"Could not update symbol lock {candidate.signal_id}: {exc}")
         except Exception as exc:
             print(f"Candidate monitor error {candidate.signal_id}: {exc}")
     return stats

@@ -197,6 +197,50 @@ def _select_poi(df: pd.DataFrame, direction: str, impulse_index: int) -> Optiona
     return chosen
 
 
+def _liquidity_protected_invalidation(
+    trigger_df: pd.DataFrame,
+    poi: Dict,
+    direction: str,
+    atr_value: float,
+    style: str,
+    spread_pct: float = 0.0,
+) -> Dict:
+    """Place invalidation beyond nearby pivot liquidity, not directly on it."""
+    pivot_highs, pivot_lows = pivots(trigger_df, 3, 3)
+    edge = float(poi["bottom"] if direction == "LONG" else poi["top"])
+    nearby_distance = 1.5 * atr_value
+    points = pivot_lows if direction == "LONG" else pivot_highs
+    if direction == "LONG":
+        protected = [
+            float(point["price"])
+            for point in points[-20:]
+            if edge - nearby_distance <= float(point["price"]) <= edge + 0.10 * atr_value
+        ]
+        liquidity_anchor = min([edge] + protected)
+    else:
+        protected = [
+            float(point["price"])
+            for point in points[-20:]
+            if edge - 0.10 * atr_value <= float(point["price"]) <= edge + nearby_distance
+        ]
+        liquidity_anchor = max([edge] + protected)
+
+    atr_buffer = (0.35 if style.upper() == "SWING" else 0.25) * atr_value
+    spread_buffer = abs(liquidity_anchor) * max(0.0, float(spread_pct)) / 100 * 2.0
+    buffer_value = max(atr_buffer, spread_buffer)
+    invalidation = (
+        liquidity_anchor - buffer_value
+        if direction == "LONG"
+        else liquidity_anchor + buffer_value
+    )
+    return {
+        "price": float(invalidation),
+        "liquidity_anchor": float(liquidity_anchor),
+        "buffer": float(buffer_value),
+        "protected_pivots": len(protected),
+    }
+
+
 def _structural_targets(
     context_df: pd.DataFrame, direction: str, entry: float, sl: float
 ) -> Dict:
@@ -223,18 +267,20 @@ def _structural_targets(
 
 def _market_quality(bundle: MarketBundle, style: str) -> Tuple[bool, str, int]:
     ticker = bundle.ticker or {}
-    turnover = float(ticker.get("turnover24h", 0) or 0)
+    day_turnover = float(ticker.get("trading_day_turnover", ticker.get("turnover24h", 0)) or 0)
+    projected_turnover = float(ticker.get("projected_day_turnover", day_turnover) or day_turnover)
     spread = float(ticker.get("spread_pct", 999) or 999)
     relative = float(ticker.get("relative_volume", 1) or 1)
     if style == "SCALP":
-        valid = turnover >= SETTINGS.scalp_min_turnover_usd and spread <= SETTINGS.scalp_max_spread_percent
+        valid = projected_turnover >= SETTINGS.scalp_min_turnover_usd and spread <= SETTINGS.scalp_max_spread_percent
     else:
-        valid = turnover >= SETTINGS.watchlist_min_turnover_usd and spread <= SETTINGS.watchlist_max_spread_percent
-    points = 1 if valid and (relative >= 1.1 or turnover >= SETTINGS.scalp_min_turnover_usd) else 0
+        valid = projected_turnover >= SETTINGS.watchlist_min_turnover_usd and spread <= SETTINGS.watchlist_max_spread_percent
+    points = 1 if valid and (relative >= 1.1 or projected_turnover >= SETTINGS.scalp_min_turnover_usd) else 0
     detail = (
-        f"گردش مالی ۲۴ ساعته نماد حدود ${turnover:,.0f}، اسپرد تقریبی {spread:.3f}% "
-        f"و حجم نسبی {relative:.2f} برابر میانگین اخیر است. "
-        + ("نقدشوندگی برای این نوع معامله قابل قبول ارزیابی شده است." if valid else "نقدشوندگی یا اسپرد هنوز استاندارد لازم برای اجرای معامله را ندارد.")
+        f"گردش مالی ثبت‌شده از ابتدای روز معاملاتی UTC حدود ${day_turnover:,.0f} "
+        f"(برآورد آهنگ روزانه ${projected_turnover:,.0f})، اسپرد تقریبی {spread:.3f}% "
+        f"و آهنگ حجم نسبی {relative:.2f} برابر میانه روزهای اخیر است. "
+        + ("نقدشوندگی برای این نوع معامله قابل قبول ارزیابی شده است." if valid else "نقدشوندگی روز جاری یا اسپرد هنوز استاندارد لازم برای اجرای معامله را ندارد.")
     )
     return valid, detail, points
 
@@ -273,10 +319,15 @@ def _base_candidate(
     atr_values = atr(trigger_df)
     atr_value = float(atr_values.iloc[-1]) if pd.notna(atr_values.iloc[-1]) else abs(poi["top"] - poi["bottom"])
     entry = (float(poi["bottom"]) + float(poi["top"])) / 2
-    if direction == "LONG":
-        sl = float(poi["bottom"]) - 0.25 * atr_value
-    else:
-        sl = float(poi["top"]) + 0.25 * atr_value
+    invalidation = _liquidity_protected_invalidation(
+        trigger_df,
+        poi,
+        direction,
+        atr_value,
+        style,
+        float((bundle.ticker or {}).get("spread_pct", 0) or 0),
+    )
+    sl = float(invalidation["price"])
     if entry <= 0 or abs(entry - sl) / entry < 0.0008:
         return None
     targets = _structural_targets(context_df, direction, entry, sl)
@@ -300,8 +351,9 @@ def _base_candidate(
         f"سطح ساختاری {_fmt(float(impulse.get('level', 0)))} با Close شکسته شده؛ بنابراین شکست صرفاً یک Wick محسوب نمی‌شود."
     )
     rr_detail = (
-        f"حد ضرر پشت ناحیه و با بافر ATR در {_fmt(sl)} قرار می‌گیرد. هدف اول {_fmt(targets['tp1'])} "
-        f"و هدف دوم {_fmt(targets['tp2'])} بر اساس نقدینگی و ساختار مقابل انتخاب شده‌اند. "
+        f"قیمت ابطال تحلیل در {_fmt(sl)}، آن‌سوی مرجع نقدینگی {_fmt(invalidation['liquidity_anchor'])} "
+        f"و با بافر پویا {_fmt(invalidation['buffer'])} قرار گرفته است؛ بنابراین مستقیماً روی Pivot/نقدینگی آشکار نیست. "
+        f"هدف اول {_fmt(targets['tp1'])} و هدف دوم {_fmt(targets['tp2'])} بر اساس نقدینگی و ساختار مقابل انتخاب شده‌اند. "
         f"نسبت سود به زیان تقریبی اهداف به‌ترتیب {targets['rr1']:.2f}R و {targets['rr2']:.2f}R است."
     )
 
@@ -374,7 +426,12 @@ def _base_candidate(
         confirmations=confirmations,
         warnings=[
             "این تحلیل تا قبل از Retest و بسته‌شدن کندل تأییدی، دستور ورود نیست.",
-            f"بسته‌شدن معتبر قیمت آن‌سوی {_fmt(sl)} سناریو را باطل می‌کند.",
+            f"لمس/عبور معتبر قیمت از {_fmt(sl)} سناریوی تحلیلی را باطل می‌کند.",
+            (
+                "در Swing این قیمت مرز ابطال تحلیل است؛ محل سفارش Stop و مدیریت خروج باید توسط خود معامله‌گر تعیین شود."
+                if style == "SWING"
+                else "Stop و اندازه پوزیشن پیشنهادی‌اند و باید با مدیریت شخصی معامله‌گر تطبیق داده شوند."
+            ),
         ],
         mandatory_gates=gates,
         market=dict(bundle.ticker or {}),
@@ -383,6 +440,9 @@ def _base_candidate(
             "structure_level": float(impulse.get("level", 0)),
             "poi_type": poi.get("type", "POI"),
             "atr": atr_value,
+            "invalidation_liquidity_anchor": invalidation["liquidity_anchor"],
+            "invalidation_buffer": invalidation["buffer"],
+            "protected_liquidity_pivots": invalidation["protected_pivots"],
             "session": last_session,
             "strategy_version": SETTINGS.strategy_version,
             "touched": poi.get("touches", 0) > 0,

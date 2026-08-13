@@ -48,7 +48,9 @@ class Settings:
     account_size: float = 1000.0
     base_risk_percent: float = 1.0
     max_risk_percent: float = 1.25
-    max_margin_percent: float = 25.0
+    # Maximum account equity posted as margin for one position. Quality tiers
+    # use 3%-5%; this is margin allocation, not acceptable account loss.
+    max_margin_percent: float = 5.0
     max_open_trades: int = 5
     max_correlated_trades: int = 2
     daily_loss_limit_percent: float = 3.0
@@ -65,6 +67,8 @@ class Settings:
     watchlist_min_turnover_usd: float = 5_000_000.0
     watchlist_max_spread_percent: float = 0.25
     watchlist_min_listing_days: int = 14
+    watchlist_max_forex_symbols: int = 3
+    watchlist_max_tradfi_symbols: int = 15
     scalp_min_turnover_usd: float = 20_000_000.0
     scalp_max_spread_percent: float = 0.12
 
@@ -105,6 +109,8 @@ class Settings:
             watchlist_min_turnover_usd=_float("WATCHLIST_MIN_TURNOVER_USD", cls.watchlist_min_turnover_usd),
             watchlist_max_spread_percent=_float("WATCHLIST_MAX_SPREAD_PERCENT", cls.watchlist_max_spread_percent),
             watchlist_min_listing_days=_int("WATCHLIST_MIN_LISTING_DAYS", cls.watchlist_min_listing_days),
+            watchlist_max_forex_symbols=_int("WATCHLIST_MAX_FOREX_SYMBOLS", cls.watchlist_max_forex_symbols),
+            watchlist_max_tradfi_symbols=_int("WATCHLIST_MAX_TRADFI_SYMBOLS", cls.watchlist_max_tradfi_symbols),
             scalp_min_turnover_usd=_float("SCALP_MIN_TURNOVER_USD", cls.scalp_min_turnover_usd),
             scalp_max_spread_percent=_float("SCALP_MAX_SPREAD_PERCENT", cls.scalp_max_spread_percent),
             bybit_timeout_seconds=_int("BYBIT_TIMEOUT_SECONDS", cls.bybit_timeout_seconds),
