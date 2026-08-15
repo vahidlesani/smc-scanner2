@@ -31,3 +31,7 @@ Thumbs.db
 
 # Temp
 /tmp/
+
+# Analysis sandbox
+experiments/data_cache/
+experiments/results/
