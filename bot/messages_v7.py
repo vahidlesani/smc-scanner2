@@ -13,6 +13,7 @@ from matplotlib.patches import FancyArrowPatch, Rectangle
 from matplotlib.ticker import FuncFormatter
 import matplotlib.image as mpimg
 import mplfinance as mpf
+import numpy as np
 import pandas as pd
 import requests
 
@@ -27,22 +28,56 @@ CHAT_ID_EXECUTION = os.getenv("CHAT_ID_APPROACHING", "")
 CHAT_ID_RESULTS = os.getenv("CHAT_ID_RESULTS", "")
 CHAT_ID_ADMIN = os.getenv("CHAT_ID", "")
 
-# VivaSignals Pro chart identity: TradingView-inspired, but deliberately
-# independent and optimized for Telegram readability.
+# Chart identity: Viva's own TradingView look (light, monochrome candles,
+# borderless pastel supply/demand boxes). CHART_STYLE=dark restores the old
+# night theme; all colors remain overridable via the CHART_*_COLOR envs.
+_CHART_PRESETS = {
+    "light": {
+        "figure": "#FFFFFF",
+        "panel": "#FFFFFF",
+        "grid": "#E6EAF1",
+        "text": "#131722",
+        "muted": "#6A7587",
+        "bull": "#FFFFFF",
+        "bear": "#131722",
+        "entry": "#2962FF",
+        "supply": "#F23645",
+        "demand": "#089981",
+        "supply_text": "#B81B29",
+        "demand_text": "#06705E",
+        "invalidation": "#F23645",
+        "tp1": "#089981",
+        "tp2": "#2962FF",
+        "liquidity": "#7B3FF2",
+        "structure": "#2962FF",
+        "trend": "#131722",
+    },
+    "dark": {
+        "figure": "#0B101A",
+        "panel": "#111827",
+        "grid": "#273449",
+        "text": "#E5EDF7",
+        "muted": "#94A3B8",
+        "bull": "#00C2A8",
+        "bear": "#FF5C6C",
+        "entry": "#FFC857",
+        "supply": "#FF5C6C",
+        "demand": "#00C2A8",
+        "supply_text": "#FF8B97",
+        "demand_text": "#4AE3CE",
+        "invalidation": "#FF4757",
+        "tp1": "#39D98A",
+        "tp2": "#00B8D9",
+        "liquidity": "#A78BFA",
+        "structure": "#38BDF8",
+        "trend": "#E5EDF7",
+    },
+}
+_STYLE_NAME = (os.getenv("CHART_STYLE", "light") or "light").lower()
+_BASE = _CHART_PRESETS["dark" if _STYLE_NAME == "dark" else "light"]
 CHART_THEME = {
-    "figure": os.getenv("CHART_FIGURE_COLOR", "#0B101A"),
-    "panel": os.getenv("CHART_PANEL_COLOR", "#111827"),
-    "grid": os.getenv("CHART_GRID_COLOR", "#273449"),
-    "text": os.getenv("CHART_TEXT_COLOR", "#E5EDF7"),
-    "muted": os.getenv("CHART_MUTED_COLOR", "#94A3B8"),
-    "bull": os.getenv("CHART_BULL_COLOR", "#00C2A8"),
-    "bear": os.getenv("CHART_BEAR_COLOR", "#FF5C6C"),
-    "entry": os.getenv("CHART_ENTRY_COLOR", "#FFC857"),
-    "invalidation": os.getenv("CHART_INVALIDATION_COLOR", "#FF4757"),
-    "tp1": os.getenv("CHART_TP1_COLOR", "#39D98A"),
-    "tp2": os.getenv("CHART_TP2_COLOR", "#00B8D9"),
-    "liquidity": os.getenv("CHART_LIQUIDITY_COLOR", "#A78BFA"),
-    "structure": os.getenv("CHART_STRUCTURE_COLOR", "#38BDF8"),
+    key: os.getenv(f"CHART_{key.upper()}_COLOR", default)
+    for key, default in _BASE.items()
 }
 CHART_BRAND_NAME = os.getenv("CHART_BRAND_NAME", "VIVA SIGNALS PRO").upper()
 CHART_BRAND_HANDLE = os.getenv("CHART_BRAND_HANDLE", "")
@@ -172,17 +207,24 @@ def send_photo(image: bytes, caption: str, chat_id: Optional[str] = None) -> boo
 
 
 def _level_tag(ax, x: float, y: float, label: str, color: str) -> None:
+    # readable text color based on the chip background luminance
+    try:
+        rgb = matplotlib.colors.to_rgb(color)
+        lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+        text_color = "#131722" if lum > 0.62 else "#FFFFFF"
+    except Exception:
+        text_color = "#FFFFFF"
     ax.text(
         x,
         y,
         label,
-        color="#07111A",
+        color=text_color,
         fontsize=7.5,
         fontweight="bold",
         va="center",
         ha="left",
         zorder=12,
-        bbox={"boxstyle": "round,pad=0.28", "facecolor": color, "edgecolor": color, "alpha": 0.96},
+        bbox={"boxstyle": "round,pad=0.28", "facecolor": color, "edgecolor": "none", "alpha": 0.92},
     )
 
 
@@ -267,13 +309,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     try:
         frame = df.tail(100).copy().set_index("timestamp")
         frame.index = pd.DatetimeIndex(frame.index)
-        market_colors = mpf.make_marketcolors(
-            up=CHART_THEME["bull"],
-            down=CHART_THEME["bear"],
-            edge="inherit",
-            wick="inherit",
-            volume="in",
-        )
+        if _STYLE_NAME == "dark":
+            market_colors = mpf.make_marketcolors(
+                up=CHART_THEME["bull"], down=CHART_THEME["bear"],
+                edge="inherit", wick="inherit", volume="in",
+            )
+        else:  # light: Viva monochrome candles (hollow bull / solid bear)
+            market_colors = mpf.make_marketcolors(
+                up=CHART_THEME["bull"], down=CHART_THEME["bear"],
+                edge={"up": "#131722", "down": "#131722"},
+                wick={"up": "#131722", "down": "#131722"},
+                volume={"up": "#D9DEE8", "down": "#AEB6C4"},
+            )
         style = mpf.make_mpf_style(
             marketcolors=market_colors,
             base_mpf_style="nightclouds",
@@ -339,40 +386,69 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             axes[3].tick_params(axis="y", labelleft=False, labelright=False)
 
         count = len(frame)
-        future = 14 if confirmed else 4
+        future = 14 if confirmed else 10
         for chart_ax in axes:
             chart_ax.set_xlim(-1, count + future)
 
         zone_start = max(0, count - 55)
-        zone_end = count + (4 if confirmed else 1)
+        zone_end = count + future - 0.5  # box extends into the candle-free margin
+        zone_color = CHART_THEME["demand"] if candidate.direction == "LONG" else CHART_THEME["supply"]
+        zone_text_color = CHART_THEME["demand_text"] if candidate.direction == "LONG" else CHART_THEME["supply_text"]
+        zone_name = "DEMAND ZONE  ·  POI / ENTRY" if candidate.direction == "LONG" else "SUPPLY ZONE  ·  POI / ENTRY"
         ax.fill_between(
             [zone_start, zone_end],
             candidate.entry_zone_bottom,
             candidate.entry_zone_top,
-            color=CHART_THEME["entry"],
-            alpha=0.12,
+            color=zone_color,
+            alpha=0.32,
             zorder=1,
-        )
-        ax.hlines(
-            [candidate.entry_zone_bottom, candidate.entry_zone_top],
-            zone_start,
-            zone_end,
-            colors=CHART_THEME["entry"],
-            linewidth=0.75,
-            linestyles=(0, (3, 3)),
-            alpha=0.65,
-            zorder=4,
+            linewidth=0,
         )
         ax.text(
-            zone_start + 0.6,
-            candidate.entry_zone_top,
-            "POI / ENTRY ZONE",
-            color=CHART_THEME["entry"],
+            count + 1.6,  # in the right margin, never over the candles
+            (candidate.entry_zone_bottom + candidate.entry_zone_top) / 2,
+            zone_name,
+            color=zone_text_color,
             fontsize=7,
-            va="bottom",
+            va="center",
+            ha="left",
             fontweight="bold",
-            alpha=0.92,
+            zorder=12,
+            bbox={"boxstyle": "round,pad=0.26", "facecolor": CHART_THEME["panel"],
+                  "edgecolor": "none", "alpha": 0.82},
         )
+
+        # TLBREAK: draw the dynamic channel/trendline + parallel bound with
+        # thin solid lines (Viva's chart style) using pivot timestamps.
+        md = candidate.metadata or {}
+        if md.get("tl_a_ts") and md.get("tl_b_ts"):
+            try:
+                idx = frame.index
+                xa = float(np.searchsorted(idx, pd.Timestamp(str(md["tl_a_ts"]))))
+                xb = float(np.searchsorted(idx, pd.Timestamp(str(md["tl_b_ts"]))))
+                xanc = float(np.searchsorted(idx, pd.Timestamp(str(md.get("tl_anchor_ts") or md["tl_b_ts"]))))
+                pa, pb = float(md["tl_a_price"]), float(md["tl_b_price"])
+                if xb > xa:
+                    slope = (pb - pa) / (xb - xa)
+                    x_end = count + future - 0.5
+                    ax.plot([xa, x_end], [pa, pa + slope * (x_end - xa)],
+                            color=CHART_THEME["trend"], linewidth=1.2, alpha=0.9, zorder=8)
+                    p_anc = float(md["tl_anchor_price"])
+                    ax.plot([xanc, x_end], [p_anc, p_anc + slope * (x_end - xanc)],
+                            color=CHART_THEME["trend"], linewidth=1.2, alpha=0.75, zorder=8)
+                    stage = md.get("tl_stage", "")
+                    label = "CHANNEL BREAK" if stage == "JUST_BROKE" else "DYNAMIC TRENDLINE"
+                    _lo, _hi = float(frame["low"].min()), float(frame["high"].max())
+                    _padv = (_hi - _lo) * 0.03
+                    x_lab = xa + 0.70 * (count - 2 - xa)
+                    y_lab = min(max(pa + slope * (x_lab - xa), _lo + _padv), _hi - _padv)
+                    ax.text(x_lab, y_lab, label, color=CHART_THEME["trend"],
+                            fontsize=7, va="bottom" if candidate.direction == "LONG" else "top",
+                            fontweight="bold", alpha=0.85, zorder=11,
+                            bbox={"boxstyle": "round,pad=0.22", "facecolor": CHART_THEME["panel"],
+                                  "edgecolor": "none", "alpha": 0.80})
+            except Exception as exc:
+                print(f"TLB chart line warning: {exc}")
 
         line_start = max(0, count - 34)
         line_end = count + (5 if confirmed else 1)
@@ -534,6 +610,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 },
             )
 
+        # keep candle scale: long context lines may not stretch the y-axis
+        _ylo = float(frame["low"].min())
+        _yhi = float(frame["high"].max())
+        _ylo = min(_ylo, float(candidate.entry_zone_bottom), float(candidate.sl))
+        _yhi = max(_yhi, float(candidate.entry_zone_top), float(candidate.sl))
+        if confirmed:
+            _yhi = max(_yhi, float(candidate.tp2))
+            _ylo = min(_ylo, float(candidate.tp1))
+        _yr = max(_yhi - _ylo, 1e-9)
+        ax.set_ylim(_ylo - 0.06 * _yr, _yhi + 0.06 * _yr)
+
         fig.text(
             0.055,
             0.952,
@@ -602,6 +689,35 @@ def build_educational_message(candidate: SignalCandidate) -> str:
     )
 
 
+def _ai_note(candidate: SignalCandidate) -> str:
+    """🤖 AI Suggestion block — deterministic multi-TF read produced by the
+    engine (not an external LLM): regime, risk points, and the one thing that
+    would improve or kill the setup."""
+    md = candidate.metadata or {}
+    lines: List[str] = []
+    direction_fa = "صعودی 🟢" if candidate.direction == "LONG" else "نزولی 🔴"
+    lines.append(f"بازار در این نماد فعلاً ساختار {direction_fa} می‌سازد.")
+    if candidate.setup_code == "TLBREAK":
+        stage = md.get("tl_stage")
+        if stage == "PRE_BREAK":
+            lines.append("قیمت هنوز پشت خط داینامیک است؛ ورود زودتر از Close معتبر یعنی شکار فیک‌اوت. صبر برای شکست.")
+        else:
+            lines.append("شکست با Close انجام شده؛ ورود فقط روی اولین بازگشت به بیس داخل کندل شکست — نه تعقیب قیمت.")
+        if md.get("tl_touches", 0) >= 1:
+            lines.append(f"خط فعال {int(md.get('tl_touches', 0))}+ برخورد قبلی دارد؛ اعتبار ساختاری بالاتر است.")
+    elif candidate.setup_code == "P1234":
+        lines.append("الگوی ۱-۲-۳-۴ فقط زمانی می‌ارزد که بازار پرانرژی باشد؛ در رنجِ خشک بهترین ترید «ننشستن» است.")
+    if candidate.rr_tp1 < 1.3:
+        lines.append(f"R:R فعلی ({candidate.rr_tp1:.2f}) زیر کف مهندسی است؛ اگر گیر کرد، بهتر است ناحیه تازه‌تر شود.")
+    if not candidate.execution_ready:
+        lines.append("یکی از گیت‌های اجباری هنوز سبز نیست؛ این تحلیل آموزشی است و وارد فاز اجرایی نمی‌شود.")
+    adx_ctx = float(md.get("adx", 0) or 0)
+    if adx_ctx >= 25:
+        lines.append(f"روند پرانرژی است (ADX≈{adx_ctx:.0f})؛ پولبک‌های کوتاه‌مدت‌تر از انتظار معمول‌اند.")
+    lines.append(f"ابطال سناریو: عبور معتبر از {_price(candidate.sl)} — قبل از آن هیچ تصمیمی نگیر.")
+    return "🤖 <b>پیشنهاد هوش مصنوعی</b>\n" + "\n".join(f"• {_e(x)}" for x in lines)
+
+
 def build_approaching_message(candidate: SignalCandidate, current_price: float, distance_atr: float) -> str:
     waiting = "حفظ ناحیه و بسته‌شدن کندل تأییدی همراه با شکست Micro Structure"
     return (
@@ -617,6 +733,7 @@ def build_approaching_message(candidate: SignalCandidate, current_price: float, 
         f"💹 قیمت فعلی: <b>{_price(current_price)}</b>\n"
         f"📏 فاصله تا ناحیه: <b>{distance_atr:.2f} ATR</b>\n\n"
         f"🔎 در انتظار: {_e(waiting)}\n\n"
+        f"{_ai_note(candidate)}\n\n"
         f"👀 آماده بررسی چارت باشید، اما تا پیام Confirmed وارد نشوید.\n"
         f"📢 <b>{_e(SETTINGS.channel_name)}</b>"
     )
@@ -666,6 +783,7 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
         f"├ سود تقریبی TP2: <b>${mm.get('tp2_profit', 0):.2f}</b>\n"
         f"└ هزینه تخمینی Fee/Slippage: <b>${mm.get('estimated_roundtrip_cost', 0):.2f}</b>"
         f"{mm_warning}\n\n"
+        f"{_ai_note(candidate)}\n\n"
         f"📌 پیشنهاد سیستم: بعد از TP1، حد ضرر باقیمانده به Breakeven منتقل شود.\n"
         f"⚠️ لمس/عبور معتبر از {_price(candidate.sl)} سناریوی تحلیلی را باطل می‌کند.\n"
         f"🧭 {_e(management_note)}\n"

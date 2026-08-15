@@ -95,11 +95,15 @@ def evaluate_confirmation(
     No live/incomplete candle can confirm a trade. A candidate score may gain one
     trigger point, but missing mandatory gates can never be compensated by score.
     """
+    def reject(code: str, message: str) -> Tuple[bool, SignalCandidate, str]:
+        candidate.metadata["last_reject_code"] = code
+        return False, candidate, message
+
     if closed_df is None or len(closed_df) < 20:
-        return False, candidate, "داده کافی برای تأیید وجود ندارد."
+        return reject("NO_DATA", "داده کافی برای تأیید وجود ندارد.")
     after = _bars_since_candidate(candidate, closed_df)
     if after is None or after.empty:
-        return False, candidate, "هنوز کندلی بعد از ایجاد ستاپ بسته نشده است."
+        return reject("NO_NEW_BAR", "هنوز کندلی بعد از ایجاد ستاپ بسته نشده است.")
 
     touched = bool(candidate.metadata.get("touched", False))
     if not touched:
@@ -111,7 +115,7 @@ def evaluate_confirmation(
         )
         candidate.metadata["touched"] = touched
     if not touched:
-        return False, candidate, "قیمت هنوز اولین Retest ناحیه ورود را انجام نداده است."
+        return reject("NO_TOUCH", "قیمت هنوز اولین Retest ناحیه ورود را انجام نداده است.")
 
     row = closed_df.iloc[-1]
     previous = closed_df.iloc[-2]
@@ -124,33 +128,38 @@ def evaluate_confirmation(
     body_top, body_bottom = max(open_price, close), min(open_price, close)
     upper_wick = float(row["high"]) - body_top
     lower_wick = body_bottom - float(row["low"])
+    require_mid = SETTINGS.confirm_require_zone_mid
     if candidate.direction == "LONG":
-        directional = close > open_price and close > zone_mid
+        directional = close > open_price and (close > zone_mid if require_mid else True)
         structure_trigger = close > previous_high
         engulfing = open_price <= float(previous["close"]) and close >= float(previous["open"])
         pinbar = lower_wick >= 0.55 * candle_range and upper_wick <= 0.20 * candle_range
         invalid = close <= candidate.sl
     else:
-        directional = close < open_price and close < zone_mid
+        directional = close < open_price and (close < zone_mid if require_mid else True)
         structure_trigger = close < previous_low
         engulfing = open_price >= float(previous["close"]) and close <= float(previous["open"])
         pinbar = upper_wick >= 0.55 * candle_range and lower_wick <= 0.20 * candle_range
         invalid = close >= candidate.sl
 
     if invalid:
-        return False, candidate, "کندل بسته‌شده از سطح ابطال عبور کرده است."
-    trigger_valid = directional and (structure_trigger or engulfing or pinbar) and displacement["body_atr"] >= 0.35
+        return reject("CLOSE_THROUGH_INVALIDATION", "کندل بسته‌شده از سطح ابطال عبور کرده است.")
+    trigger_valid = (
+        directional
+        and (structure_trigger or engulfing or pinbar)
+        and displacement["body_atr"] >= SETTINGS.confirm_body_min_atr
+    )
     if not trigger_valid:
-        return False, candidate, (
+        return reject("NO_TRIGGER", (
             "Retest انجام شده، اما هنوز کندل تأییدی جهت‌دار همراه با شکست Micro Structure بسته نشده است."
-        )
+        ))
 
     # The executable entry is the confirmation close, not the historical POI
     # midpoint. Reject a late confirmation if its real risk/reward has degraded.
     executable_entry = close
     risk = abs(executable_entry - candidate.sl)
     if risk <= 0:
-        return False, candidate, "فاصله Entry تأییدشده تا حد ضرر معتبر نیست."
+        return reject("RISK_INVALID", "فاصله Entry تأییدشده تا حد ضرر معتبر نیست.")
     rr1 = (
         (candidate.tp1 - executable_entry) / risk
         if candidate.direction == "LONG"
@@ -161,17 +170,18 @@ def evaluate_confirmation(
         if candidate.direction == "LONG"
         else (executable_entry - candidate.tp2) / risk
     )
-    if rr1 < 1.30 or rr2 < 2.0:
-        return False, candidate, (
+    if rr1 < SETTINGS.confirm_rr1_floor or rr2 < SETTINGS.confirm_rr2_floor:
+        return reject("RR_DEGRADED", (
             f"تأیید دیر صادر شده و R/R واقعی به {rr1:.2f}R و {rr2:.2f}R کاهش یافته است."
-        )
+        ))
     candidate.planned_entry = executable_entry
     candidate.rr_tp1 = rr1
     candidate.rr_tp2 = rr2
 
     if not candidate.execution_ready:
         missing = [name for name, valid in candidate.mandatory_gates.items() if not valid]
-        return False, candidate, f"شروط اجباری تکمیل نیست: {', '.join(missing)}"
+        return reject("GATES_INCOMPLETE", f"شروط اجباری تکمیل نیست: {', '.join(missing)}")
+
 
     if structure_trigger:
         trigger_type = f"{'سقف' if candidate.direction == 'LONG' else 'کف'} Micro Structure قبلی را شکست"
@@ -191,7 +201,7 @@ def evaluate_confirmation(
     if not had_trigger:
         candidate.score = min(10, candidate.score + 1)
     if candidate.score < SETTINGS.execution_min_score:
-        return False, candidate, f"امتیاز نهایی {candidate.score} کمتر از حد اجرای {SETTINGS.execution_min_score} است."
+        return reject("SCORE_LOW", f"امتیاز نهایی {candidate.score} کمتر از حد اجرای {SETTINGS.execution_min_score} است.")
     candidate.status = "CONFIRMED"
     candidate.confirmed_at = candidate.confirmed_at or iso_now()
     candidate.metadata["technical_confirmation_complete"] = True

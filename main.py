@@ -72,8 +72,37 @@ def _request_shutdown(signum, _frame) -> None:
 
 
 def _chart_frame(candidate: SignalCandidate, bundle) -> pd.DataFrame:
+    # TLBREAK alerts show the channel break itself: chart the CONTEXT timeframe
+    # (4h/1h/1d) where the trendline lives, not the fine-grained trigger chart.
+    if candidate.setup_code == "TLBREAK":
+        context_tf = candidate.metadata.get("tl_context_tf")
+        if context_tf and bundle.get(context_tf) is not None:
+            return bundle.get(context_tf)
     timeframe = candidate.trigger_timeframe
     return bundle.get(timeframe)
+
+
+# Dead-gate candidates are no longer stored, so suppress repeat educational
+# messages for the same setup idempotently in memory (survives one process).
+_DEAD_GATE_ALERTED: Dict[str, float] = {}
+
+
+def _dead_gate_recently_alerted(candidate: SignalCandidate) -> bool:
+    key = (
+        f"{candidate.symbol}:{candidate.style}:{candidate.setup_code}:{candidate.direction}:"
+        f"{round(float(candidate.metadata.get('structure_level', 0) or 0), 6)}"
+    )
+    expiry_hours = (
+        SETTINGS.candidate_expiry_hours_swing
+        if candidate.style == "SWING"
+        else SETTINGS.candidate_expiry_hours_scalp
+    )
+    now = time.monotonic()
+    last = _DEAD_GATE_ALERTED.get(key)
+    if last is not None and (now - last) < expiry_hours * 3600:
+        return True
+    _DEAD_GATE_ALERTED[key] = now
+    return False
 
 
 def run_discovery_scan() -> Dict[str, int]:
@@ -94,6 +123,17 @@ def run_discovery_scan() -> Dict[str, int]:
             stats["detected"] += len(candidates)
             for candidate in candidates:
                 if candidate.score < SETTINGS.educational_min_score:
+                    continue
+                if SETTINGS.skip_dead_gate_candidates and not candidate.execution_ready:
+                    # A failing mandatory gate can never be repaired later, so
+                    # this candidate can never confirm. Keep it educational,
+                    # but do not track it: no Approaching spam, no symbol lock.
+                    candidate.metadata["execution_blocked_gates"] = [
+                        gate for gate, valid in candidate.mandatory_gates.items() if not valid
+                    ]
+                    stats["dead_gate"] = stats.get("dead_gate", 0) + 1
+                    if not _dead_gate_recently_alerted(candidate):
+                        send_educational_setup(candidate, _chart_frame(candidate, bundle))
                     continue
                 if has_unresolved_symbol(candidate.symbol):
                     continue
@@ -191,6 +231,11 @@ def monitor_candidates() -> Dict[str, int]:
                     f"قیمت پیش از تأیید از سطح ابطال {candidate.sl} عبور کرد.",
                 )
                 stats["cancelled"] += 1
+                continue
+
+            if SETTINGS.skip_dead_gate_candidates and not candidate.execution_ready:
+                # Legacy dead-on-arrival candidate from before the gate fix:
+                # cannot ever confirm; expiry/invalidation above will close it.
                 continue
 
             if not candidate.metadata.get("technical_confirmation_complete"):
@@ -310,6 +355,19 @@ def run_monitor_cycle() -> None:
         print(f"Candidate monitor cycle error: {exc}")
 
 
+def _next_aligned(now: datetime, interval: int, offset: int) -> datetime:
+    """Next grid-aligned time `offset` minutes into each `interval` block."""
+    interval = max(1, int(interval))
+    offset = int(offset) % interval
+    base = now.replace(second=0, microsecond=0)
+    minute = base.minute
+    next_minute = ((minute - offset) // interval + 1) * interval + offset
+    if next_minute >= 60:
+        return (base.replace(minute=offset) + timedelta(hours=1))
+    candidate = base.replace(minute=next_minute)
+    return candidate if candidate > now else candidate + timedelta(minutes=interval)
+
+
 def _next_aligned_scan(now: datetime) -> datetime:
     """Next :01/:16/:31/:46 UTC, shortly after a 15m candle closes."""
     interval = max(1, SETTINGS.full_scan_minutes)
@@ -368,7 +426,12 @@ def main() -> None:
     if SETTINGS.run_scan_on_start:
         run_discovery_scan()
     next_scan = _next_aligned_scan(datetime.now(timezone.utc))
-    next_monitor = datetime.now(timezone.utc)
+    # Monitor on a candle-close grid: each cycle sees the most decisive final
+    # minute of the smallest trigger timeframe (5m), and every 12th/48th/288th
+    # cycle coincides with the 1h/4h/1D close.
+    next_monitor = _next_aligned(
+        datetime.now(timezone.utc), SETTINGS.monitor_minutes, SETTINGS.monitor_offset_minute
+    )
     last_daily_report = ""
     print(
         f"Scheduler active • next discovery {next_scan.isoformat(timespec='minutes')} • "
@@ -379,7 +442,9 @@ def main() -> None:
         now = datetime.now(timezone.utc)
         if now >= next_monitor:
             run_monitor_cycle()
-            next_monitor = now + timedelta(minutes=SETTINGS.monitor_minutes)
+            next_monitor = _next_aligned(
+                datetime.now(timezone.utc), SETTINGS.monitor_minutes, SETTINGS.monitor_offset_minute
+            )
         if now >= next_scan:
             run_discovery_scan()
             next_scan = _next_aligned_scan(datetime.now(timezone.utc))

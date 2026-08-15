@@ -39,11 +39,49 @@ class Settings:
 
     full_scan_minutes: int = 15
     monitor_minutes: int = 5
+    # Minute offset inside each monitor interval — aligns cycles to just
+    # after candle closes (e.g. 1 => 5m cycles run at :01/:06/:11 UTC).
+    monitor_offset_minute: int = 1
     scan_offset_minute: int = 1
     educational_min_score: int = 6
     execution_min_score: int = 7
     candidate_expiry_hours_swing: int = 36
     candidate_expiry_hours_scalp: int = 6
+
+    # Confirmation engine knobs (defaults reproduce the original strict v7).
+    confirm_rr1_floor: float = 1.30
+    confirm_rr2_floor: float = 2.0
+    confirm_body_min_atr: float = 0.35
+    confirm_require_zone_mid: bool = True
+    # Invalidation buffer widths beyond the liquidity anchor, in ATR units.
+    sl_buffer_atr_swing: float = 0.35
+    sl_buffer_atr_scalp: float = 0.25
+    # Candidates born with a failing mandatory gate can never confirm. When
+    # enabled, they are educational-only: they are not tracked for monitoring
+    # and therefore never send Approaching messages or lock their symbol.
+    skip_dead_gate_candidates: bool = True
+    # Experimental P1234 detector: minimum Wilder ADX(14) on the trigger
+    # timeframe at detection time. 0.0 disables the regime filter.
+    p1234_min_adx: float = 0.0
+    # Wire the experimental detectors (P1234) into live scanning. Off by
+    # default; enable only behind a paper-trading phase.
+    experimental_p1234_enabled: bool = False
+    # Comma-separated symbol allowlist for the experimental detectors
+    # (e.g. "SOLUSDT,ETHUSDT"); empty string = no symbol restriction.
+    experimental_p1234_symbols: str = "SOLUSDT"
+    # Experimental TLBREAK (trendline/channel breakout) detector.
+    experimental_tlbreak_enabled: bool = False
+    experimental_tlbreak_symbols: str = ""  # empty = no symbol restriction
+    tlbreak_min_adx: float = 0.0            # ADX(14) gate on context TF; 0 = off
+    # Override the context timeframe for the channel lines (e.g. "1d" for the
+    # macro long-term swing tier Viva specified); empty = style default (4h/1h).
+    tlbreak_context_tf: str = ""
+    tlbreak_tp1_height_frac: float = 0.45   # TP1 = 45% of channel height
+    tlbreak_tp2_height_frac: float = 0.70   # TP2 = 70% ("not the top of the path")
+    # Viva's range-fraction target policy for the core v7 setups (default off):
+    # LONG in DISCOUNT / SHORT in PREMIUM target 40%/70% of the dealing range.
+    range_fraction_targets: bool = False
+    range_fraction_symbols: str = ""        # empty = all symbols
 
     account_size: float = 1000.0
     base_risk_percent: float = 1.0
@@ -85,11 +123,30 @@ class Settings:
             channel_name=os.getenv("CHANNEL_NAME", cls.channel_name),
             full_scan_minutes=_int("FULL_SCAN_MINUTES", cls.full_scan_minutes),
             monitor_minutes=_int("MONITOR_MINUTES", cls.monitor_minutes),
+            monitor_offset_minute=_int("MONITOR_OFFSET_MINUTE", cls.monitor_offset_minute),
             scan_offset_minute=_int("SCAN_OFFSET_MINUTE", cls.scan_offset_minute),
             educational_min_score=_int("EDUCATIONAL_MIN_SCORE", cls.educational_min_score),
             execution_min_score=_int("EXECUTION_MIN_SCORE", cls.execution_min_score),
             candidate_expiry_hours_swing=_int("CANDIDATE_EXPIRY_HOURS_SWING", cls.candidate_expiry_hours_swing),
             candidate_expiry_hours_scalp=_int("CANDIDATE_EXPIRY_HOURS_SCALP", cls.candidate_expiry_hours_scalp),
+            confirm_rr1_floor=_float("CONFIRM_RR1_FLOOR", cls.confirm_rr1_floor),
+            confirm_rr2_floor=_float("CONFIRM_RR2_FLOOR", cls.confirm_rr2_floor),
+            confirm_body_min_atr=_float("CONFIRM_BODY_MIN_ATR", cls.confirm_body_min_atr),
+            confirm_require_zone_mid=_bool("CONFIRM_REQUIRE_ZONE_MID", cls.confirm_require_zone_mid),
+            sl_buffer_atr_swing=_float("SL_BUFFER_ATR_SWING", cls.sl_buffer_atr_swing),
+            sl_buffer_atr_scalp=_float("SL_BUFFER_ATR_SCALP", cls.sl_buffer_atr_scalp),
+            skip_dead_gate_candidates=_bool("SKIP_DEAD_GATE_CANDIDATES", cls.skip_dead_gate_candidates),
+            p1234_min_adx=_float("P1234_MIN_ADX", cls.p1234_min_adx),
+            experimental_p1234_enabled=_bool("EXPERIMENTAL_P1234_ENABLED", cls.experimental_p1234_enabled),
+            experimental_p1234_symbols=os.getenv("EXPERIMENTAL_P1234_SYMBOLS", cls.experimental_p1234_symbols),
+            experimental_tlbreak_enabled=_bool("EXPERIMENTAL_TLBREAK_ENABLED", cls.experimental_tlbreak_enabled),
+            experimental_tlbreak_symbols=os.getenv("EXPERIMENTAL_TLBREAK_SYMBOLS", cls.experimental_tlbreak_symbols),
+            tlbreak_min_adx=_float("TLBREAK_MIN_ADX", cls.tlbreak_min_adx),
+            tlbreak_tp1_height_frac=_float("TLBREAK_TP1_HEIGHT_FRAC", cls.tlbreak_tp1_height_frac),
+            tlbreak_tp2_height_frac=_float("TLBREAK_TP2_HEIGHT_FRAC", cls.tlbreak_tp2_height_frac),
+            tlbreak_context_tf=os.getenv("TLBREAK_CONTEXT_TF", cls.tlbreak_context_tf),
+            range_fraction_targets=_bool("RANGE_FRACTION_TARGETS", cls.range_fraction_targets),
+            range_fraction_symbols=os.getenv("RANGE_FRACTION_SYMBOLS", cls.range_fraction_symbols),
             account_size=_float("ACCOUNT_SIZE", cls.account_size),
             base_risk_percent=_float("RISK_PERCENT", cls.base_risk_percent),
             max_risk_percent=_float("MAX_RISK_PERCENT", cls.max_risk_percent),
