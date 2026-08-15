@@ -225,7 +225,9 @@ def _liquidity_protected_invalidation(
         ]
         liquidity_anchor = max([edge] + protected)
 
-    atr_buffer = (0.35 if style.upper() == "SWING" else 0.25) * atr_value
+    atr_buffer = (
+        SETTINGS.sl_buffer_atr_swing if style.upper() == "SWING" else SETTINGS.sl_buffer_atr_scalp
+    ) * atr_value
     spread_buffer = abs(liquidity_anchor) * max(0.0, float(spread_pct)) / 100 * 2.0
     buffer_value = max(atr_buffer, spread_buffer)
     invalidation = (
@@ -331,6 +333,37 @@ def _base_candidate(
     if entry <= 0 or abs(entry - sl) / entry < 0.0008:
         return None
     targets = _structural_targets(context_df, direction, entry, sl)
+    # Optional Viva range-fraction targets (his rule for the previous system):
+    # when aligned with the range EDGE (LONG in DISCOUNT / SHORT in PREMIUM),
+    # aim for 40%/70% of the dealing-range height measured from the boundary
+    # instead of the far structure — smaller, higher-probability targets.
+    range_mode = bool(getattr(SETTINGS, "range_fraction_targets", False))
+    if range_mode:
+        raw_syms = getattr(SETTINGS, "range_fraction_symbols", "") or ""
+        allowed = {x.strip().upper() for x in raw_syms.split(",") if x.strip()}
+        if allowed and bundle.symbol.upper() not in allowed:
+            range_mode = False
+    if range_mode:
+        _h = float(pd_location["high"]) - float(pd_location["low"])
+        _loc = pd_location["location"]
+        _edge = ((direction == "LONG" and _loc == "DISCOUNT")
+                 or (direction == "SHORT" and _loc == "PREMIUM"))
+        if _edge and _h > 0:
+            if direction == "LONG":
+                _tp1 = float(pd_location["low"]) + 0.40 * _h
+                _tp2 = float(pd_location["low"]) + 0.70 * _h
+            else:
+                _tp1 = float(pd_location["high"]) - 0.40 * _h
+                _tp2 = float(pd_location["high"]) - 0.70 * _h
+            if (direction == "LONG" and _tp1 > entry) or (direction == "SHORT" and _tp1 < entry):
+                _risk = abs(entry - sl)
+                targets = {
+                    **targets,
+                    "tp1": float(_tp1),
+                    "tp2": float(_tp2),
+                    "rr1": (abs(_tp1 - entry) / _risk) if _risk > 0 else 0.0,
+                    "rr2": (abs(_tp2 - entry) / _risk) if _risk > 0 else 0.0,
+                }
     rr_ok = targets["rr1"] >= 1.5 and targets["rr2"] >= 2.2
     market_ok, market_detail, market_points = _market_quality(bundle, style)
 
@@ -717,9 +750,36 @@ DETECTORS = [
 ]
 
 
+def _active_detectors() -> List:
+    """Production detectors plus env-flagged experimental ones (lazy import to
+    avoid a module cycle: setups_experimental imports helpers from here)."""
+    detectors = list(DETECTORS)
+    if getattr(SETTINGS, "experimental_p1234_enabled", False) or getattr(SETTINGS, "experimental_tlbreak_enabled", False):
+        try:
+            import analysis.setups_experimental as exp
+            if getattr(SETTINGS, "experimental_p1234_enabled", False):
+                detectors.extend(exp.EXPERIMENTAL_DETECTORS)
+            if getattr(SETTINGS, "experimental_tlbreak_enabled", False):
+                detectors.extend(exp.TLBREAK_DETECTORS)
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"Experimental detectors unavailable: {exc}")
+    return detectors
+
+
+def _experimental_symbol_allowed(detector_name: str, symbol: str) -> bool:
+    if detector_name == "detect_pattern_1234":
+        raw = getattr(SETTINGS, "experimental_p1234_symbols", "") or ""
+    else:
+        raw = getattr(SETTINGS, "experimental_tlbreak_symbols", "") or ""
+    allowed = {x.strip().upper() for x in raw.split(",") if x.strip()}
+    return not allowed or symbol.upper() in allowed
+
+
 def scan_setups(bundle: MarketBundle, style: str) -> List[SignalCandidate]:
     candidates: List[SignalCandidate] = []
-    for detector in DETECTORS:
+    for detector in _active_detectors():
+        if getattr(detector, "__module__", "").endswith("setups_experimental") and not _experimental_symbol_allowed(detector.__name__, bundle.symbol):
+            continue
         try:
             result = detector(bundle, style)
             if result and result.score >= SETTINGS.educational_min_score:

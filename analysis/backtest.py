@@ -7,6 +7,7 @@ future retest/closed-candle confirmation, and uses conservative intrabar rules.
 from __future__ import annotations
 
 import os
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import timedelta
 from typing import Dict, List, Optional, Tuple
@@ -105,7 +106,11 @@ def _wait_for_confirmation(
     trigger: pd.DataFrame,
     detection_index: int,
 ) -> Tuple[Optional[int], SignalCandidate]:
-    max_bars = (36 * 4) if candidate.style == "SWING" else (6 * 12)
+    max_bars = (
+        SETTINGS.candidate_expiry_hours_swing * 4
+        if candidate.style == "SWING"
+        else SETTINGS.candidate_expiry_hours_scalp * 12
+    )
     end = min(len(trigger), detection_index + max_bars + 1)
     for index in range(detection_index + 1, end):
         candle = trigger.iloc[index]
@@ -227,6 +232,7 @@ def run_style_backtest(symbol: str, style: str, days: int = 14) -> Dict:
     warmup = 180 if style == "SWING" else 240
     seen = set()
     trades: List[BacktestTrade] = []
+    funnel: Counter = Counter()
     # End early enough to leave future bars for confirmation and result simulation.
     for index in range(warmup, len(trigger) - 5):
         timestamp = trigger["timestamp"].iloc[index]
@@ -241,16 +247,32 @@ def run_style_backtest(symbol: str, style: str, days: int = 14) -> Dict:
             ticker=_historical_ticker(sliced.get("1d"), timestamp),
         )
         for candidate in scan_setups(bundle, style):
+            if SETTINGS.skip_dead_gate_candidates and not candidate.execution_ready:
+                # Mirror live: dead-gate candidates are educational-only, so
+                # they neither block nor enter the confirmation lifecycle. A
+                # later bar may re-detect the same setup once its gates heal.
+                continue
             key = _candidate_key(candidate)
             if key in seen:
                 continue
             seen.add(key)
             candidate.created_at = pd.Timestamp(timestamp).isoformat()
-            expiry = pd.Timestamp(timestamp) + (timedelta(hours=36) if style == "SWING" else timedelta(hours=6))
+            expiry_hours = (
+                SETTINGS.candidate_expiry_hours_swing
+                if style == "SWING"
+                else SETTINGS.candidate_expiry_hours_scalp
+            )
+            expiry = pd.Timestamp(timestamp) + timedelta(hours=expiry_hours)
             candidate.expires_at = expiry.isoformat()
+            funnel["candidates"] += 1
             confirmed_index, candidate = _wait_for_confirmation(candidate, trigger, index)
             if confirmed_index is None:
+                if candidate.metadata.get("touched"):
+                    funnel["touched_no_confirm"] += 1
+                code = candidate.metadata.get("last_reject_code") or "KILLED_BY_SL"
+                funnel[f"reject_{code}"] += 1
                 continue
+            funnel["confirmed"] += 1
             trades.append(_simulate_trade(candidate, trigger, confirmed_index))
 
     overall = _metrics(trades)
@@ -263,6 +285,7 @@ def run_style_backtest(symbol: str, style: str, days: int = 14) -> Dict:
         "days": days,
         "metrics": overall,
         "by_setup": by_setup,
+        "funnel": dict(funnel),
         "trades": [asdict(trade) for trade in trades],
         "methodology": {
             "lookahead": False,
@@ -327,6 +350,18 @@ def generate_backtest_report(results: Dict) -> str:
             lines.append(
                 f"   • {setup}: {setup_metric['total']} trade • "
                 f"WR {setup_metric['winrate']:.1f}% • PF {setup_metric['profit_factor']:.2f}"
+            )
+        funnel = data.get("funnel") or {}
+        if funnel.get("candidates"):
+            rejects = sorted(
+                ((k.replace("reject_", ""), v) for k, v in funnel.items() if k.startswith("reject_")),
+                key=lambda item: -item[1],
+            )
+            top = ", ".join(f"{name}×{count}" for name, count in rejects[:4])
+            lines.append(
+                f"   🔎 funnel: {funnel['candidates']} candidate → "
+                f"{funnel.get('confirmed', 0)} confirmed"
+                + (f" • ردها: {top}" if top else "")
             )
     lines.extend([
         "\n━━━━━━━━━━━━━━━━━━━━",
