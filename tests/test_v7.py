@@ -209,6 +209,9 @@ class V7ModelTests(unittest.TestCase):
         rows[-1].update({"open": 99.8, "high": 101.5, "low": 99.5, "close": 101.2, "volume": 2500})
         frame = pd.DataFrame(rows)
         candidate = make_candidate(score=7)
+        # This fixture represents a 1.2 ATR context; the confirmation is close
+        # enough to the POI and must not be classified as a chased entry.
+        candidate.metadata["atr"] = 2.2
         confirmed, candidate, _ = evaluate_confirmation(candidate, frame)
         self.assertTrue(confirmed)
         self.assertEqual(candidate.status, "CONFIRMED")

@@ -28,7 +28,10 @@ from analysis.setups_v7 import (
     _base_candidate,
     _direction,
     _ensure_frames,
+    _liquidity_protected_invalidation,
+    _structural_targets,
     confirm_timeframe,
+    timeframe_profile,
     pivots,
 )
 from data.fetcher import MarketBundle
@@ -97,8 +100,7 @@ def _find_1234(df, direction: str) -> Optional[dict]:
 
 
 def detect_pattern_1234(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
-    context_tf, trigger_tf = ("4h", "15m") if style == "SWING" else ("1h", "5m")
-    middle_tf = "1h" if style == "SWING" else "15m"
+    context_tf, middle_tf, trigger_tf = timeframe_profile(style)
     if not _ensure_frames(bundle, (context_tf, middle_tf, trigger_tf)):
         return None
     context = structure_bias(bundle.get(context_tf), 5)
@@ -259,8 +261,8 @@ def _intrabar_base(bundle: MarketBundle, context_df, trigger_tf: str, direction:
 def detect_trendline_breakout(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
     settings = get_settings()
     override_tf = (getattr(settings, "tlbreak_context_tf", "") or "").strip()
-    context_tf = override_tf or (("4h" if style == "SWING" else "1h"))
-    trigger_tf = "15m" if style == "SWING" else "5m"
+    context_tf, _middle_tf, trigger_tf = timeframe_profile(style)
+    context_tf = override_tf or context_tf
     if not _ensure_frames(bundle, (context_tf, trigger_tf)):
         return None
     context_df = bundle.get(context_tf)
@@ -411,7 +413,7 @@ EXPERIMENTAL_DETECTORS = [detect_pattern_1234]
 SETUP_NAMES["PINVAL"] = "Valid Pinbar in Important Zone (alert)"
 SETUP_NAMES_FA["PINVAL"] = "پین‌بار معتبر در ناحیه مهم"
 
-PINVAL_TF_BY_STYLE = {"SWING": ("1h",), "SCALP": ("15m", "5m")}
+PINVAL_TF_BY_STYLE = {"SWING": ("1h",), "DAYTRADE": ("15m",), "SCALP": ("5m",)}
 
 
 def _unmitigated_fvg_edge(df, direction: str, atr_v: float, lookback: int = 60):
@@ -468,7 +470,7 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
     settings = get_settings()
     if not getattr(settings, "pinv_enabled", True):
         return None
-    ctx_tf = "4h" if style == "SWING" else "1h"
+    ctx_tf, _middle_tf, _trigger_tf = timeframe_profile(style)
     if not _ensure_frames(bundle, (ctx_tf,)):
         return None
     best = None
@@ -514,33 +516,28 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                 has_doji = True
 
         entry = c
-        # SL beyond the pinbar wick with a real buffer (advisory fix: 0.15 ATR
-        # was too thin). TP from actual opposing structure on the context TF,
-        # not fixed R multiples; alert is dropped if structural RR is weak.
-        sl = (probe - 0.35 * atr_v) if is_bull else (probe + 0.35 * atr_v)
+        # A valid pinbar is only a location clue. Execution risk must live
+        # beyond actual nearby liquidity, with adaptive volatility/price floors.
+        poi = {"bottom": min(o, c), "top": max(o, c), "touches": 0, "type": "PINVAL"}
+        invalidation = _liquidity_protected_invalidation(
+            df, poi, direction, atr_v, str(style).upper(),
+            float((bundle.ticker or {}).get("spread_pct", 0) or 0),
+        )
+        sl = float(invalidation["price"])
         risk = abs(entry - sl)
         if risk <= 0:
             continue
+        # Do not invent targets from fixed R multiples. Both targets must be
+        # real opposing context pivots, otherwise this is an alert-only chart
+        # with no executable trade and must not be published.
         ctx_df = bundle.get(ctx_tf)
-        tp1, tp2 = None, None
-        if ctx_df is not None:
-            try:
-                from analysis.setups_v7 import _structural_targets
-                targets = _structural_targets(ctx_df, direction, entry, sl)
-                if isinstance(targets, dict):
-                    tp1 = float(targets.get("tp1") or 0) or None
-                    tp2 = float(targets.get("tp2") or 0) or None
-                elif isinstance(targets, (list, tuple)) and len(targets) >= 2:
-                    tp1, tp2 = float(targets[0]), float(targets[1])
-            except Exception:
-                tp1 = tp2 = None
-        if not tp1 or not tp2:
-            tp1 = entry + (1.3 * risk if is_bull else -1.3 * risk)
-            tp2 = entry + (2.4 * risk if is_bull else -2.4 * risk)
-        rr1 = abs(tp1 - entry) / risk
-        rr2 = abs(tp2 - entry) / risk
-        if rr1 < 1.0 or rr2 < 1.5:
-            continue  # structure can't pay — don't publish a weak alert
+        targets = _structural_targets(ctx_df, direction, entry, sl, require_real_levels=True) if ctx_df is not None else None
+        if not targets:
+            continue
+        tp1, tp2 = float(targets["tp1"]), float(targets["tp2"])
+        rr1, rr2 = float(targets["rr1"]), float(targets["rr2"])
+        if rr1 < float(getattr(settings, "pinv_rr1_floor", 1.30)) or rr2 < float(getattr(settings, "pinv_rr2_floor", 2.0)):
+            continue
         tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}.get(str(tf), 300)
         zone_kind = "FVG" if in_fvg else (zone["kind"] if in_zone else "NONE")
         zone_fa = {"FVG": "لبهٔ FVG «فلگ‌لیمیت»", "FLIP": "فلیپ‌زون مهم",
@@ -558,7 +555,7 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                 continue
         except Exception:
             pass
-        style_name = "SWING" if style == "SWING" else "SCALP"
+        style_name = str(style).upper()
         candidate = SignalCandidate(
             signal_id=f"viva-pinv-{bundle.symbol}-{tf}-{str(last_ts)[:16]}",
             symbol=bundle.symbol,
@@ -583,7 +580,6 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         )
         candidate.metadata.update({
             "pinv": 1,
-            "alert_only": 1,
             "pin_tf": tf,
             "pin_high": h,
             "pin_low": l,
@@ -595,10 +591,16 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             "pin_verdict_candles": int(getattr(settings, "alert_verdict_candles", 3)),
             "context_tf": ctx_tf,
             "confirm_tf": confirm_timeframe(style, tf),
+            "invalidation_liquidity_anchor": invalidation["liquidity_anchor"],
+            "invalidation_buffer": invalidation["buffer"],
+            # PINVAL is now eligible for the same real confirmation lifecycle
+            # as every other setup; it is not a verdict-only pseudo-signal.
+            "alert_only": 0,
         })
+        candidate.mandatory_gates = {"pin_zone": True, "structural_targets": True, "risk_reward": True}
         if not candidate.expires_at:
             from datetime import datetime, timedelta, timezone
-            hours = 10 if style == "SWING" else 3
+            hours = 24 if style == "SWING" else (10 if style == "DAYTRADE" else 3)
             candidate.expires_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
         if best is None or candidate.score > best.score:
             best = candidate

@@ -39,6 +39,10 @@ class Settings:
 
     full_scan_minutes: int = 15
     monitor_minutes: int = 5
+    # Live research focus. SCALP is intentionally off by default: lower TF stays
+    # available as the confirmation layer for DAYTRADE/SWING, not as a noisy
+    # standalone signal stream.
+    live_styles: str = "DAYTRADE,SWING"
     # Minute offset inside each monitor interval — aligns cycles to just
     # after candle closes (e.g. 1 => 5m cycles run at :01/:06/:11 UTC).
     monitor_offset_minute: int = 1
@@ -71,6 +75,18 @@ class Settings:
     # Invalidation buffer widths beyond the liquidity anchor, in ATR units.
     sl_buffer_atr_swing: float = 0.35
     sl_buffer_atr_scalp: float = 0.25
+    # Stop floors are a volatility/price guard, not a fixed stop. The final
+    # invalidation remains behind liquidity; a setup without enough structural
+    # room is rejected rather than made tradable with a paper-thin stop.
+    min_stop_pct_daytrade: float = 0.012
+    min_stop_pct_swing: float = 0.020
+    min_stop_pct_scalp: float = 0.006
+    min_stop_atr_daytrade: float = 1.0
+    min_stop_atr_swing: float = 1.4
+    min_stop_atr_scalp: float = 0.8
+    pinv_rr1_floor: float = 1.30
+    pinv_rr2_floor: float = 2.00
+    confirm_max_chase_atr: float = 0.80
     # Candidates born with a failing mandatory gate can never confirm. When
     # enabled, they are educational-only: they are not tracked for monitoring
     # and therefore never send Approaching messages or lock their symbol.
@@ -138,6 +154,7 @@ class Settings:
             channel_name=os.getenv("CHANNEL_NAME", cls.channel_name),
             full_scan_minutes=_int("FULL_SCAN_MINUTES", cls.full_scan_minutes),
             monitor_minutes=_int("MONITOR_MINUTES", cls.monitor_minutes),
+            live_styles=os.getenv("LIVE_STYLES", cls.live_styles),
             monitor_offset_minute=_int("MONITOR_OFFSET_MINUTE", cls.monitor_offset_minute),
             core_v7_setups_enabled=_bool("CORE_V7_SETUPS_ENABLED", cls.core_v7_setups_enabled),
             pinv_enabled=_bool("PINVAL_ENABLED", cls.pinv_enabled),
@@ -158,6 +175,15 @@ class Settings:
             confirm_require_zone_mid=_bool("CONFIRM_REQUIRE_ZONE_MID", cls.confirm_require_zone_mid),
             sl_buffer_atr_swing=_float("SL_BUFFER_ATR_SWING", cls.sl_buffer_atr_swing),
             sl_buffer_atr_scalp=_float("SL_BUFFER_ATR_SCALP", cls.sl_buffer_atr_scalp),
+            min_stop_pct_daytrade=_float("MIN_STOP_PCT_DAYTRADE", cls.min_stop_pct_daytrade),
+            min_stop_pct_swing=_float("MIN_STOP_PCT_SWING", cls.min_stop_pct_swing),
+            min_stop_pct_scalp=_float("MIN_STOP_PCT_SCALP", cls.min_stop_pct_scalp),
+            min_stop_atr_daytrade=_float("MIN_STOP_ATR_DAYTRADE", cls.min_stop_atr_daytrade),
+            min_stop_atr_swing=_float("MIN_STOP_ATR_SWING", cls.min_stop_atr_swing),
+            min_stop_atr_scalp=_float("MIN_STOP_ATR_SCALP", cls.min_stop_atr_scalp),
+            pinv_rr1_floor=_float("PINVAL_RR1_FLOOR", cls.pinv_rr1_floor),
+            pinv_rr2_floor=_float("PINVAL_RR2_FLOOR", cls.pinv_rr2_floor),
+            confirm_max_chase_atr=_float("CONFIRM_MAX_CHASE_ATR", cls.confirm_max_chase_atr),
             skip_dead_gate_candidates=_bool("SKIP_DEAD_GATE_CANDIDATES", cls.skip_dead_gate_candidates),
             p1234_min_adx=_float("P1234_MIN_ADX", cls.p1234_min_adx),
             experimental_p1234_enabled=_bool("EXPERIMENTAL_P1234_ENABLED", cls.experimental_p1234_enabled),

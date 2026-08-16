@@ -74,6 +74,22 @@ def confirm_timeframe(style: str, fallback: str) -> str:
     return CONFIRM_TF.get(style.upper(), fallback)
 
 
+# A trade style must not decide both the zone and entry timeframe implicitly.
+# These are the actual research tiers:
+# SCALP:    1h context → 15m structure → 5m zone → 1m confirmation
+# DAYTRADE: 4h context → 1h structure  → 15m zone → 5m confirmation
+# SWING:    1d context → 4h structure  → 1h zone  → 5m confirmation
+TIMEFRAME_PROFILES = {
+    "SCALP": ("1h", "15m", "5m"),
+    "DAYTRADE": ("4h", "1h", "15m"),
+    "SWING": ("1d", "4h", "1h"),
+}
+
+
+def timeframe_profile(style: str):
+    return TIMEFRAME_PROFILES.get(str(style).upper(), TIMEFRAME_PROFILES["DAYTRADE"])
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Multi-timeframe narrative enrichment (Viva v7.6 spec)
 #
@@ -397,11 +413,18 @@ def _liquidity_protected_invalidation(
         ]
         liquidity_anchor = max([edge] + protected)
 
+    style_key = str(style).upper()
     atr_buffer = (
-        SETTINGS.sl_buffer_atr_swing if style.upper() == "SWING" else SETTINGS.sl_buffer_atr_scalp
+        SETTINGS.sl_buffer_atr_swing if style_key == "SWING" else SETTINGS.sl_buffer_atr_scalp
     ) * atr_value
+    # Price/volatility floor prevents absurdly thin invalidations on low-priced
+    # contracts, while still adapting to each asset and timeframe.
+    pct_floor = float(getattr(SETTINGS, f"min_stop_pct_{style_key.lower()}", SETTINGS.min_stop_pct_daytrade))
+    atr_floor_mult = float(getattr(SETTINGS, f"min_stop_atr_{style_key.lower()}", SETTINGS.min_stop_atr_daytrade))
+    structural_floor = abs(edge) * max(0.0, pct_floor)
+    volatility_floor = max(0.0, atr_value) * max(0.0, atr_floor_mult)
     spread_buffer = abs(liquidity_anchor) * max(0.0, float(spread_pct)) / 100 * 2.0
-    buffer_value = max(atr_buffer, spread_buffer)
+    buffer_value = max(atr_buffer, spread_buffer, structural_floor, volatility_floor)
     invalidation = (
         liquidity_anchor - buffer_value
         if direction == "LONG"
@@ -416,20 +439,28 @@ def _liquidity_protected_invalidation(
 
 
 def _structural_targets(
-    context_df: pd.DataFrame, direction: str, entry: float, sl: float
-) -> Dict:
+    context_df: pd.DataFrame, direction: str, entry: float, sl: float, *, require_real_levels: bool = False
+) -> Optional[Dict]:
     risk = abs(entry - sl)
     ph, pl = pivots(context_df, 3, 3)
     levels = sorted({float(point["price"]) for point in (ph if direction == "LONG" else pl)})
     if direction == "LONG":
         valid = [level for level in levels if level >= entry + 1.5 * risk]
+        if require_real_levels and not valid:
+            return None
         tp1 = valid[0] if valid else entry + 2.0 * risk
         tp2_options = [level for level in valid if level >= tp1 + 0.5 * risk]
+        if require_real_levels and not tp2_options:
+            return None
         tp2 = tp2_options[0] if tp2_options else max(entry + 3.0 * risk, tp1 + risk)
     else:
         valid = sorted([level for level in levels if level <= entry - 1.5 * risk], reverse=True)
+        if require_real_levels and not valid:
+            return None
         tp1 = valid[0] if valid else entry - 2.0 * risk
         tp2_options = [level for level in valid if level <= tp1 - 0.5 * risk]
+        if require_real_levels and not tp2_options:
+            return None
         tp2 = tp2_options[0] if tp2_options else min(entry - 3.0 * risk, tp1 - risk)
     return {
         "tp1": float(tp1),
@@ -480,7 +511,7 @@ def _base_candidate(
     bias = context["bias"]
     expected_bias = "BULLISH" if direction == "LONG" else "BEARISH"
     context_aligned = bias == expected_bias
-    lower_context_tf = "1h" if style == "SWING" else "15m"
+    _profile_context, lower_context_tf, _profile_trigger = timeframe_profile(style)
     lower_context = structure_bias(bundle.get(lower_context_tf), 3) if bundle.get(lower_context_tf) is not None else {"bias": "NEUTRAL"}
     lower_aligned = lower_context["bias"] in (expected_bias, "NEUTRAL")
     pd_location = premium_discount(context_df)
@@ -658,8 +689,7 @@ def _base_candidate(
 
 
 def detect_liquidity_reversal(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
-    context_tf, trigger_tf = ("4h", "15m") if style == "SWING" else ("1h", "5m")
-    middle_tf = "1h" if style == "SWING" else "15m"
+    context_tf, middle_tf, trigger_tf = timeframe_profile(style)
     if not _ensure_frames(bundle, (context_tf, middle_tf, trigger_tf)):
         return None
     context = structure_bias(bundle.get(context_tf), 5)
@@ -693,8 +723,7 @@ def detect_liquidity_reversal(bundle: MarketBundle, style: str) -> Optional[Sign
 
 
 def detect_bos_first_pullback(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
-    context_tf, trigger_tf = ("4h", "15m") if style == "SWING" else ("1h", "5m")
-    middle_tf = "1h" if style == "SWING" else "15m"
+    context_tf, middle_tf, trigger_tf = timeframe_profile(style)
     if not _ensure_frames(bundle, (context_tf, middle_tf, trigger_tf)):
         return None
     context = structure_bias(bundle.get(context_tf), 5)
@@ -762,8 +791,7 @@ def _trendline_break(df: pd.DataFrame, direction: str, recent_bars: int = 8) -> 
 
 
 def detect_trendline_first_retest(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
-    context_tf, trigger_tf = ("4h", "15m") if style == "SWING" else ("1h", "5m")
-    middle_tf = "1h" if style == "SWING" else "15m"
+    context_tf, middle_tf, trigger_tf = timeframe_profile(style)
     if not _ensure_frames(bundle, (context_tf, middle_tf, trigger_tf)):
         return None
     context = structure_bias(bundle.get(context_tf), 5)
@@ -832,8 +860,7 @@ def _supply_demand_break(df: pd.DataFrame, direction: str) -> Optional[Dict]:
 
 
 def detect_supply_demand_retest(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
-    context_tf, trigger_tf = ("4h", "15m") if style == "SWING" else ("1h", "5m")
-    middle_tf = "1h" if style == "SWING" else "15m"
+    context_tf, middle_tf, trigger_tf = timeframe_profile(style)
     if not _ensure_frames(bundle, (context_tf, middle_tf, trigger_tf)):
         return None
     context = structure_bias(bundle.get(context_tf), 5)
@@ -865,8 +892,7 @@ def detect_supply_demand_retest(bundle: MarketBundle, style: str) -> Optional[Si
 
 
 def detect_ifvg_breaker(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
-    context_tf, trigger_tf = ("4h", "15m") if style == "SWING" else ("1h", "5m")
-    middle_tf = "1h" if style == "SWING" else "15m"
+    context_tf, middle_tf, trigger_tf = timeframe_profile(style)
     if not _ensure_frames(bundle, (context_tf, middle_tf, trigger_tf)):
         return None
     context = structure_bias(bundle.get(context_tf), 5)

@@ -17,7 +17,16 @@ SETTINGS = get_settings()
 
 class SwingEngine:
     name = "SWING"
-    required_frames = ("1d", "4h", "1h", "15m")
+    required_frames = ("1d", "4h", "1h")
+
+    def scan(self, bundle: MarketBundle) -> List[SignalCandidate]:
+        return scan_setups(bundle, self.name)
+
+
+class DayTradeEngine:
+    """Primary live tier: 4h context, 1h structure, 15m POI, 5m confirmation."""
+    name = "DAYTRADE"
+    required_frames = ("4h", "1h", "15m", "5m")
 
     def scan(self, bundle: MarketBundle) -> List[SignalCandidate]:
         return scan_setups(bundle, self.name)
@@ -25,7 +34,7 @@ class SwingEngine:
 
 class ScalpEngine:
     name = "SCALP"
-    required_frames = ("1h", "15m", "5m")
+    required_frames = ("1h", "15m", "5m", "1m")
 
     def scan(self, bundle: MarketBundle) -> List[SignalCandidate]:
         turnover = float((bundle.ticker or {}).get("turnover24h", 0) or 0)
@@ -35,26 +44,28 @@ class ScalpEngine:
         return scan_setups(bundle, self.name)
 
 
-SWING_ENGINE = SwingEngine()
-SCALP_ENGINE = ScalpEngine()
+ENGINES = {"SWING": SwingEngine(), "DAYTRADE": DayTradeEngine(), "SCALP": ScalpEngine()}
+
+
+def _live_styles() -> List[str]:
+    raw = str(getattr(SETTINGS, "live_styles", "DAYTRADE,SWING") or "")
+    styles = [x.strip().upper() for x in raw.split(",") if x.strip() in ENGINES]
+    return styles or ["DAYTRADE", "SWING"]
 
 
 def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
-    """Run independent engines; they do not share timeframe assumptions."""
+    """Run only the explicitly enabled tiers. Lower TF may still confirm a
+    DAYTRADE/SWING entry even while standalone SCALP discovery is paused."""
     candidates: List[SignalCandidate] = []
-    candidates.extend(SWING_ENGINE.scan(bundle))
-    candidates.extend(SCALP_ENGINE.scan(bundle))
-    # Viva v7.6: every alert must describe WHY it fired, the multi-timeframe
-    # context, and nearby zones — computed once at scan time.
+    for style in _live_styles():
+        candidates.extend(ENGINES[style].scan(bundle))
     from analysis.setups_v7 import enrich_candidate_context
-
     for candidate in candidates:
         try:
             enrich_candidate_context(bundle, candidate)
         except Exception:
             pass
     return candidates
-
 
 def _as_utc(value: str) -> datetime:
     dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -169,6 +180,12 @@ def evaluate_confirmation(
     risk = abs(executable_entry - candidate.sl)
     if risk <= 0:
         return reject("RISK_INVALID", "فاصله Entry تأییدشده تا حد ضرر معتبر نیست.")
+    atr_value = float(candidate.metadata.get("atr", 0) or 0)
+    if atr_value > 0:
+        chase_atr = abs(executable_entry - zone_mid) / atr_value
+        max_chase = float(getattr(SETTINGS, "confirm_max_chase_atr", 0.80))
+        if chase_atr > max_chase:
+            return reject("ENTRY_TOO_FAR", f"کلوز تأیید {chase_atr:.2f} ATR از زون دور شده؛ Chase مجاز نیست.")
     rr1 = (
         (candidate.tp1 - executable_entry) / risk
         if candidate.direction == "LONG"
