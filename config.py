@@ -43,6 +43,21 @@ class Settings:
     # after candle closes (e.g. 1 => 5m cycles run at :01/:06/:11 UTC).
     monitor_offset_minute: int = 1
     scan_offset_minute: int = 1
+
+    # ── viva setup era: prune low-evidence core detectors by default ──
+    # R&D finding (90d/4-symbol): the five core v7 setups had no standalone
+    # edge, so only the validated paths run unless explicitly re-enabled.
+    core_v7_setups_enabled: bool = False
+    # Pinbar-in-zone alerts (5m/15m/1h) — bullish 🔴/🟢 alert + verdict reply
+    pinv_enabled: bool = True
+    pinv_min_wick_body: float = 2.0      # dominant wick / body
+    pinv_max_body_frac: float = 0.35     # body / range
+    pinv_min_range_atr: float = 0.6      # candle range / ATR floor
+    pinv_symbols: str = ""               # empty = all symbols
+    # How many trigger candles an alert gets before a verdict reply (❌/✅)
+    alert_verdict_candles: int = 3
+    # Log-scale rendering for higher-context trendline charts
+    chart_log_htf: bool = True
     educational_min_score: int = 6
     execution_min_score: int = 7
     candidate_expiry_hours_swing: int = 36
@@ -124,6 +139,14 @@ class Settings:
             full_scan_minutes=_int("FULL_SCAN_MINUTES", cls.full_scan_minutes),
             monitor_minutes=_int("MONITOR_MINUTES", cls.monitor_minutes),
             monitor_offset_minute=_int("MONITOR_OFFSET_MINUTE", cls.monitor_offset_minute),
+            core_v7_setups_enabled=_bool("CORE_V7_SETUPS_ENABLED", cls.core_v7_setups_enabled),
+            pinv_enabled=_bool("PINVAL_ENABLED", cls.pinv_enabled),
+            pinv_min_wick_body=_float("PINVAL_MIN_WICK_BODY", cls.pinv_min_wick_body),
+            pinv_max_body_frac=_float("PINVAL_MAX_BODY_FRAC", cls.pinv_max_body_frac),
+            pinv_min_range_atr=_float("PINVAL_MIN_RANGE_ATR", cls.pinv_min_range_atr),
+            pinv_symbols=os.getenv("PINVAL_SYMBOLS", cls.pinv_symbols),
+            alert_verdict_candles=_int("ALERT_VERDICT_CANDLES", cls.alert_verdict_candles),
+            chart_log_htf=_bool("CHART_LOG_HTF", cls.chart_log_htf),
             scan_offset_minute=_int("SCAN_OFFSET_MINUTE", cls.scan_offset_minute),
             educational_min_score=_int("EDUCATIONAL_MIN_SCORE", cls.educational_min_score),
             execution_min_score=_int("EXECUTION_MIN_SCORE", cls.execution_min_score),

@@ -70,6 +70,7 @@ def find_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
             SELECT payload FROM signal_candidates
             WHERE symbol=?
               AND status IN ('EDUCATIONAL', 'APPROACHING', 'CONFIRMED')
+              AND setup_code != 'PINVAL'
               AND expires_at>?
             ORDER BY created_at DESC LIMIT 1
             """,

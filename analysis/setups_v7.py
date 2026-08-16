@@ -752,23 +752,31 @@ DETECTORS = [
 
 def _active_detectors() -> List:
     """Production detectors plus env-flagged experimental ones (lazy import to
-    avoid a module cycle: setups_experimental imports helpers from here)."""
-    detectors = list(DETECTORS)
-    if getattr(SETTINGS, "experimental_p1234_enabled", False) or getattr(SETTINGS, "experimental_tlbreak_enabled", False):
-        try:
-            import analysis.setups_experimental as exp
-            if getattr(SETTINGS, "experimental_p1234_enabled", False):
-                detectors.extend(exp.EXPERIMENTAL_DETECTORS)
-            if getattr(SETTINGS, "experimental_tlbreak_enabled", False):
-                detectors.extend(exp.TLBREAK_DETECTORS)
-        except Exception as exc:  # pragma: no cover - defensive
-            print(f"Experimental detectors unavailable: {exc}")
+    avoid a module cycle: setups_experimental imports helpers from here).
+
+    Viva-era default: the five legacy core detectors are OFF (no standalone
+    edge in the 90d/4-sample R&D review) unless CORE_V7_SETUPS_ENABLED=true.
+    The validated paths (P1234+ADX, TLBREAK pattern alerts) and the PINVAL
+    pinbar alert run whenever their own flags allow."""
+    detectors = list(DETECTORS) if getattr(SETTINGS, "core_v7_setups_enabled", False) else []
+    try:
+        import analysis.setups_experimental as exp
+        if getattr(SETTINGS, "experimental_p1234_enabled", False):
+            detectors.extend(exp.EXPERIMENTAL_DETECTORS)
+        if getattr(SETTINGS, "experimental_tlbreak_enabled", False):
+            detectors.extend(exp.TLBREAK_DETECTORS)
+        if getattr(SETTINGS, "pinv_enabled", True):
+            detectors.extend(exp.PINVAL_DETECTORS)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"Experimental detectors unavailable: {exc}")
     return detectors
 
 
 def _experimental_symbol_allowed(detector_name: str, symbol: str) -> bool:
     if detector_name == "detect_pattern_1234":
         raw = getattr(SETTINGS, "experimental_p1234_symbols", "") or ""
+    elif detector_name == "detect_pinbar_zone":
+        raw = getattr(SETTINGS, "pinv_symbols", "") or ""
     else:
         raw = getattr(SETTINGS, "experimental_tlbreak_symbols", "") or ""
     allowed = {x.strip().upper() for x in raw.split(",") if x.strip()}

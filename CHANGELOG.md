@@ -99,3 +99,44 @@
 - Pin Bar, Engulfing, basic FVG and RSI no longer issue standalone executable trades.
 - TP targets prioritise market structure/liquidity and are checked again at the executable confirmation price.
 - Dashboard and performance APIs show confirmed signals only.
+
+## v7.5.0 — 2026-08-16 — **VIVA SETUP consolidation**
+
+### Changed (defaults!)
+- **Setup pruning:** the five legacy core detectors (LSR/BOS1/TLR/SDR/IFVG) are
+  OFF by default (`CORE_V7_SETUPS_ENABLED=false`). Live default setups are now
+  the three validated/alert paths only: **TLBREAK** (trendline/channel/triangle/
+  wedge break&touch), **P1234+ADX** (SOL-scoped), **PINVAL** (pinbar-in-zone
+  alert). This is the merged strategy Viva asked for: one «VIVA SETUP» family.
+- Chart identity update: timeframe printed in the header; light background
+  `CHART_STYLE=light` default unchanged; bull candles switched to very light
+  gray (#F2F4F7) so hollow bodies stay visible; all annotation text moved to a
+  single candle-free corner stack (INVALIDATION / SWING HIGH / SWING LOW /
+  EXPECTED MOVE / pattern state); confirmed charts draw a TradingView-style
+  ▲ LONG / ▼ SHORT position marker + dashed scenario arrows; educational
+  charts draw an EXPECTED MOVE → TP1 schematic arrow; optional log-scale axis
+  for higher-context (TLB 4h/1d) charts (`CHART_LOG_HTF`).
+- Every alert/confirmation message now includes a «🧭 کانتکست تایم بالاتر»
+  block (pattern state, sweep/structure breaks, zone kind: flip / FVG-flag-limit
+  / fresh S-D, bias).
+
+### Added
+- **PINVAL detector** (`analysis/setups_experimental.py::detect_pinbar_zone`):
+  valid pinbar (wick ≥ 2× body, body ≤ 35% range, range ≥ 0.6 ATR) inside an
+  important area — context-TF pivot zone (with flip-zone detection) and/or the
+  edge of an un-mitigated FVG («فلگ‌لیمیت») — on trigger TFs 5m/15m/1h
+  (scalp: 15m/5m, swing: 1h). Optional adjacent-doji confluence bump.
+  Knobs: `PINVAL_ENABLED` (true), `PINVAL_MIN_WICK_BODY` (2.0),
+  `PINVAL_MAX_BODY_FRAC` (0.35), `PINVAL_MIN_RANGE_ATR` (0.6),
+  `PINVAL_SYMBOLS` (empty = all).
+- **Verdict replies:** each alert stores its Telegram `message_id`; the monitor
+  replies ✅ تأیید شد / ❌ تأیید نشد / ⚪ بدون تأیید under the alert message.
+  For PINVAL the verdict is decided within `ALERT_VERDICT_CANDLES` (3) candles:
+  close beyond pin extreme = confirm, close beyond wick = invalidate.
+- TLBREAK pattern classifier: separate detection of converging structures →
+  «مثلث» (triangle, opposite slopes) vs «وج» (wedge, same-sign narrowing) vs
+  channel; strategy_fa now says «شکست الگوی مثلث/وج/کانال» etc.
+
+### Fixed
+- Pinbar/alert candidates no longer block or get blocked by the one-lifecycle-
+  per-symbol dedupe (they skip symbol locks; `find_similar` ignores PINVAL).

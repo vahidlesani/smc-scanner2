@@ -38,7 +38,7 @@ _CHART_PRESETS = {
         "grid": "#E6EAF1",
         "text": "#131722",
         "muted": "#6A7587",
-        "bull": "#FFFFFF",
+        "bull": "#F2F4F7",
         "bear": "#131722",
         "entry": "#2962FF",
         "supply": "#F23645",
@@ -93,6 +93,36 @@ SIGNAL_SEPARATOR = os.getenv(
 
 def _e(value) -> str:
     return html.escape(str(value), quote=False)
+
+
+_TF_FA = {"1d": "روزانه", "4h": "۴ ساعته", "1h": "۱ ساعته", "15m": "۱۵ دقیقه", "5m": "۵ دقیقه"}
+
+
+def _htf_context_fa(candidate: SignalCandidate) -> str:
+    """Higher-timeframe context block for every alert message — where we are
+    relative to important zones and what just broke (Viva's context rule)."""
+    md = candidate.metadata or {}
+    bits: List[str] = []
+    ctx_tf = (md.get("tl_context_tf") or md.get("pin_ctx_tf") or md.get("context_tf") or "").strip()
+    if ctx_tf:
+        tf_fa = _TF_FA.get(ctx_tf, ctx_tf.upper())
+        if candidate.setup_code == "TLBREAK" and md.get("tl_pattern_fa"):
+            st = "شکسته شده" if md.get("tl_stage") == "JUST_BROKE" else "در آستانهٔ شکست است"
+            bits.append(f"{md['tl_pattern_fa']} در تایم {tf_fa} {st}")
+        elif candidate.setup_code == "PINVAL":
+            bits.append(f"کانتکست معتبرسنج: تایم {tf_fa}")
+        else:
+            bits.append(f"کانتکست تحلیل: تایم {tf_fa}")
+    if md.get("sweep_level"):
+        bits.append("نقدینگی پشت سقف/کف قبلی جمع شده (Liquidity Sweep)")
+    if md.get("structure_level"):
+        bits.append("یک سطح ساختار مهم در تایم بالاتر شکسته شده (BOS/MSS)")
+    if candidate.setup_code == "PINVAL":
+        doji = "؛ دو‌جی کناری هم دیده می‌شود" if md.get("pin_has_doji") else ""
+        bits.append(f"کندل داخل {md.get('pin_zone_fa', 'ناحیهٔ مهم')} شکل گرفته{doji}")
+    if candidate.bias in ("BULLISH", "BEARISH"):
+        bits.append("بایاس ساختاری: " + ("صعودی" if candidate.bias == "BULLISH" else "نزولی"))
+    return "🧭 <b>کانتکست تایم بالاتر</b>\n" + "\n".join(f"• {_e(b)}" for b in bits)
 
 
 def _price(value: float) -> str:
@@ -154,56 +184,92 @@ def _chunks(text: str, limit: int = 3900) -> List[str]:
     return chunks
 
 
-def send_message(text: str, chat_id: Optional[str] = None) -> bool:
+def send_message(
+    text: str,
+    chat_id: Optional[str] = None,
+    reply_to_message_id: Optional[int] = None,
+) -> Optional[int]:
+    """Send text; returns the first chunk's message_id (truthy) or None."""
     target = chat_id or CHAT_ID_ADMIN
     if not TOKEN or not target:
         print("Telegram message skipped: missing TELEGRAM_TOKEN or target chat id")
-        return False
+        return None
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    success = True
+    first_id: Optional[int] = None
     for chunk in _chunks(text):
+        payload = {
+            "chat_id": target,
+            "text": chunk,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if reply_to_message_id:
+            payload["reply_to_message_id"] = int(reply_to_message_id)
+            payload["allow_sending_without_reply"] = True
         try:
-            response = requests.post(
-                url,
-                data={
-                    "chat_id": target,
-                    "text": chunk,
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": True,
-                },
-                timeout=15,
-            )
+            response = requests.post(url, data=payload, timeout=15)
             if not response.ok:
                 print(f"Telegram sendMessage {response.status_code}: {response.text[:240]}")
-                success = False
+            elif first_id is None:
+                first_id = int(response.json().get("result", {}).get("message_id") or 0) or None
         except Exception as exc:
             print(f"Telegram sendMessage error: {exc}")
-            success = False
-    return success
+    return first_id
 
 
 def send_signal_separator(chat_id: Optional[str] = None) -> bool:
     """Separate complete lifecycle packages without splitting chart and text."""
-    return send_message(f"<b>{_e(SIGNAL_SEPARATOR)}</b>", chat_id)
+    return bool(send_message(f"<b>{_e(SIGNAL_SEPARATOR)}</b>", chat_id))
 
 
-def send_photo(image: bytes, caption: str, chat_id: Optional[str] = None) -> bool:
+def send_verdict_reply(candidate: SignalCandidate, ok: Optional[bool], note_fa: str) -> bool:
+    """Reply ✅/❌/⚪ to the original alert message so the loop visibly closes
+    within a few candles of every alert (Viva's confirmation-feedback rule)."""
+    md = candidate.metadata or {}
+    mid = md.get("education_message_id") or md.get("approaching_message_id")
+    target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
+    if not mid:
+        mid = md.get("approaching_message_id")
+        target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    dir_fa = "صعودی 🟢" if candidate.direction == "LONG" else "نزولی 🔴"
+    head = {True: "✅ <b>تأیید شد</b>", False: "❌ <b>تأیید نشد</b>", None: "⚪ <b>بدون تأیید</b>"}[ok]
+    text = (
+        f"{head}\n"
+        f"🪙 {_e(candidate.symbol)} • {_e(candidate.strategy_fa)}\n"
+        f"🧭 سناریوی {dir_fa}\n"
+        f"{_e(note_fa)}\n"
+        f"🆔 <code>{_e(candidate.signal_id)}</code>"
+    )
+    return bool(send_message(text, target, reply_to_message_id=mid))
+
+
+def send_photo(
+    image: bytes,
+    caption: str,
+    chat_id: Optional[str] = None,
+    reply_to_message_id: Optional[int] = None,
+) -> Optional[int]:
     target = chat_id or CHAT_ID_ADMIN
     if not TOKEN or not target or not image:
-        return False
+        return None
+    payload = {"chat_id": target, "caption": caption[:1000], "parse_mode": "HTML"}
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = int(reply_to_message_id)
+        payload["allow_sending_without_reply"] = True
     try:
         response = requests.post(
             f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-            data={"chat_id": target, "caption": caption[:1000], "parse_mode": "HTML"},
+            data=payload,
             files={"photo": ("viva-chart.png", image, "image/png")},
             timeout=35,
         )
         if not response.ok:
             print(f"Telegram sendPhoto {response.status_code}: {response.text[:240]}")
-        return bool(response.ok)
+            return None
+        return int(response.json().get("result", {}).get("message_id") or 0) or None
     except Exception as exc:
         print(f"Telegram sendPhoto error: {exc}")
-        return False
+        return None
 
 
 def _level_tag(ax, x: float, y: float, label: str, color: str) -> None:
@@ -302,6 +368,26 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
     )
 
 
+def _render_corner_notes(ax, notes: list, confirmed: bool = False) -> None:
+    """All chart annotations live in ONE clean stack inside the candle-free
+    right margin (Viva's rule: never print over candles). Each note is a small
+    borderless chip; color encodes meaning."""
+    y = 0.965
+    for text, color in notes:
+        ax.text(
+            0.899, y, text,
+            transform=ax.transAxes,
+            ha="left", va="top",
+            color=color,
+            fontsize=6.4,
+            fontweight="bold",
+            zorder=15,
+            bbox={"boxstyle": "round,pad=0.22", "facecolor": CHART_THEME["panel"],
+                  "edgecolor": "none", "alpha": 0.88},
+        )
+        y -= 0.055
+
+
 def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool = False) -> Optional[bytes]:
     """Render a branded TradingView-inspired 1440×900 chart."""
     if df is None or df.empty:
@@ -390,6 +476,25 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         for chart_ax in axes:
             chart_ax.set_xlim(-1, count + future)
 
+        # higher-context charts (TLBREAK 4h/1h or any 1d frame) render on a
+        # log price axis so long-term trendline touches/breaks stay visible.
+        notes = []
+        md0 = candidate.metadata or {}
+        ctx_for_log = md0.get("tl_context_tf")
+        use_log = (
+            getattr(SETTINGS, "chart_log_htf", True)
+            and _STYLE_NAME != "dark"
+            and (
+                (candidate.setup_code == "TLBREAK" and ctx_for_log in ("4h", "1d"))
+                or (candidate.trigger_timeframe == "1h" and float(frame["high"].max()) / max(float(frame["low"].min()), 1e-12) > 1.35)
+            )
+        )
+        if use_log:
+            try:
+                ax.set_yscale("log")
+            except Exception:
+                use_log = False
+
         zone_start = max(0, count - 55)
         zone_end = count + future - 0.5  # box extends into the candle-free margin
         zone_color = CHART_THEME["demand"] if candidate.direction == "LONG" else CHART_THEME["supply"]
@@ -437,16 +542,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     ax.plot([xanc, x_end], [p_anc, p_anc + slope * (x_end - xanc)],
                             color=CHART_THEME["trend"], linewidth=1.2, alpha=0.75, zorder=8)
                     stage = md.get("tl_stage", "")
-                    label = "CHANNEL BREAK" if stage == "JUST_BROKE" else "DYNAMIC TRENDLINE"
-                    _lo, _hi = float(frame["low"].min()), float(frame["high"].max())
-                    _padv = (_hi - _lo) * 0.03
-                    x_lab = xa + 0.70 * (count - 2 - xa)
-                    y_lab = min(max(pa + slope * (x_lab - xa), _lo + _padv), _hi - _padv)
-                    ax.text(x_lab, y_lab, label, color=CHART_THEME["trend"],
-                            fontsize=7, va="bottom" if candidate.direction == "LONG" else "top",
-                            fontweight="bold", alpha=0.85, zorder=11,
-                            bbox={"boxstyle": "round,pad=0.22", "facecolor": CHART_THEME["panel"],
-                                  "edgecolor": "none", "alpha": 0.80})
+                    pattern_en = (md.get("tl_pattern") or "CHANNEL").upper()
+                    lbl = {"JUST_BROKE": f"{pattern_en} BREAK • {md.get('tl_context_tf','').upper()}",
+                           "PRE_BREAK": f"{pattern_en} WATCH • {md.get('tl_context_tf','').upper()}"}.get(stage, pattern_en)
+                    notes.append((lbl, CHART_THEME["trend"]))
             except Exception as exc:
                 print(f"TLB chart line warning: {exc}")
 
@@ -461,13 +560,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             linestyles=(0, (6, 3)),
             zorder=7,
         )
-        _level_tag(
-            ax,
-            line_end + 0.35,
-            candidate.sl,
-            f"INVALIDATION  {_price(candidate.sl)}",
-            CHART_THEME["invalidation"],
-        )
+        notes.append((f"INVALIDATION  {_price(candidate.sl)}", CHART_THEME["invalidation"]))
 
         sweep_level = candidate.metadata.get("sweep_level")
         if sweep_level:
@@ -480,14 +573,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 linewidth=1.0,
                 alpha=0.80,
             )
-            ax.text(
-                max(0, count - 64),
-                float(sweep_level),
-                "LIQUIDITY SWEEP",
-                color=CHART_THEME["liquidity"],
-                fontsize=6.8,
-                va="bottom",
-            )
+            notes.append((f"LIQUIDITY SWEEP  {_price(float(sweep_level))}", CHART_THEME["liquidity"]))
         structure_level = candidate.metadata.get("structure_level")
         if structure_level:
             ax.hlines(
@@ -499,18 +585,43 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 linewidth=0.95,
                 alpha=0.78,
             )
-            ax.text(
-                max(0, count - 54),
-                float(structure_level),
-                "MSS / BOS",
-                color=CHART_THEME["structure"],
-                fontsize=6.8,
-                va="bottom",
-            )
+            notes.append((f"MSS / BOS  {_price(float(structure_level))}", CHART_THEME["structure"]))
+
+        # The expected direction, drawn as one clean schematic arrow from the
+        # entry zone towards TP1 (matches the analysis text under the chart).
+        if not confirmed:
+            try:
+                _scenario_arrow(
+                    ax,
+                    (count + 1.0, candidate.planned_entry),
+                    (count + future - 2.5, candidate.tp1),
+                    CHART_THEME["tp1"] if candidate.direction == "LONG" else CHART_THEME["invalidation"],
+                    alpha=0.65,
+                )
+                notes.append((f"EXPECTED MOVE → TP1  {_price(candidate.tp1)}",
+                              CHART_THEME["tp1"]))
+            except Exception:
+                pass
 
         if confirmed:
             tool_start = max(0, count - 20)
             tool_end = count + 4.5
+            # TradingView-style Long/Short position marker at the last candle.
+            marker_price = candidate.planned_entry
+            marker_x = count - 1
+            if candidate.direction == "LONG":
+                ax.scatter([marker_x], [marker_price], marker="^", s=130,
+                           color=CHART_THEME["tp1"], zorder=16,
+                           edgecolors=CHART_THEME["figure"], linewidths=0.8)
+                pos_note = "▲ LONG POSITION"
+                pos_color = CHART_THEME["tp1"]
+            else:
+                ax.scatter([marker_x], [marker_price], marker="v", s=130,
+                           color=CHART_THEME["invalidation"], zorder=16,
+                           edgecolors=CHART_THEME["figure"], linewidths=0.8)
+                pos_note = "▼ SHORT POSITION"
+                pos_color = CHART_THEME["invalidation"]
+            notes.append((pos_note, pos_color))
             ax.fill_between(
                 [tool_start, tool_end],
                 candidate.planned_entry,
@@ -610,6 +721,28 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 },
             )
 
+        # Swing highs/lows of the visible window — «سقف و کف» printed as clean
+        # dotted guides (no text over candles, label goes to the corner stack).
+        try:
+            from analysis.indicators import pivots as _piv
+            ph, pl = _piv(frame.reset_index(), 2, 2)
+            if ph:
+                hi = max(p["price"] for p in ph[-6:])
+                ax.hlines(float(hi), max(0, count - 50), count + future - 0.5,
+                          color=CHART_THEME["invalidation"], linestyle=(0, (1, 3)),
+                          linewidth=0.8, alpha=0.5, zorder=4)
+                notes.append((f"SWING HIGH  {_price(float(hi))}", CHART_THEME["invalidation"]))
+            if pl:
+                lo = min(p["price"] for p in pl[-6:])
+                ax.hlines(float(lo), max(0, count - 50), count + future - 0.5,
+                          color=CHART_THEME["demand"], linestyle=(0, (1, 3)),
+                          linewidth=0.8, alpha=0.5, zorder=4)
+                notes.append((f"SWING LOW  {_price(float(lo))}", CHART_THEME["demand"]))
+        except Exception:
+            pass
+
+        _render_corner_notes(ax, notes, confirmed=confirmed)
+
         # keep candle scale: long context lines may not stretch the y-axis
         _ylo = float(frame["low"].min())
         _yhi = float(frame["high"].max())
@@ -621,10 +754,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         _yr = max(_yhi - _ylo, 1e-9)
         ax.set_ylim(_ylo - 0.06 * _yr, _yhi + 0.06 * _yr)
 
+        _tf_disp = (md.get("tl_context_tf") if candidate.setup_code == "TLBREAK" else None) \
+            or md.get("pin_tf") or candidate.trigger_timeframe or ""
         fig.text(
             0.055,
             0.952,
-            f"{candidate.symbol}  •  {candidate.style}  •  {candidate.direction}",
+            f"{candidate.symbol}  •  {str(_tf_disp).upper()}  •  {candidate.style}  •  {candidate.direction}",
             color=CHART_THEME["text"],
             fontsize=14,
             fontweight="bold",
@@ -633,7 +768,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         fig.text(
             0.055,
             0.922,
-            f"{candidate.setup_code}  ·  {_chart_market_label(candidate)}  ·  {'CONFIRMED' if confirmed else 'EDUCATIONAL ANALYSIS'}",
+            f"{candidate.setup_code}  ·  {_chart_market_label(candidate)}  ·  TRIG {candidate.trigger_timeframe.upper()}  ·  {'VIVA SETUP ✦ CONFIRMED' if confirmed else 'VIVA SETUP ✦ ANALYSIS'}",
             color=CHART_THEME["muted"],
             fontsize=8,
             va="center",
@@ -681,6 +816,7 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         f"🔎 <b>ناحیه‌ای که زیر نظر داریم</b>\n\n"
         f"از <b>{_price(candidate.entry_zone_bottom)}</b> تا <b>{_price(candidate.entry_zone_top)}</b>\n"
         f"سطح ابطال سناریو: <b>{_price(candidate.sl)}</b>\n\n"
+        f"{_htf_context_fa(candidate)}\n\n"
         f"🧩 <b>تأییدهای کمکی</b>\n{confirmations}\n\n"
         f"⚠️ <b>شرایط و هشدارها</b>\n{warnings}\n\n"
         f"⛔ Entry، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود.\n"
@@ -733,6 +869,7 @@ def build_approaching_message(candidate: SignalCandidate, current_price: float, 
         f"💹 قیمت فعلی: <b>{_price(current_price)}</b>\n"
         f"📏 فاصله تا ناحیه: <b>{distance_atr:.2f} ATR</b>\n\n"
         f"🔎 در انتظار: {_e(waiting)}\n\n"
+        f"{_htf_context_fa(candidate)}\n\n"
         f"{_ai_note(candidate)}\n\n"
         f"👀 آماده بررسی چارت باشید، اما تا پیام Confirmed وارد نشوید.\n"
         f"📢 <b>{_e(SETTINGS.channel_name)}</b>"
@@ -767,6 +904,7 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
         f"🧠 <b>دلایل تأیید ورود</b>\n\n"
         + "\n\n".join(reasons)
         + f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
+        f"{_htf_context_fa(candidate)}\n\n"
         f"📍 <b>سطوح معامله</b>\n"
         f"├ Entry: <b>{_price(candidate.planned_entry)}</b>\n"
         f"├ {_e(invalidation_label)}: <b>{_price(candidate.sl)}</b>\n"
@@ -791,20 +929,40 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
     )
 
 
+def _store_alert_message_id(candidate: SignalCandidate, key: str, mid: Optional[int]) -> None:
+    if not mid:
+        return
+    candidate.metadata[key] = int(mid)
+    try:
+        from database.candidate_store import update_candidate as _persist
+        _persist(candidate)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"Alert message id persist warning {candidate.signal_id}: {exc}")
+
+
 def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame]) -> bool:
     target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
     if not candidate.metadata.get("education_separator_attempted"):
         send_signal_separator(target)
         candidate.metadata["education_separator_attempted"] = True
     chart = generate_chart(chart_df, candidate, confirmed=False) if chart_df is not None else None
-    if chart:
-        send_photo(
-            chart,
-            f"📚 {_e(candidate.symbol)} • {_e(candidate.style)} • {_e(candidate.setup_code)}\n"
-            f"⛔ تأیید ورود نیست\n🆔 <code>{_e(candidate.signal_id)}</code>",
-            target,
+    if candidate.setup_code == "PINVAL":
+        caption = (
+            f"🚨 {_e(candidate.symbol)} • {_e(candidate.trigger_timeframe)} • پین‌بار "
+            f"{'🟢 صعودی' if candidate.direction == 'LONG' else '🔴 نزولی'}\n"
+            f"🆔 <code>{_e(candidate.signal_id)}</code>"
         )
-    return send_message(build_educational_message(candidate), target)
+    else:
+        caption = (
+            f"📚 {_e(candidate.symbol)} • {_e(candidate.style)} • {_e(candidate.setup_code)}\n"
+            f"⛔ تأیید ورود نیست\n🆔 <code>{_e(candidate.signal_id)}</code>"
+        )
+    if chart:
+        _store_alert_message_id(candidate, "education_chart_message_id",
+                                send_photo(chart, caption, target))
+    mid = send_message(build_educational_message(candidate), target)
+    _store_alert_message_id(candidate, "education_message_id", mid)
+    return bool(mid)
 
 
 def send_approaching(candidate: SignalCandidate, current_price: float, distance_atr: float) -> bool:
@@ -812,7 +970,9 @@ def send_approaching(candidate: SignalCandidate, current_price: float, distance_
     if not candidate.metadata.get("approaching_separator_attempted"):
         send_signal_separator(target)
         candidate.metadata["approaching_separator_attempted"] = True
-    return send_message(build_approaching_message(candidate, current_price, distance_atr), target)
+    mid = send_message(build_approaching_message(candidate, current_price, distance_atr), target)
+    _store_alert_message_id(candidate, "approaching_message_id", mid)
+    return bool(mid)
 
 
 def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame]) -> bool:

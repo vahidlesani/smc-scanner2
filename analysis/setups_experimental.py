@@ -19,7 +19,7 @@ from typing import Optional
 
 import numpy as np
 
-from analysis.indicators import adx, structure_bias
+from analysis.indicators import adx, atr, structure_bias
 from analysis.models import EvidenceItem, SignalCandidate
 from config import get_settings
 from analysis.setups_v7 import (
@@ -347,6 +347,25 @@ def detect_trendline_breakout(bundle: MarketBundle, style: str) -> Optional[Sign
         # structural targets (first opposing supply/demand) from the engine;
         # relax only the CREATION gate; confirm-time floors still apply.
         candidate.mandatory_gates["rr"] = candidate.rr_tp1 >= 1.0 and candidate.rr_tp2 >= 1.5
+        other_dir = "SHORT" if direction == "LONG" else "LONG"
+        other_fit = _fit_channel_line(context_df, other_dir)
+        pattern = "TRENDLINE"
+        if other_fit is not None:
+            def _line_price(fit_d, x):
+                return fit_d["b"]["price"] + fit_d["slope"] * (x - fit_d["b"]["index"])
+            x_far = int(max(fit["a"]["index"], other_fit["a"]["index"]))
+            x_now = len(context_df) - 2
+            gap_far = abs(_line_price(fit, x_far) - _line_price(other_fit, x_far))
+            gap_now = abs(_line_price(fit, x_now) - _line_price(other_fit, x_now))
+            if gap_now < 0.70 * gap_far and gap_now > 0:
+                # converging dynamic structure: opposite slopes = triangle,
+                # same-sign slopes narrowing = wedge
+                pattern = "TRIANGLE" if fit["slope"] * other_fit["slope"] < 0 else "WEDGE"
+            else:
+                pattern = "CHANNEL"
+        pattern_fa = {"TRIANGLE": "الگوی مثلث", "WEDGE": "الگوی وج",
+                      "CHANNEL": "کانال داینامیک", "TRENDLINE": "ترندلاین داینامیک"}[pattern]
+        candidate.strategy_fa = ("شکست " if stage == "JUST_BROKE" else "برخوردِ نزدیک به ") + pattern_fa
         candidate.metadata.update({
             "tl_a_index": int(fit["a"]["index"]), "tl_a_price": float(fit["a"]["price"]),
             "tl_a_ts": str(fit["a"].get("timestamp", "")),
@@ -359,6 +378,8 @@ def detect_trendline_breakout(bundle: MarketBundle, style: str) -> Optional[Sign
             "tl_context_tf": context_tf,
             "tl_bound_now": float(fit["bound_now"]),
             "tl_base_kind": base["kind"] if stage == "JUST_BROKE" else "LINE_WATCH",
+            "tl_pattern": pattern,
+            "tl_pattern_fa": pattern_fa,
         })
         return candidate
     return None
@@ -370,3 +391,184 @@ SETUP_NAMES_FA["TLBREAK"] = "شکست خط روند/کانال داینامیک 
 TLBREAK_DETECTORS = [detect_trendline_breakout]
 
 EXPERIMENTAL_DETECTORS = [detect_pattern_1234]
+
+
+# --------------------------------------------------------------------------
+# PINVAL — valid pinbar inside an important zone (Viva's alert spec).
+#
+# A pinbar is VALID when:
+#   * range >= 0.6 * ATR(14) of its own timeframe
+#   * dominant wick >= 2x body, body <= 35% of the range
+#   * it rejects an IMPORTANT zone: a higher-context supply/demand pivot zone,
+#     the edge of an un-mitigated FVG on the same TF, without adjacent dojis
+#     next to a higher-context level (confluence bonus), or both.
+# The alert is informational (🟢/🔴); the monitor resolves a verdict within
+# ALERT_VERDICT_CANDLES candles: close beyond the pinbar extreme in the alert
+# direction => ✅ confirmed; close beyond the wick => ❌ invalidated; else ⚪.
+# --------------------------------------------------------------------------
+
+SETUP_NAMES["PINVAL"] = "Valid Pinbar in Important Zone (alert)"
+SETUP_NAMES_FA["PINVAL"] = "پین‌بار معتبر در ناحیه مهم"
+
+PINVAL_TF_BY_STYLE = {"SWING": ("1h",), "SCALP": ("15m", "5m")}
+
+
+def _unmitigated_fvg_edge(df, direction: str, atr_v: float, lookback: int = 60):
+    """Nearest un-mitigated FVG edge aligned with `direction` (demand for LONG)."""
+    highs = df["high"].values
+    lows = df["low"].values
+    closes = df["close"].values
+    n = len(df)
+    best = None
+    for i in range(n - 3, max(2, n - lookback) - 1, -1):
+        if direction == "LONG" and lows[i] > highs[i - 2]:
+            lo, hi = highs[i - 2], lows[i]
+            if hi - lo < 0.15 * atr_v:
+                continue
+            if np.any(closes[i + 1:] < lo):  # gap traded through -> mitigated
+                continue
+            best = {"kind": "FVG", "bottom": float(lo), "top": float(hi), "index": i}
+            break
+        if direction == "SHORT" and highs[i] < lows[i - 2]:
+            lo, hi = lows[i - 2], highs[i]
+            if hi - lo < 0.15 * atr_v:
+                continue
+            if np.any(closes[i + 1:] > hi):
+                continue
+            best = {"kind": "FVG", "bottom": float(lo), "top": float(hi), "index": i}
+            break
+    return best
+
+
+def _context_zone(bundle: MarketBundle, ctx_tf: str, direction: str, atr_c: float):
+    """Important higher-context supply/demand zone from the latest pivots."""
+    ctx = bundle.get(ctx_tf)
+    if ctx is None or len(ctx) < 60:
+        return None
+    highs, lows = pivots(ctx, 3, 3)
+    seq = highs if direction == "SHORT" else lows
+    if len(seq) < 2:
+        return None
+    lv = float(seq[-1]["price"])
+    # flip-zone hint: same level was respected from BOTH sides historically
+    closes = ctx["close"].values
+    for older in seq[-6:]:
+        ol = float(older["price"])
+        if abs(ol - lv) > 0.6 * atr_c:
+            continue
+        above = np.any(closes[: int(older["index"])] > lv + 0.6 * atr_c)
+        below = np.any(closes[: int(older["index"])] < lv - 0.6 * atr_c)
+        if above and below:
+            return {"kind": "FLIP", "level": lv}
+    return {"kind": "SD_FRESH", "level": lv}
+
+
+def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
+    settings = get_settings()
+    if not getattr(settings, "pinv_enabled", True):
+        return None
+    ctx_tf = "4h" if style == "SWING" else "1h"
+    if not _ensure_frames(bundle, (ctx_tf,)):
+        return None
+    best = None
+    for tf in PINVAL_TF_BY_STYLE.get(style, ("15m",)):
+        df = bundle.get(tf)
+        if df is None or len(df) < 40:
+            continue
+        atr_ser = atr(df)
+        atr_v = float(atr_ser.iloc[-1]) if np.isfinite(atr_ser.iloc[-1]) else 0.0
+        if atr_v <= 0:
+            continue
+        row = df.iloc[-1]
+        o, h, l, c = (float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"]))
+        rng = h - l
+        body = abs(c - o)
+        if rng < getattr(settings, "pinv_min_range_atr", 0.6) * atr_v or body <= 0:
+            continue
+        upper = h - max(o, c)
+        lower = min(o, c) - l
+        is_bull = lower >= getattr(settings, "pinv_min_wick_body", 2.0) * body and body <= getattr(settings, "pinv_max_body_frac", 0.35) * rng and c >= l + rng * 0.5
+        is_bear = upper >= getattr(settings, "pinv_min_wick_body", 2.0) * body and body <= getattr(settings, "pinv_max_body_frac", 0.35) * rng and c <= h - rng * 0.5
+        if not (is_bull or is_bear):
+            continue
+        direction = "LONG" if is_bull else "SHORT"
+        probe = l if is_bull else h
+
+        fvg = _unmitigated_fvg_edge(df, direction, atr_v)
+        in_fvg = bool(fvg) and fvg["bottom"] - 0.35 * atr_v <= probe <= fvg["top"] + 0.35 * atr_v
+        zone = _context_zone(bundle, ctx_tf, direction, atr_v)
+        in_zone = bool(zone) and abs(probe - zone["level"]) <= 0.7 * atr_v
+        if not (in_fvg or in_zone):
+            continue  # Viva's rule: pinbar matters only inside an important area
+
+        # adjacent doji confluence (previous two candles)
+        has_doji = False
+        for j in (-2, -3):
+            if len(df) + j < 0:
+                continue
+            r2 = df.iloc[j]
+            b2 = abs(float(r2["close"]) - float(r2["open"]))
+            r2_rng = float(r2["high"]) - float(r2["low"])
+            if r2_rng >= 0.3 * atr_v and b2 <= 0.15 * r2_rng:
+                has_doji = True
+
+        entry = c
+        sl = (probe - 0.15 * atr_v) if is_bull else (probe + 0.15 * atr_v)
+        risk = abs(entry - sl)
+        if risk <= 0:
+            continue
+        tp1 = entry + (1.3 * risk if is_bull else -1.3 * risk)
+        tp2 = entry + (2.4 * risk if is_bull else -2.4 * risk)
+        zone_kind = "FVG" if in_fvg else (zone["kind"] if in_zone else "NONE")
+        zone_fa = {"FVG": "لبهٔ FVG «فلگ‌لیمیت»", "FLIP": "فلیپ‌زون مهم",
+                   "SD_FRESH": "زون تازهٔ عرضه/تقاضای تایم بالاتر", "NONE": "ناحیهٔ مرتبط"}.get(zone_kind, "ناحیهٔ مهم")
+        last_ts = df["timestamp"].iloc[-1]
+        from analysis.models import iso_now
+        created = iso_now()
+        style_name = "SWING" if style == "SWING" else "SCALP"
+        candidate = SignalCandidate(
+            signal_id=f"viva-pinv-{bundle.symbol}-{tf}-{str(last_ts)[:16]}",
+            symbol=bundle.symbol,
+            style=style_name,
+            setup_code="PINVAL",
+            setup_name=SETUP_NAMES["PINVAL"],
+            strategy_fa=f"پین‌بار {'صعودی 🟢' if is_bull else 'نزولی 🔴'} در {zone_fa}",
+            direction=direction,
+            score=8 + (1 if has_doji else 0),
+            status="EDUCATIONAL",
+            entry_zone_bottom=min(o, c),
+            entry_zone_top=max(o, c),
+            planned_entry=entry,
+            sl=sl,
+            tp1=tp1,
+            tp2=tp2,
+            rr_tp1=1.3,
+            rr_tp2=2.4,
+            bias=("BULLISH" if is_bull else "BEARISH"),
+            trigger_timeframe=tf,
+            expires_at="",
+        )
+        candidate.metadata.update({
+            "pinv": 1,
+            "alert_only": 1,
+            "pin_tf": tf,
+            "pin_high": h,
+            "pin_low": l,
+            "pin_ts": str(last_ts),
+            "pin_zone_kind": zone_kind,
+            "pin_zone_fa": zone_fa,
+            "pin_ctx_tf": ctx_tf,
+            "pin_has_doji": bool(has_doji),
+            "pin_verdict_candles": int(getattr(settings, "alert_verdict_candles", 3)),
+            "context_tf": ctx_tf,
+        })
+        if not candidate.expires_at:
+            from datetime import datetime, timedelta, timezone
+            hours = 10 if style == "SWING" else 3
+            candidate.expires_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+        if best is None or candidate.score > best.score:
+            best = candidate
+    return best
+
+
+PINVAL_DETECTORS = [detect_pinbar_zone]

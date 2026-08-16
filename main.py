@@ -124,6 +124,15 @@ def run_discovery_scan() -> Dict[str, int]:
             for candidate in candidates:
                 if candidate.score < SETTINGS.educational_min_score:
                     continue
+                if candidate.setup_code == "PINVAL":
+                    # Alert-only pinbar: never holds a symbol lock, never enters
+                    # the confirmation lifecycle — the monitor resolves its
+                    # verdict within a few candles and replies under the alert.
+                    if not add_candidate(candidate):
+                        continue
+                    stats["new"] += 1
+                    send_educational_setup(candidate, _chart_frame(candidate, bundle))
+                    continue
                 if SETTINGS.skip_dead_gate_candidates and not candidate.execution_ready:
                     # A failing mandatory gate can never be repaired later, so
                     # this candidate can never confirm. Keep it educational,
@@ -161,6 +170,64 @@ def run_discovery_scan() -> Dict[str, int]:
         f"detected={stats['detected']} new={stats['new']} errors={stats['errors']}"
     )
     return stats
+
+
+def _resolve_pinv_verdict(candidate: SignalCandidate, closed: Optional[pd.DataFrame]) -> None:
+    """Pinbar alert lifecycle: within N trigger candles, a close beyond the
+    pinbar's confirming extreme = ✅ تأیید; a close beyond the wick = ❌ تأیید
+    نشد; running out of candles or expiry = ⚪ بدون تأیید. Every outcome is a
+    Telegram reply under the original alert so the loop visibly closes."""
+    from bot.messages_v7 import send_verdict_reply
+    if closed is None or len(closed) < 2:
+        if is_expired(candidate):
+            candidate.status = "VERDICT_TIMEOUT"
+            update_candidate(candidate)
+            send_verdict_reply(candidate, None, "مهلت هشدار تمام شد؛ حرکت تأییدکننده شکل نگرفت.")
+        return
+    md = candidate.metadata or {}
+    pin_ts = str(md.get("pin_ts") or "")
+    pin_high = float(md.get("pin_high") or 0)
+    pin_low = float(md.get("pin_low") or 0)
+    n_candles = int(md.get("pin_verdict_candles") or SETTINGS.alert_verdict_candles)
+    if not pin_high or not pin_low:
+        candidate.status = "VERDICT_TIMEOUT"
+        update_candidate(candidate)
+        return
+    try:
+        ts = pd.Timestamp(pin_ts)
+        after = closed[pd.to_datetime(closed["timestamp"]) > ts]
+    except Exception:
+        after = closed.tail(n_candles)
+    direction = candidate.direction
+    for _, row in after.head(n_candles).iterrows():
+        c = float(row["close"])
+        if direction == "LONG":
+            if c > pin_high:
+                _pinv_done(candidate, True, f"کلوز بالای {pin_high:g} — حرکت صعودی پین‌بار تأیید شد. مدیریت با خودت.")
+                return
+            if c < pin_low:
+                _pinv_done(candidate, False, f"کلوز پایین کف پین‌بار ({pin_low:g}) — سناریو باطل شد.")
+                return
+        else:
+            if c < pin_low:
+                _pinv_done(candidate, True, f"کلوز زیر {pin_low:g} — حرکت نزولی پین‌بار تأیید شد. مدیریت با خودت.")
+                return
+            if c > pin_high:
+                _pinv_done(candidate, False, f"کلوز بالای سقف پین‌بار ({pin_high:g}) — سناریو باطل شد.")
+                return
+    if len(after) >= n_candles or is_expired(candidate):
+        candidate.status = "VERDICT_TIMEOUT"
+        update_candidate(candidate)
+        send_verdict_reply(candidate, None,
+                         f"پس از {len(after)} کندل، کلوز تأییدکننده نیامد؛ هشدار بدون اجرا بسته شد.")
+
+
+def _pinv_done(candidate: SignalCandidate, ok: bool, why: str) -> None:
+    from bot.messages_v7 import send_verdict_reply
+    candidate.status = "VERDICT_YES" if ok else "VERDICT_NO"
+    print(f"PINVAL verdict {candidate.signal_id}: {candidate.status}")
+    send_verdict_reply(candidate, ok, why)
+    update_candidate(candidate)
 
 
 def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataFrame, pd.DataFrame, float]]:
@@ -209,6 +276,10 @@ def monitor_candidates() -> Dict[str, int]:
             continue
         live, closed, current_price = market_data if market_data else (None, None, None)
         try:
+            if candidate.setup_code == "PINVAL":
+                stats["pinv"] = stats.get("pinv", 0) + 1
+                _resolve_pinv_verdict(candidate, closed)
+                continue
             if not publication_in_progress and is_expired(candidate):
                 candidate.status = "EXPIRED"
                 update_candidate(candidate)
@@ -217,6 +288,11 @@ def monitor_candidates() -> Dict[str, int]:
                 except Exception as exc:
                     print(f"Could not release staged symbol {candidate.signal_id}: {exc}")
                 send_candidate_cancelled(candidate, "زمان اعتبار Setup به پایان رسید و تأیید ورود تشکیل نشد.")
+                try:
+                    from bot.messages_v7 import send_verdict_reply
+                    send_verdict_reply(candidate, None, "مهلت ستاپ تمام شد؛ کندل تأییدکننده شکل نگرفت.")
+                except Exception:
+                    pass
                 stats["cancelled"] += 1
                 continue
             if not publication_in_progress and is_invalidated(candidate, current_price):
@@ -230,6 +306,11 @@ def monitor_candidates() -> Dict[str, int]:
                     candidate,
                     f"قیمت پیش از تأیید از سطح ابطال {candidate.sl} عبور کرد.",
                 )
+                try:
+                    from bot.messages_v7 import send_verdict_reply
+                    send_verdict_reply(candidate, False, f"قیمت از سطح ابطال {candidate.sl:g} گذشت؛ سناریو باطل شد.")
+                except Exception:
+                    pass
                 stats["cancelled"] += 1
                 continue
 
@@ -307,6 +388,11 @@ def monitor_candidates() -> Dict[str, int]:
                             candidate.status = "CONFIRMED"
                             candidate.metadata["confirmation_sent"] = True
                             candidate.metadata.pop("publication_pending", None)
+                            try:
+                                from bot.messages_v7 import send_verdict_reply
+                                send_verdict_reply(candidate, True, "تأیید ورود با کندل بسته‌شده صادر شد — پیام کانفرمد جداگانه آمد.")
+                            except Exception:
+                                pass
                             stats["confirmed"] += 1
                     else:
                         candidate.status = "APPROACHING"
