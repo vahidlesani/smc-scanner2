@@ -557,7 +557,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 spine.set_alpha(0.55)
 
         ax = axes[0]
-        ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
+        for _price_ax in axes[:2]:
+            _price_ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
         ax.tick_params(
             axis="y",
             colors=CHART_THEME["text"],
@@ -597,6 +598,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         if use_log:
             try:
                 ax.set_yscale("log")
+                # set_yscale replaces the price formatter with matplotlib's
+                # scientific log labels (4.38 × 10³); restore plain prices.
+                ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
             except Exception:
                 use_log = False
 
@@ -892,9 +896,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             notes.append((f"RANGE HIGH  {_price(rhi)}", CHART_THEME["invalidation"]))
                             notes.append((f"RANGE LOW  {_price(rlo)}", CHART_THEME["demand"]))
                             if rlo <= last_close <= rhi:
-                                notes.append(("INSIDE RANGE · شکست معتبر تا ورود لازم است", CHART_THEME["muted"]))
+                                notes.append(("INSIDE RANGE · wait for a valid break", CHART_THEME["muted"]))
                             else:
-                                notes.append(("RANGE BROKEN · بیرون از رنج", CHART_THEME["muted"]))
+                                notes.append(("RANGE BROKEN · outside the range", CHART_THEME["muted"]))
             except Exception as exc:
                 print(f"Range overlay warning: {exc}")
 
@@ -923,7 +927,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             color=CHART_THEME["trend"], linestyle=(0, (7, 5)),
                             linewidth=0.85, alpha=0.5, zorder=3)
                     line_label = "DYNAMIC RESISTANCE" if candidate.direction == "LONG" else "DYNAMIC SUPPORT"
-                    notes.append((f"{line_label} · touch/break = هشدار", CHART_THEME["trend"]))
+                    notes.append((f"{line_label} · touch/break alerts", CHART_THEME["trend"]))
             except Exception as exc:
                 print(f"Trendline overlay warning: {exc}")
 

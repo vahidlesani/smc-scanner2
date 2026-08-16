@@ -57,7 +57,7 @@ class Settings:
     # How many trigger candles an alert gets before a verdict reply (❌/✅)
     alert_verdict_candles: int = 3
     # Log-scale rendering for higher-context trendline charts
-    chart_log_htf: bool = True
+    chart_log_htf: bool = False
     educational_min_score: int = 6
     execution_min_score: int = 7
     candidate_expiry_hours_swing: int = 36
