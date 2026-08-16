@@ -231,25 +231,31 @@ def _pinv_done(candidate: SignalCandidate, ok: bool, why: str) -> None:
 
 
 def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataFrame, pd.DataFrame, float]]:
-    """One Bybit request per active symbol/style for monitor and confirmation."""
+    """One Bybit request per active symbol/TF for monitor and confirmation.
+
+    Confirmation now runs on the candidate's finer `confirm_tf` (1m scalp /
+    5m swing) when present, so a valid retest is confirmed inside minutes;
+    charts keep using the trigger TF (see `_chart_frame`)."""
     frames: Dict[Tuple[str, str], Tuple[pd.DataFrame, pd.DataFrame, float]] = {}
     for candidate in candidates:
-        key = (candidate.symbol, candidate.trigger_timeframe)
-        if key in frames:
-            continue
-        live = get_klines(
-            candidate.symbol,
-            candidate.trigger_timeframe,
-            140,
-            closed_only=False,
-            use_cache=False,
-        )
-        if live is None or len(live) < 20:
-            continue
-        # Bybit's newest row is forming; only prior rows may confirm an entry.
-        closed = live.iloc[:-1].reset_index(drop=True)
-        current_price = float(live["close"].iloc[-1])
-        frames[key] = (live, closed, current_price)
+        confirm_tf = candidate.metadata.get("confirm_tf") or candidate.trigger_timeframe
+        for tf in {confirm_tf, candidate.trigger_timeframe}:
+            key = (candidate.symbol, tf)
+            if key in frames:
+                continue
+            live = get_klines(
+                candidate.symbol,
+                tf,
+                140,
+                closed_only=False,
+                use_cache=False,
+            )
+            if live is None or len(live) < 20:
+                continue
+            # Bybit's newest row is forming; only prior rows may confirm.
+            closed = live.iloc[:-1].reset_index(drop=True)
+            current_price = float(live["close"].iloc[-1])
+            frames[key] = (live, closed, current_price)
     return frames
 
 
@@ -261,7 +267,7 @@ def monitor_candidates() -> Dict[str, int]:
         return stats
     frames = _candidate_market_frames(candidates)
     for candidate in candidates:
-        key = (candidate.symbol, candidate.trigger_timeframe)
+        key = (candidate.symbol, candidate.metadata.get("confirm_tf") or candidate.trigger_timeframe)
         market_data = frames.get(key)
         publication_in_progress = bool(
             candidate.metadata.get("technical_confirmation_complete")
@@ -371,7 +377,7 @@ def monitor_candidates() -> Dict[str, int]:
                         candidate.metadata.pop("publication_pending", None)
                     elif not gate_lookup_ok:
                         pass  # Fail closed; never republish while DB state is unknown.
-                    elif send_confirmed(candidate, closed):
+                    elif send_confirmed(candidate, (frames.get((candidate.symbol, candidate.trigger_timeframe)) or (None, closed, None))[1]):
                         # send_confirmed sets durable component receipts in metadata;
                         # result monitoring remains disarmed until this DB update commits.
                         candidate.status = "APPROACHING"

@@ -14,7 +14,7 @@ from urllib3.util.retry import Retry
 
 from config import get_settings
 
-TF_MAP = {"1d": "D", "4h": "240", "1h": "60", "15m": "15", "5m": "5"}
+TF_MAP = {"1d": "D", "4h": "240", "1h": "60", "15m": "15", "5m": "5", "1m": "1"}
 
 _SETTINGS = get_settings()
 _BASE_URLS = [

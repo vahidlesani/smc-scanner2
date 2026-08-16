@@ -43,6 +43,19 @@ SETUP_NAMES_FA = {
     "IFVG": "بریکر بلاک / معکوس FVG",
 }
 
+# Viva's confirmation grid: zone detection stays on the trigger TF
+# (5m scalp / 15m swing), but entry CONFIRMATION listens on the finer TF
+# below it so a valid retest is confirmed within ~1-3 minutes, not after a
+# full 5m/15m candle close. SCALP: confirm on 1m; SWING: confirm on 5m.
+CONFIRM_TF = {
+    "SCALP": "1m",
+    "SWING": "5m",
+}
+
+
+def confirm_timeframe(style: str, fallback: str) -> str:
+    return CONFIRM_TF.get(style.upper(), fallback)
+
 
 def _fmt(value: float) -> str:
     if value >= 1000:
@@ -479,6 +492,7 @@ def _base_candidate(
             "session": last_session,
             "strategy_version": SETTINGS.strategy_version,
             "touched": poi.get("touches", 0) > 0,
+            "confirm_tf": confirm_timeframe(style, trigger_tf),
         },
         expires_at=expires.isoformat(timespec="seconds"),
     )

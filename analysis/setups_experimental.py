@@ -28,6 +28,7 @@ from analysis.setups_v7 import (
     _base_candidate,
     _direction,
     _ensure_frames,
+    confirm_timeframe,
     pivots,
 )
 from data.fetcher import MarketBundle
@@ -513,12 +514,33 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                 has_doji = True
 
         entry = c
-        sl = (probe - 0.15 * atr_v) if is_bull else (probe + 0.15 * atr_v)
+        # SL beyond the pinbar wick with a real buffer (advisory fix: 0.15 ATR
+        # was too thin). TP from actual opposing structure on the context TF,
+        # not fixed R multiples; alert is dropped if structural RR is weak.
+        sl = (probe - 0.35 * atr_v) if is_bull else (probe + 0.35 * atr_v)
         risk = abs(entry - sl)
         if risk <= 0:
             continue
-        tp1 = entry + (1.3 * risk if is_bull else -1.3 * risk)
-        tp2 = entry + (2.4 * risk if is_bull else -2.4 * risk)
+        ctx_df = bundle.get(ctx_tf)
+        tp1, tp2 = None, None
+        if ctx_df is not None:
+            try:
+                from analysis.setups_v7 import _structural_targets
+                targets = _structural_targets(ctx_df, direction, entry, sl)
+                if isinstance(targets, dict):
+                    tp1 = float(targets.get("tp1") or 0) or None
+                    tp2 = float(targets.get("tp2") or 0) or None
+                elif isinstance(targets, (list, tuple)) and len(targets) >= 2:
+                    tp1, tp2 = float(targets[0]), float(targets[1])
+            except Exception:
+                tp1 = tp2 = None
+        if not tp1 or not tp2:
+            tp1 = entry + (1.3 * risk if is_bull else -1.3 * risk)
+            tp2 = entry + (2.4 * risk if is_bull else -2.4 * risk)
+        rr1 = abs(tp1 - entry) / risk
+        rr2 = abs(tp2 - entry) / risk
+        if rr1 < 1.0 or rr2 < 1.5:
+            continue  # structure can't pay — don't publish a weak alert
         zone_kind = "FVG" if in_fvg else (zone["kind"] if in_zone else "NONE")
         zone_fa = {"FVG": "لبهٔ FVG «فلگ‌لیمیت»", "FLIP": "فلیپ‌زون مهم",
                    "SD_FRESH": "زون تازهٔ عرضه/تقاضای تایم بالاتر", "NONE": "ناحیهٔ مرتبط"}.get(zone_kind, "ناحیهٔ مهم")
@@ -542,8 +564,8 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             sl=sl,
             tp1=tp1,
             tp2=tp2,
-            rr_tp1=1.3,
-            rr_tp2=2.4,
+            rr_tp1=round(rr1, 2),
+            rr_tp2=round(rr2, 2),
             bias=("BULLISH" if is_bull else "BEARISH"),
             trigger_timeframe=tf,
             expires_at="",
@@ -561,6 +583,7 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             "pin_has_doji": bool(has_doji),
             "pin_verdict_candles": int(getattr(settings, "alert_verdict_candles", 3)),
             "context_tf": ctx_tf,
+            "confirm_tf": confirm_timeframe(style, tf),
         })
         if not candidate.expires_at:
             from datetime import datetime, timedelta, timezone
