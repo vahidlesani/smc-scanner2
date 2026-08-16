@@ -147,6 +147,41 @@ def get_klines(
     use_cache: bool = True,
     end_ms: Optional[int] = None,
 ) -> Optional[pd.DataFrame]:
+    """Fetch candles for `symbol` — Ourbit first (Viva's execution venue),
+    Bybit as fallback for symbols Ourbit doesn't list.
+
+    Data provider precedence is env-driven:
+    DATA_PROVIDER=ourbit  -> ourbit-then-bybit (default)
+    DATA_PROVIDER=bybit   -> bybit only
+    """
+    provider = os.getenv("DATA_PROVIDER", "ourbit").strip().lower()
+    if provider != "bybit":
+        try:
+            from data.ourbit import get_ourbit_klines, ourbit_listed
+
+            if ourbit_listed(symbol):
+                frame = get_ourbit_klines(
+                    symbol,
+                    interval,
+                    limit=limit,
+                    closed_only=closed_only,
+                    end_s=int(end_ms / 1000) if end_ms else None,
+                )
+                if frame is not None and not frame.empty:
+                    return frame
+        except Exception as exc:  # never let a venue hiccup kill a scan
+            _log_error_once(f"ourbit-route:{symbol}:{interval}", f"Ourbit route failed {symbol} {interval}: {exc}")
+    return _get_klines_bybit(symbol, interval, limit, closed_only, use_cache, end_ms)
+
+
+def _get_klines_bybit(
+    symbol: str,
+    interval: str,
+    limit: int = 200,
+    closed_only: bool = True,
+    use_cache: bool = True,
+    end_ms: Optional[int] = None,
+) -> Optional[pd.DataFrame]:
     """Fetch up to 1000 bars. Use get_klines_paginated for longer history."""
     if interval not in TF_MAP:
         _log_error_once(f"interval:{interval}", f"Unknown interval: {interval}")

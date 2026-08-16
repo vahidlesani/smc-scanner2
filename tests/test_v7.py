@@ -182,6 +182,9 @@ class V7ModelTests(unittest.TestCase):
             patch.object(universe, "get_instruments", return_value=instruments),
             patch.object(universe, "get_tickers", return_value=tickers),
             patch.object(universe, "get_klines", side_effect=daily_for),
+            patch("data.ranking.get_global_ranking", return_value={}),
+            patch("data.ranking.get_ranked_symbols", return_value=[]),
+            patch("data.ourbit.get_ourbit_tickers", return_value=[]),
         ):
             symbols, metrics = universe.DynamicUniverse()._build()
 

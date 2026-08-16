@@ -109,6 +109,20 @@ def run_discovery_scan() -> Dict[str, int]:
     """Find educational setups; never writes unconfirmed rows to Supabase."""
     started = time.monotonic()
     symbols, metrics = UNIVERSE.get()
+    # Viva's priority rule: symbols with an open alert get scanned FIRST (in
+    # the order their alerts were issued) so follow-up scenarios on them
+    # surface before anything else.
+    try:
+        active_symbols = []
+        for candidate in get_active_candidates():
+            if candidate.setup_code == "PINVAL":
+                continue
+            if candidate.symbol in symbols and candidate.symbol not in active_symbols:
+                active_symbols.append(candidate.symbol)
+        if active_symbols:
+            symbols = active_symbols + [s for s in symbols if s not in active_symbols]
+    except Exception:
+        pass
     stats = {"symbols": len(symbols), "detected": 0, "new": 0, "errors": 0}
     print(
         f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC] "
@@ -144,7 +158,7 @@ def run_discovery_scan() -> Dict[str, int]:
                     if not _dead_gate_recently_alerted(candidate):
                         send_educational_setup(candidate, _chart_frame(candidate, bundle))
                     continue
-                if has_unresolved_symbol(candidate.symbol):
+                if has_unresolved_symbol(candidate.symbol, trigger_tf=candidate.trigger_timeframe):
                     continue
                 if not add_candidate(candidate):
                     continue

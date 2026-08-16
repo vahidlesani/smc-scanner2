@@ -19,6 +19,7 @@ from analysis.indicators import (
     detect_rsi_divergence,
     pivots,
     premium_discount,
+    rsi,
     session_name,
     structure_bias,
 )
@@ -52,9 +53,152 @@ CONFIRM_TF = {
     "SWING": "5m",
 }
 
+# Viva's confirmation grid (2026-08): the finer TF that confirms a scenario
+# depends on the TRIGGER timeframe, not the trade style:
+#   5m trigger  -> 1m confirm (scalp reacts within ~60s)
+#   15m trigger -> 5m confirm
+#   1h trigger  -> 5m confirm
+CONFIRM_TF_BY_TRIGGER = {
+    "5m": "1m",
+    "15m": "5m",
+    "1h": "5m",
+    "4h": "15m",
+}
+
 
 def confirm_timeframe(style: str, fallback: str) -> str:
+    """Trigger-TF-driven confirmation grid (see CONFIRM_TF_BY_TRIGGER)."""
+    tf = str(fallback or "").lower()
+    if tf in CONFIRM_TF_BY_TRIGGER:
+        return CONFIRM_TF_BY_TRIGGER[tf]
     return CONFIRM_TF.get(style.upper(), fallback)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Multi-timeframe narrative enrichment (Viva v7.6 spec)
+#
+# Every alert/signal must (a) state WHY it exists, (b) describe the higher-TF
+# context timeframe-by-timeframe, and (c) name the zones price is near
+# (flip zones / FVG / OB / swing highs-lows). We compute that ONCE at scan
+# time and cache it in `metadata` so message builders stay pure and cheap.
+# ──────────────────────────────────────────────────────────────────────────
+
+_MTF_ORDER = ["1d", "4h", "1h", "15m", "5m"]
+_TF_FA = {"1d": "روزانه", "4h": "۴ساعته", "1h": "۱ساعته", "15m": "۱۵دقیقه", "5m": "۵دقیقه", "1m": "۱دقیقه"}
+_BIAS_FA = {"BULLISH": "صعودی 🟢", "BEARISH": "نزولی 🔴", "NEUTRAL": "خنثی ⚪"}
+
+
+def _tf_bias_fa(df) -> str:
+    if df is None or len(df) < 30:
+        return "دیتای کافی نیست"
+    try:
+        bias = structure_bias(df, 3).get("bias", "NEUTRAL")
+    except Exception:
+        bias = "NEUTRAL"
+    return _BIAS_FA.get(bias, "خنثی ⚪")
+
+
+def _nearest_levels(df, price: float, atr_value: float, max_each: int = 2) -> Dict[str, List[float]]:
+    """Closest pivot highs above and lows below current price (S/R shelf)."""
+    if df is None or len(df) < 30 or atr_value <= 0:
+        return {"above": [], "below": []}
+    ph, pl = pivots(df, 3, 3)
+    above = sorted({float(p["price"]) for p in ph if float(p["price"]) > price})[:max_each]
+    below = sorted({float(p["price"]) for p in pl if float(p["price"]) < price}, reverse=True)[:max_each]
+    return {"above": above, "below": below}
+
+
+def enrich_candidate_context(bundle: MarketBundle, candidate: SignalCandidate) -> None:
+    """Attach Viva's narrative blocks to `candidate.metadata`:
+    - mtf_fa:    per-timeframe structure read (+ RSI value, divergence tags)
+    - zones_fa:  nearest important zones with distance in ATR
+    - div_fa:    RSI divergence note when present on the trigger TF
+    Never raises; enrichment is best-effort cosmetics over the real setup.
+    """
+    md = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+    mtf_lines: List[str] = []
+    zone_lines: List[str] = []
+    try:
+        trigger_tf = candidate.trigger_timeframe
+        last_row = bundle.get(trigger_tf)
+        last_price = float(last_row["close"].iloc[-1]) if last_row is not None and len(last_row) else 0.0
+        atr_now = candidate.metadata.get("atr")
+        if last_row is not None and len(last_row) >= 20:
+            _atr = atr(last_row)
+            if pd.notna(_atr.iloc[-1]):
+                atr_now = float(_atr.iloc[-1])
+        atr_now = float(atr_now or 0)
+
+        for tf in _MTF_ORDER:
+            df = bundle.get(tf)
+            if df is None or len(df) < 30:
+                continue
+            line = f"• تایم {_TF_FA.get(tf, tf)}: ساختار {_tf_bias_fa(df)}"
+            try:
+                rsi_now = float(rsi(df).iloc[-1])
+                if pd.notna(rsi_now):
+                    tag = ""
+                    if rsi_now >= 70:
+                        tag = " (اوربایت ⚠️)"
+                    elif rsi_now <= 30:
+                        tag = " (اورسلد ⚠️)"
+                    line += f" • RSI≈{rsi_now:.0f}{tag}"
+            except Exception:
+                pass
+            if tf == trigger_tf:
+                div = detect_rsi_divergence(df, candidate.direction)
+                if div:
+                    kind = {
+                        "REGULAR_BULLISH": "واگرایی معمولی مثبت",
+                        "REGULAR_BEARISH": "واگرایی معمولی منفی",
+                        "HIDDEN_BULLISH": "واگرایی مخفی مثبت",
+                        "HIDDEN_BEARISH": "واگرایی مخفی منفی",
+                    }.get(div["type"], div["type"])
+                    line += f" • {kind} RSI 🔄"
+                    md["div_fa"] = f"{kind} RSI روی تایم تریگر دیده می‌شود."
+            mtf_lines.append(line)
+
+        # Zone proximity scan: context frames' shelves around current price.
+        if last_price > 0 and atr_now > 0:
+            for tf in ("4h", "1h", "15m"):
+                df = bundle.get(tf)
+                if df is None or len(df) < 30:
+                    continue
+                levels = _nearest_levels(df, last_price, atr_now)
+                tf_fa = _TF_FA.get(tf, tf)
+                for level in levels.get("above", []):
+                    dist = (level - last_price) / atr_now
+                    if dist <= 6:
+                        zone_lines.append(
+                            f"⬆️ مقاومت {tf_fa} در {_fmt(level)} — فاصله ≈{dist:.1f} ATR از قیمت فعلی"
+                        )
+                for level in levels.get("below", []):
+                    dist = (last_price - level) / atr_now
+                    if dist <= 6:
+                        zone_lines.append(
+                            f"⬇️ حمایت {tf_fa} در {_fmt(level)} — فاصله ≈{dist:.1f} ATR از قیمت فعلی"
+                        )
+            # the candidate's own POI is the most important zone — say its kind
+            poi_type = str(md.get("poi_type") or "").upper()
+            poi_fa = {
+                "FVG": "فلگ‌لیمیت (FVG)",
+                "OB": "اوردر بلاک",
+                "IFVG": "FVG معکوس‌شده",
+                "FLIP": "فلیپ‌زون",
+            }.get(poi_type)
+            if poi_fa:
+                zone_lines.insert(
+                    0,
+                    f"🎯 ناحیه ورود: {poi_fa} بین {_fmt(candidate.entry_zone_bottom)} و {_fmt(candidate.entry_zone_top)}",
+                )
+    except Exception as exc:
+        print(f"Context enrichment skipped for {candidate.signal_id}: {exc}")
+        return
+    if mtf_lines:
+        md["mtf_fa"] = mtf_lines
+    if zone_lines:
+        md["zones_fa"] = zone_lines[:8]
+    candidate.metadata = md
 
 
 def _fmt(value: float) -> str:

@@ -1,8 +1,12 @@
 """Local, transient candidate state.
 
 Unconfirmed educational setups are deliberately NOT written to Supabase.
-This SQLite store is operational state only and can be placed on a Render
-persistent disk with CANDIDATE_DB_PATH if restart durability is desired.
+This SQLite store is operational state only and can be placed on a persistent
+disk with CANDIDATE_DB_PATH if restart durability is desired.
+
+Viva's locking model (v7.6): a pending scenario must NEVER block the whole
+symbol. Locks are per (symbol, trigger timeframe) — a pending 1h swing still
+allows scalp alerts on the same symbol's 5m/15m triggers.
 """
 from __future__ import annotations
 
@@ -15,6 +19,10 @@ from typing import List, Optional
 from analysis.models import SignalCandidate, iso_now
 
 DB_PATH = os.getenv("CANDIDATE_DB_PATH", "/tmp/viva_candidates.db")
+# Non-confirmed lifecycles are throwaway: once resolved they are removed fast.
+# Confirmed rows persist a bit longer (they are the only ones ALSO in Supabase).
+RESOLVED_RETENTION_HOURS = int(os.getenv("CANDIDATE_RESOLVED_RETENTION_HOURS", "6"))
+CONFIRMED_RETENTION_HOURS = int(os.getenv("CANDIDATE_CONFIRMED_RETENTION_HOURS", "48"))
 
 
 @contextmanager
@@ -52,29 +60,39 @@ def init_candidate_store() -> None:
             )
             """
         )
+        # Migration: per-timeframe locking needs the trigger TF as a column.
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(signal_candidates)")}
+        if "trigger_tf" not in columns:
+            conn.execute("ALTER TABLE signal_candidates ADD COLUMN trigger_tf TEXT NOT NULL DEFAULT ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_active ON signal_candidates(status, expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_dedupe ON signal_candidates(dedupe_key, status)")
 
 
+def _trigger_tf(candidate: SignalCandidate) -> str:
+    return str(getattr(candidate, "trigger_timeframe", "") or "").lower()
+
+
 def _dedupe_key(candidate: SignalCandidate) -> str:
-    # One unresolved lifecycle per symbol. This avoids conflicting Scalp/Swing,
-    # setup or direction messages until the first scenario has a final state.
-    return candidate.symbol.upper()
+    # One unresolved lifecycle per (symbol, trigger timeframe). A pending 1h
+    # swing no longer blocks scalp setups on the same symbol's 5m trigger.
+    return f"{candidate.symbol.upper()}:{_trigger_tf(candidate)}"
 
 
 def find_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
     now = iso_now()
+    params = [candidate.symbol.upper(), _trigger_tf(candidate), now]
     with _connection() as conn:
         row = conn.execute(
             """
             SELECT payload FROM signal_candidates
             WHERE symbol=?
+              AND trigger_tf=?
               AND status IN ('EDUCATIONAL', 'APPROACHING', 'CONFIRMED')
               AND setup_code != 'PINVAL'
               AND expires_at>?
             ORDER BY created_at DESC LIMIT 1
             """,
-            (candidate.symbol.upper(), now),
+            params,
         ).fetchone()
     return SignalCandidate.from_json(row["payload"]) if row else None
 
@@ -88,8 +106,8 @@ def add_candidate(candidate: SignalCandidate) -> bool:
             """
             INSERT OR IGNORE INTO signal_candidates
             (signal_id, dedupe_key, symbol, style, setup_code, direction,
-             score, status, approaching_sent, payload, created_at, updated_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             score, status, approaching_sent, payload, created_at, updated_at, expires_at, trigger_tf)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 candidate.signal_id,
@@ -105,6 +123,7 @@ def add_candidate(candidate: SignalCandidate) -> bool:
                 candidate.created_at,
                 now,
                 candidate.expires_at,
+                _trigger_tf(candidate),
             ),
         )
         return conn.total_changes > 0
@@ -117,7 +136,7 @@ def update_candidate(candidate: SignalCandidate, status: Optional[str] = None) -
         conn.execute(
             """
             UPDATE signal_candidates
-            SET score=?, status=?, approaching_sent=?, payload=?, updated_at=?, expires_at=?
+            SET score=?, status=?, approaching_sent=?, payload=?, updated_at=?, expires_at=?, trigger_tf=?
             WHERE signal_id=?
             """,
             (
@@ -127,6 +146,7 @@ def update_candidate(candidate: SignalCandidate, status: Optional[str] = None) -
                 candidate.to_json(),
                 iso_now(),
                 candidate.expires_at,
+                _trigger_tf(candidate),
                 candidate.signal_id,
             ),
         )
@@ -160,7 +180,13 @@ def set_status(signal_id: str, status: str) -> None:
 
 
 def cleanup_candidates(retention_days: int = 7) -> int:
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat(timespec="seconds")
+    """Aggressive slimming (Viva's DB policy): only confirmed signals deserve
+    history — and those already persist in Supabase. Everything resolved and
+    non-confirmed disappears after RESOLVED_RETENTION_HOURS."""
+    now_dt = datetime.now(timezone.utc)
+    resolved_cutoff = (now_dt - timedelta(hours=RESOLVED_RETENTION_HOURS)).isoformat(timespec="seconds")
+    confirmed_cutoff = (now_dt - timedelta(hours=CONFIRMED_RETENTION_HOURS)).isoformat(timespec="seconds")
+    legacy_cutoff = (now_dt - timedelta(days=retention_days)).isoformat(timespec="seconds")
     now = iso_now()
     with _connection() as conn:
         conn.execute(
@@ -168,7 +194,12 @@ def cleanup_candidates(retention_days: int = 7) -> int:
             (now, now),
         )
         cursor = conn.execute(
-            "DELETE FROM signal_candidates WHERE updated_at<? AND status IN ('CONFIRMED','CANCELLED','EXPIRED')",
-            (cutoff,),
+            """
+            DELETE FROM signal_candidates
+            WHERE (status NOT IN ('CONFIRMED','EDUCATIONAL','APPROACHING') AND updated_at<?)
+               OR (status='CONFIRMED' AND updated_at<?)
+               OR (updated_at<?)
+            """,
+            (resolved_cutoff, confirmed_cutoff, legacy_cutoff),
         )
         return cursor.rowcount

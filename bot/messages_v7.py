@@ -89,6 +89,10 @@ SIGNAL_SEPARATOR = os.getenv(
     "SIGNAL_SEPARATOR_TEXT",
     "━━━━━━━━━━ 💹 VIVASIGNALS PRO ━━━━━━━━━━",
 )
+# v7.6 chart overlays (Viva's chart-design references)
+_CHART_SCENARIO_ZIGZAG = os.getenv("CHART_SCENARIO_ZIGZAG", "on").strip().lower() in {"1", "on", "true", "yes"}
+_CHART_RANGE_OVERLAY = os.getenv("CHART_RANGE_OVERLAY", "on").strip().lower() in {"1", "on", "true", "yes"}
+_CHART_STRUCTURE_LINES = os.getenv("CHART_STRUCTURE_LINES", "on").strip().lower() in {"1", "on", "true", "yes"}
 
 
 def _e(value) -> str:
@@ -122,7 +126,45 @@ def _htf_context_fa(candidate: SignalCandidate) -> str:
         bits.append(f"کندل داخل {md.get('pin_zone_fa', 'ناحیهٔ مهم')} شکل گرفته{doji}")
     if candidate.bias in ("BULLISH", "BEARISH"):
         bits.append("بایاس ساختاری: " + ("صعودی" if candidate.bias == "BULLISH" else "نزولی"))
-    return "🧭 <b>کانتکست تایم بالاتر</b>\n" + "\n".join(f"• {_e(b)}" for b in bits)
+    # v7.6 multi-timeframe read (computed at scan time by enrich_candidate_context)
+    mtf = md.get("mtf_fa") or []
+    zones = md.get("zones_fa") or []
+    out = "🧭 <b>کانتکست مولتی‌تایم‌فریم</b>\n" + "\n".join(f"• {_e(b)}" for b in bits)
+    if mtf:
+        out += "\n\n⏱ <b>نمای تایم‌به‌تایم بازار</b>\n" + "\n".join(_e(line) for line in mtf)
+    if zones:
+        out += "\n\n🗺 <b>زون‌های مهم نزدیک قیمت</b>\n" + "\n".join(_e(line) for line in zones)
+    return out
+
+
+def _why_fa(candidate: SignalCandidate, limit: int = 6) -> str:
+    """🔍 «چرا این هشدار صادر شد؟» — the plain-language confluence list every
+    alert/signal must carry per Viva's v7.6 spec."""
+    items: List[str] = []
+    md = candidate.metadata or {}
+    if candidate.strategy_fa:
+        items.append(f"ستاپ: {candidate.strategy_fa}")
+    for item in candidate.evidence:
+        if item.confirmed:
+            first_line = str(item.title or "").strip()
+            if first_line:
+                items.append(first_line)
+    for conf in (candidate.confirmations or [])[:2]:
+        first_line = str(conf).split(".")[0].split("؛")[0].strip()
+        if first_line:
+            items.append(first_line)
+    if md.get("tl_pattern_fa"):
+        items.append(str(md["tl_pattern_fa"]))
+    if md.get("div_fa"):
+        items.append(str(md["div_fa"]))
+    deduped: List[str] = []
+    seen = set()
+    for item in items:
+        if item not in seen:
+            deduped.append(item)
+            seen.add(item)
+    body = "\n".join(f"• {_e(x)}" for x in deduped[:limit]) or "• شواهد ساختاری کامل شد."
+    return f"🔍 <b>چرا این {'سیگنال' if candidate.status == 'CONFIRMED' else 'هشدار'} صادر شد؟</b>\n{body}"
 
 
 def _price(value: float) -> str:
@@ -308,6 +350,35 @@ def _scenario_arrow(ax, start, end, color: str, alpha: float = 0.9) -> None:
         zorder=11,
     )
     ax.add_patch(arrow)
+
+
+def _scenario_path(ax, start, end, color: str, alpha: float = 0.85) -> None:
+    """Viva's hand-drawn schematic path: a light zig-zag polyline confined to
+    the candle-free right margin, ending in an arrowhead. It sketches the
+    *shape* of the expected move (pullbacks inside the trend), not a laser
+    line — matches the reference sketches he sent."""
+    x0, y0 = start
+    x1, y1 = end
+    span_x = max(x1 - x0, 1e-9)
+    delta_y = y1 - y0
+    # alternating counter-bends sized as a fraction of total displacement
+    fracs = (0.0, 0.2, 0.34, 0.5, 0.66, 0.8, 1.0)
+    bends = (0.0, -0.11, 0.13, -0.12, 0.10, -0.08, 0.0)
+    xs = [x0 + f * span_x for f in fracs]
+    ys = [y0 + f * delta_y + b * abs(delta_y) for f, b in zip(fracs, bends)]
+    ax.plot(xs, ys, color=color, linewidth=1.15, alpha=alpha, zorder=11, solid_capstyle="round")
+    head = FancyArrowPatch(
+        (xs[-2], ys[-2]),
+        (xs[-1], ys[-1]),
+        arrowstyle="-|>",
+        mutation_scale=12,
+        linewidth=0,
+        color=color,
+        alpha=alpha,
+        transform=ax.transData,
+        zorder=12,
+    )
+    ax.add_patch(head)
 
 
 def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
@@ -587,17 +658,22 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             )
             notes.append((f"MSS / BOS  {_price(float(structure_level))}", CHART_THEME["structure"]))
 
-        # The expected direction, drawn as one clean schematic arrow from the
-        # entry zone towards TP1 (matches the analysis text under the chart).
+        # The expected direction as one clean schematic path from the entry
+        # zone towards TP1, fully inside the candle-free right margin
+        # (Viva's sketch style: zig-zag polyline with an arrowhead).
         if not confirmed:
             try:
-                _scenario_arrow(
-                    ax,
-                    (count + 1.0, candidate.planned_entry),
-                    (count + future - 2.5, candidate.tp1),
-                    CHART_THEME["tp1"] if candidate.direction == "LONG" else CHART_THEME["invalidation"],
-                    alpha=0.65,
+                _path_kwargs = dict(
+                    ax=ax,
+                    start=(count + 1.0, candidate.planned_entry),
+                    end=(count + future - 2.5, candidate.tp1),
+                    color=CHART_THEME["tp1"] if candidate.direction == "LONG" else CHART_THEME["invalidation"],
+                    alpha=0.7,
                 )
+                if _CHART_SCENARIO_ZIGZAG:
+                    _scenario_path(**_path_kwargs)
+                else:
+                    _scenario_arrow(**_path_kwargs)
                 notes.append((f"EXPECTED MOVE → TP1  {_price(candidate.tp1)}",
                               CHART_THEME["tp1"]))
             except Exception:
@@ -664,18 +740,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _level_tag(ax, tool_end + 0.35, level, f"{label}  {_price(level)}", color)
 
             scenario_x = [count + 0.6, count + 5.2, count + 9.8]
-            _scenario_arrow(
-                ax,
-                (scenario_x[0], candidate.planned_entry),
-                (scenario_x[1], candidate.tp1),
-                CHART_THEME["text"],
-            )
-            _scenario_arrow(
-                ax,
-                (scenario_x[1], candidate.tp1),
-                (scenario_x[2], candidate.tp2),
-                CHART_THEME["tp2"],
-            )
+            if _CHART_SCENARIO_ZIGZAG:
+                _scenario_path(ax, (scenario_x[0], candidate.planned_entry),
+                               (scenario_x[1], candidate.tp1), CHART_THEME["text"])
+                _scenario_path(ax, (scenario_x[1], candidate.tp1),
+                               (scenario_x[2], candidate.tp2), CHART_THEME["tp2"])
+            else:
+                _scenario_arrow(ax, (scenario_x[0], candidate.planned_entry),
+                                (scenario_x[1], candidate.tp1), CHART_THEME["text"])
+                _scenario_arrow(ax, (scenario_x[1], candidate.tp1),
+                                (scenario_x[2], candidate.tp2), CHART_THEME["tp2"])
             _scenario_arrow(
                 ax,
                 (scenario_x[0], candidate.planned_entry),
@@ -740,6 +814,84 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 notes.append((f"SWING LOW  {_price(float(lo))}", CHART_THEME["demand"]))
         except Exception:
             pass
+
+        # ── Viva v7.6 · valid trading range overlay ──────────────────────
+        # If the frame contains a real range (top & bottom validated by >=2
+        # pivot touches each), draw both boundaries across the chart and say
+        # plainly whether price is INSIDE it (entry blocked until a break).
+        if _CHART_RANGE_OVERLAY:
+            try:
+                from analysis.indicators import pivots as _rng_piv
+
+                _reset = frame.reset_index()
+                _rph, _rpl = _rng_piv(_reset, 3, 3)
+                _tr = (frame["high"] - frame["low"]).tail(14)
+                _atr_now = float(_tr.mean()) if len(_tr) else 0.0
+                last_close = float(frame["close"].iloc[-1])
+                if _atr_now > 0 and len(_rph) >= 2 and len(_rpl) >= 2:
+                    def _validated(piv_list):
+                        levels = []
+                        for piv in piv_list:
+                            price = float(piv["price"])
+                            if any(abs(price - lv) <= 0.45 * _atr_now for lv in levels):
+                                continue
+                            touches = sum(
+                                1 for p2 in piv_list
+                                if abs(float(p2["price"]) - price) <= 0.55 * _atr_now
+                            )
+                            if touches >= 2:
+                                levels.append(price)
+                        return levels
+
+                    his = _validated(_rph)
+                    los = _validated(_rpl)
+                    if his and los:
+                        rhi = min(his, key=lambda v: abs(v - last_close))
+                        rlo = min(los, key=lambda v: abs(v - last_close))
+                        if rlo < rhi and (rhi - rlo) >= 2.2 * _atr_now:
+                            ax.hlines(rhi, 0, count + future - 0.5,
+                                      color=CHART_THEME["invalidation"],
+                                      linestyle=(0, (8, 5)), linewidth=1.0, alpha=0.55, zorder=3)
+                            ax.hlines(rlo, 0, count + future - 0.5,
+                                      color=CHART_THEME["demand"],
+                                      linestyle=(0, (8, 5)), linewidth=1.0, alpha=0.55, zorder=3)
+                            notes.append((f"RANGE HIGH  {_price(rhi)}", CHART_THEME["invalidation"]))
+                            notes.append((f"RANGE LOW  {_price(rlo)}", CHART_THEME["demand"]))
+                            if rlo <= last_close <= rhi:
+                                notes.append(("INSIDE RANGE · شکست معتبر تا ورود لازم است", CHART_THEME["muted"]))
+                            else:
+                                notes.append(("RANGE BROKEN · بیرون از رنج", CHART_THEME["muted"]))
+            except Exception as exc:
+                print(f"Range overlay warning: {exc}")
+
+        # ── Viva v7.6 · dynamic trendline/channel on every chart ─────────
+        # The same fitter that powers TLBREAK, projected onto whatever frame
+        # is being drawn — dashed so it never fights a TLBREAK alert's own
+        # solid lines. At most one structural pair per chart: no clutter.
+        if _CHART_STRUCTURE_LINES and candidate.setup_code != "TLBREAK":
+            try:
+                from analysis.setups_experimental import _fit_channel_line
+
+                _reset = frame.reset_index()
+                _fdf = _reset[["timestamp", "open", "high", "low", "close", *([c for c in ("volume", "turnover") if c in _reset.columns])]]
+                fit = _fit_channel_line(_fdf, candidate.direction)
+                if fit:
+                    x_a = float(fit["a"]["index"])
+                    x_end = count + future - 0.5
+                    p_a = float(fit["a"]["price"])
+                    slope = float(fit["slope"])
+                    ax.plot([x_a, x_end], [p_a, p_a + slope * (x_end - x_a)],
+                            color=CHART_THEME["trend"], linestyle=(0, (7, 5)),
+                            linewidth=0.95, alpha=0.7, zorder=3)
+                    a_x = float(fit["anchor"]["index"])
+                    a_p = float(fit["anchor"]["price"])
+                    ax.plot([a_x, x_end], [a_p, a_p + slope * (x_end - a_x)],
+                            color=CHART_THEME["trend"], linestyle=(0, (7, 5)),
+                            linewidth=0.85, alpha=0.5, zorder=3)
+                    line_label = "DYNAMIC RESISTANCE" if candidate.direction == "LONG" else "DYNAMIC SUPPORT"
+                    notes.append((f"{line_label} · touch/break = هشدار", CHART_THEME["trend"]))
+            except Exception as exc:
+                print(f"Trendline overlay warning: {exc}")
 
         _render_corner_notes(ax, notes, confirmed=confirmed)
 
@@ -811,6 +963,7 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         f"⭐ امتیاز فعلی: <b>{candidate.score}/10</b>\n"
         f"🆔 <code>{_e(candidate.signal_id)}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{_why_fa(candidate)}\n\n"
         + "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(evidence_blocks)
         + f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
         f"🔎 <b>ناحیه‌ای که زیر نظر داریم</b>\n\n"
@@ -868,6 +1021,7 @@ def build_approaching_message(candidate: SignalCandidate, current_price: float, 
         f"📍 ناحیه بررسی: <b>{_price(candidate.entry_zone_bottom)} – {_price(candidate.entry_zone_top)}</b>\n"
         f"💹 قیمت فعلی: <b>{_price(current_price)}</b>\n"
         f"📏 فاصله تا ناحیه: <b>{distance_atr:.2f} ATR</b>\n\n"
+        f"{_why_fa(candidate)}\n\n"
         f"🔎 در انتظار: {_e(waiting)}\n\n"
         f"{_htf_context_fa(candidate)}\n\n"
         f"{_ai_note(candidate)}\n\n"
@@ -947,9 +1101,13 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
         candidate.metadata["education_separator_attempted"] = True
     chart = generate_chart(chart_df, candidate, confirmed=False) if chart_df is not None else None
     if candidate.setup_code == "PINVAL":
+        md = candidate.metadata or {}
+        zone_fa = str(md.get("pin_zone_fa") or "ناحیه مهم")
+        ctx_fa = _TF_FA.get(str(md.get("pin_ctx_tf") or ""), str(md.get("pin_ctx_tf") or "").upper())
         caption = (
             f"🚨 {_e(candidate.symbol)} • {_e(candidate.trigger_timeframe)} • پین‌بار "
             f"{'🟢 صعودی' if candidate.direction == 'LONG' else '🔴 نزولی'}\n"
+            f"📍 داخل { _e(zone_fa) }" + (f" (کانتکست {_e(ctx_fa)})" if ctx_fa else "") + "\n"
             f"🆔 <code>{_e(candidate.signal_id)}</code>"
         )
     else:

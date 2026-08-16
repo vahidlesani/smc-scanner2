@@ -1,5 +1,39 @@
 # Changelog
 
+## v7.6.0 — 2026-08-16
+
+### Viva's 9-point overhaul wave
+- **Ourbit data provider** (new `data/ourbit.py`): candles, contracts (710
+  perps incl. PAXG/XAUT gold) and tickers straight from Viva's execution
+  venue — no API key needed, public market data. Routing in `fetcher.py`:
+  Ourbit first when the symbol is listed there, Bybit fallback (Bybit-only
+  via DATA_PROVIDER=bybit).
+- **Independent liquidity ranking** (new `data/ranking.py`): the watchlist is
+  ranked by OKX global swap turnover (Bybit fallback) — a coin with real
+  global futures volume is never dropped just because the candle venue is
+  thin on it. Metals (PAXG/XAUT/SILVER) and commodities are injected even
+  though crypto rankings don't list them, with a 4x lower liquidity floor.
+- **Per-(symbol, trigger_tf) locking**: a pending 1h swing no longer blocks
+  scalp setups on the same symbol's 5m/15m triggers. Both the SQLite
+  candidate store (new trigger_tf column) and the Supabase symbol locks
+  (composite `SYMBOL:tf` key, no schema migration) + `has_unresolved_symbol`
+  now respect the trigger timeframe.
+- **Trigger-driven confirmation grid**: 5m→1m, 15m→5m, 1h→5m (was style-based).
+- **Scan priority**: symbols with open alerts scan first, in alert order.
+- **DB slimming policy**: only confirmed signals keep history (they persist
+  in Supabase); resolved non-confirmed candidates are purged after 6h,
+  confirmed after 48h (env-tunable).
+- **Every alert explains itself**: 🔍 «چرا این هشدار صادر شد؟» confluence
+  list, ⏱ timeframe-by-timeframe market view (structure bias + RSI +
+  divergence tags), 🗺 nearby zones with ATR distance — computed once at
+  scan time (`enrich_candidate_context`), minimal emoji section headers.
+- **Charts**: hand-drawn-style zig-zag scenario path in the candle-free
+  right margin; valid-range overlay (top/bottom validated by >=2 pivot
+  touches, "INSIDE RANGE" tag blocks impulse entries); dynamic
+  trendline/channel dashed overlay on every chart via the TLBREAK fitter.
+  Env killswitches: CHART_SCENARIO_ZIGZAG / CHART_RANGE_OVERLAY /
+  CHART_STRUCTURE_LINES.
+
 ## v7.4.0 — 2026-08-15
 
 ### Added

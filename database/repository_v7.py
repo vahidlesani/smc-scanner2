@@ -165,10 +165,18 @@ def confirmed_exists(signal_id: str) -> bool:
         return cursor.fetchone() is not None
 
 
+def symbol_lock_key(candidate: SignalCandidate) -> str:
+    """v7.6: locks are per (symbol, trigger timeframe), stored in the existing
+    `symbol` TEXT column as `SYMBOL:tf` — no schema change required. A pending
+    1h swing no longer blocks scalp scenarios on this symbol's 5m trigger."""
+    tf = str(getattr(candidate, "trigger_timeframe", "") or "").lower()
+    return f"{candidate.symbol.upper()}:{tf}" if tf else candidate.symbol.upper()
+
+
 def acquire_symbol_lock(candidate: SignalCandidate) -> bool:
     """Atomically persist a cross-restart lock without candidate history."""
     p = legacy_db._ph()
-    symbol = candidate.symbol.upper()
+    symbol = symbol_lock_key(candidate)
     now = _now()
     expiry = _naive_timestamp(candidate.expires_at)
     expiry_text = (
@@ -219,7 +227,7 @@ def update_symbol_lock(candidate: SignalCandidate) -> None:
                 candidate.status,
                 expiry_text,
                 _now(),
-                candidate.symbol.upper(),
+                symbol_lock_key(candidate),
                 candidate.signal_id,
                 SETTINGS.strategy_version,
             ),
@@ -227,19 +235,27 @@ def update_symbol_lock(candidate: SignalCandidate) -> None:
 
 
 def release_symbol_lock(symbol: str, signal_id: str) -> None:
+    """Release by signal_id — works for both plain-symbol and `SYMBOL:tf`
+    composite lock rows."""
     p = legacy_db._ph()
     with legacy_db.db_cursor() as cursor:
         cursor.execute(
             f"DELETE FROM signal_symbol_locks "
-            f"WHERE symbol={p} AND signal_id={p} AND strategy_version={p}",
-            (symbol.upper(), signal_id, SETTINGS.strategy_version),
+            f"WHERE signal_id={p} AND strategy_version={p}",
+            (signal_id, SETTINGS.strategy_version),
         )
 
 
-def has_unresolved_symbol(symbol: str, exclude_signal_id: str = "") -> bool:
-    """Block every duplicate confirmed lifecycle on a symbol until its outcome."""
+def has_unresolved_symbol(symbol: str, exclude_signal_id: str = "", trigger_tf: str = "") -> bool:
+    """Block a duplicate confirmed lifecycle on the SAME symbol+trigger TF until
+    its outcome. A pending PENDING swing on `1h` never blocks this symbol's
+    `5m` scalp confirmations (Viva's per-TF locking rule)."""
     p = legacy_db._ph()
     params = [symbol.upper(), SETTINGS.strategy_version]
+    tf_filter = ""
+    if trigger_tf:
+        tf_filter = f"AND trigger_timeframe={p}"
+        params.append(str(trigger_tf).lower())
     exclude = ""
     if exclude_signal_id:
         exclude = f"AND signal_id<>{p}"
@@ -252,6 +268,7 @@ def has_unresolved_symbol(symbol: str, exclude_signal_id: str = "") -> bool:
               AND confirmed_at IS NOT NULL
               AND status IN ('AWAITING_PUBLICATION', 'CONFIRMED')
               AND result='PENDING'
+              {tf_filter}
               {exclude}
             LIMIT 1
             """,

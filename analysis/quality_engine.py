@@ -44,6 +44,15 @@ def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
     candidates: List[SignalCandidate] = []
     candidates.extend(SWING_ENGINE.scan(bundle))
     candidates.extend(SCALP_ENGINE.scan(bundle))
+    # Viva v7.6: every alert must describe WHY it fired, the multi-timeframe
+    # context, and nearby zones — computed once at scan time.
+    from analysis.setups_v7 import enrich_candidate_context
+
+    for candidate in candidates:
+        try:
+            enrich_candidate_context(bundle, candidate)
+        except Exception:
+            pass
     return candidates
 
 
