@@ -4,6 +4,8 @@ from __future__ import annotations
 import html
 import io
 import os
+import threading
+import time
 from typing import List, Optional
 
 import matplotlib
@@ -209,6 +211,48 @@ def _chart_market_label(candidate: SignalCandidate) -> str:
     return f"{venue} • {asset_class}"
 
 
+_TG_LOCK = threading.Lock()
+_TG_LAST_SENT = 0.0
+_TG_MIN_GAP = float(os.getenv("TELEGRAM_MIN_SEND_GAP", "0.9"))
+
+
+def _tg_pace(min_gap: Optional[float] = None) -> None:
+    """Telegram hard rate limits: ~1 msg/s per chat, ~20 msg/min per group.
+    A discovery burst can emit many alerts at once, so serialize all sends."""
+    global _TG_LAST_SENT
+    with _TG_LOCK:
+        gap = _TG_MIN_GAP if min_gap is None else min_gap
+        wait = gap - (time.monotonic() - _TG_LAST_SENT)
+        if wait > 0:
+            time.sleep(wait)
+        _TG_LAST_SENT = time.monotonic()
+
+
+def _tg_post(url: str, *, data: dict, files: Optional[dict] = None, timeout: int = 15) -> Optional[dict]:
+    """POST with 429-retry honoring retry_after (max 3 attempts)."""
+    for attempt in range(3):
+        try:
+            _tg_pace()
+            response = requests.post(url, data=data, files=files, timeout=timeout)
+        except Exception as exc:
+            print(f"Telegram API error: {exc}")
+            return None
+        if response.ok:
+            return response.json()
+        if response.status_code == 429 and attempt < 2:
+            retry_after = 5
+            try:
+                retry_after = int(response.json().get("parameters", {}).get("retry_after", 5))
+            except Exception:
+                pass
+            print(f"Telegram 429 — retry in {retry_after + 1}s ({url.rsplit('/', 1)[-1]})")
+            time.sleep(retry_after + 1)
+            continue
+        print(f"Telegram API {response.status_code}: {response.text[:240]}")
+        return None
+    return None
+
+
 def _chunks(text: str, limit: int = 3900) -> List[str]:
     chunks: List[str] = []
     remaining = text.strip()
@@ -248,14 +292,9 @@ def send_message(
         if reply_to_message_id:
             payload["reply_to_message_id"] = int(reply_to_message_id)
             payload["allow_sending_without_reply"] = True
-        try:
-            response = requests.post(url, data=payload, timeout=15)
-            if not response.ok:
-                print(f"Telegram sendMessage {response.status_code}: {response.text[:240]}")
-            elif first_id is None:
-                first_id = int(response.json().get("result", {}).get("message_id") or 0) or None
-        except Exception as exc:
-            print(f"Telegram sendMessage error: {exc}")
+        result = _tg_post(url, data=payload, timeout=15)
+        if result and first_id is None:
+            first_id = int(result.get("result", {}).get("message_id") or 0) or None
     return first_id
 
 
@@ -298,20 +337,15 @@ def send_photo(
     if reply_to_message_id:
         payload["reply_to_message_id"] = int(reply_to_message_id)
         payload["allow_sending_without_reply"] = True
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-            data=payload,
-            files={"photo": ("viva-chart.png", image, "image/png")},
-            timeout=35,
-        )
-        if not response.ok:
-            print(f"Telegram sendPhoto {response.status_code}: {response.text[:240]}")
-            return None
-        return int(response.json().get("result", {}).get("message_id") or 0) or None
-    except Exception as exc:
-        print(f"Telegram sendPhoto error: {exc}")
+    result = _tg_post(
+        f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
+        data=payload,
+        files={"photo": ("viva-chart.png", image, "image/png")},
+        timeout=35,
+    )
+    if not result:
         return None
+    return int(result.get("result", {}).get("message_id") or 0) or None
 
 
 def _level_tag(ax, x: float, y: float, label: str, color: str) -> None:
