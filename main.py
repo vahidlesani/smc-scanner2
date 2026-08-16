@@ -138,15 +138,6 @@ def run_discovery_scan() -> Dict[str, int]:
             for candidate in candidates:
                 if candidate.score < SETTINGS.educational_min_score:
                     continue
-                if candidate.setup_code == "PINVAL":
-                    # Alert-only pinbar: never holds a symbol lock, never enters
-                    # the confirmation lifecycle — the monitor resolves its
-                    # verdict within a few candles and replies under the alert.
-                    if not add_candidate(candidate):
-                        continue
-                    stats["new"] += 1
-                    send_educational_setup(candidate, _chart_frame(candidate, bundle))
-                    continue
                 if SETTINGS.skip_dead_gate_candidates and not candidate.execution_ready:
                     # A failing mandatory gate can never be repaired later, so
                     # this candidate can never confirm. Keep it educational,
@@ -184,6 +175,21 @@ def run_discovery_scan() -> Dict[str, int]:
         f"detected={stats['detected']} new={stats['new']} errors={stats['errors']}"
     )
     return stats
+
+
+def _pinv_window_expired(candidate: SignalCandidate, closed: Optional[pd.DataFrame]) -> bool:
+    """Count only closed bars of the pin trigger timeframe after alert creation."""
+    if closed is None or closed.empty:
+        return is_expired(candidate)
+    md = candidate.metadata or {}
+    tf = str(md.get("pin_tf") or candidate.trigger_timeframe)
+    seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}.get(tf, 300)
+    try:
+        created = pd.Timestamp(str(candidate.created_at)).tz_localize(None)
+        bars = closed[pd.to_datetime(closed["timestamp"]) >= created - pd.Timedelta(seconds=seconds)]
+        return len(bars) >= int(md.get("pin_verdict_candles") or SETTINGS.alert_verdict_candles)
+    except Exception:
+        return is_expired(candidate)
 
 
 def _resolve_pinv_verdict(candidate: SignalCandidate, closed: Optional[pd.DataFrame]) -> None:
@@ -310,14 +316,24 @@ def monitor_candidates() -> Dict[str, int]:
         live, closed, current_price = market_data if market_data else (None, None, None)
         try:
             if candidate.setup_code == "PINVAL":
-                stats["pinv"] = stats.get("pinv", 0) + 1
-                # Verdicts resolve on the PIN's own timeframe frame — never on
-                # the finer confirm TF (that was the mass-cancellation bug).
+                # PINVAL now uses the same lower-timeframe confirmation engine
+                # as every executable setup. Its native timeframe only limits
+                # how long the alert may wait; it never counts LTF bars here.
                 md_pin = candidate.metadata or {}
                 pin_tf = str(md_pin.get("pin_tf") or candidate.trigger_timeframe)
-                pin_frame = frames.get((candidate.symbol, pin_tf)) or market_data
-                _resolve_pinv_verdict(candidate, pin_frame[1] if pin_frame else None)
-                continue
+                pin_frame = frames.get((candidate.symbol, pin_tf))
+                if _pinv_window_expired(candidate, pin_frame[1] if pin_frame else None):
+                    candidate.status = "EXPIRED"
+                    update_candidate(candidate)
+                    try:
+                        cancel_staged_confirmation(candidate.signal_id)
+                    except Exception:
+                        pass
+                    send_candidate_cancelled(candidate, "مهلت اعتبار پین‌بار تمام شد و تأیید ساختاری تایم پایین شکل نگرفت.")
+                    from bot.messages_v7 import send_verdict_reply
+                    send_verdict_reply(candidate, None, "در پنجره اعتبار ستاپ، تأیید ورود تایم پایین تشکیل نشد.")
+                    stats["cancelled"] += 1
+                    continue
             if not publication_in_progress and is_expired(candidate):
                 candidate.status = "EXPIRED"
                 update_candidate(candidate)
