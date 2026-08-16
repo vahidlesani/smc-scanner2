@@ -541,12 +541,23 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         rr2 = abs(tp2 - entry) / risk
         if rr1 < 1.0 or rr2 < 1.5:
             continue  # structure can't pay — don't publish a weak alert
+        tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}.get(str(tf), 300)
         zone_kind = "FVG" if in_fvg else (zone["kind"] if in_zone else "NONE")
         zone_fa = {"FVG": "لبهٔ FVG «فلگ‌لیمیت»", "FLIP": "فلیپ‌زون مهم",
                    "SD_FRESH": "زون تازهٔ عرضه/تقاضای تایم بالاتر", "NONE": "ناحیهٔ مرتبط"}.get(zone_kind, "ناحیهٔ مهم")
         last_ts = df["timestamp"].iloc[-1]
         from analysis.models import iso_now
         created = iso_now()
+        # Freshness guard: an alerting pinbar must have just closed. Without
+        # this, a stale pin (e.g. a 1h pin from 45 minutes ago) gets alerted
+        # and the monitor instantly mass-verdicts it from already-closed
+        # candles — Viva's "10 alerts, all cancelled 1 minute later" bug.
+        try:
+            age_s = (pd.Timestamp.utcnow().tz_localize(None) - pd.Timestamp(last_ts)).total_seconds()
+            if age_s > 2 * tf_seconds:
+                continue
+        except Exception:
+            pass
         style_name = "SWING" if style == "SWING" else "SCALP"
         candidate = SignalCandidate(
             signal_id=f"viva-pinv-{bundle.symbol}-{tf}-{str(last_ts)[:16]}",

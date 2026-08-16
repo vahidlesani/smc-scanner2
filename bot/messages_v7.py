@@ -91,8 +91,8 @@ SIGNAL_SEPARATOR = os.getenv(
     "SIGNAL_SEPARATOR_TEXT",
     "━━━━━━━━━━ 💹 VIVASIGNALS PRO ━━━━━━━━━━",
 )
-# v7.6 chart overlays (Viva's chart-design references)
-_CHART_SCENARIO_ZIGZAG = os.getenv("CHART_SCENARIO_ZIGZAG", "on").strip().lower() in {"1", "on", "true", "yes"}
+        # v7.6 chart overlays (Viva's chart-design references)
+_CHART_SCENARIO_ZIGZAG = os.getenv("CHART_SCENARIO_ZIGZAG", "off").strip().lower() in {"1", "on", "true", "yes"}
 _CHART_RANGE_OVERLAY = os.getenv("CHART_RANGE_OVERLAY", "on").strip().lower() in {"1", "on", "true", "yes"}
 _CHART_STRUCTURE_LINES = os.getenv("CHART_STRUCTURE_LINES", "on").strip().lower() in {"1", "on", "true", "yes"}
 
@@ -101,7 +101,7 @@ def _e(value) -> str:
     return html.escape(str(value), quote=False)
 
 
-_TF_FA = {"1d": "روزانه", "4h": "۴ ساعته", "1h": "۱ ساعته", "15m": "۱۵ دقیقه", "5m": "۵ دقیقه"}
+_TF_FA = {"1d": "روزانه", "4h": "۴ ساعته", "1h": "۱ ساعته", "15m": "۱۵ دقیقه", "5m": "۵ دقیقه", "1m": "۱ دقیقه"}
 
 
 def _htf_context_fa(candidate: SignalCandidate) -> str:
@@ -128,15 +128,74 @@ def _htf_context_fa(candidate: SignalCandidate) -> str:
         bits.append(f"کندل داخل {md.get('pin_zone_fa', 'ناحیهٔ مهم')} شکل گرفته{doji}")
     if candidate.bias in ("BULLISH", "BEARISH"):
         bits.append("بایاس ساختاری: " + ("صعودی" if candidate.bias == "BULLISH" else "نزولی"))
-    # v7.6 multi-timeframe read (computed at scan time by enrich_candidate_context)
-    mtf = md.get("mtf_fa") or []
-    zones = md.get("zones_fa") or []
-    out = "🧭 <b>کانتکست مولتی‌تایم‌فریم</b>\n" + "\n".join(f"• {_e(b)}" for b in bits)
-    if mtf:
-        out += "\n\n⏱ <b>نمای تایم‌به‌تایم بازار</b>\n" + "\n".join(_e(line) for line in mtf)
-    if zones:
-        out += "\n\n🗺 <b>زون‌های مهم نزدیک قیمت</b>\n" + "\n".join(_e(line) for line in zones)
-    return out
+
+    # v7.6.3 compact multi-TF read (Viva's rule: SHORT narrative — structure
+    # bias of the higher TFs plus a natural-language note only when price is
+    # near an important level).
+    mtf = md.get("mtf_struct") or {}
+    near = md.get("nearest_zones") or []
+    style = candidate.style.upper()
+    show_tfs = ("1d", "4h") if style == "SWING" else ("4h", "1h")
+    if style == "SCALP":
+        show_tfs = ("4h", "1h")
+    seg = []
+    for tf in show_tfs:
+        row = mtf.get(tf)
+        if not row:
+            continue
+        bias = row.get("bias", "NEUTRAL")
+        bias_fa = {"BULLISH": "صعودی 🟢", "BEARISH": "نزولی 🔴", "NEUTRAL": "خنثی ⚪"}.get(bias, "خنثی ⚪")
+        rsi_val = row.get("rsi")
+        tag = ""
+        if isinstance(rsi_val, (int, float)):
+            if rsi_val >= 70:
+                tag = " (RSI افراطی⚠️)"
+            elif rsi_val <= 30:
+                tag = " (RSI اشباع فروش⚠️)"
+        seg.append(f"{_TF_FA.get(tf, tf.upper())}: {bias_fa}{tag}")
+    if seg:
+        bits.append("ساختار تایم‌های بالاتر → " + " | ".join(seg))
+    allowed = {"1d", "4h"} if style == "SWING" else {"4h", "1h"}
+    z_above = [z for z in near if z.get("side") == "above" and z.get("tf") in allowed]
+    z_below = [z for z in near if z.get("side") == "below" and z.get("tf") in allowed]
+    if z_above:
+        z = z_above[0]
+        if z["dist_atr"] <= 5:
+            note = f"نزدیک‌ترین سطح بالای قیمت: سقف {_TF_FA.get(z['tf'], z['tf'])} {_price(z['level'])} (≈{z['dist_atr']} واحد نوسان)"
+            if z["dist_atr"] <= 1.5:
+                note += " — ⚠️ در همسایگی مقاومت مهم هستیم"
+            bits.append(note)
+    if z_below:
+        z = z_below[0]
+        if z["dist_atr"] <= 5:
+            note = f"نزدیک‌ترین سطح زیر قیمت: کف {_TF_FA.get(z['tf'], z['tf'])} {_price(z['level'])} (≈{z['dist_atr']} واحد نوسان)"
+            if z["dist_atr"] <= 1.5:
+                note += " — ⚠️ در همسایگی حمایت مهم هستیم"
+            bits.append(note)
+    return "🧭 <b>کانتکست تایم بالاتر</b>\n" + "\n".join(f"• {_e(b)}" for b in bits)
+
+
+def _confirm_rule_fa(candidate: SignalCandidate) -> str:
+    """Viva's requirement: every alert states the confirmation condition AND
+    the invalidation condition up front, in one glanceable line."""
+    md = candidate.metadata or {}
+    if candidate.setup_code == "PINVAL":
+        tf_fa = _TF_FA.get(str(md.get("pin_tf") or ""), candidate.trigger_timeframe)
+        n = int(md.get("pin_verdict_candles") or 3)
+        hi, lo = float(md.get("pin_high") or 0), float(md.get("pin_low") or 0)
+        if candidate.direction == "LONG":
+            cond = f"کلوز {tf_fa} بالای {_price(hi)}"
+            kill = f"کلوز {tf_fa} زیر {_price(lo)}"
+        else:
+            cond = f"کلوز {tf_fa} زیر {_price(lo)}"
+            kill = f"کلوز {tf_fa} بالای {_price(hi)}"
+        return f"⚖️ <b>شرط تأیید (تا {n} کندل {tf_fa} بعد):</b> {cond} • <b>ابطال:</b> {kill}"
+    ctf = str(md.get("confirm_tf") or "").upper()
+    ctf_fa = _TF_FA.get(str(md.get("confirm_tf") or "").lower(), ctf)
+    return (
+        f"⚖️ <b>شرط تأیید:</b> بازگشت به ناحیه + کلوز معتبر {ctf_fa} در جهت سناریو"
+        f" • <b>ابطال:</b> عبور معتبر از {_price(candidate.sl)}"
+    )
 
 
 def _why_fa(candidate: SignalCandidate, limit: int = 6) -> str:
@@ -1001,12 +1060,12 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         f"⭐ امتیاز فعلی: <b>{candidate.score}/10</b>\n"
         f"🆔 <code>{_e(candidate.signal_id)}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{_why_fa(candidate)}\n\n"
         + "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(evidence_blocks)
         + f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
         f"🔎 <b>ناحیه‌ای که زیر نظر داریم</b>\n\n"
         f"از <b>{_price(candidate.entry_zone_bottom)}</b> تا <b>{_price(candidate.entry_zone_top)}</b>\n"
         f"سطح ابطال سناریو: <b>{_price(candidate.sl)}</b>\n\n"
+        f"{_confirm_rule_fa(candidate)}\n\n"
         f"{_htf_context_fa(candidate)}\n\n"
         f"🧩 <b>تأییدهای کمکی</b>\n{confirmations}\n\n"
         f"⚠️ <b>شرایط و هشدارها</b>\n{warnings}\n\n"
@@ -1142,10 +1201,16 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
         md = candidate.metadata or {}
         zone_fa = str(md.get("pin_zone_fa") or "ناحیه مهم")
         ctx_fa = _TF_FA.get(str(md.get("pin_ctx_tf") or ""), str(md.get("pin_ctx_tf") or "").upper())
+        hi, lo = float(md.get("pin_high") or 0), float(md.get("pin_low") or 0)
+        if candidate.direction == "LONG":
+            rule = f"✅ کلوز بالای {_price(hi)} • ❌ کلوز زیر {_price(lo)}"
+        else:
+            rule = f"✅ کلوز زیر {_price(lo)} • ❌ کلوز بالای {_price(hi)}"
         caption = (
             f"🚨 {_e(candidate.symbol)} • {_e(candidate.trigger_timeframe)} • پین‌بار "
             f"{'🟢 صعودی' if candidate.direction == 'LONG' else '🔴 نزولی'}\n"
-            f"📍 داخل { _e(zone_fa) }" + (f" (کانتکست {_e(ctx_fa)})" if ctx_fa else "") + "\n"
+            f"📍 داخل {_e(zone_fa)}" + (f" (کانتکست {_e(ctx_fa)})" if ctx_fa else "") + "\n"
+            f"{_e(rule)}\n"
             f"🆔 <code>{_e(candidate.signal_id)}</code>"
         )
     else:

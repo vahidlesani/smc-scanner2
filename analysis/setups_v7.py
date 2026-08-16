@@ -117,7 +117,9 @@ def enrich_candidate_context(bundle: MarketBundle, candidate: SignalCandidate) -
     """
     md = candidate.metadata if isinstance(candidate.metadata, dict) else {}
     mtf_lines: List[str] = []
+    mtf_struct: Dict[str, Dict] = {}
     zone_lines: List[str] = []
+    nearest_zones: List[Dict] = []
     try:
         trigger_tf = candidate.trigger_timeframe
         last_row = bundle.get(trigger_tf)
@@ -133,18 +135,25 @@ def enrich_candidate_context(bundle: MarketBundle, candidate: SignalCandidate) -
             df = bundle.get(tf)
             if df is None or len(df) < 30:
                 continue
-            line = f"• تایم {_TF_FA.get(tf, tf)}: ساختار {_tf_bias_fa(df)}"
             try:
-                rsi_now = float(rsi(df).iloc[-1])
-                if pd.notna(rsi_now):
-                    tag = ""
-                    if rsi_now >= 70:
-                        tag = " (اوربایت ⚠️)"
-                    elif rsi_now <= 30:
-                        tag = " (اورسلد ⚠️)"
-                    line += f" • RSI≈{rsi_now:.0f}{tag}"
+                bias_tf = structure_bias(df, 3).get("bias", "NEUTRAL")
+            except Exception:
+                bias_tf = "NEUTRAL"
+            rsi_now = None
+            try:
+                _r = rsi(df).iloc[-1]
+                rsi_now = float(_r) if pd.notna(_r) else None
             except Exception:
                 pass
+            mtf_struct[tf] = {"bias": bias_tf, "rsi": rsi_now}
+            line = f"• تایم {_TF_FA.get(tf, tf)}: ساختار {_BIAS_FA.get(bias_tf, 'خنثی ⚪')}"
+            if rsi_now is not None:
+                tag = ""
+                if rsi_now >= 70:
+                    tag = " (اوربایت ⚠️)"
+                elif rsi_now <= 30:
+                    tag = " (اورسلد ⚠️)"
+                line += f" • RSI≈{rsi_now:.0f}{tag}"
             if tf == trigger_tf:
                 div = detect_rsi_divergence(df, candidate.direction)
                 if div:
@@ -172,12 +181,14 @@ def enrich_candidate_context(bundle: MarketBundle, candidate: SignalCandidate) -
                         zone_lines.append(
                             f"⬆️ مقاومت {tf_fa} در {_fmt(level)} — فاصله ≈{dist:.1f} ATR از قیمت فعلی"
                         )
+                        nearest_zones.append({"tf": tf, "side": "above", "level": float(level), "dist_atr": round(float(dist), 2)})
                 for level in levels.get("below", []):
                     dist = (last_price - level) / atr_now
                     if dist <= 6:
                         zone_lines.append(
                             f"⬇️ حمایت {tf_fa} در {_fmt(level)} — فاصله ≈{dist:.1f} ATR از قیمت فعلی"
                         )
+                        nearest_zones.append({"tf": tf, "side": "below", "level": float(level), "dist_atr": round(float(dist), 2)})
             # the candidate's own POI is the most important zone — say its kind
             poi_type = str(md.get("poi_type") or "").upper()
             poi_fa = {
@@ -196,8 +207,12 @@ def enrich_candidate_context(bundle: MarketBundle, candidate: SignalCandidate) -
         return
     if mtf_lines:
         md["mtf_fa"] = mtf_lines
+    if mtf_struct:
+        md["mtf_struct"] = mtf_struct
     if zone_lines:
         md["zones_fa"] = zone_lines[:8]
+    if nearest_zones:
+        md["nearest_zones"] = sorted(nearest_zones, key=lambda z: z["dist_atr"])[:6]
     candidate.metadata = md
 
 

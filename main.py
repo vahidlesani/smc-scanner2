@@ -207,11 +207,23 @@ def _resolve_pinv_verdict(candidate: SignalCandidate, closed: Optional[pd.DataFr
         candidate.status = "VERDICT_TIMEOUT"
         update_candidate(candidate)
         return
+    # Verdict window = N closed candles AFTER THE ALERT, on the pin's own
+    # timeframe. (Earlier versions counted candles after the pin candle
+    # itself, so a pin one candle old at detection exhausted the whole
+    # verdict window before anyone could act — the "cancelled after 21
+    # candles in 1 minute" bug.)
+    pin_tf = str(md.get("pin_tf") or candidate.trigger_timeframe)
+    tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}.get(pin_tf, 300)
     try:
-        ts = pd.Timestamp(pin_ts)
-        after = closed[pd.to_datetime(closed["timestamp"]) > ts]
+        det = pd.Timestamp(str(candidate.created_at)).tz_localize(None)
+        threshold = det - pd.Timedelta(seconds=tf_seconds)
+        after = closed[pd.to_datetime(closed["timestamp"]) >= threshold]
     except Exception:
-        after = closed.tail(n_candles)
+        try:
+            ts = pd.Timestamp(pin_ts)
+            after = closed[pd.to_datetime(closed["timestamp"]) > ts]
+        except Exception:
+            after = closed.tail(n_candles)
     direction = candidate.direction
     for _, row in after.head(n_candles).iterrows():
         c = float(row["close"])
@@ -232,8 +244,9 @@ def _resolve_pinv_verdict(candidate: SignalCandidate, closed: Optional[pd.DataFr
     if len(after) >= n_candles or is_expired(candidate):
         candidate.status = "VERDICT_TIMEOUT"
         update_candidate(candidate)
+        tf_fa = {"1m": "۱دقیقه‌ای", "5m": "۵دقیقه‌ای", "15m": "۱۵دقیقه‌ای", "1h": "۱ساعته"}.get(pin_tf, pin_tf)
         send_verdict_reply(candidate, None,
-                         f"پس از {len(after)} کندل، کلوز تأییدکننده نیامد؛ هشدار بدون اجرا بسته شد.")
+                         f"پس از {len(after)} کندل {tf_fa} (از زمان هشدار) کلوز تأییدکننده نیامد؛ هشدار بدون اجرا بسته شد.")
 
 
 def _pinv_done(candidate: SignalCandidate, ok: bool, why: str) -> None:
@@ -298,7 +311,12 @@ def monitor_candidates() -> Dict[str, int]:
         try:
             if candidate.setup_code == "PINVAL":
                 stats["pinv"] = stats.get("pinv", 0) + 1
-                _resolve_pinv_verdict(candidate, closed)
+                # Verdicts resolve on the PIN's own timeframe frame — never on
+                # the finer confirm TF (that was the mass-cancellation bug).
+                md_pin = candidate.metadata or {}
+                pin_tf = str(md_pin.get("pin_tf") or candidate.trigger_timeframe)
+                pin_frame = frames.get((candidate.symbol, pin_tf)) or market_data
+                _resolve_pinv_verdict(candidate, pin_frame[1] if pin_frame else None)
                 continue
             if not publication_in_progress and is_expired(candidate):
                 candidate.status = "EXPIRED"
