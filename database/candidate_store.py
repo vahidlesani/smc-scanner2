@@ -88,7 +88,6 @@ def find_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
             WHERE symbol=?
               AND trigger_tf=?
               AND status IN ('EDUCATIONAL', 'APPROACHING', 'CONFIRMED')
-              AND setup_code != 'PINVAL'
               AND expires_at>?
             ORDER BY created_at DESC LIMIT 1
             """,

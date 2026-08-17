@@ -12,7 +12,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, Rectangle
-from matplotlib.ticker import FuncFormatter
+from matplotlib.ticker import FuncFormatter, MaxNLocator, AutoMinorLocator
 import matplotlib.image as mpimg
 import mplfinance as mpf
 import numpy as np
@@ -543,7 +543,7 @@ def _render_corner_notes(ax, notes: list, confirmed: bool = False) -> None:
     y = 0.965
     for text, color in notes:
         ax.text(
-            0.899, y, text,
+            0.790, y, text,
             transform=ax.transAxes,
             ha="left", va="top",
             color=color,
@@ -606,8 +606,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         )
         # mplfinance creates manually positioned axes, so set the panel geometry
         # directly: wide price area, compact volume, and a small branded footer.
-        price_position = [0.055, 0.245, 0.845, 0.650]
-        volume_position = [0.055, 0.090, 0.845, 0.135]
+        # Wide candle-free future area: at 120dpi this is ~7cm from the last
+        # candle to the price ladder, leaving every chart label readable.
+        price_position = [0.055, 0.245, 0.805, 0.650]
+        volume_position = [0.055, 0.090, 0.805, 0.135]
         for index, chart_ax in enumerate(axes):
             chart_ax.set_position(price_position if index < 2 else volume_position)
             chart_ax.set_facecolor(CHART_THEME["panel"])
@@ -625,11 +627,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         ax.tick_params(
             axis="y",
             colors=CHART_THEME["text"],
-            labelsize=9.5,
+            labelsize=9.0,
             labelright=True,
             right=True,
-            pad=18,
+            pad=12,
+            length=4,
+            width=0.8,
         )
+        # TradingView-like readable price ladder: measured major intervals,
+        # light minor guides, precise plain-number formatting on the right.
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=8, min_n_ticks=6))
+        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.grid(which="minor", axis="y", color=CHART_THEME["grid"], alpha=0.16, linewidth=0.45)
         ax.set_ylabel("")
         for label in ax.get_yticklabels():
             label.set_fontweight("bold")
@@ -641,7 +650,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             axes[3].tick_params(axis="y", labelleft=False, labelright=False)
 
         count = len(frame)
-        future = 14 if confirmed else 10
+        # 30–34 bars of blank future space keeps the last candle roughly seven
+        # centimetres from the price ladder / labels on the 12-inch render.
+        future = 34 if confirmed else 30
         for chart_ax in axes:
             chart_ax.set_xlim(-1, count + future)
 
@@ -682,7 +693,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             linewidth=0,
         )
         ax.text(
-            count + 1.6,  # in the right margin, never over the candles
+            count + 2.0,  # in the wide right margin, never over the candles
             (candidate.entry_zone_bottom + candidate.entry_zone_top) / 2,
             zone_name,
             color=zone_text_color,
