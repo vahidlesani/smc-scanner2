@@ -101,8 +101,8 @@ def main_menu_keyboard(user_id=None):
             {"text": "🔔 ستاپ‌های فعال", "callback_data": "setups"},
         ],
         [
-            {"text": "📊 آمار کانال", "callback_data": "stats"},
-            {"text": "💎 عضویت", "callback_data": "mem_menu"},
+            {"text": "📊 نتایج ستاپ‌ها", "callback_data": "strategies"},
+            {"text": "📚 آموزش اصطلاحات", "callback_data": "education"},
         ],
         [
             {"text": "🖥 وضعیت ربات", "callback_data": "status"},
@@ -628,6 +628,22 @@ def handle_strategy_detail(chat_id, strategy):
                  strategy_list_keyboard())
 
 
+def handle_education(chat_id):
+    text = (
+        "📚 <b>آموزش اصطلاحات چارت</b>\n━━━━━━━━━━━━━━━━━━\n"
+        "• <b>BOS / MSS</b>: شکست ساختار یا تغییر رفتار ساختاری.\n"
+        "• <b>FVG</b>: ناکارآمدی بین کندل‌ها؛ ناحیه‌ای که ممکن است قیمت به آن برگردد.\n"
+        "• <b>Supply / Demand</b>: زون عرضه یا تقاضا که واکنش معتبر قبلی دارد.\n"
+        "• <b>Liquidity Sweep</b>: جمع‌کردن سقف/کف و برگشت قیمت.\n"
+        "• <b>Retest</b>: بازگشت قیمت برای تست سطح شکسته‌شده.\n"
+        "• <b>Displacement</b>: حرکت جهت‌دار با بدنه معتبر نسبت به ATR.\n"
+        "• <b>ATR</b>: واحد نوسان واقعی همان نماد و همان تایم‌فریم.\n"
+        "• <b>R:R</b>: نسبت سود بالقوه به فاصله ابطال.\n"
+        "• <b>Invalidation</b>: سطحی که عبور معتبر از آن، سناریو را باطل می‌کند."
+    )
+    send_message(text, chat_id, main_menu_keyboard())
+
+
 # ─── پردازش Callback ───
 
 def handle_callback(callback_query):
@@ -649,6 +665,8 @@ def handle_callback(callback_query):
         handle_stats(chat_id, uid)
     elif data == "strategies":
         handle_strategies(chat_id)
+    elif data == "education":
+        handle_education(chat_id)
     elif data == "signals":
         if _is_admin(uid):
             handle_recent_signals(chat_id)

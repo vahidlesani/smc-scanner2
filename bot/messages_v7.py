@@ -388,6 +388,7 @@ def send_photo(
     caption: str,
     chat_id: Optional[str] = None,
     reply_to_message_id: Optional[int] = None,
+    reply_markup: Optional[dict] = None,
 ) -> Optional[int]:
     target = chat_id or CHAT_ID_ADMIN
     if not TOKEN or not target or not image:
@@ -396,6 +397,9 @@ def send_photo(
     if reply_to_message_id:
         payload["reply_to_message_id"] = int(reply_to_message_id)
         payload["allow_sending_without_reply"] = True
+    if reply_markup:
+        import json
+        payload["reply_markup"] = json.dumps(reply_markup)
     result = _tg_post(
         f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
         data=payload,
@@ -1236,36 +1240,51 @@ def send_approaching(candidate: SignalCandidate, current_price: float, distance_
     return bool(mid)
 
 
-def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame]) -> bool:
-    """Publish both required components, resuming a partially completed attempt."""
-    target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
-    if not candidate.metadata.get("confirmation_separator_attempted"):
-        send_signal_separator(target)
-        candidate.metadata["confirmation_separator_attempted"] = True
+def _telegram_message_link(chat_id: str, message_id: int) -> str:
+    """Member-visible permanent link for a channel/supergroup post."""
+    raw = str(chat_id or "")
+    if raw.startswith("-100"):
+        return f"https://t.me/c/{raw[4:]}/{int(message_id)}"
+    return ""
 
+
+def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
+    mm = build_money_management(candidate)
+    style_fa = {"DAYTRADE": "DAYTRADE", "SWING": "SWING", "SCALP": "SCALP"}.get(candidate.style.upper(), candidate.style)
+    rows = [
+        f"✅ <b>سیگنال تأییدشده</b> • {_e(candidate.setup_code)}",
+        f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(style_fa)} • {_e(candidate.direction)}",
+        f"🎯 Entry {_price(candidate.planned_entry)}  |  SL {_price(candidate.sl)}",
+        f"🏁 TP1 {_price(candidate.tp1)}  |  TP2 {_price(candidate.tp2)}",
+        f"⚖️ R:R {candidate.rr_tp1:.2f} / {candidate.rr_tp2:.2f} • ⭐ {candidate.score}/10",
+    ]
+    if mm:
+        rows.append(f"💼 حجم پیشنهادی ${mm['position_size']:,.0f} • Margin ${mm['margin']:,.0f} • ریسک {mm['risk_pct']:.2f}%")
+    rows.append(f"🆔 <code>{_e(candidate.signal_id)}</code>")
+    return "\n".join(rows)
+
+
+def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame]) -> bool:
+    """Execution channel is intentionally chart-first: confirmed trade numbers
+    plus a one-click link back to its educational alert/chart."""
+    target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
     if not candidate.metadata.get("confirmation_chart_sent"):
         chart = generate_chart(chart_df, candidate, confirmed=True) if chart_df is not None else None
         if not chart:
             print(f"Confirmed publication blocked: chart unavailable for {candidate.signal_id}")
             return False
-        if not send_photo(
-            chart,
-            f"✅ CONFIRMED • {_e(candidate.symbol)} • {_e(candidate.style)} • {_e(candidate.direction)}\n"
-            f"⭐ {candidate.score}/10\n🆔 <code>{_e(candidate.signal_id)}</code>",
-            target,
-        ):
+        source_chat = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
+        source_mid = candidate.metadata.get("education_chart_message_id") or candidate.metadata.get("education_message_id")
+        link = _telegram_message_link(source_chat, int(source_mid)) if source_mid else ""
+        keyboard = {"inline_keyboard": [[{"text": "📚 چارت و توضیحات هشدار اولیه", "url": link}]]} if link else None
+        mid = send_photo(chart, _confirmed_chart_caption(candidate), target, reply_markup=keyboard)
+        if not mid:
             return False
+        candidate.metadata["confirmation_chart_message_id"] = int(mid)
         candidate.metadata["confirmation_chart_sent"] = True
-
-    if not candidate.metadata.get("confirmation_message_sent"):
-        if not send_message(build_confirmed_message(candidate), target):
-            return False
-        candidate.metadata["confirmation_message_sent"] = True
-
-    return bool(
-        candidate.metadata.get("confirmation_chart_sent")
-        and candidate.metadata.get("confirmation_message_sent")
-    )
+    # Deliberately no second verbose message in VivaMon Labs Pro.
+    candidate.metadata["confirmation_message_sent"] = True
+    return True
 
 
 def send_candidate_cancelled(candidate: SignalCandidate, reason: str) -> bool:
