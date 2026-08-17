@@ -1350,23 +1350,32 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
     return bool(mid)
 
 
+def _approaching_caption(candidate: SignalCandidate, current_price: float, distance_atr: float) -> str:
+    why = candidate.strategy_fa
+    return (
+        f"⚡ <b>هشدار نهایی | آماده‌سازی ورود</b> • {_e(candidate.setup_code)}\n"
+        f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(candidate.style)} • {_e(candidate.direction)}\n"
+        f"🎯 {_e(why)} • ⭐ {candidate.score}/10\n"
+        f"📍 زون: {_price(candidate.entry_zone_bottom)} – {_price(candidate.entry_zone_top)} • قیمت: {_price(current_price)}\n"
+        f"⚖️ در انتظار کلوز تأییدی تایم پایین / MSS • فاصله {distance_atr:.2f} ATR\n"
+        f"🛑 ابطال: {_price(candidate.sl)} • 🆔 <code>{_e(candidate.signal_id)}</code>"
+    )
+
+
 def send_approaching(candidate: SignalCandidate, current_price: float, distance_atr: float) -> bool:
-    # Approaching is educational monitoring, never a Pro-channel publication.
-    target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
-    if not candidate.metadata.get("approaching_separator_attempted"):
-        send_signal_separator(target)
-        candidate.metadata["approaching_separator_attempted"] = True
-    mid = send_message(build_approaching_message(candidate, current_price, distance_atr), target)
+    """Final watch alert belongs in Pro too, but compact and chart-backed.
+    It is still NOT a confirmed entry."""
+    target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    try:
+        from data.fetcher import get_klines
+        frame = get_klines(candidate.symbol, candidate.trigger_timeframe, 180, closed_only=False, use_cache=False)
+        chart = generate_chart(frame, candidate, confirmed=False) if frame is not None else None
+    except Exception:
+        chart = None
+    caption = _approaching_caption(candidate, current_price, distance_atr)
+    mid = send_photo(chart, caption, target) if chart else send_message(caption, target)
     _store_alert_message_id(candidate, "approaching_message_id", mid)
     return bool(mid)
-
-
-def _telegram_message_link(chat_id: str, message_id: int) -> str:
-    """Member-visible permanent link for a channel/supergroup post."""
-    raw = str(chat_id or "")
-    if raw.startswith("-100"):
-        return f"https://t.me/c/{raw[4:]}/{int(message_id)}"
-    return ""
 
 
 def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
