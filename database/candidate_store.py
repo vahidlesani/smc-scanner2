@@ -87,13 +87,25 @@ def find_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
             SELECT payload FROM signal_candidates
             WHERE symbol=?
               AND trigger_tf=?
-              AND status IN ('EDUCATIONAL', 'APPROACHING', 'CONFIRMED')
+              AND status IN ('EDUCATIONAL', 'APPROACHING')
               AND expires_at>?
             ORDER BY created_at DESC LIMIT 1
             """,
             params,
         ).fetchone()
     return SignalCandidate.from_json(row["payload"]) if row else None
+
+
+def supersede_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
+    """Keep only the freshest live alert for one symbol/trigger timeframe.
+    Confirmed trades are never superseded; only alert-channel clutter is."""
+    previous = find_similar(candidate)
+    if not previous:
+        return None
+    previous.status = "SUPERSEDED"
+    previous.metadata["superseded_by"] = candidate.signal_id
+    update_candidate(previous)
+    return previous
 
 
 def add_candidate(candidate: SignalCandidate) -> bool:

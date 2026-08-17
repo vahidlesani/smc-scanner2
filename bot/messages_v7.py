@@ -369,6 +369,23 @@ def delete_message(chat_id: str, message_id: int) -> bool:
     return bool(result and result.get("ok"))
 
 
+def purge_candidate_alert_posts(candidate: SignalCandidate) -> int:
+    """Delete only this candidate's alert-channel package, never Pro/results."""
+    target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
+    deleted = 0
+    for key in ("education_chart_message_id", "education_message_id", "approaching_message_id"):
+        mid = candidate.metadata.get(key)
+        if mid and delete_message(target, int(mid)):
+            deleted += 1
+    candidate.metadata["alert_posts_purged"] = True
+    try:
+        from database.candidate_store import update_candidate
+        update_candidate(candidate)
+    except Exception:
+        pass
+    return deleted
+
+
 def purge_resolved_alert_posts(limit: int = 400) -> int:
     """Remove only resolved/duplicate educational posts from the alert channel.
     Confirmed execution and result channels are never touched."""
@@ -378,12 +395,7 @@ def purge_resolved_alert_posts(limit: int = 400) -> int:
     for candidate in get_resolved_candidates(limit):
         if candidate.metadata.get("alert_posts_purged"):
             continue
-        for key in ("education_chart_message_id", "education_message_id", "approaching_message_id"):
-            mid = candidate.metadata.get(key)
-            if mid and delete_message(target, int(mid)):
-                deleted += 1
-        candidate.metadata["alert_posts_purged"] = True
-        update_candidate(candidate)
+        deleted += purge_candidate_alert_posts(candidate)
     return deleted
 
 
@@ -542,6 +554,13 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
         va="center",
         alpha=0.82,
         zorder=22,
+    )
+    # Signature watermark lives behind price, deliberately subtle like a
+    # TradingView publication watermark: visible branding, zero obstruction.
+    ax.text(
+        0.50, 0.50, CHART_BRAND_NAME.upper(), transform=ax.transAxes,
+        ha="center", va="center", fontsize=31, fontweight="bold",
+        color=CHART_THEME["text"], alpha=0.045, zorder=0,
     )
     ax.text(
         0.985,

@@ -35,6 +35,7 @@ from bot.messages_v7 import (
     send_educational_setup,
     send_message,
     send_startup_message,
+    purge_candidate_alert_posts,
     send_tp1_event,
     send_trade_result,
 )
@@ -47,6 +48,7 @@ from database.candidate_store import (
     get_active_candidates,
     init_candidate_store,
     update_candidate,
+    supersede_similar,
 )
 from database.repository_v7 import (
     acquire_symbol_lock,
@@ -149,6 +151,16 @@ def run_discovery_scan() -> Dict[str, int]:
                     if not _dead_gate_recently_alerted(candidate):
                         send_educational_setup(candidate, _chart_frame(candidate, bundle))
                     continue
+                # Same symbol + same trigger TF: remove the older alert package
+                # and publish only the newest live scenario, so strong setups
+                # never disappear inside Telegram clutter.
+                previous = supersede_similar(candidate)
+                if previous:
+                    try:
+                        release_symbol_lock(previous.symbol, previous.signal_id)
+                    except Exception:
+                        pass
+                    purge_candidate_alert_posts(previous)
                 if has_unresolved_symbol(candidate.symbol, trigger_tf=candidate.trigger_timeframe):
                     continue
                 if not add_candidate(candidate):
