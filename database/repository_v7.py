@@ -333,7 +333,9 @@ def save_backtest_run(result: Dict) -> str:
 
 
 def portfolio_guard(candidate: SignalCandidate) -> Tuple[bool, str]:
-    """Prevent concentration and trading after the configured daily loss cap."""
+    """Optional live-account allocation guard; disabled during research/demo."""
+    if not getattr(SETTINGS, "portfolio_guard_enabled", False):
+        return True, "Portfolio guard disabled for research/demo mode"
     p = legacy_db._ph()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     truth = "TRUE" if legacy_db.USE_POSTGRES else "1"

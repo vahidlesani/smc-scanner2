@@ -94,7 +94,7 @@ SIGNAL_SEPARATOR = os.getenv(
     "━━━━━━━━━━ 💹 VIVASIGNALS PRO ━━━━━━━━━━",
 )
         # v7.6 chart overlays (Viva's chart-design references)
-_CHART_SCENARIO_ZIGZAG = os.getenv("CHART_SCENARIO_ZIGZAG", "on").strip().lower() in {"1", "on", "true", "yes"}
+_CHART_SCENARIO_ZIGZAG = os.getenv("CHART_SCENARIO_ZIGZAG", "off").strip().lower() in {"1", "on", "true", "yes"}
 _CHART_RANGE_OVERLAY = os.getenv("CHART_RANGE_OVERLAY", "on").strip().lower() in {"1", "on", "true", "yes"}
 _CHART_STRUCTURE_LINES = os.getenv("CHART_STRUCTURE_LINES", "on").strip().lower() in {"1", "on", "true", "yes"}
 
@@ -407,6 +407,8 @@ def send_signal_separator(chat_id: Optional[str] = None) -> bool:
 def send_verdict_reply(candidate: SignalCandidate, ok: Optional[bool], note_fa: str) -> bool:
     """Reply ✅/❌/⚪ to the original alert message so the loop visibly closes
     within a few candles of every alert (Viva's confirmation-feedback rule)."""
+    if candidate.status in {"CANCELLED", "EXPIRED", "SUPERSEDED", "VERDICT_NO", "VERDICT_TIMEOUT"}:
+        return False
     md = candidate.metadata or {}
     mid = md.get("education_message_id") or md.get("approaching_message_id")
     target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
@@ -1404,18 +1406,11 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
 
 
 def send_candidate_cancelled(candidate: SignalCandidate, reason: str) -> bool:
-    target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
-    if not candidate.metadata.get("cancellation_separator_attempted"):
-        send_signal_separator(target)
-        candidate.metadata["cancellation_separator_attempted"] = True
-    return send_message(
-        f"ℹ️ <b>سناریوی آموزشی باطل شد</b>\n"
-        f"🪙 {_e(candidate.symbol)} • {_e(candidate.style)}\n"
-        f"🆔 <code>{_e(candidate.signal_id)}</code>\n\n"
-        f"دلیل: {_e(reason)}\n\n"
-        f"این Setup تأیید نشده بود و در Win Rate یا نتایج معاملات محاسبه نمی‌شود.",
-        target,
-    )
+    """A cancelled educational scenario disappears from the alert feed instead
+    of becoming another noisy cancellation post. Confirmed/result channels are untouched."""
+    removed = purge_candidate_alert_posts(candidate)
+    print(f"Alert removed {candidate.signal_id}: {reason} • posts={removed}")
+    return True
 
 
 def _published_lifecycle_event(event: dict) -> bool:

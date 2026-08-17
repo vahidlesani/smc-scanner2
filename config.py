@@ -120,6 +120,9 @@ class Settings:
     # Maximum account equity posted as margin for one position. Quality tiers
     # use 3%-5%; this is margin allocation, not acceptable account loss.
     max_margin_percent: float = 5.0
+    # Paper/test mode must never drop a technically-confirmed signal because
+    # a portfolio allocation cap is full. Turn on explicitly for live execution.
+    portfolio_guard_enabled: bool = False
     max_open_trades: int = 5
     max_correlated_trades: int = 2
     daily_loss_limit_percent: float = 3.0
@@ -200,6 +203,7 @@ class Settings:
             base_risk_percent=_float("RISK_PERCENT", cls.base_risk_percent),
             max_risk_percent=_float("MAX_RISK_PERCENT", cls.max_risk_percent),
             max_margin_percent=_float("MAX_MARGIN_PERCENT", cls.max_margin_percent),
+            portfolio_guard_enabled=_bool("PORTFOLIO_GUARD_ENABLED", cls.portfolio_guard_enabled),
             max_open_trades=_int("MAX_OPEN_TRADES", cls.max_open_trades),
             max_correlated_trades=_int("MAX_CORRELATED_TRADES", cls.max_correlated_trades),
             daily_loss_limit_percent=_float("DAILY_LOSS_LIMIT_PERCENT", cls.daily_loss_limit_percent),
