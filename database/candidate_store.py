@@ -96,6 +96,22 @@ def find_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
     return SignalCandidate.from_json(row["payload"]) if row else None
 
 
+def supersede_symbol_alerts(symbol: str, replacement_id: str) -> List[SignalCandidate]:
+    """Resolve all live alert packages for a symbol before a materially newer
+    scenario is published. Confirmed trades are deliberately excluded."""
+    with _connection() as conn:
+        rows = conn.execute(
+            "SELECT payload FROM signal_candidates WHERE symbol=? AND status IN ('EDUCATIONAL','APPROACHING')",
+            (str(symbol).upper(),),
+        ).fetchall()
+    previous = [SignalCandidate.from_json(row["payload"]) for row in rows]
+    for item in previous:
+        item.status = "SUPERSEDED"
+        item.metadata["superseded_by"] = replacement_id
+        update_candidate(item)
+    return previous
+
+
 def is_material_update(previous: SignalCandidate, candidate: SignalCandidate) -> bool:
     """Avoid reposting identical scans; replace only when the live scenario
     meaningfully changed (direction/setup/zone/structure)."""

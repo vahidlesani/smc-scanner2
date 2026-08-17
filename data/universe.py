@@ -274,7 +274,10 @@ class DynamicUniverse:
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         elapsed_fraction = max((now - day_start).total_seconds() / 86_400, 0.10)
         liquid_today: List[Dict] = []
+        allowed_assets = {x.strip().upper() for x in str(SETTINGS.watchlist_allowed_asset_classes).split(",") if x.strip()}
         for row in rows:
+            if allowed_assets and str(row.get("asset_class", "CRYPTO")).upper() not in allowed_assets:
+                continue
             daily = get_klines(row["symbol"], "1d", 10, closed_only=False)
             if daily is None or len(daily) < 4 or "turnover" not in daily:
                 continue

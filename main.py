@@ -51,6 +51,7 @@ from database.candidate_store import (
     supersede_similar,
     find_similar,
     is_material_update,
+    supersede_symbol_alerts,
 )
 from database.repository_v7 import (
     acquire_symbol_lock,
@@ -157,15 +158,17 @@ def run_discovery_scan() -> Dict[str, int]:
                 # and publish only the newest live scenario, so strong setups
                 # never disappear inside Telegram clutter.
                 previous = find_similar(candidate)
-                if previous:
-                    if not is_material_update(previous, candidate):
-                        continue  # identical state: leave the visible alert alone
-                    supersede_similar(candidate)
+                if previous and not is_material_update(previous, candidate):
+                    continue  # identical state: leave the visible alert alone
+                # A materially newer scenario replaces every live alert package
+                # of the same SYMBOL, even if its new signal id/timeframe differs.
+                # This is Telegram hygiene, not a position lock.
+                for prior in supersede_symbol_alerts(candidate.symbol, candidate.signal_id):
                     try:
-                        release_symbol_lock(previous.symbol, previous.signal_id)
+                        release_symbol_lock(prior.symbol, prior.signal_id)
                     except Exception:
                         pass
-                    purge_candidate_alert_posts(previous)
+                    purge_candidate_alert_posts(prior)
                 # Live alerts replace themselves on meaningful new information;
                 # symbol locks would hide those updates, so discovery has no lock.
                 if not add_candidate(candidate):

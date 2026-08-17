@@ -599,7 +599,9 @@ def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool =
     sample = frame.iloc[:max(12, len(frame) // 3)]
     top_empty = max(0.0, (hi - float(sample["high"].max())) / span)
     bottom_empty = max(0.0, (float(sample["low"].min()) - lo) / span)
-    use_top = top_empty >= bottom_empty
+    # Confirmed charts reserve upper-left for the Long/Short trade box.
+    # Their structural notes therefore always use the lower-left empty corner.
+    use_top = (top_empty >= bottom_empty) and not confirmed
     y = 0.968 if use_top else 0.055
     step = -0.043 if use_top else 0.043
     shown = notes[:9]

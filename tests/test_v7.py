@@ -135,7 +135,7 @@ class V7ModelTests(unittest.TestCase):
         self.assertEqual(_asset_class({"symbol": "XAUUSDT", "baseCoin": "XAU", "quoteCoin": "USDT"}), "METAL")
         self.assertEqual(_asset_class({"symbol": "AAPLUSDT", "symbolType": "TradFi Stock"}), "EQUITY")
 
-    def test_dynamic_universe_reserves_top_three_liquid_forex_pairs(self):
+    def test_dynamic_universe_excludes_forex_when_crypto_metals_only(self):
         from data import universe
 
         forex = [
@@ -189,8 +189,7 @@ class V7ModelTests(unittest.TestCase):
             symbols, metrics = universe.DynamicUniverse()._build()
 
         selected_forex = [symbol for symbol in symbols if metrics[symbol]["asset_class"] == "FOREX"]
-        self.assertEqual(selected_forex, ["EURUSD", "GBPUSD", "USDJPY"])
-        self.assertNotIn("USDCAD", selected_forex)
+        self.assertEqual(selected_forex, [])
 
     def test_confirmation_uses_closed_trigger_after_touch(self):
         times = pd.date_range(end=pd.Timestamp.utcnow().tz_localize(None), periods=30, freq="15min")

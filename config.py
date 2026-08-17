@@ -139,7 +139,9 @@ class Settings:
     watchlist_min_turnover_usd: float = 5_000_000.0
     watchlist_max_spread_percent: float = 0.25
     watchlist_min_listing_days: int = 14
-    watchlist_max_forex_symbols: int = 3
+    # Current product universe: global liquid crypto plus oil/gold/silver only.
+    watchlist_allowed_asset_classes: str = "CRYPTO,METAL,COMMODITY"
+    watchlist_max_forex_symbols: int = 0
     watchlist_max_tradfi_symbols: int = 15
     scalp_min_turnover_usd: float = 20_000_000.0
     scalp_max_spread_percent: float = 0.12
@@ -219,6 +221,7 @@ class Settings:
             watchlist_min_turnover_usd=_float("WATCHLIST_MIN_TURNOVER_USD", cls.watchlist_min_turnover_usd),
             watchlist_max_spread_percent=_float("WATCHLIST_MAX_SPREAD_PERCENT", cls.watchlist_max_spread_percent),
             watchlist_min_listing_days=_int("WATCHLIST_MIN_LISTING_DAYS", cls.watchlist_min_listing_days),
+            watchlist_allowed_asset_classes=os.getenv("WATCHLIST_ALLOWED_ASSET_CLASSES", cls.watchlist_allowed_asset_classes),
             watchlist_max_forex_symbols=_int("WATCHLIST_MAX_FOREX_SYMBOLS", cls.watchlist_max_forex_symbols),
             watchlist_max_tradfi_symbols=_int("WATCHLIST_MAX_TRADFI_SYMBOLS", cls.watchlist_max_tradfi_symbols),
             scalp_min_turnover_usd=_float("SCALP_MIN_TURNOVER_USD", cls.scalp_min_turnover_usd),
