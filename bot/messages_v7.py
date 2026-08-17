@@ -1351,7 +1351,8 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
 
 
 def send_approaching(candidate: SignalCandidate, current_price: float, distance_atr: float) -> bool:
-    target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    # Approaching is educational monitoring, never a Pro-channel publication.
+    target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
     if not candidate.metadata.get("approaching_separator_attempted"):
         send_signal_separator(target)
         candidate.metadata["approaching_separator_attempted"] = True
