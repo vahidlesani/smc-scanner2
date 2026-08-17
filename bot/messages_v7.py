@@ -35,13 +35,13 @@ CHAT_ID_ADMIN = os.getenv("CHAT_ID", "")
 # night theme; all colors remain overridable via the CHART_*_COLOR envs.
 _CHART_PRESETS = {
     "light": {
-        "figure": "#FFFFFF",
-        "panel": "#FFFFFF",
-        "grid": "#E6EAF1",
-        "text": "#131722",
-        "muted": "#6A7587",
-        "bull": "#F2F4F7",
-        "bear": "#131722",
+        "figure": "#F8F1E7",
+        "panel": "#FFF9F0",
+        "grid": "#E6DDD0",
+        "text": "#25272B",
+        "muted": "#74716C",
+        "bull": "#D7D8DA",
+        "bear": "#3D4046",
         "entry": "#2962FF",
         "supply": "#F23645",
         "demand": "#089981",
@@ -52,7 +52,9 @@ _CHART_PRESETS = {
         "tp2": "#2962FF",
         "liquidity": "#7B3FF2",
         "structure": "#2962FF",
-        "trend": "#131722",
+        "trend": "#3D4046",
+        "volume_up": "#C7A58A",
+        "volume_down": "#96745F",
     },
     "dark": {
         "figure": "#0B101A",
@@ -564,24 +566,61 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
     )
 
 
-def _render_corner_notes(ax, notes: list, confirmed: bool = False) -> None:
-    """All chart annotations live in ONE clean stack inside the candle-free
-    right margin (Viva's rule: never print over candles). Each note is a small
-    borderless chip; color encodes meaning."""
-    y = 0.965
-    for text, color in notes:
+def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool = False) -> None:
+    """Compact annotation stack in the emptier LEFT chart corner.
+    It keeps structural labels away from both live candles and the price ladder."""
+    if not notes or frame is None or frame.empty:
+        return
+    lo, hi = ax.get_ylim()
+    span = max(hi - lo, 1e-12)
+    # Measure the oldest visible third: choose the larger of top/bottom empty
+    # spaces, exactly where discretionary charting normally parks annotations.
+    sample = frame.iloc[:max(12, len(frame) // 3)]
+    top_empty = max(0.0, (hi - float(sample["high"].max())) / span)
+    bottom_empty = max(0.0, (float(sample["low"].min()) - lo) / span)
+    use_top = top_empty >= bottom_empty
+    y = 0.968 if use_top else 0.055
+    step = -0.043 if use_top else 0.043
+    shown = notes[:9]
+    for text, color in shown:
         ax.text(
-            0.790, y, text,
+            0.014, y, text,
             transform=ax.transAxes,
-            ha="left", va="top",
-            color=color,
-            fontsize=6.4,
-            fontweight="bold",
-            zorder=15,
-            bbox={"boxstyle": "round,pad=0.22", "facecolor": CHART_THEME["panel"],
-                  "edgecolor": "none", "alpha": 0.88},
+            ha="left", va="top" if use_top else "bottom",
+            color=color, fontsize=5.8, fontweight="bold", zorder=15,
+            bbox={"boxstyle": "round,pad=0.16", "facecolor": CHART_THEME["panel"],
+                  "edgecolor": "none", "alpha": 0.82},
         )
-        y -= 0.055
+        y += step
+
+
+def _draw_visible_fvgs(ax, frame: pd.DataFrame, count: int) -> list:
+    """Draw at most two fresh visible FVGs as subtle TradingView-like boxes."""
+    found = []
+    start = max(2, len(frame) - 90)
+    for i in range(start, len(frame)):
+        h0, l0 = float(frame["high"].iloc[i - 2]), float(frame["low"].iloc[i - 2])
+        hi, lo = float(frame["high"].iloc[i]), float(frame["low"].iloc[i])
+        if lo > h0:  # bullish imbalance
+            bottom, top, color, tag = h0, lo, CHART_THEME["demand"], "BULL FVG"
+        elif hi < l0:  # bearish imbalance
+            bottom, top, color, tag = hi, l0, CHART_THEME["supply"], "BEAR FVG"
+        else:
+            continue
+        later = frame.iloc[i + 1:]
+        # Fresh: price has not fully traversed the gap afterwards.
+        mitigated = bool((later["low"] <= bottom).any()) if tag == "BULL FVG" else bool((later["high"] >= top).any())
+        if mitigated:
+            continue
+        found.append((i, bottom, top, color, tag))
+    # closest/latest only — never turn the chart into a colored wallpaper.
+    result = []
+    for i, bottom, top, color, tag in found[-2:]:
+        ax.add_patch(Rectangle((max(0, i - 2), bottom), count - max(0, i - 2), top - bottom,
+                               facecolor=color, edgecolor=color, linewidth=0.7,
+                               linestyle=(0, (3, 2)), alpha=0.09, zorder=0))
+        result.append((tag, color))
+    return result
 
 
 def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool = False) -> Optional[bytes]:
@@ -589,7 +628,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     if df is None or df.empty:
         return None
     try:
-        frame = df.tail(100).copy().set_index("timestamp")
+        # Preserve enough history for real channel / wedge / range geometry;
+        # the blank future panel is added separately, never by sacrificing bars.
+        frame = df.tail(150).copy().set_index("timestamp")
         frame.index = pd.DatetimeIndex(frame.index)
         if _STYLE_NAME == "dark":
             market_colors = mpf.make_marketcolors(
@@ -601,7 +642,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 up=CHART_THEME["bull"], down=CHART_THEME["bear"],
                 edge={"up": "#131722", "down": "#131722"},
                 wick={"up": "#131722", "down": "#131722"},
-                volume={"up": "#D9DEE8", "down": "#AEB6C4"},
+                volume={"up": CHART_THEME["volume_up"], "down": CHART_THEME["volume_down"]},
             )
         style = mpf.make_mpf_style(
             marketcolors=market_colors,
@@ -624,8 +665,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             volume=True,
             style=style,
             returnfig=True,
-            figsize=(12, 7.5),
-            panel_ratios=(5, 1.15),
+            figsize=(15, 8.5),
+            panel_ratios=(5.2, 1.05),
+            update_width_config={"candle_linewidth": 0.72, "candle_width": 0.62, "volume_width": 0.62},
             datetime_format="%m-%d  %H:%M",
             xrotation=0,
             ylabel="",
@@ -636,8 +678,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # directly: wide price area, compact volume, and a small branded footer.
         # Wide candle-free future area: at 120dpi this is ~7cm from the last
         # candle to the price ladder, leaving every chart label readable.
-        price_position = [0.055, 0.245, 0.805, 0.650]
-        volume_position = [0.055, 0.090, 0.805, 0.135]
+        price_position = [0.050, 0.235, 0.820, 0.665]
+        volume_position = [0.050, 0.085, 0.820, 0.125]
         for index, chart_ax in enumerate(axes):
             chart_ax.set_position(price_position if index < 2 else volume_position)
             chart_ax.set_facecolor(CHART_THEME["panel"])
@@ -680,7 +722,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         count = len(frame)
         # 30–34 bars of blank future space keeps the last candle roughly seven
         # centimetres from the price ladder / labels on the 12-inch render.
-        future = 34 if confirmed else 30
+        future = 42 if confirmed else 40
         for chart_ax in axes:
             chart_ax.set_xlim(-1, count + future)
 
@@ -1033,7 +1075,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception as exc:
                 print(f"Trendline overlay warning: {exc}")
 
-        _render_corner_notes(ax, notes, confirmed=confirmed)
+        # Fresh imbalances are visual context, not extra trade signals.
+        notes.extend(_draw_visible_fvgs(ax, frame, count))
 
         # keep candle scale: long context lines may not stretch the y-axis
         _ylo = float(frame["low"].min())
@@ -1045,6 +1088,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _ylo = min(_ylo, float(candidate.tp1))
         _yr = max(_yhi - _ylo, 1e-9)
         ax.set_ylim(_ylo - 0.06 * _yr, _yhi + 0.06 * _yr)
+
+        _render_corner_notes(ax, notes, frame, confirmed=confirmed)
 
         _tf_disp = (md.get("tl_context_tf") if candidate.setup_code == "TLBREAK" else None) \
             or md.get("pin_tf") or candidate.trigger_timeframe or ""
@@ -1071,7 +1116,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         fig.savefig(
             buffer,
             format="png",
-            dpi=120,
+            dpi=180,
             facecolor=CHART_THEME["figure"],
             edgecolor="none",
         )

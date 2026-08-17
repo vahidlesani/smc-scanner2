@@ -92,8 +92,8 @@ class V7ModelTests(unittest.TestCase):
         image = generate_chart(frame, candidate, confirmed=True)
         self.assertIsNotNone(image)
         self.assertEqual(image[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertEqual(int.from_bytes(image[16:20], "big"), 1440)
-        self.assertEqual(int.from_bytes(image[20:24], "big"), 900)
+        self.assertEqual(int.from_bytes(image[16:20], "big"), 2700)
+        self.assertEqual(int.from_bytes(image[20:24], "big"), 1530)
 
     def test_money_management_caps_margin(self):
         candidate = make_candidate("CONFIRMED", 8)
