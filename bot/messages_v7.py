@@ -1460,6 +1460,7 @@ def send_tp1_event(signal: dict) -> bool:
     return send_message(
         f"🥇 <b>TP1 HIT</b>\n"
         f"🪙 <b>{_e(signal['symbol'])}</b> • {_e(signal.get('style', ''))}\n"
+        f"🎯 <b>{_e(signal.get('source') or signal.get('strategy_fa') or 'SETUP')}</b>\n"
         f"🆔 <code>{_e(signal['signal_id'])}</code>\n\n"
         f"✅ {SETTINGS.partial_tp1_percent:.0f}% پوزیشن بسته شد.\n"
         f"🔒 حد ضرر {SETTINGS.partial_tp2_percent:.0f}% باقی‌مانده به Breakeven منتقل شد.",
@@ -1481,6 +1482,7 @@ def send_trade_result(event: dict) -> bool:
     return send_message(
         f"{emoji} <b>نتیجه سیگنال Confirmed</b>\n"
         f"🪙 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('style', ''))}\n"
+        f"🎯 <b>{_e(event.get('source') or event.get('strategy_fa') or 'SETUP')}</b>\n"
         f"🆔 <code>{_e(event.get('signal_id'))}</code>\n"
         f"📊 نتیجه: <b>{_e(result)}</b>\n"
         f"📈 بازده قیمت: <b>{float(event.get('pnl', 0)):+.2f}%</b>\n"
