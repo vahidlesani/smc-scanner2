@@ -40,7 +40,7 @@ _CHART_PRESETS = {
         "grid": "#E6DDD0",
         "text": "#25272B",
         "muted": "#74716C",
-        "bull": "#D7D8DA",
+        "bull": "#F3E7DA",
         "bear": "#3D4046",
         "entry": "#2962FF",
         "supply": "#F23645",
@@ -94,7 +94,7 @@ SIGNAL_SEPARATOR = os.getenv(
     "━━━━━━━━━━ 💹 VIVASIGNALS PRO ━━━━━━━━━━",
 )
         # v7.6 chart overlays (Viva's chart-design references)
-_CHART_SCENARIO_ZIGZAG = os.getenv("CHART_SCENARIO_ZIGZAG", "off").strip().lower() in {"1", "on", "true", "yes"}
+_CHART_SCENARIO_ZIGZAG = os.getenv("CHART_SCENARIO_ZIGZAG", "on").strip().lower() in {"1", "on", "true", "yes"}
 _CHART_RANGE_OVERLAY = os.getenv("CHART_RANGE_OVERLAY", "on").strip().lower() in {"1", "on", "true", "yes"}
 _CHART_STRUCTURE_LINES = os.getenv("CHART_STRUCTURE_LINES", "on").strip().lower() in {"1", "on", "true", "yes"}
 
@@ -479,33 +479,25 @@ def _scenario_arrow(ax, start, end, color: str, alpha: float = 0.9) -> None:
     ax.add_patch(arrow)
 
 
-def _scenario_path(ax, start, end, color: str, alpha: float = 0.85) -> None:
-    """Viva's hand-drawn schematic path: a light zig-zag polyline confined to
-    the candle-free right margin, ending in an arrowhead. It sketches the
-    *shape* of the expected move (pullbacks inside the trend), not a laser
-    line — matches the reference sketches he sent."""
+def _scenario_path(ax, start, end, color: str, alpha: float = 0.88) -> None:
+    """A restrained candle-like projected path: two natural pullbacks, smooth
+    segments and one precise arrowhead — not a cartoon zigzag."""
     x0, y0 = start
     x1, y1 = end
-    span_x = max(x1 - x0, 1e-9)
-    delta_y = y1 - y0
-    # alternating counter-bends sized as a fraction of total displacement
-    fracs = (0.0, 0.2, 0.34, 0.5, 0.66, 0.8, 1.0)
-    bends = (0.0, -0.11, 0.13, -0.12, 0.10, -0.08, 0.0)
-    xs = [x0 + f * span_x for f in fracs]
-    ys = [y0 + f * delta_y + b * abs(delta_y) for f, b in zip(fracs, bends)]
-    ax.plot(xs, ys, color=color, linewidth=1.15, alpha=alpha, zorder=11, solid_capstyle="round")
-    head = FancyArrowPatch(
-        (xs[-2], ys[-2]),
-        (xs[-1], ys[-1]),
-        arrowstyle="-|>",
-        mutation_scale=12,
-        linewidth=0,
-        color=color,
-        alpha=alpha,
-        transform=ax.transData,
-        zorder=12,
-    )
-    ax.add_patch(head)
+    dx, dy = max(x1 - x0, 1e-9), y1 - y0
+    # small counter-swings preserve the direction of the scenario.
+    fractions = (0.0, 0.26, 0.48, 0.72, 1.0)
+    pullbacks = (0.0, -0.075, 0.045, -0.030, 0.0)
+    xs = [x0 + dx * f for f in fractions]
+    ys = [y0 + dy * f + abs(dy) * p for f, p in zip(fractions, pullbacks)]
+    ax.plot(xs, ys, color=color, linewidth=1.35, linestyle=(0, (5, 3)),
+            alpha=alpha, zorder=11, solid_capstyle="round", solid_joinstyle="round",
+            antialiased=True)
+    ax.add_patch(FancyArrowPatch(
+        (xs[-2], ys[-2]), (xs[-1], ys[-1]), arrowstyle="-|>",
+        mutation_scale=14, linewidth=0.0, color=color, alpha=alpha,
+        transform=ax.transData, zorder=12,
+    ))
 
 
 def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
@@ -640,8 +632,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         else:  # light: Viva monochrome candles (hollow bull / solid bear)
             market_colors = mpf.make_marketcolors(
                 up=CHART_THEME["bull"], down=CHART_THEME["bear"],
-                edge={"up": "#131722", "down": "#131722"},
-                wick={"up": "#131722", "down": "#131722"},
+                edge={"up": "#6C625C", "down": "#3D4046"},
+                wick={"up": "#6C625C", "down": "#3D4046"},
                 volume={"up": CHART_THEME["volume_up"], "down": CHART_THEME["volume_down"]},
             )
         style = mpf.make_mpf_style(
@@ -692,6 +684,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 spine.set_alpha(0.55)
 
         ax = axes[0]
+        # mplfinance otherwise applies its default blue histogram edge. Keep
+        # volume borders in the same muted nude family as their fill.
+        if len(axes) > 2:
+            for bar in getattr(axes[2], "patches", []):
+                face = bar.get_facecolor()
+                bar.set_edgecolor(face)
+                bar.set_linewidth(0.35)
         for _price_ax in axes[:2]:
             _price_ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
         ax.tick_params(
@@ -790,10 +789,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     slope = (pb - pa) / (xb - xa)
                     x_end = count + future - 0.5
                     ax.plot([xa, x_end], [pa, pa + slope * (x_end - xa)],
-                            color=CHART_THEME["trend"], linewidth=1.2, alpha=0.9, zorder=8)
+                            color=CHART_THEME["trend"], linewidth=1.65, alpha=0.92, zorder=8,
+                            solid_capstyle="round", antialiased=True)
                     p_anc = float(md["tl_anchor_price"])
                     ax.plot([xanc, x_end], [p_anc, p_anc + slope * (x_end - xanc)],
-                            color=CHART_THEME["trend"], linewidth=1.2, alpha=0.75, zorder=8)
+                            color=CHART_THEME["trend"], linewidth=1.35, alpha=0.75, zorder=8,
+                            solid_capstyle="round", antialiased=True)
                     stage = md.get("tl_stage", "")
                     pattern_en = (md.get("tl_pattern") or "CHANNEL").upper()
                     lbl = {"JUST_BROKE": f"{pattern_en} BREAK • {md.get('tl_context_tf','').upper()}",
@@ -1063,13 +1064,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     p_a = float(fit["a"]["price"])
                     slope = float(fit["slope"])
                     ax.plot([x_a, x_end], [p_a, p_a + slope * (x_end - x_a)],
-                            color=CHART_THEME["trend"], linestyle=(0, (7, 5)),
-                            linewidth=0.95, alpha=0.7, zorder=3)
+                            color=CHART_THEME["trend"], linestyle="-",
+                            linewidth=1.45, alpha=0.84, zorder=3,
+                            solid_capstyle="round", antialiased=True)
                     a_x = float(fit["anchor"]["index"])
                     a_p = float(fit["anchor"]["price"])
                     ax.plot([a_x, x_end], [a_p, a_p + slope * (x_end - a_x)],
-                            color=CHART_THEME["trend"], linestyle=(0, (7, 5)),
-                            linewidth=0.85, alpha=0.5, zorder=3)
+                            color=CHART_THEME["trend"], linestyle="-",
+                            linewidth=1.20, alpha=0.65, zorder=3,
+                            solid_capstyle="round", antialiased=True)
+                    ax.scatter([x_a, a_x], [p_a, a_p], s=18, color=CHART_THEME["panel"],
+                               edgecolors=CHART_THEME["trend"], linewidths=0.9, zorder=8)
                     line_label = "DYNAMIC RESISTANCE" if candidate.direction == "LONG" else "DYNAMIC SUPPORT"
                     notes.append((f"{line_label} · touch/break alerts", CHART_THEME["trend"]))
             except Exception as exc:
