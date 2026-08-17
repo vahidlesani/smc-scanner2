@@ -556,11 +556,19 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
         zorder=22,
     )
     # Signature watermark lives behind price, deliberately subtle like a
-    # TradingView publication watermark: visible branding, zero obstruction.
+    # TradingView publication watermark: actual logo + text, never above candles.
+    if os.path.isfile(CHART_LOGO_PATH):
+        try:
+            mark_ax = ax.inset_axes([0.395, 0.315, 0.21, 0.37], transform=ax.transAxes, zorder=0)
+            mark_ax.imshow(mpimg.imread(CHART_LOGO_PATH), alpha=0.050)
+            mark_ax.set_axis_off()
+            mark_ax.patch.set_alpha(0)
+        except Exception as exc:
+            print(f"Chart watermark warning: {exc}")
     ax.text(
         0.50, 0.50, CHART_BRAND_NAME.upper(), transform=ax.transAxes,
         ha="center", va="center", fontsize=31, fontweight="bold",
-        color=CHART_THEME["text"], alpha=0.045, zorder=0,
+        color=CHART_THEME["text"], alpha=0.040, zorder=0,
     )
     ax.text(
         0.985,
