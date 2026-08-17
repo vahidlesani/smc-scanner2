@@ -350,6 +350,13 @@ def detect_trendline_breakout(bundle: MarketBundle, style: str) -> Optional[Sign
         # structural targets (first opposing supply/demand) from the engine;
         # relax only the CREATION gate; confirm-time floors still apply.
         candidate.mandatory_gates["rr"] = candidate.rr_tp1 >= 1.0 and candidate.rr_tp2 >= 1.5
+        # For a validated trend/triangle/channel event, HTF bias is context and
+        # not a veto: the break itself may be the reversal. The symbol already
+        # passed the dynamic-liquidity universe, so venue-day turnover is not
+        # allowed to make a technically valid alert dead-on-arrival.
+        candidate.mandatory_gates["htf_alignment"] = True
+        candidate.mandatory_gates["market_liquidity"] = True
+        candidate.metadata["tl_context_conflict"] = not bool(context.get("bias") == bias)
         other_dir = "SHORT" if direction == "LONG" else "LONG"
         other_fit = _fit_channel_line(context_df, other_dir)
         pattern = "TRENDLINE"
