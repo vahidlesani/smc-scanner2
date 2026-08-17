@@ -538,6 +538,9 @@ def _daily_report() -> None:
                 f"• {item['strategy_fa']}: {item['wins']}W/{item['losses']}L • {item['winrate']:.1f}%"
             )
         send_message("\n".join(lines))
+        from bot.messages_v7 import purge_resolved_alert_posts
+        removed = purge_resolved_alert_posts()
+        print(f"Daily alert cleanup: removed {removed} resolved posts")
     except Exception as exc:
         print(f"Daily report error: {exc}")
 

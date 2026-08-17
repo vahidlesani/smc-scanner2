@@ -202,3 +202,16 @@ def cleanup_candidates(retention_days: int = 7) -> int:
             (resolved_cutoff, confirmed_cutoff, legacy_cutoff),
         )
         return cursor.rowcount
+
+
+def get_resolved_candidates(limit: int = 400) -> List[SignalCandidate]:
+    """Transient alert records eligible for Telegram-channel cleanup only."""
+    with _connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT payload FROM signal_candidates
+            WHERE status NOT IN ('EDUCATIONAL','APPROACHING','CONFIRMED')
+            ORDER BY updated_at ASC LIMIT ?
+            """, (int(limit),)
+        ).fetchall()
+    return [SignalCandidate.from_json(row["payload"]) for row in rows]

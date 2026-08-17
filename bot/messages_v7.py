@@ -357,6 +357,34 @@ def send_message(
     return first_id
 
 
+def delete_message(chat_id: str, message_id: int) -> bool:
+    if not TOKEN or not chat_id or not message_id:
+        return False
+    result = _tg_post(
+        f"https://api.telegram.org/bot{TOKEN}/deleteMessage",
+        data={"chat_id": str(chat_id), "message_id": int(message_id)}, timeout=12,
+    )
+    return bool(result and result.get("ok"))
+
+
+def purge_resolved_alert_posts(limit: int = 400) -> int:
+    """Remove only resolved/duplicate educational posts from the alert channel.
+    Confirmed execution and result channels are never touched."""
+    from database.candidate_store import get_resolved_candidates, update_candidate
+    target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
+    deleted = 0
+    for candidate in get_resolved_candidates(limit):
+        if candidate.metadata.get("alert_posts_purged"):
+            continue
+        for key in ("education_chart_message_id", "education_message_id", "approaching_message_id"):
+            mid = candidate.metadata.get(key)
+            if mid and delete_message(target, int(mid)):
+                deleted += 1
+        candidate.metadata["alert_posts_purged"] = True
+        update_candidate(candidate)
+    return deleted
+
+
 def send_signal_separator(chat_id: Optional[str] = None) -> bool:
     """Separate complete lifecycle packages without splitting chart and text."""
     return bool(send_message(f"<b>{_e(SIGNAL_SEPARATOR)}</b>", chat_id))

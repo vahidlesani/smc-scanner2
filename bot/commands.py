@@ -112,7 +112,7 @@ def main_menu_keyboard(user_id=None):
     if user_id is not None and _is_admin(user_id):
         rows.append([
             {"text": "🧪 بک‌تست (ادمین)", "callback_data": "backtest_menu"},
-            {"text": "🔮 استراتژی‌ها", "callback_data": "strategies"},
+            {"text": "🧹 پاکسازی هشدارها", "callback_data": "purge_alerts"},
         ])
     return {"inline_keyboard": rows}
 
@@ -674,6 +674,13 @@ def handle_callback(callback_query):
             answer_callback(callback_id, "این بخش فقط برای ادمینه 🔒")
     elif data == "status":
         handle_status(chat_id, uid)
+    elif data == "purge_alerts":
+        if _is_admin(uid):
+            from bot.messages_v7 import purge_resolved_alert_posts
+            count = purge_resolved_alert_posts()
+            send_message(f"🧹 {count} پیام حل‌شده از کانال هشدار پاک شد.", chat_id, main_menu_keyboard(uid))
+        else:
+            answer_callback(callback_id, "این بخش فقط برای ادمینه 🔒")
     elif data == "help":
         handle_help(chat_id, uid)
     # تحلیل فوری
