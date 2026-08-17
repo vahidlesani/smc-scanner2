@@ -49,6 +49,8 @@ from database.candidate_store import (
     init_candidate_store,
     update_candidate,
     supersede_similar,
+    find_similar,
+    is_material_update,
 )
 from database.repository_v7 import (
     acquire_symbol_lock,
@@ -154,24 +156,19 @@ def run_discovery_scan() -> Dict[str, int]:
                 # Same symbol + same trigger TF: remove the older alert package
                 # and publish only the newest live scenario, so strong setups
                 # never disappear inside Telegram clutter.
-                previous = supersede_similar(candidate)
+                previous = find_similar(candidate)
                 if previous:
+                    if not is_material_update(previous, candidate):
+                        continue  # identical state: leave the visible alert alone
+                    supersede_similar(candidate)
                     try:
                         release_symbol_lock(previous.symbol, previous.signal_id)
                     except Exception:
                         pass
                     purge_candidate_alert_posts(previous)
-                if has_unresolved_symbol(candidate.symbol, trigger_tf=candidate.trigger_timeframe):
-                    continue
+                # Live alerts replace themselves on meaningful new information;
+                # symbol locks would hide those updates, so discovery has no lock.
                 if not add_candidate(candidate):
-                    continue
-                try:
-                    locked = acquire_symbol_lock(candidate)
-                except Exception as exc:
-                    locked = False
-                    print(f"Symbol-lock error {candidate.symbol}: {exc}")
-                if not locked:
-                    update_candidate(candidate, "CANCELLED")
                     continue
                 stats["new"] += 1
                 send_educational_setup(candidate, _chart_frame(candidate, bundle))
@@ -334,18 +331,8 @@ def monitor_candidates() -> Dict[str, int]:
                 md_pin = candidate.metadata or {}
                 pin_tf = str(md_pin.get("pin_tf") or candidate.trigger_timeframe)
                 pin_frame = frames.get((candidate.symbol, pin_tf))
-                if _pinv_window_expired(candidate, pin_frame[1] if pin_frame else None):
-                    candidate.status = "EXPIRED"
-                    update_candidate(candidate)
-                    try:
-                        cancel_staged_confirmation(candidate.signal_id)
-                    except Exception:
-                        pass
-                    send_candidate_cancelled(candidate, "مهلت اعتبار پین‌بار تمام شد و تأیید ساختاری تایم پایین شکل نگرفت.")
-                    from bot.messages_v7 import send_verdict_reply
-                    send_verdict_reply(candidate, None, "در پنجره اعتبار ستاپ، تأیید ورود تایم پایین تشکیل نشد.")
-                    stats["cancelled"] += 1
-                    continue
+                # No arbitrary 3/4-candle verdict timeout: a meaningful new
+                # alert supersedes this one; only real invalidation/expiry ends it.
             if not publication_in_progress and is_expired(candidate):
                 candidate.status = "EXPIRED"
                 update_candidate(candidate)

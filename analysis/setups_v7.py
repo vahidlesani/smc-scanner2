@@ -385,6 +385,20 @@ def _select_poi(df: pd.DataFrame, direction: str, impulse_index: int) -> Optiona
     return chosen
 
 
+def _five_tick_gap(price: float, market: Optional[Dict] = None) -> float:
+    """Five venue ticks beyond the valid base; uses a safe price-scale fallback
+    when a venue has not provided its tick size."""
+    market = market or {}
+    try:
+        tick = float(market.get("tick_size") or market.get("price_tick") or 0)
+    except (TypeError, ValueError):
+        tick = 0.0
+    if tick <= 0:
+        p = abs(float(price))
+        tick = 0.1 if p >= 10_000 else (0.01 if p >= 10 else (0.0001 if p >= 1 else (0.00001 if p >= 0.1 else 0.000001)))
+    return 5.0 * tick
+
+
 def _liquidity_protected_invalidation(
     trigger_df: pd.DataFrame,
     poi: Dict,
@@ -392,6 +406,7 @@ def _liquidity_protected_invalidation(
     atr_value: float,
     style: str,
     spread_pct: float = 0.0,
+    market: Optional[Dict] = None,
 ) -> Dict:
     """Place invalidation beyond nearby pivot liquidity, not directly on it."""
     pivot_highs, pivot_lows = pivots(trigger_df, 3, 3)
@@ -423,8 +438,9 @@ def _liquidity_protected_invalidation(
     atr_floor_mult = float(getattr(SETTINGS, f"min_stop_atr_{style_key.lower()}", SETTINGS.min_stop_atr_daytrade))
     structural_floor = abs(edge) * max(0.0, pct_floor)
     volatility_floor = max(0.0, atr_value) * max(0.0, atr_floor_mult)
+    base_gap = _five_tick_gap(liquidity_anchor, market)
     spread_buffer = abs(liquidity_anchor) * max(0.0, float(spread_pct)) / 100 * 2.0
-    buffer_value = max(atr_buffer, spread_buffer, structural_floor, volatility_floor)
+    buffer_value = max(atr_buffer, spread_buffer, structural_floor, volatility_floor, base_gap)
     invalidation = (
         liquidity_anchor - buffer_value
         if direction == "LONG"
@@ -435,6 +451,7 @@ def _liquidity_protected_invalidation(
         "liquidity_anchor": float(liquidity_anchor),
         "buffer": float(buffer_value),
         "protected_pivots": len(protected),
+        "base_gap": float(base_gap),
     }
 
 
@@ -531,6 +548,7 @@ def _base_candidate(
         atr_value,
         style,
         float((bundle.ticker or {}).get("spread_pct", 0) or 0),
+        dict(bundle.ticker or {}),
     )
     sl = float(invalidation["price"])
     if entry <= 0 or abs(entry - sl) / entry < 0.0008:

@@ -96,6 +96,20 @@ def find_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
     return SignalCandidate.from_json(row["payload"]) if row else None
 
 
+def is_material_update(previous: SignalCandidate, candidate: SignalCandidate) -> bool:
+    """Avoid reposting identical scans; replace only when the live scenario
+    meaningfully changed (direction/setup/zone/structure)."""
+    if previous.setup_code != candidate.setup_code or previous.direction != candidate.direction:
+        return True
+    old_atr = float(previous.metadata.get("atr", 0) or 0)
+    threshold = max(old_atr * 0.20, abs(previous.zone_mid) * 0.0005, 1e-12)
+    if abs(previous.zone_mid - candidate.zone_mid) > threshold:
+        return True
+    old_level = float(previous.metadata.get("structure_level", 0) or 0)
+    new_level = float(candidate.metadata.get("structure_level", 0) or 0)
+    return bool(old_level and new_level and abs(old_level - new_level) > threshold)
+
+
 def supersede_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
     """Keep only the freshest live alert for one symbol/trigger timeframe.
     Confirmed trades are never superseded; only alert-channel clutter is."""
