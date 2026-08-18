@@ -644,7 +644,17 @@ def _base_candidate(
     last_session = session_name(trigger_df["timestamp"].iloc[-1])
     confirmations.append(f"سشن آخرین کندل بسته‌شده: {last_session}")
 
-    score = min(10, sum(item.points for item in evidence if item.confirmed))
+    # Score ranks quality; gates decide eligibility. They intentionally are
+    # not the same mechanism, otherwise every eligible signal becomes a 10/10.
+    score = 4
+    score += 1 if context_aligned and lower_aligned else 0
+    score += 1 if location_ok else 0
+    score += 1 if special_gate_value else 0
+    score += 1 if float(impulse.get("body_atr", 0) or 0) >= 0.80 else 0
+    score += 1 if poi.get("touches", 0) == 0 else 0
+    score += 1 if targets["rr1"] >= 2.0 and targets["rr2"] >= 3.0 else 0
+    score += 1 if market_ok and relative >= 1.10 else 0
+    score = min(10, max(0, int(score)))
     gates = {
         "htf_alignment": context_aligned and lower_aligned and location_ok,
         special_gate_name: special_gate_value,
@@ -699,7 +709,10 @@ def _base_candidate(
             "protected_liquidity_pivots": invalidation["protected_pivots"],
             "session": last_session,
             "strategy_version": SETTINGS.strategy_version,
-            "touched": poi.get("touches", 0) > 0,
+            # Historical visits affect freshness, never satisfy the future
+            # retest requirement. Only candles after created_at may set this.
+            "touched": False,
+            "historical_visit_count": int(poi.get("touches", 0)),
             "confirm_tf": confirm_timeframe(style, trigger_tf),
         },
         expires_at=expires.isoformat(timespec="seconds"),

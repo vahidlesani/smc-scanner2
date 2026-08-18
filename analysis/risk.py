@@ -67,6 +67,8 @@ def calculate_position(
     account: float,
     style: str = "SWING",
     venue_max_leverage: Optional[float] = None,
+    tp1: Optional[float] = None,
+    tp2: Optional[float] = None,
 ) -> Optional[Dict]:
     entry = float(entry)
     sl = float(sl)
@@ -94,12 +96,13 @@ def calculate_position(
     actual_risk = notional * sl_fraction
     actual_risk_pct = actual_risk / account * 100
 
-    if direction == "LONG":
-        tp1 = entry + sl_distance * 2
-        tp2 = entry + sl_distance * 3
-    else:
-        tp1 = entry - sl_distance * 2
-        tp2 = entry - sl_distance * 3
+    # Legacy callers without structural targets retain a fallback only for UI
+    # compatibility. Live v7 candidates always pass their own targets below.
+    if tp1 is None or tp2 is None:
+        if direction == "LONG":
+            tp1, tp2 = entry + sl_distance * 2, entry + sl_distance * 3
+        else:
+            tp1, tp2 = entry - sl_distance * 2, entry - sl_distance * 3
 
     return {
         "sl_pct": sl_fraction * 100,
@@ -132,6 +135,8 @@ def build_money_management(candidate, account: Optional[float] = None) -> Dict:
         account,
         candidate.style,
         candidate.market.get("max_leverage"),
+        candidate.tp1,
+        candidate.tp2,
     )
     if not position:
         return {}
@@ -150,9 +155,9 @@ def build_money_management(candidate, account: Optional[float] = None) -> Dict:
         "account": account,
         "partial_tp1": SETTINGS.partial_tp1_percent,
         "partial_tp2": SETTINGS.partial_tp2_percent,
-        "tp1_profit": max(0.0, gross_tp1 - estimated_cost * SETTINGS.partial_tp1_percent / 100),
-        "tp2_profit": max(0.0, gross_tp2 - estimated_cost * SETTINGS.partial_tp2_percent / 100),
-        "total_profit": max(0.0, gross_tp1 + gross_tp2 - estimated_cost),
+        "tp1_profit": gross_tp1 - estimated_cost * SETTINGS.partial_tp1_percent / 100,
+        "tp2_profit": gross_tp2 - estimated_cost * SETTINGS.partial_tp2_percent / 100,
+        "total_profit": gross_tp1 + gross_tp2 - estimated_cost,
         "estimated_roundtrip_cost": estimated_cost,
         "max_loss_with_cost": position["risk_amount"] + estimated_cost,
     }
