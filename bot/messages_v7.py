@@ -1350,6 +1350,17 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
     return bool(mid)
 
 
+def _approaching_ai_hint(candidate: SignalCandidate) -> str:
+    md = candidate.metadata or {}
+    if candidate.setup_code == "TLBREAK":
+        return "فقط بعد از Close معتبر پشت خط و حفظ بیس وارد شو؛ تعقیب قیمت ممنوع."
+    if candidate.setup_code == "PINVAL":
+        return "پین‌بار فقط location است؛ تأیید با شکست micro-structure تایم پایین معتبر می‌شود."
+    if md.get("nearest_zones"):
+        return "زون نزدیک را ببین؛ تأیید تایم پایین را به‌خاطر هیجان حرکت جا ننداز."
+    return "تا کلوز تأییدی و حفظ ابطال، این فقط سناریوی تحت‌نظر است."
+
+
 def _approaching_caption(candidate: SignalCandidate, current_price: float, distance_atr: float) -> str:
     why = candidate.strategy_fa
     return (
