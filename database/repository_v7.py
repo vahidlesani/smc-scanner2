@@ -15,6 +15,7 @@ import pandas as pd
 
 from analysis.models import SignalCandidate
 from analysis.risk import build_money_management
+from analysis.trade_management import build_ladder
 from config import get_settings
 from data.fetcher import get_klines
 from database import db as legacy_db
@@ -41,6 +42,8 @@ SIGNAL_COLUMNS = {
     "last_checked_at": "TEXT",
     "session_name": "TEXT DEFAULT ''",
     "pnl_usd": "REAL DEFAULT 0",
+    "target_state_json": "TEXT DEFAULT '{}'",
+    "pro_message_id": "INTEGER DEFAULT 0",
 }
 
 ACTIVE_COLUMNS = {
@@ -57,6 +60,8 @@ ACTIVE_COLUMNS = {
     "confirmation_sent": "BOOLEAN DEFAULT FALSE",
     "confirmation_sent_at": "TEXT",
     "last_checked_at": "TEXT",
+    "target_state_json": "TEXT DEFAULT '{}'",
+    "pro_message_id": "INTEGER DEFAULT 0",
 }
 
 
@@ -512,9 +517,13 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
         VALUES ({','.join([p] * 29)})
     """
 
+    ladder = build_ladder(candidate.planned_entry, candidate.sl, candidate.direction, candidate.market)
+    ladder_json = json.dumps(ladder, ensure_ascii=False)
     with legacy_db.db_cursor() as cursor:
         cursor.execute(sql, params)
         cursor.execute(active_sql, active_params)
+        cursor.execute(f"UPDATE signals SET target_state_json={p} WHERE signal_id={p}", (ladder_json, candidate.signal_id))
+        cursor.execute(f"UPDATE active_signals SET target_state_json={p} WHERE signal_id={p}", (ladder_json, candidate.signal_id))
     return True
 
 
