@@ -36,6 +36,7 @@ from bot.messages_v7 import (
     send_message,
     send_startup_message,
     purge_candidate_alert_posts,
+    purge_pro_watch_post,
     send_tp1_event,
     send_trade_result,
 )
@@ -169,6 +170,7 @@ def run_discovery_scan() -> Dict[str, int]:
                     except Exception:
                         pass
                     purge_candidate_alert_posts(prior)
+                    purge_pro_watch_post(prior)
                 # Live alerts replace themselves on meaningful new information;
                 # symbol locks would hide those updates, so discovery has no lock.
                 if not add_candidate(candidate):
@@ -435,6 +437,9 @@ def monitor_candidates() -> Dict[str, int]:
                         try:
                             update_candidate(candidate)
                             mark_confirmation_published(candidate.signal_id)
+                            # Confirmed replaces the final-watch post in Pro;
+                            # educational alert remains reachable through the link.
+                            purge_pro_watch_post(candidate)
                         except Exception as exc:
                             print(
                                 f"Confirmation was published but DB gate remains pending "

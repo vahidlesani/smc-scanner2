@@ -373,7 +373,7 @@ def purge_candidate_alert_posts(candidate: SignalCandidate) -> int:
     """Delete only this candidate's alert-channel package, never Pro/results."""
     target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
     deleted = 0
-    for key in ("education_chart_message_id", "education_message_id", "approaching_message_id"):
+    for key in ("education_chart_message_id", "education_message_id"):
         mid = candidate.metadata.get(key)
         if mid and delete_message(target, int(mid)):
             deleted += 1
@@ -384,6 +384,23 @@ def purge_candidate_alert_posts(candidate: SignalCandidate) -> int:
     except Exception:
         pass
     return deleted
+
+
+def purge_pro_watch_post(candidate: SignalCandidate) -> bool:
+    """Remove only the compact final-watch post from VivaMon Labs Pro.
+    Confirmed chart and all TP/trailing replies are never touched."""
+    mid = candidate.metadata.get("approaching_message_id")
+    if not mid:
+        return False
+    ok = delete_message(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, int(mid))
+    if ok:
+        candidate.metadata["pro_watch_post_purged"] = True
+        try:
+            from database.candidate_store import update_candidate
+            update_candidate(candidate)
+        except Exception:
+            pass
+    return ok
 
 
 def purge_resolved_alert_posts(limit: int = 400) -> int:
@@ -1432,7 +1449,8 @@ def send_candidate_cancelled(candidate: SignalCandidate, reason: str) -> bool:
     """A cancelled educational scenario disappears from the alert feed instead
     of becoming another noisy cancellation post. Confirmed/result channels are untouched."""
     removed = purge_candidate_alert_posts(candidate)
-    print(f"Alert removed {candidate.signal_id}: {reason} • posts={removed}")
+    pro_removed = purge_pro_watch_post(candidate)
+    print(f"Alert removed {candidate.signal_id}: {reason} • alert_posts={removed} pro_watch={pro_removed}")
     return True
 
 
