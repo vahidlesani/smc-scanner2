@@ -396,6 +396,10 @@ def monitor_candidates() -> Dict[str, int]:
             else:
                 confirmed, candidate, reason = evaluate_confirmation(candidate, closed)
 
+            if not confirmed:
+                code = str(candidate.metadata.get("last_reject_code") or "UNKNOWN")
+                stats["rejects"] = stats.get("rejects", {})
+                stats["rejects"][code] = int(stats["rejects"].get(code, 0)) + 1
             if confirmed:
                 was_staged = bool(candidate.metadata.get("persistence_staged"))
                 try:
@@ -496,7 +500,8 @@ def run_monitor_cycle() -> None:
         if stats["active"] or trade_events:
             print(
                 f"Monitor • candidates={stats['active']} approaching={stats['approaching']} "
-                f"confirmed={stats['confirmed']} cancelled={stats['cancelled']} trade_events={trade_events}"
+                f"confirmed={stats['confirmed']} cancelled={stats['cancelled']} trade_events={trade_events} "
+                f"rejects={stats.get('rejects', {})}"
             )
     except Exception as exc:
         print(f"Candidate monitor cycle error: {exc}")
