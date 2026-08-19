@@ -653,7 +653,8 @@ def _base_candidate(
     score += 1 if float(impulse.get("body_atr", 0) or 0) >= 0.80 else 0
     score += 1 if poi.get("touches", 0) == 0 else 0
     score += 1 if targets["rr1"] >= 2.0 and targets["rr2"] >= 3.0 else 0
-    score += 1 if market_ok and relative >= 1.10 else 0
+    relative_volume = float((bundle.ticker or {}).get("relative_volume", 1) or 1)
+    score += 1 if market_ok and relative_volume >= 1.10 else 0
     score = min(10, max(0, int(score)))
     gates = {
         "htf_alignment": context_aligned and lower_aligned and location_ok,
