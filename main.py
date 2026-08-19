@@ -441,9 +441,8 @@ def monitor_candidates() -> Dict[str, int]:
                         try:
                             update_candidate(candidate)
                             mark_confirmation_published(candidate.signal_id)
-                            # Confirmed replaces the final-watch post in Pro;
-                            # educational alert remains reachable through the link.
-                            purge_pro_watch_post(candidate)
+                            # Confirmed is a reply under the final-watch chart in Pro;
+                            # the full educational alert remains reachable through its link.
                         except Exception as exc:
                             print(
                                 f"Confirmation was published but DB gate remains pending "

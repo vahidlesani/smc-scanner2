@@ -604,6 +604,23 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
     )
 
 
+def _setup_stickers(candidate: SignalCandidate, confirmed: bool) -> list:
+    """Small semantic chips. They label lifecycle/structure without covering price."""
+    md = candidate.metadata or {}
+    chips = [("CONFIRMED" if confirmed else "FINAL WATCH", CHART_THEME["tp1"] if confirmed else CHART_THEME["entry"])]
+    poi = str(md.get("poi_type") or "").upper()
+    if "BASE" in poi or "ORDER_BLOCK" in poi:
+        chips.append(("RBR / DBD BASE", CHART_THEME["demand"] if candidate.direction == "LONG" else CHART_THEME["supply"]))
+    if md.get("pinv") or candidate.setup_code == "PINVAL":
+        chips.append(("PIN REJECTION", CHART_THEME["structure"]))
+    if md.get("structure_level"):
+        chips.append(("MICRO BOS / MSS", CHART_THEME["structure"]))
+    visit = int(md.get("visit_index") or 1)
+    if md.get("touched"):
+        chips.append(("FIRST RETEST" if visit <= 1 else f"RETEST #{visit}", CHART_THEME["trend"]))
+    return chips
+
+
 def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool = False) -> None:
     """Compact annotation stack in the emptier LEFT chart corner.
     It keeps structural labels away from both live candles and the price ladder."""
@@ -1128,7 +1145,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception as exc:
                 print(f"Trendline overlay warning: {exc}")
 
-        # Fresh imbalances are visual context, not extra trade signals.
+        # Semantic setup chips and fresh imbalances are visual context, not extra signals.
+        notes = _setup_stickers(candidate, confirmed) + notes
         notes.extend(_draw_visible_fvgs(ax, frame, count))
 
         # keep candle scale: long context lines may not stretch the y-axis
@@ -1435,7 +1453,10 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
         source_mid = candidate.metadata.get("education_chart_message_id") or candidate.metadata.get("education_message_id")
         link = _telegram_message_link(source_chat, int(source_mid)) if source_mid else ""
         keyboard = {"inline_keyboard": [[{"text": "📚 چارت و توضیحات هشدار اولیه", "url": link}]]} if link else None
-        mid = send_photo(chart, _confirmed_chart_caption(candidate), target, reply_markup=keyboard)
+        watch_mid = candidate.metadata.get("approaching_message_id")
+        mid = send_photo(chart, _confirmed_chart_caption(candidate), target,
+                         reply_to_message_id=int(watch_mid) if watch_mid else None,
+                         reply_markup=keyboard)
         if not mid:
             return False
         candidate.metadata["confirmation_chart_message_id"] = int(mid)
