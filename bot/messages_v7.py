@@ -1424,6 +1424,14 @@ def send_approaching(candidate: SignalCandidate, current_price: float, distance_
     return bool(mid)
 
 
+def _telegram_message_link(chat_id: str, message_id: int) -> str:
+    """Member-visible direct channel/supergroup permalink."""
+    raw = str(chat_id or "")
+    if raw.startswith("-100"):
+        return f"https://t.me/c/{raw[4:]}/{int(message_id)}"
+    return ""
+
+
 def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
     mm = build_money_management(candidate)
     style_fa = {"DAYTRADE": "DAYTRADE", "SWING": "SWING", "SCALP": "SCALP"}.get(candidate.style.upper(), candidate.style)
