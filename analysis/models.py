@@ -120,5 +120,12 @@ def generate_viva_signal_id(symbol: str, style: str, setup_code: str) -> str:
 
 
 def generate_viva_public_code(setup_code: str = "", style: str = "") -> str:
-    """Public clickable lifecycle handle; setup remains a separate visible badge."""
-    return f"VIVA-MON-CODE{utc_now().strftime('%m%d%H%M')}"
+    """Stable human-facing lineage code; never embeds update time or symbol."""
+    import secrets
+    label_map = {
+        "PINVAL": "PINBAR", "TLBREAK": "TLBREAK", "P1234": "P1234",
+        "LSR": "LSR", "SDR": "SDR", "BOS1": "BOS", "IFVG": "IFVG", "TLR": "TLR",
+    }
+    raw = "".join(ch for ch in str(setup_code).upper() if ch.isalnum())[:12]
+    label = label_map.get(raw, raw or "SETUP")
+    return f"VIVA-{label}-CODE{secrets.randbelow(90000) + 10000}"

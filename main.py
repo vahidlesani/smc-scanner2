@@ -168,6 +168,9 @@ def run_discovery_scan() -> Dict[str, int]:
                     stats["suppressed_pre_tp1"] = stats.get("suppressed_pre_tp1", 0) + 1
                     continue
                 previous = find_similar(candidate)
+                if previous and previous.metadata.get("public_code"):
+                    # Every alert update/confirmation/result belongs to one stable lineage code.
+                    candidate.metadata["public_code"] = previous.metadata["public_code"]
                 if previous and not is_material_update(previous, candidate):
                     continue  # identical state: leave the visible alert alone
                 # A materially newer scenario replaces every live alert package
