@@ -545,7 +545,7 @@ def _add_setup_sticker(fig, candidate: SignalCandidate) -> None:
     try:
         # Header band keeps the branded setup sticker out of the candle area.
         # Separate high-resolution badge, kept in the empty upper-right margin.
-        sticker_ax = fig.add_axes([0.895, 0.812, 0.072, 0.072], zorder=30)
+        sticker_ax = fig.add_axes([0.705, 0.904, 0.055, 0.055], zorder=30)
         sticker_ax.imshow(mpimg.imread(path))
         sticker_ax.axis("off")
     except Exception as exc:
