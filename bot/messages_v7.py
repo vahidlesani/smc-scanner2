@@ -604,10 +604,28 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
     )
 
 
+def _setup_badge(candidate: SignalCandidate) -> tuple[str, str]:
+    """Branded, setup-specific sticker used consistently on chart and caption."""
+    code = str(candidate.setup_code or "SETUP").upper()
+    labels = {
+        "PINVAL": "VIVA ✦ PINVAL",
+        "TLBREAK": "VIVA ✦ TREND BREAK",
+        "P1234": "VIVA ✦ 1-2-3-4",
+        "LSR": "VIVA ✦ LIQUIDITY",
+        "SDR": "VIVA ✦ SUPPLY/DEMAND",
+        "BOS1": "VIVA ✦ BOS RETEST",
+        "IFVG": "VIVA ✦ FVG FLIP",
+        "TLR": "VIVA ✦ TREND RETEST",
+    }
+    color = CHART_THEME["structure"] if code in {"P1234", "BOS1", "IFVG"} else (CHART_THEME["trend"] if code == "TLBREAK" else CHART_THEME["demand"])
+    return labels.get(code, f"VIVA ✦ {code}"), color
+
+
 def _setup_stickers(candidate: SignalCandidate, confirmed: bool) -> list:
     """Small semantic chips. They label lifecycle/structure without covering price."""
     md = candidate.metadata or {}
-    chips = [("CONFIRMED" if confirmed else "FINAL WATCH", CHART_THEME["tp1"] if confirmed else CHART_THEME["entry"])]
+    badge, badge_color = _setup_badge(candidate)
+    chips = [(badge, badge_color), ("CONFIRMED" if confirmed else "FINAL WATCH", CHART_THEME["tp1"] if confirmed else CHART_THEME["entry"])]
     poi = str(md.get("poi_type") or "").upper()
     if "BASE" in poi or "ORDER_BLOCK" in poi:
         chips.append(("RBR / DBD BASE", CHART_THEME["demand"] if candidate.direction == "LONG" else CHART_THEME["supply"]))
@@ -1400,7 +1418,9 @@ def _approaching_ai_hint(candidate: SignalCandidate) -> str:
 
 def _approaching_caption(candidate: SignalCandidate, current_price: float, distance_atr: float) -> str:
     why = candidate.strategy_fa
+    badge, _ = _setup_badge(candidate)
     return (
+        f"🏷 <b>{_e(badge)}</b>\n"
         f"⚡ <b>هشدار نهایی | آماده‌سازی ورود</b> • {_e(candidate.setup_code)}\n"
         f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(candidate.style)} • {_e(candidate.direction)}\n"
         f"🎯 {_e(why)} • ⭐ {candidate.score}/10\n"
@@ -1437,7 +1457,9 @@ def _telegram_message_link(chat_id: str, message_id: int) -> str:
 def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
     mm = build_money_management(candidate)
     style_fa = {"DAYTRADE": "DAYTRADE", "SWING": "SWING", "SCALP": "SCALP"}.get(candidate.style.upper(), candidate.style)
+    badge, _ = _setup_badge(candidate)
     rows = [
+        f"🏷 <b>{_e(badge)}</b>",
         f"✅ <b>سیگنال تأییدشده</b> • {_e(candidate.setup_code)}",
         f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(style_fa)} • {_e(candidate.direction)}",
         f"🎯 Entry {_price(candidate.planned_entry)}  |  SL {_price(candidate.sl)}",
