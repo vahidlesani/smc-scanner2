@@ -90,6 +90,7 @@ CHART_LOGO_PATH = os.getenv(
     "CHART_LOGO_PATH",
     os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "vivasignals-logo.png"),
 )
+SETUP_STICKER_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "stickers")
 SIGNAL_SEPARATOR = os.getenv(
     "SIGNAL_SEPARATOR_TEXT",
     "━━━━━━━━━━ 💹 VIVASIGNALS PRO ━━━━━━━━━━",
@@ -530,6 +531,19 @@ def _scenario_path(ax, start, end, color: str, alpha: float = 0.88) -> None:
         mutation_scale=14, linewidth=0.0, color=color, alpha=alpha,
         transform=ax.transData, zorder=12,
     ))
+
+
+def _add_setup_sticker(fig, candidate: SignalCandidate) -> None:
+    path = os.path.join(SETUP_STICKER_DIR, f"{str(candidate.setup_code).lower()}.png")
+    if not os.path.isfile(path):
+        return
+    try:
+        # Header band keeps the branded setup sticker out of the candle area.
+        sticker_ax = fig.add_axes([0.705, 0.904, 0.175, 0.041], zorder=30)
+        sticker_ax.imshow(mpimg.imread(path))
+        sticker_ax.axis("off")
+    except Exception as exc:
+        print(f"Setup sticker warning: {exc}")
 
 
 def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
@@ -1205,6 +1219,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             fontsize=8,
             va="center",
         )
+        _add_setup_sticker(fig, candidate)
         _add_branding(fig, ax, candidate)
 
         buffer = io.BytesIO()
