@@ -101,7 +101,7 @@ def main_menu_keyboard(user_id=None):
             {"text": "🔔 ستاپ‌های فعال", "callback_data": "setups"},
         ],
         [
-            {"text": "📊 نتایج ستاپ‌ها", "callback_data": "strategies"},
+            {"text": "📊 ژورنال و نتایج", "callback_data": "strategies"},
             {"text": "📚 آموزش اصطلاحات", "callback_data": "education"},
         ],
         [
@@ -574,23 +574,46 @@ def handle_backtest(chat_id, symbol, style="BOTH"):
 
 
 def handle_strategies(chat_id):
+    """Professional results hub: per-setup stats plus drill-down buttons."""
     from database.db import get_strategy_performance
     try:
         strategies = get_strategy_performance()
         if not strategies:
-            send_message("📊 هنوز داده‌ای ثبت نشده.", chat_id, main_menu_keyboard())
+            send_message("📊 هنوز سیگنال Confirmed ثبت نشده.", chat_id, main_menu_keyboard())
             return
-        lines = ["🔮 <b>عملکرد استراتژی‌ها</b>", "━━━━━━━━━━━━━━━━━━"]
+        lines = ["📊 <b>ژورنال عملکرد ستاپ‌ها</b>", "━━━━━━━━━━━━━━━━━━"]
+        rows, row = [], []
         for s in strategies:
             emoji = "🏆" if s['winrate'] >= 70 else "⭐" if s['winrate'] >= 55 else "⚠️" if s['winrate'] >= 40 else "❌"
+            code = str(s.get('source') or s.get('setup_code') or '')
             lines.append(
-                f"{emoji} <b>{s['strategy_fa']}</b>\n"
-                f"├ 📈 {s['total']} ترید (✅{s['wins']} ❌{s['losses']})\n"
-                f"├ 🎯 WR {s['winrate']:.1f}%  💰 {s['avg_pnl']:+.2f}%\n"
-                f"└ ⭐ {s['avg_score']}")
-        send_message("\n".join(lines), chat_id, main_menu_keyboard())
+                f"{emoji} <b>{s['strategy_fa']}</b> • <code>{_e(code)}</code>\n"
+                f"├ 📈 {s['total']} Confirmed (✅{s['wins']} ❌{s['losses']})\n"
+                f"├ 🎯 WR {s['winrate']:.1f}%  •  Avg {s['avg_pnl']:+.2f}%\n"
+                f"└ ⭐ کیفیت میانگین {s['avg_score']}")
+            if code:
+                row.append({"text": f"📌 {code}", "callback_data": f"res_{code}"})
+                if len(row) == 3:
+                    rows.append(row); row=[]
+        if row: rows.append(row)
+        rows.append([{"text": "📋 آخرین Confirmها", "callback_data": "recent_results"}, {"text": "◀️ منو", "callback_data": "main_menu"}])
+        send_message("\n━━━━━━━━━━━━━━━━━━\n".join(lines), chat_id, {"inline_keyboard": rows})
     except Exception as e:
-        send_message(f"❌ خطا: {e}", chat_id)
+        send_message(f"❌ خطا در ژورنال نتایج: {e}", chat_id, main_menu_keyboard())
+
+
+def handle_setup_results(chat_id, setup_code):
+    from database.db import get_recent_signals
+    code = str(setup_code).upper()
+    signals = [x for x in get_recent_signals(80) if str(x.get("source") or "").upper() == code]
+    if not signals:
+        send_message(f"📌 هنوز نتیجه‌ای برای <b>{_e(code)}</b> ثبت نشده.", chat_id, main_menu_keyboard())
+        return
+    lines = [f"📌 <b>ژورنال { _e(code) }</b>", "━━━━━━━━━━━━━━━━━━"]
+    for item in signals[:12]:
+        result = {"WIN":"✅", "LOSS":"❌", "PENDING":"⏳"}.get(item.get("result"), "⏳")
+        lines.append(f"{result} <code>{_e(item.get('signal_id'))}</code>\n🪙 {_e(item.get('symbol'))} • {_e(item.get('direction'))} • {float(item.get('pnl_pct') or 0):+.2f}%")
+    send_message("\n".join(lines), chat_id, {"inline_keyboard":[[{"text":"◀️ ژورنال ستاپ‌ها","callback_data":"strategies"}], [{"text":"🏠 منو","callback_data":"main_menu"}]]})
 
 
 def handle_recent_signals(chat_id):
@@ -667,6 +690,10 @@ def handle_callback(callback_query):
         handle_strategies(chat_id)
     elif data == "education":
         handle_education(chat_id)
+    elif data == "recent_results":
+        handle_recent_signals(chat_id)
+    elif data.startswith("res_"):
+        handle_setup_results(chat_id, data[4:])
     elif data == "signals":
         if _is_admin(uid):
             handle_recent_signals(chat_id)
