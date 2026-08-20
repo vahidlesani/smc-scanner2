@@ -498,7 +498,7 @@ def monitor_confirmed_results() -> int:
                 set_first_tp_message_id(event["signal_id"], int(first_tp_mid))
                 event["first_tp_message_id"] = int(first_tp_mid)
             send_tp1_event(event)  # immutable win-rate feed
-        elif str(event.get("event", "")).startswith("TP") or event.get("event") == "TRAIL_STOP":
+        elif str(event.get("event", "")).startswith("TP") or event.get("event") in {"TRAIL_STOP", "STOP"}:
             send_ladder_event(event)
         elif event.get("event") == "CLOSED":
             send_trade_result(event)
