@@ -1472,7 +1472,10 @@ def send_approaching(candidate: SignalCandidate, current_price: float, distance_
     except Exception:
         chart = None
     caption = _approaching_caption(candidate, current_price, distance_atr)
-    mid = send_photo(chart, caption, target) if chart else send_message(caption, target)
+    source_mid = candidate.metadata.get("education_chart_message_id") or candidate.metadata.get("education_message_id")
+    source_link = _telegram_message_link(CHAT_ID_EDUCATION or CHAT_ID_ADMIN, int(source_mid)) if source_mid else ""
+    markup = {"inline_keyboard": [[{"text": "📚 تحلیل و چارت هشدار اولیه", "url": source_link}]]} if source_link else None
+    mid = send_photo(chart, caption, target, reply_markup=markup) if chart else send_message(caption, target, reply_markup=markup)
     _store_alert_message_id(candidate, "approaching_message_id", mid)
     return bool(mid)
 
