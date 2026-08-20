@@ -1523,8 +1523,8 @@ def send_tp1_event(signal: dict) -> bool:
         f"🎯 <b>{_e(signal.get('source') or signal.get('strategy_fa') or 'SETUP')}</b>\n"
         f"🆔 <code>{_e(signal['signal_id'])}</code>\n"
         f"{link_line}\n"
-        f"✅ {SETTINGS.partial_tp1_percent:.0f}% پوزیشن بسته شد.\n"
-        f"🔒 حد ضرر {SETTINGS.partial_tp2_percent:.0f}% باقی‌مانده به Breakeven منتقل شد.",
+        f"✅ {float(signal.get('weight', SETTINGS.partial_tp1_percent)):.0f}% پوزیشن بسته شد.\n"
+        f"🔒 Trailing SL → {_price(float(signal.get('new_sl') or signal.get('sl') or 0))}",
         target,
     )
 
