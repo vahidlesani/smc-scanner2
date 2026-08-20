@@ -545,7 +545,7 @@ def _add_setup_sticker(fig, candidate: SignalCandidate) -> None:
     try:
         # Header band keeps the branded setup sticker out of the candle area.
         # Separate high-resolution badge, kept in the empty upper-right margin.
-        sticker_ax = fig.add_axes([0.705, 0.904, 0.055, 0.055], zorder=30)
+        sticker_ax = fig.add_axes([0.685, 0.900, 0.070, 0.070], zorder=30)
         sticker_ax.imshow(mpimg.imread(path))
         sticker_ax.axis("off")
     except Exception as exc:
@@ -1230,6 +1230,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             va="center",
         )
         _add_setup_sticker(fig, candidate)
+        fig.text(0.762, 0.931, "VIVA SETUP ✳️", color=CHART_THEME["text"], fontsize=9.5, fontweight="bold", va="center")
         _add_branding(fig, ax, candidate)
 
         buffer = io.BytesIO()
@@ -1522,7 +1523,7 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
     """Execution channel is intentionally chart-first: confirmed trade numbers
     plus a one-click link back to its educational alert/chart."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
-    candidate.metadata["target_ladder"] = build_ladder(candidate.planned_entry, candidate.sl, candidate.direction, candidate.market)
+    candidate.metadata["target_ladder"] = build_ladder(candidate.planned_entry, candidate.sl, candidate.direction, candidate.market, candidate.tp2)
     if not candidate.metadata.get("confirmation_chart_sent"):
         chart = generate_chart(chart_df, candidate, confirmed=True) if chart_df is not None else None
         if not chart:

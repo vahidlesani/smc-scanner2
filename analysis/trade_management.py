@@ -21,7 +21,7 @@ def venue_tick(price: float, market: Optional[Dict] = None) -> float:
     return 0.1 if p >= 10_000 else (0.01 if p >= 10 else (0.0001 if p >= 1 else (0.00001 if p >= .1 else .000001)))
 
 
-def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict] = None) -> Dict:
+def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict] = None, final_target: Optional[float] = None) -> Dict:
     """Five 1R-spaced profit levels, fixed exits 35/35/20/5/5.
 
     Stop only trails after a target is actually reached. The five-tick buffer
@@ -33,7 +33,12 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
         raise ValueError("entry/sl must define positive risk")
     sign = 1.0 if str(direction).upper() == "LONG" else -1.0
     tick_gap = 5.0 * venue_tick(entry, market)
-    targets = [entry + sign * risk * n for n in range(1, 6)]
+    # Exit ladder is independent from the R:R gate. It partitions the actual
+    # structural final target into five equal price segments.
+    proposed_final = float(final_target or 0)
+    valid_final = (proposed_final > entry if sign > 0 else proposed_final < entry)
+    final_price = proposed_final if valid_final else entry + sign * risk * 5
+    targets = [entry + (final_price - entry) * i / 5.0 for i in range(1, 6)]
     # after TP1 stop moves just beyond entry; afterwards just beyond prior TP
     trail_stops = [entry + sign * tick_gap]
     trail_stops += [targets[n] + sign * tick_gap for n in range(0, 4)]
@@ -44,6 +49,7 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
         "original_sl": sl,
         "current_sl": sl,
         "risk": risk,
+        "final_target": final_price,
         "tick_gap": tick_gap,
         "targets": targets,
         "trail_stops": trail_stops,

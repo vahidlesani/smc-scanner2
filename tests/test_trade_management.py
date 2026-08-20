@@ -2,7 +2,7 @@ from analysis.trade_management import build_ladder, advance_ladder
 
 
 def test_ladder_long_targets_and_trail():
-    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01})
+    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
     assert p["targets"] == [102, 104, 106, 108, 110]
     assert p["trail_stops"][0] == 100.05
     result = advance_ladder(p, 102.1, 100.2)
@@ -20,7 +20,7 @@ def test_ladder_stop_is_conservative_when_same_candle_hits_tp():
 
 
 def test_ladder_short_trails_down_after_tp1():
-    p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01})
+    p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01}, 90)
     assert p["targets"] == [98, 96, 94, 92, 90]
     result = advance_ladder(p, 99.9, 97.9)
     assert result["events"][0]["event"] == "TP1"

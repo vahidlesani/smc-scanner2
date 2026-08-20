@@ -543,7 +543,7 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
         VALUES ({','.join([p] * 29)})
     """
 
-    ladder = build_ladder(candidate.planned_entry, candidate.sl, candidate.direction, candidate.market)
+    ladder = build_ladder(candidate.planned_entry, candidate.sl, candidate.direction, candidate.market, candidate.tp2)
     ladder_json = json.dumps(ladder, ensure_ascii=False)
     with legacy_db.db_cursor() as cursor:
         cursor.execute(sql, params)

@@ -357,7 +357,7 @@ class V7PersistenceTests(unittest.TestCase):
             events = repository_v7.monitor_confirmed_trades()
         finally:
             repository_v7.get_klines = original
-        self.assertEqual([event["event"] for event in events], ["TP1", "TP2", "TP3", "TP4", "TRAIL_STOP", "CLOSED"])
+        self.assertEqual([event["event"] for event in events], ["TP1", "TP2", "TP3", "TRAIL_STOP", "CLOSED"])
         self.assertEqual(events[-1]["result"], "WIN")
         self.assertGreater(get_recent_signals()[0]["pnl_pct"], 0)
 
