@@ -36,6 +36,12 @@ MAJOR_EQUITY_CODES = {
     "SPY", "QQQ", "DIA", "IWM",
 }
 
+# Tokenized stocks/ETFs and synthetic RWA contracts must never enter the
+# crypto scanner even if a venue reports them with a USDT suffix.
+TOKENIZED_NONCRYPTO_BASES = {
+    "AAPL", "AMZN", "AMD", "AVGO", "BA", "COIN", "GOOG", "GOOGL", "HOOD", "INTC", "KORU", "META", "MSFT", "MSTR", "MU", "NFLX", "NVDA", "NVDAX", "PLTR", "QQQ", "SAMSUNG", "SKHYNIX", "SNDK", "SNXX", "SPCX", "SPY", "TSLA",
+}
+
 
 def _asset_class(instrument: Dict) -> str:
     symbol = str(instrument.get("symbol", "")).upper().replace("+", "")
@@ -162,6 +168,9 @@ class DynamicUniverse:
 
         def _append(symbol: str, global_turnover: float, venue_row: Dict, rank_source: str) -> None:
             if symbol in seen:
+                return
+            base = symbol.upper().removesuffix("USDT").removesuffix("USDC")
+            if base in TOKENIZED_NONCRYPTO_BASES:
                 return
             spread = venue_row.get("spread_pct")
             last = float(venue_row.get("last_price") or 0)
