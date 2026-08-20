@@ -16,6 +16,7 @@ from bot import membership as mem
 SETTINGS = get_settings()
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
+CHAT_ID_EXECUTION = os.environ.get("CHAT_ID_APPROACHING", "")
 CHANNEL_NAME = SETTINGS.channel_name
 
 CRYPTO_SYMBOLS = [
@@ -674,8 +675,17 @@ def handle_result_detail(chat_id, token):
     except Exception: chart=None
     result={"WIN":"✅ WIN","LOSS":"❌ LOSS","PENDING":"⏳ OPEN"}.get(item.get("result"),"⏳")
     caption=f"📊 <b>جزئیات ژورنال</b> • {_e(c.setup_code)}\n🪙 {_e(c.symbol)} • {_e(c.direction)} • {result}\n🎯 Entry {_e(entry)} | SL {_e(sl)}\n🏁 TP1 {_e(item.get('tp1'))} | TP2 {_e(item.get('tp2'))}\n📈 PnL {float(item.get('pnl_pct') or 0):+.2f}%\n🆔 <code>{_e(item.get('public_code') or item.get('signal_id'))}</code>"
-    if chart: send_photo(chat_id, chart, caption)
-    else: send_message(caption,chat_id)
+    def _msg_url(mid):
+        raw = str(CHAT_ID_EXECUTION or "")
+        return f"https://t.me/c/{raw[4:]}/{int(mid)}" if raw.startswith("-100") and mid else ""
+    rows = []
+    confirmed_url = _msg_url(item.get("pro_message_id"))
+    tp_url = _msg_url(item.get("first_tp_message_id"))
+    if confirmed_url: rows.append([{"text":"📌 چارت Confirmed اصلی", "url":confirmed_url}])
+    if tp_url: rows.append([{"text":"🏁 چارت تاریخی TP1", "url":tp_url}])
+    markup = {"inline_keyboard": rows} if rows else None
+    if chart: send_photo(chat_id, chart, caption, markup)
+    else: send_message(caption,chat_id, markup)
 
 
 def handle_education(chat_id):

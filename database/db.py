@@ -910,7 +910,7 @@ def get_recent_signals(limit: int = 50) -> list:
             SELECT signal_id, symbol, source, strategy_fa, direction,
                    entry, sl, tp1, tp2, result, pnl_pct, score,
                    leverage, margin_usd, trade_style, created_at, closed_at,
-                   target_state_json, public_code, pro_message_id
+                   target_state_json, public_code, pro_message_id, first_tp_message_id
             FROM signals
             WHERE {_published_v7_clause()}
             ORDER BY created_at DESC
@@ -927,7 +927,7 @@ def get_recent_signals(limit: int = 50) -> list:
             "leverage": r[12], "margin_usd": r[13],
             "trade_style": r[14],
             "created_at": r[15], "closed_at": r[16],
-            "target_state_json": r[17] or "{}", "public_code": r[18] or "", "pro_message_id": r[19] or 0,
+            "target_state_json": r[17] or "{}", "public_code": r[18] or "", "pro_message_id": r[19] or 0, "first_tp_message_id": r[20] or 0,
         }
         for r in rows
     ]
