@@ -96,6 +96,18 @@ def _uname(user: dict) -> str:
 
 # ─── کیبوردها ───
 
+def reply_menu_keyboard(user_id=None):
+    rows = [
+        [{"text": "🔎 تحلیل فوری"}, {"text": "📡 ستاپ‌های فعال"}],
+        [{"text": "📊 ژورنال نتایج"}, {"text": "🩺 وضعیت سامانه"}],
+        [{"text": "📚 مسیر یادگیری"}, {"text": "💎 حساب من"}],
+        [{"text": "🚪 ورود به کانال"}, {"text": "🛡 اصول ایمنی"}],
+    ]
+    if user_id is not None and _is_admin(user_id):
+        rows.append([{"text": "🧪 گزارش آزمون"}, {"text": "🧹 پاکسازی هشدارها"}])
+    return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
+
+
 def main_menu_keyboard(user_id=None):
     rows = [
         [
@@ -191,7 +203,7 @@ def handle_start(chat_id, user=None):
         f"{mem.plan_status_fa(int(user.get('id', chat_id)), _uname(user))}\n"
         "از دکمه‌ها شروع کن 👇"
     )
-    send_message(text, chat_id, main_menu_keyboard(user.get("id")))
+    send_message(text, chat_id, reply_menu_keyboard(user.get("id")))
 
 
 def handle_help(chat_id, user_id=None):
@@ -833,6 +845,22 @@ def handle_message(message):
     uid = int(user.get("id", 0) or 0)
 
     if not text.startswith("/"):
+        from bot.messages_v7 import purge_resolved_alert_posts
+        quick = {
+            "🔎 تحلیل فوری": lambda: handle_ia_menu(chat_id),
+            "📡 ستاپ‌های فعال": lambda: handle_setups(chat_id),
+            "📊 ژورنال نتایج": lambda: handle_strategies(chat_id),
+            "🩺 وضعیت سامانه": lambda: handle_status(chat_id, uid),
+            "📚 مسیر یادگیری": lambda: handle_education(chat_id),
+            "💎 حساب من": lambda: handle_membership(chat_id, user),
+            "🚪 ورود به کانال": lambda: send_message(mem.CHANNEL_INVITE_URL or "لینک کانال تنظیم نشده.", chat_id),
+            "🛡 اصول ایمنی": lambda: handle_help(chat_id, uid),
+            "🧪 گزارش آزمون": lambda: handle_backtest(chat_id, "BTCUSDT") if _is_admin(uid) else None,
+            "🧹 پاکسازی هشدارها": lambda: send_message(f"🧹 {purge_resolved_alert_posts()} پیام پاک شد.", chat_id) if _is_admin(uid) else None,
+        }
+        if text in quick:
+            quick[text]()
+            return
         _handle_pending_text(message)
         return
 
