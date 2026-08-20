@@ -97,11 +97,13 @@ def _uname(user: dict) -> str:
 # ─── کیبوردها ───
 
 def reply_menu_keyboard(user_id=None):
+    """Persistent VivaMon-style lower Telegram menu (no scanner logic copied)."""
     rows = [
         [{"text": "🔎 تحلیل فوری"}, {"text": "📡 ستاپ‌های فعال"}],
-        [{"text": "📊 ژورنال نتایج"}, {"text": "🩺 وضعیت سامانه"}],
-        [{"text": "📚 مسیر یادگیری"}, {"text": "💎 حساب من"}],
-        [{"text": "🚪 ورود به کانال"}, {"text": "🛡 اصول ایمنی"}],
+        [{"text": "🕘 موارد اخیر"}, {"text": "📊 نتایج ستاپ‌ها"}],
+        [{"text": "🩺 وضعیت سامانه"}, {"text": "📚 مسیر یادگیری"}],
+        [{"text": "🚪 ورود به کانال"}, {"text": "💎 حساب و دسترسی"}],
+        [{"text": "🛡 اصول ایمنی"}, {"text": "🪪 شناسه من"}],
     ]
     if user_id is not None and _is_admin(user_id):
         rows.append([{"text": "🧪 گزارش آزمون"}, {"text": "🧹 پاکسازی هشدارها"}])
@@ -849,12 +851,14 @@ def handle_message(message):
         quick = {
             "🔎 تحلیل فوری": lambda: handle_ia_menu(chat_id),
             "📡 ستاپ‌های فعال": lambda: handle_setups(chat_id),
-            "📊 ژورنال نتایج": lambda: handle_strategies(chat_id),
+            "🕘 موارد اخیر": lambda: handle_recent_signals(chat_id),
+            "📊 نتایج ستاپ‌ها": lambda: handle_strategies(chat_id),
             "🩺 وضعیت سامانه": lambda: handle_status(chat_id, uid),
             "📚 مسیر یادگیری": lambda: handle_education(chat_id),
-            "💎 حساب من": lambda: handle_membership(chat_id, user),
+            "💎 حساب و دسترسی": lambda: handle_membership(chat_id, user),
             "🚪 ورود به کانال": lambda: send_message(mem.CHANNEL_INVITE_URL or "لینک کانال تنظیم نشده.", chat_id),
             "🛡 اصول ایمنی": lambda: handle_help(chat_id, uid),
+            "🪪 شناسه من": lambda: send_message(f"🪪 شناسه Telegram شما: <code>{uid}</code>", chat_id),
             "🧪 گزارش آزمون": lambda: handle_backtest(chat_id, "BTCUSDT") if _is_admin(uid) else None,
             "🧹 پاکسازی هشدارها": lambda: send_message(f"🧹 {purge_resolved_alert_posts()} پیام پاک شد.", chat_id) if _is_admin(uid) else None,
         }
@@ -877,8 +881,18 @@ def handle_message(message):
         handle_setups(chat_id)
     elif cmd in {"/membership", "/sub", "/subscribe"}:
         handle_membership(chat_id, user)
-    elif cmd == "/stats":
-        handle_stats(chat_id, uid)
+    elif cmd in {"/stats", "/results"}:
+        handle_strategies(chat_id)
+    elif cmd == "/recent":
+        handle_recent_signals(chat_id)
+    elif cmd == "/guide":
+        handle_education(chat_id)
+    elif cmd == "/join":
+        send_message(mem.CHANNEL_INVITE_URL or "لینک کانال تنظیم نشده.", chat_id)
+    elif cmd == "/account":
+        handle_membership(chat_id, user)
+    elif cmd == "/id":
+        send_message(f"🪪 شناسه Telegram شما: <code>{uid}</code>", chat_id)
     elif cmd == "/status":
         handle_status(chat_id, uid)
     elif cmd == "/backtest" and _is_admin(uid):
