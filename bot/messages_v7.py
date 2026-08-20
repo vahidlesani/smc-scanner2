@@ -1570,16 +1570,16 @@ def _published_lifecycle_event(event: dict) -> bool:
 
 
 def send_tp1_event(signal: dict) -> bool:
-    if signal.get("event") != "TP1" or not _published_lifecycle_event(signal):
+    if not str(signal.get("event") or "").startswith("TP") or not _published_lifecycle_event(signal):
         return False
     target = CHAT_ID_RESULTS or CHAT_ID_ADMIN
     send_signal_separator(target)
-    link_id = int(signal.get("first_tp_message_id") or signal.get("pro_message_id") or 0)
+    link_id = int(signal.get("pro_event_message_id") or signal.get("first_tp_message_id") or signal.get("pro_message_id") or 0)
     link = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, link_id)
     code = _e(signal.get("public_code") or signal.get("signal_id"))
     link_line = f'<a href="{link}">🔗 {code} • چارت TP/Confirmed</a>\n' if link else ""
     return send_message(
-        f"🥇 <b>TP1 HIT</b>\n"
+        f"🥇 <b>{_e(signal.get('event') or 'TP')} HIT</b>\n"
         f"🪙 <b>{_e(signal['symbol'])}</b> • {_e(signal.get('style', ''))}\n"
         f"🎯 <b>{_e(signal.get('source') or signal.get('strategy_fa') or 'SETUP')}</b>\n"
         f"🆔 <code>{code}</code>\n"

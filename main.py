@@ -492,13 +492,15 @@ def monitor_candidates() -> Dict[str, int]:
 def monitor_confirmed_results() -> int:
     events = monitor_confirmed_trades()
     for event in events:
-        if event.get("event") == "TP1":
-            first_tp_mid = send_ladder_event(event)
-            if first_tp_mid:
-                set_first_tp_message_id(event["signal_id"], int(first_tp_mid))
-                event["first_tp_message_id"] = int(first_tp_mid)
-            send_tp1_event(event)  # immutable win-rate feed
-        elif str(event.get("event", "")).startswith("TP") or event.get("event") in {"TRAIL_STOP", "STOP"}:
+        if str(event.get("event", "")).startswith("TP"):
+            pro_tp_mid = send_ladder_event(event)
+            if pro_tp_mid:
+                event["pro_event_message_id"] = int(pro_tp_mid)
+                if event.get("event") == "TP1":
+                    set_first_tp_message_id(event["signal_id"], int(pro_tp_mid))
+                    event["first_tp_message_id"] = int(pro_tp_mid)
+            send_tp1_event(event)  # immutable win-rate feed, linked to this exact TP
+        elif event.get("event") in {"TRAIL_STOP", "STOP"}:
             send_ladder_event(event)
         elif event.get("event") == "CLOSED":
             send_trade_result(event)

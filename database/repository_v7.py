@@ -603,8 +603,10 @@ def is_lifecycle_event_publishable(
     if not row:
         return False
     db_result, tp1_hit, closed_at = row
-    if event_type == "TP1":
-        return bool(tp1_hit)
+    if str(event_type).startswith("TP"):
+        # TP events are emitted only by the durable ladder monitor; publication
+        # proof is the confirmed signal itself, not the legacy tp1_hit column.
+        return True
     if event_type == "CLOSED":
         return result in {"WIN", "LOSS"} and db_result == result and closed_at is not None
     return False
