@@ -615,6 +615,8 @@ def _setup_stickers(candidate: SignalCandidate, confirmed: bool) -> list:
         chips.append(("PIN REJECTION", CHART_THEME["structure"]))
     if md.get("structure_level"):
         chips.append(("MICRO BOS / MSS", CHART_THEME["structure"]))
+    if md.get("target_event"):
+        chips.append((str(md["target_event"]), CHART_THEME["tp1"]))
     visit = int(md.get("visit_index") or 1)
     if md.get("touched"):
         chips.append(("FIRST RETEST" if visit <= 1 else f"RETEST #{visit}", CHART_THEME["trend"]))
@@ -1568,9 +1570,29 @@ def send_startup_message(symbol_count: int) -> bool:
     )
 
 
+def _event_chart_candidate(event: dict) -> SignalCandidate:
+    targets = list(event.get("targets") or [])
+    entry = float(event.get("entry") or 0)
+    sl = float(event.get("sl") or 0)
+    tp1 = float(targets[0]) if targets else entry
+    tp2 = float(targets[1]) if len(targets) > 1 else tp1
+    direction = str(event.get("direction") or "LONG").upper()
+    risk = max(abs(entry - sl), 1e-12)
+    rr1, rr2 = abs(tp1-entry)/risk, abs(tp2-entry)/risk
+    return SignalCandidate(
+        signal_id=str(event.get("signal_id") or ""), symbol=str(event.get("symbol") or ""),
+        style=str(event.get("style") or "DAYTRADE"), setup_code=str(event.get("source") or "SETUP"),
+        setup_name=str(event.get("source") or "SETUP"), strategy_fa=str(event.get("strategy_fa") or event.get("source") or "SETUP"),
+        direction=direction, score=0, status="CONFIRMED", entry_zone_bottom=entry,
+        entry_zone_top=entry, planned_entry=entry, sl=sl, tp1=tp1, tp2=tp2,
+        rr_tp1=rr1, rr_tp2=rr2, bias="BULLISH" if direction == "LONG" else "BEARISH",
+        trigger_timeframe="5m" if str(event.get("style")) == "SCALP" else "15m",
+        metadata={"target_event": str(event.get("event") or ""), "public_code": event.get("public_code") or event.get("signal_id")},
+    )
+
+
 def send_ladder_event(event: dict) -> bool:
-    """Compact TP/trailing reply in VivaMon. Live-chart attachment is added by
-    the notification layer once it rebuilds the original candidate frame."""
+    """TP/trailing reply with a fresh market chart in VivaMon."""
     kind = str(event.get("event") or "")
     if kind not in {"TP1", "TP2", "TP3", "TP4", "TP5", "TRAIL_STOP"}:
         return False
@@ -1582,13 +1604,24 @@ def send_ladder_event(event: dict) -> bool:
             f"🪙 {_e(event.get('symbol'))} • {_e(event.get('style'))}\n"
             f"✅ {float(event.get('weight', 0)):.0f}% خروج انجام شد.\n"
             f"🔒 Trailing SL → <b>{_price(float(event.get('new_sl') or event.get('sl') or 0))}</b>\n"
-            f"🆔 <code>{_e(event.get('signal_id'))}</code>"
+            f"🆔 <code>{_e(event.get('public_code') or event.get('signal_id'))}</code>"
         )
     else:
         text = (
             f"🔒 <b>TRAILING STOP HIT</b>\n"
             f"🪙 {_e(event.get('symbol'))} • {_e(event.get('source') or 'SETUP')}\n"
             f"📍 Stop اجرا شد: <b>{_price(float(event.get('stop') or event.get('sl') or 0))}</b>\n"
-            f"🆔 <code>{_e(event.get('signal_id'))}</code>"
+            f"🆔 <code>{_e(event.get('public_code') or event.get('signal_id'))}</code>"
         )
+    try:
+        from data.fetcher import get_klines
+        candidate = _event_chart_candidate(event)
+        frame = get_klines(candidate.symbol, candidate.trigger_timeframe, 180, closed_only=False, use_cache=False)
+        chart = generate_chart(frame, candidate, confirmed=True) if frame is not None else None
+    except Exception as exc:
+        print(f"Live target chart warning {event.get('signal_id')}: {exc}")
+        chart = None
+    if chart:
+        return bool(send_photo(chart, text, target, reply_to_message_id=reply_id))
     return bool(send_message(text, target, reply_to_message_id=reply_id))
+
