@@ -21,6 +21,7 @@ import requests
 
 from analysis.models import SignalCandidate
 from analysis.risk import build_money_management
+from analysis.trade_management import build_ladder
 from config import get_settings
 
 SETTINGS = get_settings()
@@ -990,11 +991,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 linewidth=0.65,
                 alpha=0.45,
             )
-            levels = [
-                (candidate.planned_entry, "ENTRY", CHART_THEME["entry"]),
-                (candidate.tp1, "TP1", CHART_THEME["tp1"]),
-                (candidate.tp2, "TP2", CHART_THEME["tp2"]),
-            ]
+            ladder = (candidate.metadata or {}).get("target_ladder") or {}
+            ladder_targets = list(ladder.get("targets") or [candidate.tp1, candidate.tp2])
+            ladder_weights = list(ladder.get("weights") or [35, 35])
+            levels = [(candidate.planned_entry, "ENTRY", CHART_THEME["entry"])]
+            for i, level in enumerate(ladder_targets):
+                label = f"TP{i+1} {float(ladder_weights[i]) if i < len(ladder_weights) else 0:.0f}%"
+                levels.append((float(level), label, CHART_THEME["tp1"] if i < 3 else CHART_THEME["tp2"]))
             for level, label, color in levels:
                 ax.hlines(
                     level,
@@ -1175,8 +1178,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         _ylo = min(_ylo, float(candidate.entry_zone_bottom), float(candidate.sl))
         _yhi = max(_yhi, float(candidate.entry_zone_top), float(candidate.sl))
         if confirmed:
-            _yhi = max(_yhi, float(candidate.tp2))
-            _ylo = min(_ylo, float(candidate.tp1))
+            ladder_targets = list(((candidate.metadata or {}).get("target_ladder") or {}).get("targets") or [candidate.tp1, candidate.tp2])
+            _yhi = max(_yhi, *[float(v) for v in ladder_targets])
+            _ylo = min(_ylo, *[float(v) for v in ladder_targets])
         _yr = max(_yhi - _ylo, 1e-9)
         ax.set_ylim(_ylo - 0.06 * _yr, _yhi + 0.06 * _yr)
 
@@ -1463,7 +1467,7 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         f"✅ <b>سیگنال تأییدشده</b> • {_e(candidate.setup_code)}",
         f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(style_fa)} • {_e(candidate.direction)}",
         f"🎯 Entry {_price(candidate.planned_entry)}  |  SL {_price(candidate.sl)}",
-        f"🏁 TP1 {_price(candidate.tp1)}  |  TP2 {_price(candidate.tp2)}",
+        *[f"🏁 TP{i+1} {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [35, 35])))],
         f"⚖️ R:R {candidate.rr_tp1:.2f} / {candidate.rr_tp2:.2f} • ⭐ {candidate.score}/10",
     ]
     if mm:
@@ -1476,6 +1480,7 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
     """Execution channel is intentionally chart-first: confirmed trade numbers
     plus a one-click link back to its educational alert/chart."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    candidate.metadata["target_ladder"] = build_ladder(candidate.planned_entry, candidate.sl, candidate.direction, candidate.market)
     if not candidate.metadata.get("confirmation_chart_sent"):
         chart = generate_chart(chart_df, candidate, confirmed=True) if chart_df is not None else None
         if not chart:
