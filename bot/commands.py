@@ -104,6 +104,7 @@ def reply_menu_keyboard(user_id=None):
         [{"text": "🩺 وضعیت سامانه"}, {"text": "📚 مسیر یادگیری"}],
         [{"text": "🚪 ورود به کانال"}, {"text": "💎 حساب و دسترسی"}],
         [{"text": "🛡 اصول ایمنی"}, {"text": "🪪 شناسه من"}],
+        [{"text": "🔄 بروزرسانی ربات"}],
     ]
     if user_id is not None and _is_admin(user_id):
         rows.append([{"text": "🧪 گزارش آزمون"}, {"text": "🧹 پاکسازی هشدارها"}])
@@ -859,6 +860,7 @@ def handle_message(message):
             "🚪 ورود به کانال": lambda: send_message(mem.CHANNEL_INVITE_URL or "لینک کانال تنظیم نشده.", chat_id),
             "🛡 اصول ایمنی": lambda: handle_help(chat_id, uid),
             "🪪 شناسه من": lambda: send_message(f"🪪 شناسه Telegram شما: <code>{uid}</code>", chat_id),
+            "🔄 بروزرسانی ربات": lambda: handle_start(chat_id, user),
             "🧪 گزارش آزمون": lambda: handle_backtest(chat_id, "BTCUSDT") if _is_admin(uid) else None,
             "🧹 پاکسازی هشدارها": lambda: send_message(f"🧹 {purge_resolved_alert_posts()} پیام پاک شد.", chat_id) if _is_admin(uid) else None,
         }
@@ -891,8 +893,11 @@ def handle_message(message):
         send_message(mem.CHANNEL_INVITE_URL or "لینک کانال تنظیم نشده.", chat_id)
     elif cmd == "/account":
         handle_membership(chat_id, user)
-    elif cmd == "/id":
-        send_message(f"🪪 شناسه Telegram شما: <code>{uid}</code>", chat_id)
+    elif cmd in {"/id", "/refresh"}:
+        if cmd == "/refresh":
+            handle_start(chat_id, user)
+        else:
+            send_message(f"🪪 شناسه Telegram شما: <code>{uid}</code>", chat_id)
     elif cmd == "/status":
         handle_status(chat_id, uid)
     elif cmd == "/backtest" and _is_admin(uid):
