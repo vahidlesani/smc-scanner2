@@ -397,6 +397,28 @@ def portfolio_guard(candidate: SignalCandidate) -> Tuple[bool, str]:
     return True, "Portfolio guard passed"
 
 
+def has_open_pre_tp1_signal(symbol: str, trigger_timeframe: str) -> bool:
+    """One protected exposure per symbol/trigger until TP1 is actually hit.
+    This prevents the exact KORU pattern: a fresh same-TF confirmation while
+    the remaining position of the prior trade is still live and protected."""
+    p = legacy_db._ph()
+    truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT 1 FROM signals
+            WHERE symbol={p} AND trigger_timeframe={p}
+              AND confirmed={truth} AND confirmation_sent={truth}
+              AND status='CONFIRMED' AND result='PENDING'
+              AND COALESCE(tp1_hit, {'FALSE' if legacy_db.USE_POSTGRES else '0'})={'FALSE' if legacy_db.USE_POSTGRES else '0'}
+              AND strategy_version={p}
+            LIMIT 1
+            """,
+            (str(symbol).upper(), str(trigger_timeframe).lower(), SETTINGS.strategy_version),
+        )
+        return cursor.fetchone() is not None
+
+
 def save_confirmed_signal(candidate: SignalCandidate) -> bool:
     if candidate.status != "CONFIRMED" or not candidate.confirmed_at:
         raise ValueError("Only a CONFIRMED candidate can be persisted")

@@ -58,6 +58,7 @@ from database.repository_v7 import (
     acquire_symbol_lock,
     cancel_staged_confirmation,
     has_unresolved_symbol,
+    has_open_pre_tp1_signal,
     init_v7_schema,
     is_confirmation_published,
     mark_confirmation_published,
@@ -158,6 +159,11 @@ def run_discovery_scan() -> Dict[str, int]:
                 # Same symbol + same trigger TF: remove the older alert package
                 # and publish only the newest live scenario, so strong setups
                 # never disappear inside Telegram clutter.
+                # Once a trade is confirmed on this exact trigger TF, no new
+                # same-symbol candidate is allowed until TP1 protects it or it closes.
+                if has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe):
+                    stats["suppressed_pre_tp1"] = stats.get("suppressed_pre_tp1", 0) + 1
+                    continue
                 previous = find_similar(candidate)
                 if previous and not is_material_update(previous, candidate):
                     continue  # identical state: leave the visible alert alone
