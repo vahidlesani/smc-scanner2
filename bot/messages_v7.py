@@ -7,6 +7,8 @@ import os
 import threading
 import time
 from typing import List, Optional
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import matplotlib
 matplotlib.use("Agg")
@@ -106,6 +108,16 @@ def _e(value) -> str:
 
 def _public_code(candidate: SignalCandidate) -> str:
     return str((candidate.metadata or {}).get("public_code") or candidate.signal_id)
+
+def _iran_time(candidate: SignalCandidate) -> str:
+    try:
+        value = str(candidate.created_at).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        return dt.astimezone(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return "—"
 
 
 _TF_FA = {"1d": "روزانه", "4h": "۴ ساعته", "1h": "۱ ساعته", "15m": "۱۵ دقیقه", "5m": "۵ دقیقه", "1m": "۱ دقیقه"}
