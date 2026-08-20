@@ -119,8 +119,6 @@ def generate_viva_signal_id(symbol: str, style: str, setup_code: str) -> str:
     return f"viva-{clean_symbol}-{style_code}-{setup}-{ts}-{random_code}"
 
 
-def generate_viva_public_code(setup_code: str, style: str = "") -> str:
-    """Readable public lifecycle code; internal UUID stays as database identity."""
-    setup = "".join(ch for ch in str(setup_code).upper() if ch.isalnum())[:6] or "SET"
-    ts = utc_now().strftime("%m%d%H%M")
-    return f"VIVA-MON-{setup}{ts}"
+def generate_viva_public_code(setup_code: str = "", style: str = "") -> str:
+    """Public clickable lifecycle handle; setup remains a separate visible badge."""
+    return f"VIVA-MON-CODE{utc_now().strftime('%m%d%H%M')}"

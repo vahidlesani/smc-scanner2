@@ -1544,13 +1544,15 @@ def send_tp1_event(signal: dict) -> bool:
         return False
     target = CHAT_ID_RESULTS or CHAT_ID_ADMIN
     send_signal_separator(target)
-    link = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, int(signal.get("pro_message_id") or 0))
-    link_line = f'<a href="{link}">🔗 چارت و Confirmed اصلی</a>\n' if link else ""
+    link_id = int(signal.get("first_tp_message_id") or signal.get("pro_message_id") or 0)
+    link = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, link_id)
+    code = _e(signal.get("public_code") or signal.get("signal_id"))
+    link_line = f'<a href="{link}">🔗 {code} • چارت TP/Confirmed</a>\n' if link else ""
     return send_message(
         f"🥇 <b>TP1 HIT</b>\n"
         f"🪙 <b>{_e(signal['symbol'])}</b> • {_e(signal.get('style', ''))}\n"
         f"🎯 <b>{_e(signal.get('source') or signal.get('strategy_fa') or 'SETUP')}</b>\n"
-        f"🆔 <code>{_e(signal['signal_id'])}</code>\n"
+        f"🆔 <code>{code}</code>\n"
         f"{link_line}\n"
         f"✅ {float(signal.get('weight', SETTINGS.partial_tp1_percent)):.0f}% پوزیشن بسته شد.\n"
         f"🔒 Trailing SL → {_price(float(signal.get('new_sl') or signal.get('sl') or 0))}",
@@ -1649,6 +1651,6 @@ def send_ladder_event(event: dict) -> bool:
         print(f"Live target chart warning {event.get('signal_id')}: {exc}")
         chart = None
     if chart:
-        return bool(send_photo(chart, text, target, reply_to_message_id=reply_id))
-    return bool(send_message(text, target, reply_to_message_id=reply_id))
+        return send_photo(chart, text, target, reply_to_message_id=reply_id)
+    return send_message(text, target, reply_to_message_id=reply_id)
 

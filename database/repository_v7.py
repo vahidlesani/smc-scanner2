@@ -44,6 +44,8 @@ SIGNAL_COLUMNS = {
     "pnl_usd": "REAL DEFAULT 0",
     "target_state_json": "TEXT DEFAULT '{}'",
     "pro_message_id": "INTEGER DEFAULT 0",
+    "public_code": "TEXT DEFAULT ''",
+    "first_tp_message_id": "INTEGER DEFAULT 0",
 }
 
 ACTIVE_COLUMNS = {
@@ -62,6 +64,8 @@ ACTIVE_COLUMNS = {
     "last_checked_at": "TEXT",
     "target_state_json": "TEXT DEFAULT '{}'",
     "pro_message_id": "INTEGER DEFAULT 0",
+    "public_code": "TEXT DEFAULT ''",
+    "first_tp_message_id": "INTEGER DEFAULT 0",
 }
 
 
@@ -544,8 +548,9 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
     with legacy_db.db_cursor() as cursor:
         cursor.execute(sql, params)
         cursor.execute(active_sql, active_params)
-        cursor.execute(f"UPDATE signals SET target_state_json={p} WHERE signal_id={p}", (ladder_json, candidate.signal_id))
-        cursor.execute(f"UPDATE active_signals SET target_state_json={p} WHERE signal_id={p}", (ladder_json, candidate.signal_id))
+        public_code = str(candidate.metadata.get("public_code") or candidate.signal_id)
+        cursor.execute(f"UPDATE signals SET target_state_json={p}, public_code={p} WHERE signal_id={p}", (ladder_json, public_code, candidate.signal_id))
+        cursor.execute(f"UPDATE active_signals SET target_state_json={p}, public_code={p} WHERE signal_id={p}", (ladder_json, public_code, candidate.signal_id))
     return True
 
 
@@ -653,6 +658,13 @@ def set_pro_message_id(signal_id: str, message_id: int) -> None:
         cursor.execute(f"UPDATE active_signals SET pro_message_id={p} WHERE signal_id={p}", (int(message_id), signal_id))
 
 
+def set_first_tp_message_id(signal_id: str, message_id: int) -> None:
+    p = legacy_db._ph()
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(f"UPDATE signals SET first_tp_message_id={p} WHERE signal_id={p}", (int(message_id), signal_id))
+        cursor.execute(f"UPDATE active_signals SET first_tp_message_id={p} WHERE signal_id={p}", (int(message_id), signal_id))
+
+
 def _naive_timestamp(value) -> Optional[pd.Timestamp]:
     if not value:
         return None
@@ -678,7 +690,7 @@ def monitor_confirmed_trades() -> List[Dict]:
             SELECT signal_id, symbol, direction, entry, sl_original, tp1, tp2,
                    leverage, margin_usd, trade_style, confirmed_at,
                    last_checked_at, tp1_hit, source, strategy_fa,
-                   strategy_version, pro_message_id, target_state_json
+                   strategy_version, pro_message_id, target_state_json, public_code, first_tp_message_id
             FROM signals
             WHERE confirmed={truth}
               AND confirmation_sent={truth}
@@ -700,7 +712,7 @@ def monitor_confirmed_trades() -> List[Dict]:
         (
             signal_id, symbol, direction, entry, original_sl, tp1, tp2,
             leverage, margin, style, confirmed_at, last_checked_at,
-            tp1_hit, source, strategy_fa, strategy_version, pro_message_id, target_state_json,
+            tp1_hit, source, strategy_fa, strategy_version, pro_message_id, target_state_json, public_code, first_tp_message_id,
         ) = row
         timeframe = "5m" if style == "SCALP" else "15m"
         key = (symbol, timeframe)
@@ -851,7 +863,8 @@ def monitor_confirmed_trades() -> List[Dict]:
                     "strategy_version": strategy_version,
                     "confirmed_at": str(confirmed_at),
                     "confirmation_sent": True,
-                    "pro_message_id": int(pro_message_id or 0),
+                    "pro_message_id": int(pro_message_id or 0), "public_code": public_code,
+                    "first_tp_message_id": int(first_tp_message_id or 0),
                 })
         if tp1_event:
             events.append(tp1_event)

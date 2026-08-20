@@ -67,6 +67,7 @@ from database.repository_v7 import (
     release_symbol_lock,
     save_confirmed_signal,
     set_pro_message_id,
+    set_first_tp_message_id,
     update_symbol_lock,
 )
 
@@ -492,7 +493,10 @@ def monitor_confirmed_results() -> int:
     events = monitor_confirmed_trades()
     for event in events:
         if event.get("event") == "TP1":
-            send_ladder_event(event)
+            first_tp_mid = send_ladder_event(event)
+            if first_tp_mid:
+                set_first_tp_message_id(event["signal_id"], int(first_tp_mid))
+                event["first_tp_message_id"] = int(first_tp_mid)
             send_tp1_event(event)  # immutable win-rate feed
         elif str(event.get("event", "")).startswith("TP") or event.get("event") == "TRAIL_STOP":
             send_ladder_event(event)
