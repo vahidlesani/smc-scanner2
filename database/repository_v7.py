@@ -15,7 +15,7 @@ import pandas as pd
 
 from analysis.models import SignalCandidate
 from analysis.risk import build_money_management
-from analysis.trade_management import build_ladder
+from analysis.trade_management import build_ladder, advance_ladder
 from config import get_settings
 from data.fetcher import get_klines
 from database import db as legacy_db
@@ -678,7 +678,7 @@ def monitor_confirmed_trades() -> List[Dict]:
             SELECT signal_id, symbol, direction, entry, sl_original, tp1, tp2,
                    leverage, margin_usd, trade_style, confirmed_at,
                    last_checked_at, tp1_hit, source, strategy_fa,
-                   strategy_version, pro_message_id
+                   strategy_version, pro_message_id, target_state_json
             FROM signals
             WHERE confirmed={truth}
               AND confirmation_sent={truth}
@@ -700,7 +700,7 @@ def monitor_confirmed_trades() -> List[Dict]:
         (
             signal_id, symbol, direction, entry, original_sl, tp1, tp2,
             leverage, margin, style, confirmed_at, last_checked_at,
-            tp1_hit, source, strategy_fa, strategy_version, pro_message_id,
+            tp1_hit, source, strategy_fa, strategy_version, pro_message_id, target_state_json,
         ) = row
         timeframe = "5m" if style == "SCALP" else "15m"
         key = (symbol, timeframe)
@@ -715,6 +715,53 @@ def monitor_confirmed_trades() -> List[Dict]:
             timestamps = timestamps.dt.tz_convert("UTC").dt.tz_localize(None)
         pending = frame.loc[timestamps > start].copy() if start is not None else frame.tail(1).copy()
         if pending.empty:
+            continue
+
+        # New signals carry a durable 5-TP ladder. Legacy rows keep the old
+        # two-target monitor so historical result data remains untouched.
+        try:
+            ladder = json.loads(target_state_json or "{}")
+        except Exception:
+            ladder = {}
+        if ladder and ladder.get("targets") and not ladder.get("closed"):
+            ladder_events = []
+            latest_checked = start
+            for _, candle in pending.iterrows():
+                latest_checked = _naive_timestamp(candle["timestamp"])
+                step = advance_ladder(ladder, float(candle["high"]), float(candle["low"]))
+                ladder = step["state"]
+                for event in step["events"]:
+                    event.update({
+                        "signal_id": signal_id, "symbol": symbol, "direction": direction,
+                        "style": style, "source": source, "strategy_fa": strategy_fa,
+                        "strategy_version": strategy_version, "confirmed_at": str(confirmed_at),
+                        "confirmation_sent": True, "pro_message_id": int(pro_message_id or 0),
+                        "entry": float(entry), "sl": float(ladder["current_sl"]),
+                        "targets": list(ladder["targets"]), "hit_index": int(ladder["hit_index"]),
+                    })
+                    ladder_events.append(event)
+                if ladder.get("closed"):
+                    break
+            with legacy_db.db_cursor() as cursor:
+                if latest_checked is not None:
+                    checked_text = latest_checked.isoformat(sep=" ", timespec="seconds")
+                    cursor.execute(f"UPDATE signals SET target_state_json={p}, sl={p}, last_checked_at={p} WHERE signal_id={p}",
+                                   (json.dumps(ladder), float(ladder["current_sl"]), checked_text, signal_id))
+                    cursor.execute(f"UPDATE active_signals SET target_state_json={p}, sl={p}, last_checked_at={p} WHERE signal_id={p}",
+                                   (json.dumps(ladder), float(ladder["current_sl"]), checked_text, signal_id))
+                if ladder.get("closed"):
+                    notional = float(margin or 0) * int(leverage or 1)
+                    gross_pnl = float(ladder.get("realized_r", 0)) * abs(float(entry) - float(original_sl)) / float(entry) * 100
+                    net_pnl = gross_pnl - 2 * (SETTINGS.fee_rate_percent + SETTINGS.slippage_percent)
+                    profit_usd = notional * net_pnl / 100
+                    result = "WIN" if net_pnl > 0 else "LOSS"
+                    cursor.execute(f"UPDATE signals SET result={p}, pnl_pct={p}, pnl_usd={p}, closed_at={p} WHERE signal_id={p}",
+                                   (result, net_pnl, profit_usd, _now(), signal_id))
+                    cursor.execute(f"UPDATE active_signals SET status='CLOSED', is_cancelled={truth} WHERE signal_id={p}", (signal_id,))
+                    cursor.execute(f"DELETE FROM signal_symbol_locks WHERE symbol={p} AND signal_id={p} AND strategy_version={p}",
+                                   (symbol, signal_id, SETTINGS.strategy_version))
+                    ladder_events.append({"event":"CLOSED", "signal_id":signal_id,"symbol":symbol,"style":style,"source":source,"strategy_fa":strategy_fa,"strategy_version":strategy_version,"confirmed_at":str(confirmed_at),"confirmation_sent":True,"pro_message_id":int(pro_message_id or 0),"result":result,"pnl":net_pnl,"profit_usd":profit_usd})
+            events.extend(ladder_events)
             continue
 
         state_tp1 = bool(tp1_hit)

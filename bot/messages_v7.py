@@ -1566,3 +1566,29 @@ def send_startup_message(symbol_count: int) -> bool:
         f"🆔 Signal IDs: viva-*",
         CHAT_ID_ADMIN,
     )
+
+
+def send_ladder_event(event: dict) -> bool:
+    """Compact TP/trailing reply in VivaMon. Live-chart attachment is added by
+    the notification layer once it rebuilds the original candidate frame."""
+    kind = str(event.get("event") or "")
+    if kind not in {"TP1", "TP2", "TP3", "TP4", "TP5", "TRAIL_STOP"}:
+        return False
+    target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    reply_id = int(event.get("pro_message_id") or 0) or None
+    if kind.startswith("TP"):
+        text = (
+            f"🏁 <b>{_e(kind)} HIT</b> • {_e(event.get('source') or 'SETUP')}\n"
+            f"🪙 {_e(event.get('symbol'))} • {_e(event.get('style'))}\n"
+            f"✅ {float(event.get('weight', 0)):.0f}% خروج انجام شد.\n"
+            f"🔒 Trailing SL → <b>{_price(float(event.get('new_sl') or event.get('sl') or 0))}</b>\n"
+            f"🆔 <code>{_e(event.get('signal_id'))}</code>"
+        )
+    else:
+        text = (
+            f"🔒 <b>TRAILING STOP HIT</b>\n"
+            f"🪙 {_e(event.get('symbol'))} • {_e(event.get('source') or 'SETUP')}\n"
+            f"📍 Stop اجرا شد: <b>{_price(float(event.get('stop') or event.get('sl') or 0))}</b>\n"
+            f"🆔 <code>{_e(event.get('signal_id'))}</code>"
+        )
+    return bool(send_message(text, target, reply_to_message_id=reply_id))

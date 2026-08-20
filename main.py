@@ -38,6 +38,7 @@ from bot.messages_v7 import (
     purge_candidate_alert_posts,
     purge_pro_watch_post,
     send_tp1_event,
+    send_ladder_event,
     send_trade_result,
 )
 from config import get_settings
@@ -491,7 +492,10 @@ def monitor_confirmed_results() -> int:
     events = monitor_confirmed_trades()
     for event in events:
         if event.get("event") == "TP1":
-            send_tp1_event(event)
+            send_ladder_event(event)
+            send_tp1_event(event)  # immutable win-rate feed
+        elif str(event.get("event", "")).startswith("TP") or event.get("event") == "TRAIL_STOP":
+            send_ladder_event(event)
         elif event.get("event") == "CLOSED":
             send_trade_result(event)
     return len(events)
