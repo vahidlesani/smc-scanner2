@@ -32,6 +32,7 @@ STOCK_SYMBOLS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META",
 
 # short-lived per-chat map: chat_id -> {token: SignalCandidate-ish dict index}
 _setup_tokens: dict[str, dict[str, int]] = {}
+_result_tokens: dict[str, dict[str, dict]] = {}
 
 
 # ─── ابزارهای API ───
@@ -610,10 +611,16 @@ def handle_setup_results(chat_id, setup_code):
         send_message(f"📌 هنوز نتیجه‌ای برای <b>{_e(code)}</b> ثبت نشده.", chat_id, main_menu_keyboard())
         return
     lines = [f"📌 <b>ژورنال { _e(code) }</b>", "━━━━━━━━━━━━━━━━━━"]
-    for item in signals[:12]:
+    rows, token_map = [], {}
+    for i, item in enumerate(signals[:12]):
         result = {"WIN":"✅", "LOSS":"❌", "PENDING":"⏳"}.get(item.get("result"), "⏳")
-        lines.append(f"{result} <code>{_e(item.get('signal_id'))}</code>\n🪙 {_e(item.get('symbol'))} • {_e(item.get('direction'))} • {float(item.get('pnl_pct') or 0):+.2f}%")
-    send_message("\n".join(lines), chat_id, {"inline_keyboard":[[{"text":"◀️ ژورنال ستاپ‌ها","callback_data":"strategies"}], [{"text":"🏠 منو","callback_data":"main_menu"}]]})
+        lines.append(f"{result} <code>{_e(item.get('public_code') or item.get('signal_id'))}</code> • {_e(item.get('symbol'))} • {float(item.get('pnl_pct') or 0):+.2f}%")
+        token = f"jr{i}"
+        token_map[token] = item
+        rows.append([{"text": f"{result} {item.get('symbol')} • جزئیات و چارت", "callback_data": token}])
+    _result_tokens[str(chat_id)] = token_map
+    rows += [[{"text":"◀️ ژورنال ستاپ‌ها","callback_data":"strategies"}], [{"text":"🏠 منو","callback_data":"main_menu"}]]
+    send_message("\n".join(lines), chat_id, {"inline_keyboard": rows})
 
 
 def handle_recent_signals(chat_id):
@@ -649,6 +656,26 @@ def handle_strategy_detail(chat_id, strategy):
     name, desc = descriptions.get(strategy, (strategy, ""))
     send_message(f"{name}\n━━━━━━━━━━━━━━━━━━\n{desc}", chat_id,
                  strategy_list_keyboard())
+
+
+def handle_result_detail(chat_id, token):
+    item = _result_tokens.get(str(chat_id), {}).get(token)
+    if not item:
+        send_message("⚠️ این ژورنال منقضی شده؛ دوباره از منوی نتایج بازش کن.", chat_id, main_menu_keyboard())
+        return
+    from analysis.models import SignalCandidate
+    from bot.messages_v7 import generate_chart
+    from data.fetcher import get_klines
+    entry, sl = float(item.get("entry") or 0), float(item.get("sl") or 0)
+    c = SignalCandidate(signal_id=str(item.get("signal_id")), symbol=str(item.get("symbol")), style=str(item.get("trade_style") or "DAYTRADE"), setup_code=str(item.get("source") or "SETUP"), setup_name=str(item.get("source") or "SETUP"), strategy_fa=str(item.get("strategy_fa") or "SETUP"), direction=str(item.get("direction") or "LONG"), score=int(item.get("score") or 0), status="CONFIRMED", entry_zone_bottom=entry, entry_zone_top=entry, planned_entry=entry, sl=sl, tp1=float(item.get("tp1") or entry), tp2=float(item.get("tp2") or entry), rr_tp1=0, rr_tp2=0, bias="BULLISH" if item.get("direction")=="LONG" else "BEARISH", trigger_timeframe="15m", metadata={"public_code":item.get("public_code") or item.get("signal_id")})
+    try:
+        frame=get_klines(c.symbol, "15m", 180, closed_only=False, use_cache=False)
+        chart=generate_chart(frame,c,confirmed=True) if frame is not None else None
+    except Exception: chart=None
+    result={"WIN":"✅ WIN","LOSS":"❌ LOSS","PENDING":"⏳ OPEN"}.get(item.get("result"),"⏳")
+    caption=f"📊 <b>جزئیات ژورنال</b> • {_e(c.setup_code)}\n🪙 {_e(c.symbol)} • {_e(c.direction)} • {result}\n🎯 Entry {_e(entry)} | SL {_e(sl)}\n🏁 TP1 {_e(item.get('tp1'))} | TP2 {_e(item.get('tp2'))}\n📈 PnL {float(item.get('pnl_pct') or 0):+.2f}%\n🆔 <code>{_e(item.get('public_code') or item.get('signal_id'))}</code>"
+    if chart: send_photo(chat_id, chart, caption)
+    else: send_message(caption,chat_id)
 
 
 def handle_education(chat_id):
@@ -694,6 +721,8 @@ def handle_callback(callback_query):
         handle_recent_signals(chat_id)
     elif data.startswith("res_"):
         handle_setup_results(chat_id, data[4:])
+    elif data.startswith("jr"):
+        handle_result_detail(chat_id, data)
     elif data == "signals":
         if _is_admin(uid):
             handle_recent_signals(chat_id)
