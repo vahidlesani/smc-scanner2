@@ -206,6 +206,8 @@ def handle_start(chat_id, user=None):
         f"{mem.plan_status_fa(int(user.get('id', chat_id)), _uname(user))}\n"
         "از دکمه‌ها شروع کن 👇"
     )
+    # Clear the old persistent reply keyboard once; navigation stays in Telegram's bottom Menu.
+    api_call("sendMessage", {"chat_id": chat_id, "text": "🔄 منوی پایین بروزرسانی شد.", "reply_markup": json.dumps({"remove_keyboard": True})})
     send_message(text, chat_id, main_menu_keyboard(user.get("id")))
 
 
