@@ -206,7 +206,7 @@ def handle_start(chat_id, user=None):
         f"{mem.plan_status_fa(int(user.get('id', chat_id)), _uname(user))}\n"
         "از دکمه‌ها شروع کن 👇"
     )
-    send_message(text, chat_id, reply_menu_keyboard(user.get("id")))
+    send_message(text, chat_id, main_menu_keyboard(user.get("id")))
 
 
 def handle_help(chat_id, user_id=None):
@@ -923,6 +923,25 @@ def handle_message(message):
         send_message(f"👥 کاربران ثبت‌شده: <b>{mem.count_users()}</b>", chat_id)
 
 
+def register_bot_menu():
+    """Telegram bottom-left Menu command catalog; avoids a permanent keyboard."""
+    commands = [
+        {"command": "start", "description": "منوی اصلی VivaMon"},
+        {"command": "analysis", "description": "تحلیل فوری دارایی"},
+        {"command": "setups", "description": "ستاپ‌های فعال"},
+        {"command": "recent", "description": "موارد اخیر"},
+        {"command": "results", "description": "ژورنال و نتایج"},
+        {"command": "status", "description": "وضعیت سامانه"},
+        {"command": "guide", "description": "مسیر یادگیری و اصطلاحات"},
+        {"command": "join", "description": "ورود به کانال"},
+        {"command": "account", "description": "حساب و دسترسی"},
+        {"command": "id", "description": "شناسه Telegram من"},
+        {"command": "refresh", "description": "بروزرسانی منو"},
+    ]
+    api_call("setMyCommands", {"commands": commands})
+    api_call("setChatMenuButton", {"menu_button": {"type": "commands"}})
+
+
 # ─── Listener ───
 
 def get_updates(offset=None):
@@ -964,6 +983,7 @@ def command_listener():
 
 
 def start_command_listener():
+    register_bot_menu()
     thread = threading.Thread(target=command_listener, daemon=True)
     thread.start()
     return thread
