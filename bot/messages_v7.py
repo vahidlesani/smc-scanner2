@@ -1420,6 +1420,18 @@ def _approaching_ai_hint(candidate: SignalCandidate) -> str:
     return "تا کلوز تأییدی و حفظ ابطال، این فقط سناریوی تحت‌نظر است."
 
 
+def _ai_watch_hint(candidate: SignalCandidate) -> str:
+    """One concise, deterministic assistant note; never an entry command."""
+    md = candidate.metadata or {}
+    if candidate.setup_code == "TLBREAK":
+        return "فقط بعد از Close معتبر پشت خط و حفظ base؛ chase ممنوع."
+    if candidate.setup_code == "PINVAL":
+        return "پین‌بار فقط rejection است؛ ورود بعد از MSS/BOS تایم پایین."
+    if md.get("structure_level"):
+        return "تأیید فقط با شکست ساختار خرد پس از retest ناحیه معتبر است."
+    return "سناریو زیر نظر است؛ تا کلوز تأییدی هیچ ورود اجرایی نداریم."
+
+
 def _approaching_caption(candidate: SignalCandidate, current_price: float, distance_atr: float) -> str:
     why = candidate.strategy_fa
     badge, _ = _setup_badge(candidate)
