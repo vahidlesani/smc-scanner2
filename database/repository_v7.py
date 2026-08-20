@@ -753,6 +753,15 @@ def monitor_confirmed_trades() -> List[Dict]:
                         "entry": float(entry), "sl": float(ladder["current_sl"]),
                         "targets": list(ladder["targets"]), "hit_index": int(ladder["hit_index"]),
                     })
+                    notional = float(margin or 0) * int(leverage or 1)
+                    risk_pct_move = abs(float(entry) - float(original_sl)) / float(entry) * 100
+                    if str(event.get("event", "")).startswith("TP"):
+                        leg_r = int(event["event"][2:])
+                        event["leg_pnl_pct"] = leg_r * risk_pct_move * float(event.get("weight", 0)) / 100
+                        event["leg_profit_usd"] = notional * event["leg_pnl_pct"] / 100
+                    else:
+                        event["realized_pnl_pct"] = float(ladder.get("realized_r", 0)) * risk_pct_move
+                        event["realized_profit_usd"] = notional * event["realized_pnl_pct"] / 100
                     ladder_events.append(event)
                 if ladder.get("closed"):
                     break

@@ -392,9 +392,14 @@ def purge_pro_watch_post(candidate: SignalCandidate) -> bool:
     """Remove only the compact final-watch post from VivaMon Labs Pro.
     Confirmed chart and all TP/trailing replies are never touched."""
     mid = candidate.metadata.get("approaching_message_id")
-    if not mid:
+    sep = candidate.metadata.get("pro_separator_message_id")
+    if not mid and not sep:
         return False
-    ok = delete_message(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, int(mid))
+    ok = False
+    if mid:
+        ok = delete_message(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, int(mid)) or ok
+    if sep:
+        ok = delete_message(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, int(sep)) or ok
     if ok:
         candidate.metadata["pro_watch_post_purged"] = True
         try:
@@ -914,7 +919,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             linestyles=(0, (6, 3)),
             zorder=7,
         )
-        notes.append((f"INVALIDATION  {_price(candidate.sl)}", CHART_THEME["invalidation"]))
+        notes.append((f"FIRST STOP  {_price(candidate.sl)}", CHART_THEME["invalidation"]))
+        live_price = float(frame["close"].iloc[-1])
+        ax.hlines(live_price, max(0, count - 24), count + future - 0.5,
+                  color=CHART_THEME["muted"], linewidth=0.9, linestyles=(0, (1, 3)), alpha=0.75, zorder=6)
+        _level_tag(ax, count + 1.0, live_price, f"LIVE  {_price(live_price)}", CHART_THEME["muted"])
 
         sweep_level = candidate.metadata.get("sweep_level")
         if sweep_level:
@@ -1471,6 +1480,8 @@ def send_approaching(candidate: SignalCandidate, current_price: float, distance_
         chart = generate_chart(frame, candidate, confirmed=False) if frame is not None else None
     except Exception:
         chart = None
+    if not candidate.metadata.get("pro_separator_message_id"):
+        candidate.metadata["pro_separator_message_id"] = send_message("<b>━━━━━━━━ VIVA-MON-LABS ━━━━━━━━</b>", target)
     caption = _approaching_caption(candidate, current_price, distance_atr)
     source_mid = candidate.metadata.get("education_chart_message_id") or candidate.metadata.get("education_message_id")
     source_link = _telegram_message_link(CHAT_ID_EDUCATION or CHAT_ID_ADMIN, int(source_mid)) if source_mid else ""
