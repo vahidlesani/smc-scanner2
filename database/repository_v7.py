@@ -678,7 +678,7 @@ def monitor_confirmed_trades() -> List[Dict]:
             SELECT signal_id, symbol, direction, entry, sl_original, tp1, tp2,
                    leverage, margin_usd, trade_style, confirmed_at,
                    last_checked_at, tp1_hit, source, strategy_fa,
-                   strategy_version
+                   strategy_version, pro_message_id
             FROM signals
             WHERE confirmed={truth}
               AND confirmation_sent={truth}
@@ -700,7 +700,7 @@ def monitor_confirmed_trades() -> List[Dict]:
         (
             signal_id, symbol, direction, entry, original_sl, tp1, tp2,
             leverage, margin, style, confirmed_at, last_checked_at,
-            tp1_hit, source, strategy_fa, strategy_version,
+            tp1_hit, source, strategy_fa, strategy_version, pro_message_id,
         ) = row
         timeframe = "5m" if style == "SCALP" else "15m"
         key = (symbol, timeframe)
@@ -758,6 +758,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                     "strategy_version": strategy_version,
                     "confirmed_at": str(confirmed_at),
                     "confirmation_sent": True,
+                    "pro_message_id": int(pro_message_id or 0),
                 }
 
         with legacy_db.db_cursor() as cursor:
@@ -803,6 +804,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                     "strategy_version": strategy_version,
                     "confirmed_at": str(confirmed_at),
                     "confirmation_sent": True,
+                    "pro_message_id": int(pro_message_id or 0),
                 })
         if tp1_event:
             events.append(tp1_event)

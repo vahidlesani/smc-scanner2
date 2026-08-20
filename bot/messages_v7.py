@@ -1515,11 +1515,14 @@ def send_tp1_event(signal: dict) -> bool:
         return False
     target = CHAT_ID_RESULTS or CHAT_ID_ADMIN
     send_signal_separator(target)
+    link = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, int(signal.get("pro_message_id") or 0))
+    link_line = f'<a href="{link}">🔗 چارت و Confirmed اصلی</a>\n' if link else ""
     return send_message(
         f"🥇 <b>TP1 HIT</b>\n"
         f"🪙 <b>{_e(signal['symbol'])}</b> • {_e(signal.get('style', ''))}\n"
         f"🎯 <b>{_e(signal.get('source') or signal.get('strategy_fa') or 'SETUP')}</b>\n"
-        f"🆔 <code>{_e(signal['signal_id'])}</code>\n\n"
+        f"🆔 <code>{_e(signal['signal_id'])}</code>\n"
+        f"{link_line}\n"
         f"✅ {SETTINGS.partial_tp1_percent:.0f}% پوزیشن بسته شد.\n"
         f"🔒 حد ضرر {SETTINGS.partial_tp2_percent:.0f}% باقی‌مانده به Breakeven منتقل شد.",
         target,
@@ -1537,6 +1540,8 @@ def send_trade_result(event: dict) -> bool:
     target = CHAT_ID_RESULTS or CHAT_ID_ADMIN
     send_signal_separator(target)
     emoji = "✅" if result == "WIN" else "❌"
+    link = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, int(event.get("pro_message_id") or 0))
+    link_line = f'<a href="{link}">🔗 چارت و Confirmed اصلی</a>\n' if link else ""
     return send_message(
         f"{emoji} <b>نتیجه سیگنال Confirmed</b>\n"
         f"🪙 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('style', ''))}\n"
