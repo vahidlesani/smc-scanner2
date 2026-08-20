@@ -1444,7 +1444,7 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
     ]
     if mm:
         rows.append(f"💼 حجم پیشنهادی ${mm['position_size']:,.0f} • Margin ${mm['margin']:,.0f} • ریسک {mm['risk_pct']:.2f}%")
-    rows.append(f"🆔 <code>{_e(candidate.signal_id)}</code>")
+    rows.append(f"🆔 <code>{_e(candidate.metadata.get('public_code') or candidate.signal_id)}</code>")
     return "\n".join(rows)
 
 

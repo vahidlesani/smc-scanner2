@@ -23,7 +23,7 @@ from analysis.indicators import (
     session_name,
     structure_bias,
 )
-from analysis.models import EvidenceItem, SignalCandidate, generate_viva_signal_id, utc_now
+from analysis.models import EvidenceItem, SignalCandidate, generate_viva_signal_id, generate_viva_public_code, utc_now
 from config import get_settings
 from data.fetcher import MarketBundle
 
@@ -667,6 +667,7 @@ def _base_candidate(
     expiry_hours = SETTINGS.candidate_expiry_hours_swing if style == "SWING" else SETTINGS.candidate_expiry_hours_scalp
     expires = utc_now() + timedelta(hours=expiry_hours)
     signal_id = generate_viva_signal_id(bundle.symbol, style, setup_code)
+    public_code = generate_viva_public_code(setup_code, style)
     return SignalCandidate(
         signal_id=signal_id,
         symbol=bundle.symbol,
@@ -709,6 +710,7 @@ def _base_candidate(
             "invalidation_buffer": invalidation["buffer"],
             "protected_liquidity_pivots": invalidation["protected_pivots"],
             "session": last_session,
+            "public_code": public_code,
             "strategy_version": SETTINGS.strategy_version,
             # Historical visits affect freshness, never satisfy the future
             # retest requirement. Only candles after created_at may set this.

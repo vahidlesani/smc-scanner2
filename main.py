@@ -65,6 +65,7 @@ from database.repository_v7 import (
     monitor_confirmed_trades,
     release_symbol_lock,
     save_confirmed_signal,
+    set_pro_message_id,
     update_symbol_lock,
 )
 
@@ -447,6 +448,8 @@ def monitor_candidates() -> Dict[str, int]:
                         try:
                             update_candidate(candidate)
                             mark_confirmation_published(candidate.signal_id)
+                            if candidate.metadata.get("confirmation_chart_message_id"):
+                                set_pro_message_id(candidate.signal_id, candidate.metadata["confirmation_chart_message_id"])
                             # Confirmed is a reply under the final-watch chart in Pro;
                             # the full educational alert remains reachable through its link.
                         except Exception as exc:

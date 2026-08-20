@@ -20,7 +20,7 @@ from typing import Optional
 import numpy as np
 
 from analysis.indicators import adx, atr, structure_bias
-from analysis.models import EvidenceItem, SignalCandidate
+from analysis.models import EvidenceItem, SignalCandidate, generate_viva_public_code
 from config import get_settings
 from analysis.setups_v7 import (
     SETUP_NAMES,
@@ -587,6 +587,7 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         )
         candidate.metadata.update({
             "pinv": 1,
+            "public_code": generate_viva_public_code("PINVAL", style_name),
             "pin_tf": tf,
             "pin_high": h,
             "pin_low": l,

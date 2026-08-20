@@ -645,6 +645,14 @@ def mark_confirmation_published(signal_id: str) -> None:
         )
 
 
+def set_pro_message_id(signal_id: str, message_id: int) -> None:
+    """Persist the canonical VivaMon confirmed-message id for TP/result links."""
+    p = legacy_db._ph()
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(f"UPDATE signals SET pro_message_id={p} WHERE signal_id={p}", (int(message_id), signal_id))
+        cursor.execute(f"UPDATE active_signals SET pro_message_id={p} WHERE signal_id={p}", (int(message_id), signal_id))
+
+
 def _naive_timestamp(value) -> Optional[pd.Timestamp]:
     if not value:
         return None
