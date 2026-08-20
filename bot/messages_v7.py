@@ -104,6 +104,9 @@ _CHART_STRUCTURE_LINES = os.getenv("CHART_STRUCTURE_LINES", "on").strip().lower(
 def _e(value) -> str:
     return html.escape(str(value), quote=False)
 
+def _public_code(candidate: SignalCandidate) -> str:
+    return str((candidate.metadata or {}).get("public_code") or candidate.signal_id)
+
 
 _TF_FA = {"1d": "روزانه", "4h": "۴ ساعته", "1h": "۱ ساعته", "15m": "۱۵ دقیقه", "5m": "۵ دقیقه", "1m": "۱ دقیقه"}
 
@@ -446,7 +449,7 @@ def send_verdict_reply(candidate: SignalCandidate, ok: Optional[bool], note_fa: 
         f"🪙 {_e(candidate.symbol)} • {_e(candidate.strategy_fa)}\n"
         f"🧭 سناریوی {dir_fa}\n"
         f"{_e(note_fa)}\n"
-        f"🆔 <code>{_e(candidate.signal_id)}</code>"
+        f"🆔 <code>{_e(_public_code(candidate))}</code>"
     )
     return bool(send_message(text, target, reply_to_message_id=mid))
 
@@ -1267,7 +1270,7 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         f"🧭 {_e(direction_fa)}\n"
         f"🎯 ستاپ: <b>{_e(candidate.strategy_fa)}</b>\n"
         f"⭐ امتیاز فعلی: <b>{candidate.score}/10</b>\n"
-        f"🆔 <code>{_e(candidate.signal_id)}</code>\n"
+        f"🆔 <code>{_e(_public_code(candidate))}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         + "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(evidence_blocks)
         + f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
@@ -1323,7 +1326,7 @@ def build_approaching_message(candidate: SignalCandidate, current_price: float, 
         f"🌐 {_e(_market_label(candidate))}\n"
         f"🎯 {_e(candidate.strategy_fa)}\n"
         f"⭐ {candidate.score}/10\n"
-        f"🆔 <code>{_e(candidate.signal_id)}</code>\n\n"
+        f"🆔 <code>{_e(_public_code(candidate))}</code>\n\n"
         f"📍 ناحیه بررسی: <b>{_price(candidate.entry_zone_bottom)} – {_price(candidate.entry_zone_top)}</b>\n"
         f"💹 قیمت فعلی: <b>{_price(current_price)}</b>\n"
         f"📏 فاصله تا ناحیه: <b>{distance_atr:.2f} ATR</b>\n\n"
@@ -1359,7 +1362,7 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🎯 ستاپ: <b>{_e(candidate.strategy_fa)}</b>\n"
         f"⭐ کیفیت نهایی: <b>{candidate.score}/10</b> • Grade {mm.get('grade', '-')}\n"
-        f"🆔 <code>{_e(candidate.signal_id)}</code>\n"
+        f"🆔 <code>{_e(_public_code(candidate))}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🧠 <b>دلایل تأیید ورود</b>\n\n"
         + "\n\n".join(reasons)
@@ -1420,12 +1423,12 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
             f"{'🟢 صعودی' if candidate.direction == 'LONG' else '🔴 نزولی'}\n"
             f"📍 داخل {_e(zone_fa)}" + (f" (کانتکست {_e(ctx_fa)})" if ctx_fa else "") + "\n"
             f"{_e(rule)}\n"
-            f"🆔 <code>{_e(candidate.signal_id)}</code>"
+            f"🆔 <code>{_e(_public_code(candidate))}</code>"
         )
     else:
         caption = (
             f"📚 {_e(candidate.symbol)} • {_e(candidate.style)} • {_e(candidate.setup_code)}\n"
-            f"⛔ تأیید ورود نیست\n🆔 <code>{_e(candidate.signal_id)}</code>"
+            f"⛔ تأیید ورود نیست\n🆔 <code>{_e(_public_code(candidate))}</code>"
         )
     if chart:
         _store_alert_message_id(candidate, "education_chart_message_id",
@@ -1468,7 +1471,7 @@ def _approaching_caption(candidate: SignalCandidate, current_price: float, dista
         f"🎯 {_e(why)} • ⭐ {candidate.score}/10\n"
         f"📍 زون: {_price(candidate.entry_zone_bottom)} – {_price(candidate.entry_zone_top)} • قیمت: {_price(current_price)}\n"
         f"⚖️ در انتظار کلوز تأییدی تایم پایین / MSS • فاصله {distance_atr:.2f} ATR\n"
-        f"🛑 ابطال: {_price(candidate.sl)} • 🆔 <code>{_e(candidate.signal_id)}</code>"
+        f"🛑 ابطال: {_price(candidate.sl)} • 🆔 <code>{_e(_public_code(candidate))}</code>"
     )
 
 
