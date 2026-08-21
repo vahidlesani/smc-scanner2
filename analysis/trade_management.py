@@ -52,6 +52,7 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
         "final_target": final_price,
         "tick_gap": tick_gap,
         "targets": targets,
+        "target_r": [abs(t - entry) / risk for t in targets],
         "trail_stops": trail_stops,
         "weights": list(DEFAULT_WEIGHTS),
         "hit_index": 0,
@@ -70,6 +71,7 @@ def advance_ladder(state: Dict, high: float, low: float) -> Dict:
     out["targets"] = list(state["targets"])
     out["weights"] = list(state["weights"])
     out["trail_stops"] = list(state["trail_stops"])
+    out["target_r"] = list(state.get("target_r") or [abs(t - out["entry"]) / out["risk"] for t in out["targets"]])
     events: List[Dict] = []
     if out.get("closed"):
         return {"state": out, "events": events}
@@ -91,7 +93,7 @@ def advance_ladder(state: Dict, high: float, low: float) -> Dict:
         if not hit:
             break
         weight = float(out["weights"][idx])
-        out["realized_r"] = float(out["realized_r"]) + (idx + 1) * weight / 100.0
+        out["realized_r"] = float(out["realized_r"]) + float(out["target_r"][idx]) * weight / 100.0
         out["current_sl"] = float(out["trail_stops"][idx])
         idx += 1
         out["hit_index"] = idx

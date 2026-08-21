@@ -684,6 +684,28 @@ def _weighted_win_pct(direction: str, entry: float, tp1: float, tp2: float, part
     return move1 * SETTINGS.partial_tp1_percent / 100 + move2 * SETTINGS.partial_tp2_percent / 100
 
 
+def repair_legacy_tp1_misclassified_results() -> int:
+    """Repair historical records where TP1 was recorded but a later stop was
+    incorrectly stored as LOSS. The original partial profit remains a win path."""
+    p = legacy_db._ph()
+    truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"SELECT signal_id, direction, entry, sl_original, tp1, tp2 FROM signals "
+            f"WHERE strategy_version={p} AND result='LOSS' AND tp1_hit={truth}",
+            (SETTINGS.strategy_version,),
+        )
+        rows = cursor.fetchall()
+        repaired = 0
+        for signal_id, direction, entry, original_sl, tp1, tp2 in rows:
+            gross = _weighted_win_pct(direction, float(entry), float(tp1), float(tp2), True)
+            if gross <= 0:
+                continue
+            cursor.execute(f"UPDATE signals SET result='WIN', pnl_pct={p}, pnl_usd={p} WHERE signal_id={p}", (gross, 0.0, signal_id))
+            repaired += 1
+    return repaired
+
+
 def monitor_confirmed_trades() -> List[Dict]:
     """Process each closed candle chronologically; no historical `.any()` shortcuts."""
     truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
@@ -756,7 +778,8 @@ def monitor_confirmed_trades() -> List[Dict]:
                     notional = float(margin or 0) * int(leverage or 1)
                     risk_pct_move = abs(float(entry) - float(original_sl)) / float(entry) * 100
                     if str(event.get("event", "")).startswith("TP"):
-                        leg_r = int(event["event"][2:])
+                        target_index = int(event["event"][2:]) - 1
+                        leg_r = float(ladder.get("target_r", [])[target_index]) if target_index < len(ladder.get("target_r", [])) else 0.0
                         event["leg_price_move_pct"] = leg_r * risk_pct_move
                         event["leg_pnl_pct"] = event["leg_price_move_pct"] * float(event.get("weight", 0)) / 100
                         event["leg_profit_usd"] = notional * event["leg_pnl_pct"] / 100

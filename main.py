@@ -64,6 +64,7 @@ from database.repository_v7 import (
     is_confirmation_published,
     mark_confirmation_published,
     monitor_confirmed_trades,
+    repair_legacy_tp1_misclassified_results,
     release_symbol_lock,
     save_confirmed_signal,
     set_pro_message_id,
@@ -590,6 +591,12 @@ def main() -> None:
 
     init_candidate_store()
     init_v7_schema()
+    try:
+        repaired = repair_legacy_tp1_misclassified_results()
+        if repaired:
+            print(f"✅ Repaired {repaired} legacy TP1-before-stop result records")
+    except Exception as exc:
+        print(f"Legacy TP1 repair skipped: {exc}")
     symbols, _ = UNIVERSE.get()
     if SETTINGS.startup_message_enabled:
         send_startup_message(len(symbols))
