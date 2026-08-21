@@ -58,6 +58,8 @@ class Settings:
     pinv_max_body_frac: float = 0.35     # body / range
     pinv_min_range_atr: float = 0.6      # candle range / ATR floor
     pinv_symbols: str = ""               # empty = all symbols
+    pinv_allowed_directions: str = "LONG" # temporary live refinement filter
+    pinv_allowed_zone_kinds: str = "FVG"  # temporary live refinement filter
     # How many trigger candles an alert gets before a verdict reply (❌/✅)
     alert_verdict_candles: int = 3
     # Log-scale rendering for higher-context trendline charts
@@ -168,6 +170,8 @@ class Settings:
             pinv_max_body_frac=_float("PINVAL_MAX_BODY_FRAC", cls.pinv_max_body_frac),
             pinv_min_range_atr=_float("PINVAL_MIN_RANGE_ATR", cls.pinv_min_range_atr),
             pinv_symbols=os.getenv("PINVAL_SYMBOLS", cls.pinv_symbols),
+            pinv_allowed_directions=os.getenv("PINVAL_ALLOWED_DIRECTIONS", cls.pinv_allowed_directions),
+            pinv_allowed_zone_kinds=os.getenv("PINVAL_ALLOWED_ZONE_KINDS", cls.pinv_allowed_zone_kinds),
             alert_verdict_candles=_int("ALERT_VERDICT_CANDLES", cls.alert_verdict_candles),
             chart_log_htf=_bool("CHART_LOG_HTF", cls.chart_log_htf),
             scan_offset_minute=_int("SCAN_OFFSET_MINUTE", cls.scan_offset_minute),

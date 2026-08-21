@@ -547,6 +547,12 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             continue
         tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}.get(str(tf), 300)
         zone_kind = "FVG" if in_fvg else (zone["kind"] if in_zone else "NONE")
+        allowed_dirs = {x.strip().upper() for x in str(getattr(settings, "pinv_allowed_directions", "") or "").split(",") if x.strip()}
+        allowed_zones = {x.strip().upper() for x in str(getattr(settings, "pinv_allowed_zone_kinds", "") or "").split(",") if x.strip()}
+        if allowed_dirs and direction not in allowed_dirs:
+            continue
+        if allowed_zones and zone_kind.upper() not in allowed_zones:
+            continue
         zone_fa = {"FVG": "لبهٔ FVG «فلگ‌لیمیت»", "FLIP": "فلیپ‌زون مهم",
                    "SD_FRESH": "زون تازهٔ عرضه/تقاضای تایم بالاتر", "NONE": "ناحیهٔ مرتبط"}.get(zone_kind, "ناحیهٔ مهم")
         last_ts = df["timestamp"].iloc[-1]
