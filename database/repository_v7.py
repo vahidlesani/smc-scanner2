@@ -691,17 +691,18 @@ def repair_legacy_tp1_misclassified_results() -> int:
     truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
     with legacy_db.db_cursor() as cursor:
         cursor.execute(
-            f"SELECT signal_id, direction, entry, sl_original, tp1, tp2 FROM signals "
+            f"SELECT signal_id, direction, entry, sl_original, tp1, tp2, leverage, margin_usd FROM signals "
             f"WHERE strategy_version={p} AND result='LOSS' AND tp1_hit={truth}",
             (SETTINGS.strategy_version,),
         )
         rows = cursor.fetchall()
         repaired = 0
-        for signal_id, direction, entry, original_sl, tp1, tp2 in rows:
+        for signal_id, direction, entry, original_sl, tp1, tp2, leverage, margin_usd in rows:
             gross = _weighted_win_pct(direction, float(entry), float(tp1), float(tp2), True)
+            profit_usd = float(margin_usd or 0) * int(leverage or 1) * gross / 100
             if gross <= 0:
                 continue
-            cursor.execute(f"UPDATE signals SET result='WIN', pnl_pct={p}, pnl_usd={p} WHERE signal_id={p}", (gross, 0.0, signal_id))
+            cursor.execute(f"UPDATE signals SET result='WIN', pnl_pct={p}, pnl_usd={p} WHERE signal_id={p}", (gross, profit_usd, signal_id))
             repaired += 1
     return repaired
 
