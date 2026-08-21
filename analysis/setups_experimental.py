@@ -175,11 +175,7 @@ def detect_pattern_1234(bundle: MarketBundle, style: str) -> Optional[SignalCand
 
 
 def _fit_channel_line(df, direction: str) -> Optional[dict]:
-    """Validated 3-pivot trendline + parallel bound.
-
-    Two pivots are only a watch, never a published structural trend. The line
-    requires three confirmed pivots with bounded ATR-normalized fit error.
-    """
+    """Active trendline + parallel channel bound from context-TF pivots."""
     ph, pl = pivots(df, 3, 3)
     n = len(df)
     if n < 60:
@@ -188,32 +184,23 @@ def _fit_channel_line(df, direction: str) -> Optional[dict]:
     if atr_now <= 0:
         return None
     pts = ph if direction == "LONG" else pl
-    if len(pts) < 3:
+    if len(pts) < 2:
         return None
-    fit_pts = pts[-3:]
-    xs = np.array([float(p["index"]) for p in fit_pts])
-    ys = np.array([float(p["price"]) for p in fit_pts])
-    if xs[-1] - xs[0] < 14 or min(np.diff(xs)) < 6:
-        return None
-    slope, intercept = np.polyfit(xs, ys, 1)
-    fitted = slope * xs + intercept
-    fit_error = float(np.max(np.abs(ys - fitted))) / atr_now
-    if fit_error > 0.45:
-        return None
-    if direction == "LONG" and slope >= -0.01 * atr_now:
-        return None
-    if direction == "SHORT" and slope <= 0.01 * atr_now:
-        return None
-    a, b = fit_pts[0], fit_pts[-1]
+    a, b = pts[-2], pts[-1]
+    if b["index"] - a["index"] < 8:
+        return None  # line flanks too close together = local noise
+    if direction == "LONG" and not (b["price"] < a["price"]):
+        return None  # resistance must be descending
+    if direction == "SHORT" and not (b["price"] > a["price"]):
+        return None  # support must be ascending
+    slope = (b["price"] - a["price"]) / (b["index"] - a["index"])
 
     def line_at(i: float) -> float:
-        return float(slope * i + intercept)
+        return b["price"] + slope * (i - b["index"])
 
-    # Only pivots used to validate the line count as structural touches.
-    touches = len(fit_pts)
-    forward_touches = sum(
-        1 for p in pts
-        if p["index"] > b["index"] and abs(float(p["price"]) - line_at(p["index"])) <= 0.35 * atr_now
+    touches = sum(
+        1 for p in pts[:-2]
+        if abs(p["price"] - line_at(p["index"])) <= 0.35 * atr_now
     )
     opp = pl if direction == "LONG" else ph
     window = [p for p in opp if p["index"] > a["index"]]
@@ -222,17 +209,16 @@ def _fit_channel_line(df, direction: str) -> Optional[dict]:
     anchor = (min if direction == "LONG" else max)(window, key=lambda p: p["price"])
 
     def bound_at(i: float) -> float:
-        return float(anchor["price"] + slope * (i - anchor["index"]))
+        return anchor["price"] + slope * (i - anchor["index"])
 
     height = (line_at(n - 1) - bound_at(n - 1)) if direction == "LONG" else (bound_at(n - 1) - line_at(n - 1))
     if height < 1.5 * atr_now or height > 25 * atr_now:
-        return None
+        return None  # meaningless width or crossed/wrong fit
     return {
-        "a": a, "b": b, "anchor": anchor, "slope": float(slope),
+        "a": a, "b": b, "anchor": anchor, "slope": slope,
         "line_now": line_at(n - 1), "line_prev": line_at(n - 2),
         "bound_now": bound_at(n - 1), "height": height,
-        "touches": touches, "forward_touches": forward_touches,
-        "fit_error_atr": fit_error, "atr": atr_now,
+        "touches": touches, "atr": atr_now,
     }
 
 
