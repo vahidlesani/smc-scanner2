@@ -33,7 +33,7 @@ def _bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    version: str = "v7.0-quality"
+    version: str = "v9.4-vivamon"
     strategy_version: str = "smc-core-7.0"
     channel_name: str = "VivaSignals Pro"
 
@@ -150,6 +150,7 @@ class Settings:
     bybit_min_request_interval: float = 0.08
     bybit_cache_seconds: int = 45
     run_scan_on_start: bool = True
+    startup_message_enabled: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -230,6 +231,7 @@ class Settings:
             bybit_min_request_interval=_float("BYBIT_MIN_REQUEST_INTERVAL", cls.bybit_min_request_interval),
             bybit_cache_seconds=_int("BYBIT_CACHE_SECONDS", cls.bybit_cache_seconds),
             run_scan_on_start=_bool("RUN_SCAN_ON_START", cls.run_scan_on_start),
+            startup_message_enabled=_bool("STARTUP_MESSAGE_ENABLED", cls.startup_message_enabled),
         )
 
 

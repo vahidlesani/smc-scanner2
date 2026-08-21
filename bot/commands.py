@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import html
 import os
 import threading
 import time
@@ -18,6 +19,9 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID_ADMIN = os.environ.get("CHAT_ID", "")
 CHAT_ID_EXECUTION = os.environ.get("CHAT_ID_APPROACHING", "")
 CHANNEL_NAME = SETTINGS.channel_name
+
+def _e(value) -> str:
+    return html.escape(str(value), quote=False)
 
 CRYPTO_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",

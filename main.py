@@ -591,7 +591,8 @@ def main() -> None:
     init_candidate_store()
     init_v7_schema()
     symbols, _ = UNIVERSE.get()
-    send_startup_message(len(symbols))
+    if SETTINGS.startup_message_enabled:
+        send_startup_message(len(symbols))
     try:
         start_command_listener()
         print("🤖 Telegram command listener active")
