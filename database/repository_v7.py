@@ -684,6 +684,35 @@ def _weighted_win_pct(direction: str, entry: float, tp1: float, tp2: float, part
     return move1 * SETTINGS.partial_tp1_percent / 100 + move2 * SETTINGS.partial_tp2_percent / 100
 
 
+def protected_exit_audit(limit: int = 100) -> dict:
+    """Forensic report for losses that may actually contain protected profit."""
+    p = legacy_db._ph()
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"SELECT signal_id, symbol, source, direction, entry, sl, sl_original, tp1, tp2, "
+            f"tp1_hit, sl_moved_to_be, leverage, margin_usd, pnl_pct, pnl_usd, created_at, closed_at "
+            f"FROM signals WHERE strategy_version={p} AND result='LOSS' ORDER BY closed_at DESC LIMIT {p}",
+            (SETTINGS.strategy_version, int(limit)),
+        )
+        rows = cursor.fetchall()
+    records = []
+    for row in rows:
+        (sid, symbol, source, direction, entry, sl, sl_original, tp1, tp2, tp1_hit, moved_be, leverage, margin, pnl_pct, pnl_usd, created_at, closed_at) = row
+        entry_f, sl_f = float(entry), float(sl or sl_original)
+        price_protected = (str(direction) == "LONG" and sl_f >= entry_f) or (str(direction) == "SHORT" and sl_f <= entry_f)
+        suspicious = bool(tp1_hit) or bool(moved_be) or price_protected
+        records.append({
+            "signal_id": sid, "symbol": symbol, "setup": source, "direction": direction,
+            "entry": entry_f, "stop": sl_f, "tp1": float(tp1), "tp2": float(tp2),
+            "tp1_hit": bool(tp1_hit), "sl_moved_to_be": bool(moved_be),
+            "price_protected": price_protected, "suspicious": suspicious,
+            "leverage": int(leverage or 0), "margin": float(margin or 0),
+            "pnl_pct": float(pnl_pct or 0), "pnl_usd": float(pnl_usd or 0),
+            "created_at": str(created_at or ""), "closed_at": str(closed_at or ""),
+        })
+    return {"total_losses": len(records), "protected_candidates": sum(1 for item in records if item["suspicious"]), "records": records}
+
+
 def repair_legacy_tp1_misclassified_results() -> int:
     """Repair legacy trades that were labelled LOSS after profit protection.
 

@@ -111,7 +111,7 @@ def reply_menu_keyboard(user_id=None):
         [{"text": "🔄 بروزرسانی ربات"}],
     ]
     if user_id is not None and _is_admin(user_id):
-        rows.append([{"text": "🧪 گزارش آزمون"}, {"text": "🧹 پاکسازی هشدارها"}])
+        rows.append([{"text": "🧪 گزارش آزمون"}, {"text": "🧾 حسابرسی نتایج"}], [{"text": "🧹 پاکسازی هشدارها"}])
     return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
 
 
@@ -727,6 +727,26 @@ def handle_education(chat_id):
 
 # ─── پردازش Callback ───
 
+def handle_protected_exit_audit(chat_id):
+    from database.repository_v7 import protected_exit_audit
+    try:
+        report = protected_exit_audit(80)
+        lines = ["🧾 <b>حسابرسی TP / Trailing / Stop</b>", "━━━━━━━━━━━━━━━━━━", f"LOSS ثبت‌شده: <b>{report['total_losses']}</b>", f"مشکوک به سود محافظت‌شده: <b>{report['protected_candidates']}</b>", "━━━━━━━━━━━━━━━━━━"]
+        for item in report["records"]:
+            if not item["suspicious"]:
+                continue
+            flags = []
+            if item["tp1_hit"]: flags.append("TP1")
+            if item["sl_moved_to_be"]: flags.append("BE")
+            if item["price_protected"]: flags.append("Stop≥Entry")
+            lines.append(f"⚠️ <b>{_e(item['symbol'])}</b> • {_e(item['setup'])} • {','.join(flags)}\n├ Entry {item['entry']:g} • Stop {item['stop']:g}\n├ ثبت‌شده: {item['pnl_pct']:+.2f}% / ${item['pnl_usd']:+.2f}\n└ <code>{_e(item['signal_id'])}</code>")
+        if report["protected_candidates"] == 0:
+            lines.append("✅ مورد مشکوک در رکوردهای LOSS فعلی پیدا نشد.")
+        send_message("\n".join(lines), chat_id, main_menu_keyboard(chat_id))
+    except Exception as exc:
+        send_message(f"❌ خطا در حسابرسی: {exc}", chat_id, main_menu_keyboard(chat_id))
+
+
 def handle_callback(callback_query):
     data = callback_query.get("data", "")
     chat_id = str(callback_query["message"]["chat"]["id"])
@@ -868,6 +888,7 @@ def handle_message(message):
             "🪪 شناسه من": lambda: send_message(f"🪪 شناسه Telegram شما: <code>{uid}</code>", chat_id),
             "🔄 بروزرسانی ربات": lambda: handle_start(chat_id, user),
             "🧪 گزارش آزمون": lambda: handle_backtest(chat_id, "BTCUSDT") if _is_admin(uid) else None,
+            "🧾 حسابرسی نتایج": lambda: handle_protected_exit_audit(chat_id) if _is_admin(uid) else None,
             "🧹 پاکسازی هشدارها": lambda: send_message(f"🧹 {purge_resolved_alert_posts()} پیام پاک شد.", chat_id) if _is_admin(uid) else None,
         }
         if text in quick:
@@ -906,6 +927,8 @@ def handle_message(message):
             send_message(f"🪪 شناسه Telegram شما: <code>{uid}</code>", chat_id)
     elif cmd == "/status":
         handle_status(chat_id, uid)
+    elif cmd == "/audit" and _is_admin(uid):
+        handle_protected_exit_audit(chat_id)
     elif cmd == "/backtest" and _is_admin(uid):
         symbol = args[0].upper() if args else "BTCUSDT"
         if not symbol.endswith("USDT"):
