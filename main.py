@@ -593,8 +593,7 @@ def main() -> None:
     init_v7_schema()
     try:
         repaired = repair_legacy_tp1_misclassified_results()
-        if repaired:
-            print(f"✅ Repaired {repaired} legacy TP1-before-stop result records")
+        print(f"🔎 Legacy protected-exit audit: repaired={repaired}")
     except Exception as exc:
         print(f"Legacy TP1 repair skipped: {exc}")
     symbols, _ = UNIVERSE.get()

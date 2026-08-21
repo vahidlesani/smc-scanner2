@@ -685,24 +685,36 @@ def _weighted_win_pct(direction: str, entry: float, tp1: float, tp2: float, part
 
 
 def repair_legacy_tp1_misclassified_results() -> int:
-    """Repair historical records where TP1 was recorded but a later stop was
-    incorrectly stored as LOSS. The original partial profit remains a win path."""
+    """Repair legacy trades that were labelled LOSS after profit protection.
+
+    A position with TP1 recorded or a stop moved to/through entry cannot be
+    counted as a full initial-stop loss. Legacy rows did exactly that.
+    """
     p = legacy_db._ph()
     truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
     with legacy_db.db_cursor() as cursor:
         cursor.execute(
-            f"SELECT signal_id, direction, entry, sl_original, tp1, tp2, leverage, margin_usd FROM signals "
-            f"WHERE strategy_version={p} AND result='LOSS' AND tp1_hit={truth}",
+            f"SELECT signal_id, direction, entry, sl, sl_original, tp1, tp2, leverage, margin_usd, tp1_hit, sl_moved_to_be "
+            f"FROM signals WHERE strategy_version={p} AND result='LOSS'",
             (SETTINGS.strategy_version,),
         )
         rows = cursor.fetchall()
         repaired = 0
-        for signal_id, direction, entry, original_sl, tp1, tp2, leverage, margin_usd in rows:
-            gross = _weighted_win_pct(direction, float(entry), float(tp1), float(tp2), True)
-            profit_usd = float(margin_usd or 0) * int(leverage or 1) * gross / 100
+        for signal_id, direction, entry, current_sl, original_sl, tp1, tp2, leverage, margin_usd, tp1_hit, moved_be in rows:
+            entry, current_sl = float(entry), float(current_sl or original_sl)
+            protected = bool(tp1_hit) or bool(moved_be) or (direction == "LONG" and current_sl >= entry) or (direction == "SHORT" and current_sl <= entry)
+            if not protected:
+                continue
+            # At minimum TP1 partial profit was realized. If data lacks a
+            # tp1 flag but stop is protected, keep the conservative TP1 share.
+            gross = _weighted_win_pct(direction, entry, float(tp1), float(tp2), True)
             if gross <= 0:
                 continue
-            cursor.execute(f"UPDATE signals SET result='WIN', pnl_pct={p}, pnl_usd={p} WHERE signal_id={p}", (gross, profit_usd, signal_id))
+            profit_usd = float(margin_usd or 0) * int(leverage or 1) * gross / 100
+            cursor.execute(
+                f"UPDATE signals SET result='WIN', pnl_pct={p}, pnl_usd={p} WHERE signal_id={p}",
+                (gross, profit_usd, signal_id),
+            )
             repaired += 1
     return repaired
 
