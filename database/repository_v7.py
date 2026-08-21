@@ -692,7 +692,7 @@ def monitor_confirmed_trades() -> List[Dict]:
             SELECT signal_id, symbol, direction, entry, sl_original, tp1, tp2,
                    leverage, margin_usd, trade_style, confirmed_at,
                    last_checked_at, tp1_hit, source, strategy_fa,
-                   strategy_version, pro_message_id, target_state_json, public_code, first_tp_message_id
+                   strategy_version, pro_message_id, target_state_json, public_code, first_tp_message_id, trigger_timeframe
             FROM signals
             WHERE confirmed={truth}
               AND confirmation_sent={truth}
@@ -714,7 +714,7 @@ def monitor_confirmed_trades() -> List[Dict]:
         (
             signal_id, symbol, direction, entry, original_sl, tp1, tp2,
             leverage, margin, style, confirmed_at, last_checked_at,
-            tp1_hit, source, strategy_fa, strategy_version, pro_message_id, target_state_json, public_code, first_tp_message_id,
+            tp1_hit, source, strategy_fa, strategy_version, pro_message_id, target_state_json, public_code, first_tp_message_id, trigger_timeframe,
         ) = row
         timeframe = "5m" if style == "SCALP" else "15m"
         key = (symbol, timeframe)
@@ -750,8 +750,8 @@ def monitor_confirmed_trades() -> List[Dict]:
                         "style": style, "source": source, "strategy_fa": strategy_fa,
                         "strategy_version": strategy_version, "confirmed_at": str(confirmed_at),
                         "confirmation_sent": True, "pro_message_id": int(pro_message_id or 0),
-                        "entry": float(entry), "sl": float(ladder["current_sl"]),
-                        "targets": list(ladder["targets"]), "hit_index": int(ladder["hit_index"]),
+                        "entry": float(entry), "sl": float(ladder["current_sl"]), "original_sl": float(original_sl),
+                        "trigger_timeframe": str(trigger_timeframe or ""), "targets": list(ladder["targets"]), "hit_index": int(ladder["hit_index"]),
                     })
                     notional = float(margin or 0) * int(leverage or 1)
                     risk_pct_move = abs(float(entry) - float(original_sl)) / float(entry) * 100
@@ -878,6 +878,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                     "confirmed_at": str(confirmed_at),
                     "confirmation_sent": True,
                     "pro_message_id": int(pro_message_id or 0), "public_code": public_code,
+                    "trigger_timeframe": str(trigger_timeframe or ""), "original_sl": float(original_sl),
                     "first_tp_message_id": int(first_tp_message_id or 0),
                 })
         if tp1_event:

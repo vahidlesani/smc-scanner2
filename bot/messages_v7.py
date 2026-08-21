@@ -1523,7 +1523,8 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
     rows = [
         f"🏷 <b>{_e(badge)}</b>",
         f"✅ <b>سیگنال تأییدشده</b> • {_e(candidate.setup_code)}",
-        f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(style_fa)} • {_e(candidate.direction)}",
+        f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(candidate.trigger_timeframe)} • {_e(style_fa)} • {_e(candidate.direction)}",
+        f"🕓 ایران: {_iran_time(candidate)}",
         f"🎯 Entry {_price(candidate.planned_entry)}  |  SL {_price(candidate.sl)}",
         *[f"🏁 TP{i+1} {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [35, 35])))],
         f"⚖️ R:R {candidate.rr_tp1:.2f} / {candidate.rr_tp2:.2f} • ⭐ {candidate.score}/10",
@@ -1657,10 +1658,14 @@ def send_startup_message(symbol_count: int) -> bool:
     )
 
 
+def _iran_now() -> str:
+    return datetime.now(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M")
+
+
 def _event_chart_candidate(event: dict) -> SignalCandidate:
     targets = list(event.get("targets") or [])
     entry = float(event.get("entry") or 0)
-    sl = float(event.get("sl") or 0)
+    sl = float(event.get("original_sl") or event.get("sl") or 0)
     tp1 = float(targets[0]) if targets else entry
     tp2 = float(targets[1]) if len(targets) > 1 else tp1
     direction = str(event.get("direction") or "LONG").upper()
