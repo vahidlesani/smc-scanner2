@@ -240,6 +240,7 @@ def handle_status(chat_id, user_id=None):
     try:
         s = get_dashboard_summary()
         sig_line = f"📡 سیگنال‌های تأییدشده: <b>{s['total_signals']}</b>  🎯 WR: <b>{s['winrate']}%</b>"
+        confirmed_open = int(s.get("pending", 0) or 0)
     except Exception:
         sig_line = "📡 اتصال دیتابیس در دسترس نیست"
     try:
@@ -247,6 +248,8 @@ def handle_status(chat_id, user_id=None):
         active = len(get_active_candidates())
     except Exception:
         active = "؟"
+    if 'confirmed_open' not in locals():
+        confirmed_open = 0
     text = (
         "🖥 <b>وضعیت ربات</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
