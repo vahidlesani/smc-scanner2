@@ -119,6 +119,10 @@ class DynamicUniverse:
 
         ranking = get_global_ranking()
         ranked = get_ranked_symbols()
+        # Native-crypto whitelist is independent of execution venue volume.
+        # It removes tokenized equities/RWA wrappers even when they look liquid.
+        from data.marketcap import top_crypto_bases
+        crypto_whitelist = top_crypto_bases(80)
         instruments = {str(i.get("symbol", "")).upper(): i for i in get_instruments() or [] if i.get("symbol")}
         bybit_tickers = {str(t.get("symbol", "")): t for t in (get_tickers(use_cache=False) or [])}
         ourbit_rows = {}
@@ -202,6 +206,9 @@ class DynamicUniverse:
                 break
             if index >= SETTINGS.watchlist_prefilter_symbols * 2:
                 break
+            base = symbol.upper().removesuffix("USDT").removesuffix("USDC")
+            if base not in crypto_whitelist:
+                continue
             rank_row = ranking.get(symbol) or {}
             global_turnover = float(rank_row.get("global_turnover24h", 0))
             if global_turnover < SETTINGS.watchlist_min_turnover_usd * 0.5:
@@ -239,6 +246,9 @@ class DynamicUniverse:
             if symbol in seen or not symbol.endswith("USDT") and not any(
                 symbol.startswith(pair) for pair in FOREX_PAIR_CODES
             ):
+                continue
+            base = symbol.upper().removesuffix("USDT").removesuffix("USDC")
+            if base not in crypto_whitelist:
                 continue
             turnover = _float(ticker.get("turnover24h"))
             if turnover < SETTINGS.watchlist_min_turnover_usd * 0.5:
