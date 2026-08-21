@@ -1620,6 +1620,21 @@ def send_tp1_event(signal: dict) -> bool:
     )
 
 
+def send_trade_close_event(event: dict) -> bool:
+    """Final result is always a reply to the original confirmed signal."""
+    target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    reply_id = int(event.get("pro_message_id") or 0) or None
+    result = str(event.get("result") or "")
+    emoji = "✅" if result == "WIN" else "❌" if result == "LOSS" else "⚪"
+    text = (
+        f"{emoji} <b>نتیجه نهایی پوزیشن</b>\n"
+        f"🪙 {_e(event.get('symbol'))} • {_e(event.get('source') or 'SETUP')}\n"
+        f"💰 P&L: <b>${float(event.get('profit_usd') or 0):+.2f}</b> • <b>{float(event.get('pnl') or 0):+.2f}%</b>\n"
+        f"🆔 <code>{_e(event.get('public_code') or event.get('signal_id'))}</code>"
+    )
+    return bool(send_message(text, target, reply_to_message_id=reply_id))
+
+
 def send_trade_result(event: dict) -> bool:
     result = event.get("result", "")
     if (
@@ -1690,7 +1705,7 @@ def send_ladder_event(event: dict) -> bool:
     if kind not in {"TP1", "TP2", "TP3", "TP4", "TP5", "TRAIL_STOP", "STOP"}:
         return False
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
-    reply_id = int(event.get("pro_message_id") or 0) or None
+    reply_id = (int(event.get("last_tp_message_id") or 0) or int(event.get("pro_message_id") or 0) or None) if kind.startswith("TP") else (int(event.get("pro_message_id") or 0) or None)
     if kind.startswith("TP"):
         text = (
             f"🏁 <b>{_e(kind)} HIT</b> • {_e(event.get('source') or 'SETUP')}\n"

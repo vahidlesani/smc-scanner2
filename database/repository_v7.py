@@ -667,6 +667,24 @@ def set_first_tp_message_id(signal_id: str, message_id: int) -> None:
         cursor.execute(f"UPDATE active_signals SET first_tp_message_id={p} WHERE signal_id={p}", (int(message_id), signal_id))
 
 
+def set_last_tp_message_id(signal_id: str, message_id: int) -> None:
+    """Persist latest main-channel TP reply for chronological TP threading."""
+    p = legacy_db._ph()
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(f"SELECT target_state_json FROM signals WHERE signal_id={p}", (signal_id,))
+        row = cursor.fetchone()
+        if not row:
+            return
+        try:
+            state = json.loads(row[0] or "{}")
+        except Exception:
+            state = {}
+        state["last_tp_message_id"] = int(message_id)
+        raw = json.dumps(state)
+        cursor.execute(f"UPDATE signals SET target_state_json={p} WHERE signal_id={p}", (raw, signal_id))
+        cursor.execute(f"UPDATE active_signals SET target_state_json={p} WHERE signal_id={p}", (raw, signal_id))
+
+
 def _naive_timestamp(value) -> Optional[pd.Timestamp]:
     if not value:
         return None
@@ -815,7 +833,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                         "strategy_version": strategy_version, "confirmed_at": str(confirmed_at),
                         "confirmation_sent": True, "pro_message_id": int(pro_message_id or 0),
                         "entry": float(entry), "sl": float(ladder["current_sl"]), "original_sl": float(original_sl),
-                        "trigger_timeframe": str(trigger_timeframe or ""), "targets": list(ladder["targets"]), "hit_index": int(ladder["hit_index"]),
+                        "trigger_timeframe": str(trigger_timeframe or ""), "targets": list(ladder["targets"]), "hit_index": int(ladder["hit_index"]), "last_tp_message_id": int(ladder.get("last_tp_message_id") or 0),
                     })
                     notional = float(margin or 0) * int(leverage or 1)
                     risk_pct_move = abs(float(entry) - float(original_sl)) / float(entry) * 100

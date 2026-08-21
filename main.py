@@ -40,6 +40,7 @@ from bot.messages_v7 import (
     send_tp1_event,
     send_ladder_event,
     send_trade_result,
+    send_trade_close_event,
 )
 from config import get_settings
 from data.fetcher import get_klines, get_market_bundle
@@ -69,6 +70,7 @@ from database.repository_v7 import (
     save_confirmed_signal,
     set_pro_message_id,
     set_first_tp_message_id,
+    set_last_tp_message_id,
     update_symbol_lock,
 )
 
@@ -500,6 +502,7 @@ def monitor_confirmed_results() -> int:
             pro_tp_mid = send_ladder_event(event)
             if pro_tp_mid:
                 event["pro_event_message_id"] = int(pro_tp_mid)
+                set_last_tp_message_id(event["signal_id"], int(pro_tp_mid))
                 if event.get("event") == "TP1":
                     set_first_tp_message_id(event["signal_id"], int(pro_tp_mid))
                     event["first_tp_message_id"] = int(pro_tp_mid)
@@ -507,6 +510,7 @@ def monitor_confirmed_results() -> int:
         elif event.get("event") in {"TRAIL_STOP", "STOP"}:
             send_ladder_event(event)
         elif event.get("event") == "CLOSED":
+            send_trade_close_event(event)
             send_trade_result(event)
     return len(events)
 
