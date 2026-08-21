@@ -1435,12 +1435,13 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
             f"{'🟢 صعودی' if candidate.direction == 'LONG' else '🔴 نزولی'}\n"
             f"📍 داخل {_e(zone_fa)}" + (f" (کانتکست {_e(ctx_fa)})" if ctx_fa else "") + "\n"
             f"{_e(rule)}\n"
+            f"🕓 ایران: {_iran_time(candidate)}\n"
             f"🆔 <code>{_e(_public_code(candidate))}</code>"
         )
     else:
         caption = (
             f"📚 {_e(candidate.symbol)} • {_e(candidate.style)} • {_e(candidate.setup_code)}\n"
-            f"⛔ تأیید ورود نیست\n🆔 <code>{_e(_public_code(candidate))}</code>"
+            f"⛔ تأیید ورود نیست\n🕓 ایران: {_iran_time(candidate)}\n🆔 <code>{_e(_public_code(candidate))}</code>"
         )
     if chart:
         _store_alert_message_id(candidate, "education_chart_message_id",
