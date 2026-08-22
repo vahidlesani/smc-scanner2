@@ -754,8 +754,12 @@ def handle_protected_exit_audit(chat_id):
 def handle_setup_management(chat_id, message_id=None):
     enabled = os.getenv("VIVA_TLBREAK_ENABLED", "false").lower() in {"1","true","yes","on"}
     dot, label = ("🟢", "فعال") if enabled else ("🔴", "خاموش")
+    from database.repository_v7 import viva_tlbreak_performance
+    perf = viva_tlbreak_performance()
     text = ("⚙️ <b>مدیریت ستاپ‌ها</b>\n━━━━━━━━━━━━━━━━━━\n"
             f"📐 <b>VIVA-TLBREAK</b>: {dot} <b>{label}</b>\n"
+            f"📊 {perf['total']} مورد • ✅{perf['wins']} ❌{perf['losses']} • WR {perf['winrate']:.1f}%\n"
+            f"💰 P&L: {perf['pnl_pct']:+.2f}% / ${perf['pnl_usd']:+.2f}\n"
             "فقط این ستاپ شخصی Viva از این صفحه کنترل می‌شود. تغییر در Railway ذخیره و سرویس restart می‌شود.")
     keyboard={"inline_keyboard":[
         [{"text":"🟢 روشن کن","callback_data":"setup_vtl_on"},{"text":"🔴 خاموش کن","callback_data":"setup_vtl_off"}],

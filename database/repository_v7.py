@@ -44,6 +44,7 @@ SIGNAL_COLUMNS = {
     "pnl_usd": "REAL DEFAULT 0",
     "target_state_json": "TEXT DEFAULT '{}'",
     "pro_message_id": "INTEGER DEFAULT 0",
+    "strategy_variant": "TEXT DEFAULT ''",
     "public_code": "TEXT DEFAULT ''",
     "first_tp_message_id": "INTEGER DEFAULT 0",
 }
@@ -64,6 +65,7 @@ ACTIVE_COLUMNS = {
     "last_checked_at": "TEXT",
     "target_state_json": "TEXT DEFAULT '{}'",
     "pro_message_id": "INTEGER DEFAULT 0",
+    "strategy_variant": "TEXT DEFAULT ''",
     "public_code": "TEXT DEFAULT ''",
     "first_tp_message_id": "INTEGER DEFAULT 0",
 }
@@ -549,8 +551,9 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
         cursor.execute(sql, params)
         cursor.execute(active_sql, active_params)
         public_code = str(candidate.metadata.get("public_code") or candidate.signal_id)
-        cursor.execute(f"UPDATE signals SET target_state_json={p}, public_code={p} WHERE signal_id={p}", (ladder_json, public_code, candidate.signal_id))
-        cursor.execute(f"UPDATE active_signals SET target_state_json={p}, public_code={p} WHERE signal_id={p}", (ladder_json, public_code, candidate.signal_id))
+        variant = str(candidate.metadata.get("strategy_variant") or "")
+        cursor.execute(f"UPDATE signals SET target_state_json={p}, public_code={p}, strategy_variant={p} WHERE signal_id={p}", (ladder_json, public_code, variant, candidate.signal_id))
+        cursor.execute(f"UPDATE active_signals SET target_state_json={p}, public_code={p}, strategy_variant={p} WHERE signal_id={p}", (ladder_json, public_code, variant, candidate.signal_id))
     return True
 
 
@@ -700,6 +703,17 @@ def _weighted_win_pct(direction: str, entry: float, tp1: float, tp2: float, part
         return move1 * SETTINGS.partial_tp1_percent / 100
     move2 = (tp2 - entry) / entry * 100 if direction == "LONG" else (entry - tp2) / entry * 100
     return move1 * SETTINGS.partial_tp1_percent / 100 + move2 * SETTINGS.partial_tp2_percent / 100
+
+
+def viva_tlbreak_performance() -> dict:
+    p = legacy_db._ph()
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(f"SELECT result, pnl_pct, pnl_usd FROM signals WHERE strategy_version={p} AND strategy_variant='VIVA_TLBREAK'", (SETTINGS.strategy_version,))
+        rows = cursor.fetchall()
+    wins = sum(1 for r, *_ in rows if r == "WIN")
+    losses = sum(1 for r, *_ in rows if r == "LOSS")
+    closed = wins + losses
+    return {"total":len(rows),"wins":wins,"losses":losses,"pending":sum(1 for r,*_ in rows if r=="PENDING"),"winrate":wins/closed*100 if closed else 0.0,"pnl_pct":sum(float(x[1] or 0) for x in rows),"pnl_usd":sum(float(x[2] or 0) for x in rows)}
 
 
 def protected_exit_audit(limit: int = 100) -> dict:
