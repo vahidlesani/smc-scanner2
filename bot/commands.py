@@ -132,6 +132,7 @@ def main_menu_keyboard(user_id=None):
     ]
     if user_id is not None and _is_admin(user_id):
         rows.append([
+            {"text": "⚙️ مدیریت ستاپ‌ها", "callback_data": "setup_manage"},
             {"text": "🧪 بک‌تست (ادمین)", "callback_data": "backtest_menu"},
             {"text": "🧹 پاکسازی هشدارها", "callback_data": "purge_alerts"},
         ])
@@ -750,6 +751,34 @@ def handle_protected_exit_audit(chat_id):
         send_message(f"❌ خطا در حسابرسی: {exc}", chat_id, main_menu_keyboard(chat_id))
 
 
+def handle_setup_management(chat_id, message_id=None):
+    enabled = os.getenv("VIVA_TLBREAK_ENABLED", "false").lower() in {"1","true","yes","on"}
+    dot, label = ("🟢", "فعال") if enabled else ("🔴", "خاموش")
+    text = ("⚙️ <b>مدیریت ستاپ‌ها</b>\n━━━━━━━━━━━━━━━━━━\n"
+            f"📐 <b>VIVA-TLBREAK</b>: {dot} <b>{label}</b>\n"
+            "فقط این ستاپ شخصی Viva از این صفحه کنترل می‌شود. تغییر در Railway ذخیره و سرویس restart می‌شود.")
+    keyboard={"inline_keyboard":[
+        [{"text":"🟢 روشن کن","callback_data":"setup_vtl_on"},{"text":"🔴 خاموش کن","callback_data":"setup_vtl_off"}],
+        [{"text":"📊 نتایج VIVA-TLBREAK","callback_data":"res_TLBREAK"}],
+        [{"text":"◀️ بازگشت","callback_data":"main_menu"}],
+    ]}
+    if message_id: edit_message(chat_id,message_id,text,keyboard)
+    else: send_message(text,chat_id,keyboard)
+
+
+def handle_setup_toggle(chat_id, message_id, enabled):
+    from bot.railway_control import set_env_flag, setup_toggle_available
+    if not setup_toggle_available():
+        send_message("❌ کنترل Railway در ربات هنوز پیکربندی نشده.",chat_id)
+        return
+    ok=set_env_flag("VIVA_TLBREAK_ENABLED",enabled)
+    if ok:
+        send_message("✅ تنظیم ذخیره شد؛ Railway سرویس را با وضعیت جدید restart می‌کند.",chat_id)
+    else:
+        send_message("❌ تغییر تنظیم Railway انجام نشد.",chat_id)
+    handle_setup_management(chat_id,message_id)
+
+
 def handle_callback(callback_query):
     data = callback_query.get("data", "")
     chat_id = str(callback_query["message"]["chat"]["id"])
@@ -769,6 +798,15 @@ def handle_callback(callback_query):
         handle_stats(chat_id, uid)
     elif data == "strategies":
         handle_strategies(chat_id)
+    elif data == "setup_manage":
+        if _is_admin(uid): handle_setup_management(chat_id, message_id)
+        else: answer_callback(callback_id, "فقط ادمین")
+    elif data == "setup_vtl_on":
+        if _is_admin(uid): handle_setup_toggle(chat_id, message_id, True)
+        else: answer_callback(callback_id, "فقط ادمین")
+    elif data == "setup_vtl_off":
+        if _is_admin(uid): handle_setup_toggle(chat_id, message_id, False)
+        else: answer_callback(callback_id, "فقط ادمین")
     elif data == "education":
         handle_education(chat_id)
     elif data == "recent_results":
