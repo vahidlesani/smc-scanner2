@@ -147,7 +147,15 @@ def evaluate_confirmation(
         if atr_state <= 0:
             atr_state = float((closed_df["high"] - closed_df["low"]).tail(14).mean())
         state, ready = advance_live_state(candidate.metadata, row, previous, candidate.direction, zone_low=candidate.entry_zone_bottom, zone_high=candidate.entry_zone_top, atr_value=atr_state)
+        from analysis.viva_tlbreak_state import VivaTLState, advance as advance_viva_state
+        machine = VivaTLState.from_payload(candidate.metadata.get("viva_state_machine"))
+        event_map = {"S3_RETEST": "RETEST", "S4_REJECTION": "REJECTION", "S5_MICRO_BOS": "MICRO_BOS"}
+        if state in event_map:
+            machine = advance_viva_state(machine, event_map[state], max_retest_bars=int(candidate.metadata.get("viva_retest_window_bars", 16)))
+        if ready:
+            machine = advance_viva_state(machine, "CONFIRM", max_retest_bars=int(candidate.metadata.get("viva_retest_window_bars", 16)))
         candidate.metadata["viva_state"] = state
+        candidate.metadata["viva_state_machine"] = machine.payload()
         if not ready:
             return reject("VIVA_TLBREAK_WAIT_" + state, "VIVA-TLBREAK در انتظار Retest → Rejection → BOS پنج‌دقیقه‌ای است.")
     close, open_price = float(row["close"]), float(row["open"])

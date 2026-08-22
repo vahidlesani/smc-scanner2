@@ -350,8 +350,12 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         candidate.mandatory_gates["htf_alignment"] = True  # counter-trend is enforced by retest/BOS lifecycle, not a dead gate
         candidate.mandatory_gates["viva_tlbreak_geometry"] = True
         candidate.strategy_fa = f"VIVA-TLBREAK | شکست {pattern} در انتظار Retest و BOS پنج‌دقیقه"
+        from analysis.viva_tlbreak_state import VivaTLState
         candidate.metadata.update({
-            "strategy_variant": "VIVA_TLBREAK", "viva_pattern": pattern,
+            "strategy_variant": "VIVA_TLBREAK",
+            "viva_state_machine": VivaTLState(stage="S2_BREAKOUT").payload(),
+            "viva_retest_window_bars": 24 if str(style).upper() == "SWING" else 16,
+            "viva_pattern": pattern,
             "viva_touch_count": line.touch_count, "viva_fit_error_atr": line.fit_residual_atr,
             "viva_break_line": breakout.line_price, "viva_breakout_score": breakout.score,
             "viva_breakout_body_atr": breakout.body_atr, "viva_counter_trend": confluence.counter_trend,
