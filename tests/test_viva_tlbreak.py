@@ -56,3 +56,18 @@ def test_retest_rejection_and_micro_bos_are_separate_states():
     assert retest is not None and retest.passed
     bos=assess_micro_bos(df,"LONG",not_before_index=retest.retest_index)
     assert bos is not None and bos.passed
+
+from analysis.viva_tlbreak import build_pattern_plan
+
+
+def test_pattern_plan_uses_pattern_height_and_pivot_stop():
+    df = pd.DataFrame([
+        {"timestamp":pd.Timestamp("2026-01-01")+pd.Timedelta(hours=i),"open":100.,"high":102.,"low":98.,"close":101.,"volume":1000.,"turnover":100000.}
+        for i in range(50)
+    ])
+    upper = ValidatedLine("HIGH", -0.05, 105., 3, .1, 5, 40, ({"index":5,"price":104.75},{"index":20,"price":104.0},{"index":40,"price":103.0}))
+    lower = ValidatedLine("LOW", 0.03, 97., 3, .1, 5, 40, ({"index":5,"price":97.15},{"index":20,"price":97.6},{"index":40,"price":98.2}))
+    plan = build_pattern_plan(df, upper, lower, "LONG")
+    assert plan is not None
+    assert plan.measured_target > plan.breakout_price
+    assert plan.stop_anchor <= 98.2

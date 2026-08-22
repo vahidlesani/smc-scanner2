@@ -317,3 +317,63 @@ def assess_micro_bos(confirm_df: pd.DataFrame, direction: str, *, not_before_ind
         if directional and broken and body >= .40 * atr:
             return MicroBOSAssessment(i, level, body / atr, True)
     return None
+
+@dataclass(frozen=True)
+class PatternPlan:
+    pattern: str
+    direction: str
+    breakout_price: float
+    pattern_height: float
+    stop_anchor: float
+    measured_target: float
+    structural_target: Optional[float]
+
+
+def build_pattern_plan(
+    df: pd.DataFrame,
+    upper: Optional[ValidatedLine],
+    lower: Optional[ValidatedLine],
+    direction: str,
+    *,
+    structural_target: Optional[float] = None,
+) -> Optional[PatternPlan]:
+    """Pattern-specific stop anchor and measured final target.
+
+    No order is created here; this returns geometry consumed later by the
+    live candidate builder after retest + 5M BOS are complete.
+    """
+    if upper is None and lower is None:
+        return None
+    n = len(df) - 1
+    direction = str(direction).upper()
+    pattern = classify_pattern(upper, lower, n)
+    price = float(df["close"].iloc[-1])
+    if upper and lower:
+        upper_now, lower_now = upper.price_at(n), lower.price_at(n)
+        height = abs(upper_now - lower_now)
+    else:
+        line = upper or lower
+        assert line is not None
+        atr = _atr(df)
+        height = max(2.0 * atr, abs(float(df["high"].tail(30).max()) - float(df["low"].tail(30).min())) * .25)
+    if height <= 0:
+        return None
+    if direction == "LONG":
+        if pattern in {"WEDGE_FALLING", "TRIANGLE", "TRIANGLE_SYMMETRICAL", "CHANNEL"} and lower is not None:
+            stop_anchor = min(float(p["price"]) for p in lower.points)
+        else:
+            stop_anchor = float((lower or upper).points[-1]["price"])
+        measured = price + height
+        valid_structural = structural_target if structural_target and structural_target > price else None
+    else:
+        if pattern in {"WEDGE_RISING", "TRIANGLE", "TRIANGLE_SYMMETRICAL", "CHANNEL"} and upper is not None:
+            stop_anchor = max(float(p["price"]) for p in upper.points)
+        else:
+            stop_anchor = float((upper or lower).points[-1]["price"])
+        measured = price - height
+        valid_structural = structural_target if structural_target and structural_target < price else None
+    return PatternPlan(
+        pattern=pattern, direction=direction, breakout_price=price,
+        pattern_height=height, stop_anchor=stop_anchor,
+        measured_target=measured, structural_target=valid_structural,
+    )
