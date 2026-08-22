@@ -1298,6 +1298,19 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         return None
 
 
+def _viva_tlbreak_sections(candidate: SignalCandidate) -> str:
+    if (candidate.metadata or {}).get("strategy_variant") != "VIVA_TLBREAK":
+        return ""
+    from bot.messages_viva_tlbreak import detailed_warning_fa, ai_advisory_fa, management_fa
+    md = candidate.metadata or {}
+    final_target = float(md.get("viva_final_target") or candidate.tp2)
+    return (
+        detailed_warning_fa(md, candidate.direction)
+        + "\n\n" + ai_advisory_fa(md, candidate.direction)
+        + "\n\n" + management_fa(candidate.planned_entry, candidate.sl, final_target, candidate.direction)
+    )
+
+
 def build_educational_message(candidate: SignalCandidate) -> str:
     direction_fa = "سناریوی احتمالی خرید" if candidate.direction == "LONG" else "سناریوی احتمالی فروش"
     evidence_blocks = []

@@ -595,3 +595,29 @@ def recent_failed_breakout_penalty(trigger_df: pd.DataFrame, line: ValidatedLine
             return -1.5
         was_outside = outside
     return 0.0
+
+VIVA_STAGES = ("S0_WATCH", "S1_VALID", "S2_BREAKOUT", "S3_RETEST", "S4_REJECTION", "S5_MICRO_BOS", "S6_CONFIRMED", "S7_CONTINUATION")
+
+
+def advance_live_state(metadata: dict, row: pd.Series, previous: pd.Series, direction: str, *, zone_low: float, zone_high: float, atr_value: float) -> tuple[str, bool]:
+    """Durable per-candidate state transition for live paper lifecycle."""
+    state = str(metadata.get("viva_state") or "S2_BREAKOUT")
+    lo, hi = sorted((float(zone_low), float(zone_high)))
+    touched = float(row["low"]) <= hi and float(row["high"]) >= lo
+    body = abs(float(row["close"]) - float(row["open"]))
+    rng = max(float(row["high"]) - float(row["low"]), 1e-12)
+    is_long = str(direction).upper() == "LONG"
+    if state == "S2_BREAKOUT" and touched:
+        return "S3_RETEST", False
+    if state == "S3_RETEST":
+        pin = (float(row["close"]) >= float(row["low"]) + .65*rng and (min(float(row["open"]),float(row["close"]))-float(row["low"])) >= .55*rng) if is_long else (float(row["close"]) <= float(row["high"]) - .65*rng and (float(row["high"])-max(float(row["open"]),float(row["close"]))) >= .55*rng)
+        engulf = (float(previous["close"]) < float(previous["open"]) and float(row["close"]) > float(row["open"]) and float(row["open"]) <= float(previous["close"])) if is_long else (float(previous["close"]) > float(previous["open"]) and float(row["close"]) < float(row["open"]) and float(row["open"]) >= float(previous["close"]))
+        if pin or (engulf and body >= .35*atr_value):
+            return "S4_REJECTION", False
+        return state, False
+    if state == "S4_REJECTION":
+        bos = (float(row["close"]) > float(previous["high"])) if is_long else (float(row["close"]) < float(previous["low"]))
+        directional = (float(row["close"]) > float(row["open"])) if is_long else (float(row["close"]) < float(row["open"]))
+        if bos and directional and body >= .40*atr_value:
+            return "S5_MICRO_BOS", True
+    return state, False

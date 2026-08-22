@@ -139,6 +139,17 @@ def evaluate_confirmation(
 
     row = closed_df.iloc[-1]
     previous = closed_df.iloc[-2]
+    # Isolated Viva-TLBREAK state machine: retest, then rejection, then a
+    # later closed micro-BOS. Other strategies keep their existing behavior.
+    if candidate.metadata.get("strategy_variant") == "VIVA_TLBREAK":
+        from analysis.viva_tlbreak import advance_live_state
+        atr_state = float(candidate.metadata.get("atr", 0) or 0)
+        if atr_state <= 0:
+            atr_state = float((closed_df["high"] - closed_df["low"]).tail(14).mean())
+        state, ready = advance_live_state(candidate.metadata, row, previous, candidate.direction, zone_low=candidate.entry_zone_bottom, zone_high=candidate.entry_zone_top, atr_value=atr_state)
+        candidate.metadata["viva_state"] = state
+        if not ready:
+            return reject("VIVA_TLBREAK_WAIT_" + state, "VIVA-TLBREAK در انتظار Retest → Rejection → BOS پنج‌دقیقه‌ای است.")
     close, open_price = float(row["close"]), float(row["open"])
     previous_high, previous_low = float(previous["high"]), float(previous["low"])
     displacement = candle_displacement(closed_df, -1, atr_multiple=0.55)
