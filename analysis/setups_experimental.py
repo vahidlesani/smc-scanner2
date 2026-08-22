@@ -266,7 +266,7 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
     then waits for the configured retest/5M confirmation.
     """
     from analysis.viva_tlbreak import (
-        build_pattern_plan, classify_pattern, fit_validated_line, fit_two_pivot_watch,
+        build_pattern_plan, classify_pattern, classify_pattern_detailed, fit_validated_line, fit_two_pivot_watch,
         assess_projected_breakout, score_confluences, structure_score,
         pattern_length_ok, pattern_geometry_ok, recent_failed_breakout_penalty,
     )
@@ -309,7 +309,8 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         breakout = assess_projected_breakout(trigger_df, line, direction)
         if breakout is None or not breakout.passed:
             continue
-        geometry_ok, pattern = pattern_geometry_ok(upper, lower, len(refine_df) - 1)
+        geometry_ok, _geometry_pattern = pattern_geometry_ok(upper, lower, len(refine_df) - 1)
+        pattern = classify_pattern_detailed(upper, lower, len(refine_df) - 1)
         if not geometry_ok or not pattern_length_ok(line, style):
             continue
         failed_penalty = recent_failed_breakout_penalty(trigger_df, line, direction)
