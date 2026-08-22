@@ -377,3 +377,78 @@ def build_pattern_plan(
         pattern_height=height, stop_anchor=stop_anchor,
         measured_target=measured, structural_target=valid_structural,
     )
+
+@dataclass(frozen=True)
+class ConfluenceScore:
+    volume_score: float
+    rsi_score: float
+    ema_score: float
+    htf_score: float
+    counter_trend: bool
+    total: float
+    reasons: tuple[str, ...]
+
+
+def line_price_at_time(line: ValidatedLine, timestamp) -> float:
+    """Project a refine-TF regression line by time for trigger-TF checks."""
+    if len(line.points) < 2:
+        return line.price_at(line.last_index)
+    first, last = line.points[0], line.points[-1]
+    t0 = pd.Timestamp(first["timestamp"]).timestamp()
+    t1 = pd.Timestamp(last["timestamp"]).timestamp()
+    target = pd.Timestamp(timestamp).timestamp()
+    if t1 <= t0:
+        return line.price_at(line.last_index)
+    price_per_second = (float(last["price"]) - float(first["price"])) / (t1 - t0)
+    return float(last["price"]) + price_per_second * (target - t1)
+
+
+def _ema(values: pd.Series, span: int) -> pd.Series:
+    return values.astype(float).ewm(span=span, adjust=False).mean()
+
+
+def score_confluences(
+    structure_df: pd.DataFrame,
+    refine_df: pd.DataFrame,
+    trigger_df: pd.DataFrame,
+    direction: str,
+    *,
+    counter_requires_full_retest: bool = True,
+    retest_score: float = 0.0,
+    volume_score: float = 0.0,
+) -> ConfluenceScore:
+    """Independent score components from Viva config; no global setup changes."""
+    from analysis.indicators import rsi, structure_bias, volume_ratio
+    is_long = str(direction).upper() == "LONG"
+    reasons: list[str] = []
+    bias = structure_bias(structure_df, 5).get("bias", "NEUTRAL")
+    aligned = bias == ("BULLISH" if is_long else "BEARISH")
+    counter = bias in {"BULLISH", "BEARISH"} and not aligned
+    htf_score = 1.0 if aligned else 0.0
+    if aligned:
+        reasons.append("HTF structure aligned")
+    elif counter:
+        reasons.append("counter-trend breakout")
+    ema20 = _ema(refine_df["close"], 20)
+    ema50 = _ema(refine_df["close"], 50)
+    ema_score = 0.0
+    if len(ema20) >= 3:
+        slope_ok = ema20.iloc[-1] > ema20.iloc[-3] if is_long else ema20.iloc[-1] < ema20.iloc[-3]
+        stack_ok = ema20.iloc[-1] >= ema50.iloc[-1] if is_long else ema20.iloc[-1] <= ema50.iloc[-1]
+        if slope_ok and stack_ok:
+            ema_score = 0.5
+            reasons.append("EMA20/50 refinement aligned")
+    r = float(rsi(trigger_df, 14).iloc[-1])
+    rsi_score = 0.0
+    if (is_long and 50 < r < 75) or ((not is_long) and 25 < r < 50):
+        rsi_score = 1.0
+        reasons.append(f"RSI={r:.0f} directional non-extreme")
+    vr = volume_ratio(trigger_df, 20)
+    if vr >= 1.5:
+        volume_score = max(volume_score, 1.0)
+        reasons.append(f"breakout volume={vr:.2f}x")
+    if counter and counter_requires_full_retest and retest_score < 2.0:
+        reasons.append("counter-trend requires full retest")
+        # Keep visible, but disallow entry at adapter stage.
+    total = htf_score + ema_score + rsi_score + volume_score
+    return ConfluenceScore(volume_score, rsi_score, ema_score, htf_score, counter, total, tuple(reasons))

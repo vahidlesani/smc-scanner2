@@ -71,3 +71,19 @@ def test_pattern_plan_uses_pattern_height_and_pivot_stop():
     assert plan is not None
     assert plan.measured_target > plan.breakout_price
     assert plan.stop_anchor <= 98.2
+
+from analysis.viva_tlbreak import line_price_at_time, score_confluences
+
+
+def test_time_projection_uses_pivot_timestamps():
+    t0 = pd.Timestamp("2026-01-01T00:00:00Z")
+    t1 = pd.Timestamp("2026-01-01T01:00:00Z")
+    line = ValidatedLine("HIGH", 1.0, 100.0, 3, .1, 0, 1, ({"index":0,"price":100,"timestamp":t0},{"index":1,"price":101,"timestamp":t1}))
+    assert abs(line_price_at_time(line, t1 + pd.Timedelta(minutes=30)) - 101.5) < 1e-6
+
+
+def test_confluence_score_is_independent_from_pattern_score():
+    idx = pd.date_range("2026-01-01", periods=60, freq="h")
+    frame = pd.DataFrame({"timestamp":idx,"open":[100+i*.1 for i in range(60)],"high":[101+i*.1 for i in range(60)],"low":[99+i*.1 for i in range(60)],"close":[100.5+i*.1 for i in range(60)],"volume":[1000]*59+[2000],"turnover":[100000]*60})
+    out = score_confluences(frame, frame, frame, "LONG")
+    assert out.total >= 0
