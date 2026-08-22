@@ -322,6 +322,24 @@ class DynamicUniverse:
             if projected >= floor:
                 liquid_today.append(row)
 
+        # At UTC rollover, current-day candles/provider delay can temporarily
+        # shrink the universe to a handful of symbols. Keep scanning eligible
+        # global market-cap/ranking rows instead of going blind for hours.
+        min_operational = min(40, SETTINGS.watchlist_max_symbols)
+        if len(liquid_today) < min_operational:
+            existing = {row["symbol"] for row in liquid_today}
+            fallback_rows = sorted(rows, key=lambda row: float(row.get("turnover24h") or 0), reverse=True)
+            for row in fallback_rows:
+                if row["symbol"] in existing:
+                    continue
+                if allowed_assets and str(row.get("asset_class", "CRYPTO")).upper() not in allowed_assets:
+                    continue
+                liquid_today.append(row)
+                existing.add(row["symbol"])
+                if len(liquid_today) >= min_operational:
+                    break
+            if len(liquid_today) >= min_operational:
+                print(f"📈 Universe rollover fallback filled to {len(liquid_today)} eligible global symbols")
         liquid_today.sort(key=lambda row: row["trading_day_turnover"], reverse=True)
         top_turnover = liquid_today[: SETTINGS.watchlist_top_turnover]
         top_relative = sorted(
