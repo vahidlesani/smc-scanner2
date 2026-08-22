@@ -621,3 +621,33 @@ def advance_live_state(metadata: dict, row: pd.Series, previous: pd.Series, dire
         if bos and directional and body >= .40*atr_value:
             return "S5_MICRO_BOS", True
     return state, False
+
+@dataclass(frozen=True)
+class WatchLine:
+    side: Literal["HIGH", "LOW"]
+    slope: float
+    intercept: float
+    first: dict
+    last: dict
+
+    def price_at(self, index: float) -> float:
+        return self.slope * float(index) + self.intercept
+
+
+def fit_two_pivot_watch(df: pd.DataFrame, side: Literal["HIGH", "LOW"], cfg: Optional[VivaTLBreakConfig] = None) -> Optional[WatchLine]:
+    """Visible 2-pivot watch only; never eligible for entry/confirmation."""
+    cfg = cfg or load_config()
+    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right)
+    pts = highs if side == "HIGH" else lows
+    if len(pts) < 2:
+        return None
+    first, last = pts[-2], pts[-1]
+    span = float(last["index"] - first["index"])
+    if span < cfg.pivot_left * 2:
+        return None
+    slope = (float(last["price"]) - float(first["price"])) / span
+    if side == "HIGH" and slope >= 0:
+        return None
+    if side == "LOW" and slope <= 0:
+        return None
+    return WatchLine(side, slope, float(first["price"]) - slope * float(first["index"]), first, last)

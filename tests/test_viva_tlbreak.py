@@ -97,3 +97,9 @@ def test_projected_breakout_uses_timestamp_line_price():
     line = ValidatedLine("HIGH", -0.001, 102., 3, .1, 0, 20, ({"index":0,"price":102,"timestamp":idx[0]},{"index":20,"price":101.7,"timestamp":idx[20]}))
     out = assess_projected_breakout(df,line,"LONG")
     assert out and out.passed
+
+from analysis.viva_tlbreak import fit_two_pivot_watch
+
+
+def test_two_pivot_watch_never_claims_valid_line_on_monotonic_data():
+    assert fit_two_pivot_watch(_frame(), "HIGH") is None
