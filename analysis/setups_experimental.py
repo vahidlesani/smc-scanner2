@@ -267,7 +267,7 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
     """
     from analysis.viva_tlbreak import (
         build_pattern_plan, classify_pattern, fit_validated_line,
-        assess_projected_breakout, score_confluences,
+        assess_projected_breakout, score_confluences, structure_score,
     )
     structure_tf, refine_tf, trigger_tf = timeframe_profile(style)
     if not _ensure_frames(bundle, (structure_tf, refine_tf, trigger_tf)):
@@ -299,6 +299,26 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         if candidate is None:
             continue
         confluence = score_confluences(structure_df, refine_df, trigger_df, direction, retest_score=0.0)
+        # VIVA-TLBREAK owns its score/geometry; generic candidate values are
+        # replaced only for this isolated strategy.
+        viva_score = structure_score(line) + breakout.score + confluence.total
+        refine_atr = float((refine_df["high"] - refine_df["low"]).tail(14).mean())
+        buffer = max(0.35 * refine_atr, abs(candidate.planned_entry) * 0.0005)
+        pattern_sl = plan.stop_anchor - buffer if direction == "LONG" else plan.stop_anchor + buffer
+        # Never move a structural stop inside the generic liquidity protected stop.
+        candidate.sl = min(candidate.sl, pattern_sl) if direction == "LONG" else max(candidate.sl, pattern_sl)
+        final_target = plan.structural_target or plan.measured_target
+        if (direction == "LONG" and final_target <= candidate.planned_entry) or (direction == "SHORT" and final_target >= candidate.planned_entry):
+            continue
+        risk = abs(candidate.planned_entry - candidate.sl)
+        rr_final = abs(final_target - candidate.planned_entry) / max(risk, 1e-12)
+        if rr_final < 1.5:
+            continue
+        candidate.tp2 = float(final_target)
+        candidate.tp1 = float(candidate.planned_entry + (final_target - candidate.planned_entry) * 0.40)
+        candidate.rr_tp1 = abs(candidate.tp1 - candidate.planned_entry) / max(risk, 1e-12)
+        candidate.rr_tp2 = rr_final
+        candidate.score = min(10, max(0, round(viva_score)))
         # Counter trend is allowed only after the lifecycle gets full retest/BOS.
         candidate.mandatory_gates["htf_alignment"] = True  # counter-trend is enforced by retest/BOS lifecycle, not a dead gate
         candidate.mandatory_gates["viva_tlbreak_geometry"] = True
@@ -309,7 +329,9 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             "viva_break_line": breakout.line_price, "viva_breakout_score": breakout.score,
             "viva_breakout_body_atr": breakout.body_atr, "viva_counter_trend": confluence.counter_trend,
             "viva_confluence_score": confluence.total, "viva_confluence": list(confluence.reasons),
+            "viva_structure_score": structure_score(line), "viva_final_score": viva_score,
             "viva_stop_anchor": plan.stop_anchor, "viva_measured_target": plan.measured_target,
+            "viva_final_target": final_target,
             "viva_structural_target": plan.structural_target, "viva_state": "S2_BREAKOUT_CLOSED",
             "tl_context_tf": refine_tf, "tl_pattern": pattern, "tl_pattern_fa": pattern,
             "tl_line": breakout.line_price, "tl_touches": line.touch_count,
