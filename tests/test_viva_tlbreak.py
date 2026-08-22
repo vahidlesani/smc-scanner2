@@ -117,3 +117,11 @@ def test_walk_forward_never_exposes_future_rows():
     assert events
     assert seen[0] == 61
     assert seen[-1] == len(frame)
+
+from analysis.viva_tlbreak import classify_pattern_detailed
+
+
+def test_detailed_classifier_detects_ascending_triangle():
+    upper = ValidatedLine("HIGH", 0.0, 105., 3, .1, 1, 30, tuple())
+    lower = ValidatedLine("LOW", .02, 98., 3, .1, 1, 30, tuple())
+    assert classify_pattern_detailed(upper, lower, 35) == "TRIANGLE_ASCENDING"

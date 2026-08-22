@@ -651,3 +651,27 @@ def fit_two_pivot_watch(df: pd.DataFrame, side: Literal["HIGH", "LOW"], cfg: Opt
     if side == "LOW" and slope <= 0:
         return None
     return WatchLine(side, slope, float(first["price"]) - slope * float(first["index"]), first, last)
+
+
+def classify_pattern_detailed(upper: Optional[ValidatedLine], lower: Optional[ValidatedLine], index: int, cfg: Optional[VivaTLBreakConfig] = None) -> str:
+    """Extended pattern subtype classifier for chart/result labels."""
+    cfg = cfg or load_config()
+    base = classify_pattern(upper, lower, index)
+    if upper is None and lower is None:
+        return "NONE"
+    if upper is None or lower is None:
+        line = upper or lower
+        assert line is not None
+        if abs(line.slope) <= 0.01:
+            return "HORIZONTAL_SR"
+        return "TRENDLINE"
+    scale = max(abs(upper.price_at(index) - lower.price_at(index)), 1e-9)
+    flat_upper = abs(upper.slope) <= 0.05 * scale
+    flat_lower = abs(lower.slope) <= 0.05 * scale
+    if flat_upper and lower.slope > 0:
+        return "TRIANGLE_ASCENDING"
+    if flat_lower and upper.slope < 0:
+        return "TRIANGLE_DESCENDING"
+    if base == "CHANNEL":
+        return "CHANNEL_DESCENDING" if upper.slope < 0 else "CHANNEL_ASCENDING" if upper.slope > 0 else "CHANNEL_FLAT"
+    return base
