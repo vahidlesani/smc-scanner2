@@ -297,7 +297,7 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
                 bias="BULLISH" if direction=="LONG" else "BEARISH", trigger_timeframe=trigger_tf,
                 mandatory_gates={"viva_watch_only": False},
             )
-            candidate.metadata.update({"strategy_variant":"VIVA_TLBREAK","viva_state":"S0_WATCH","viva_pattern":"TWO_PIVOT_WATCH","viva_watch_line":line_price,"viva_touch_count":2,"public_code":generate_viva_public_code("TLBREAK", style)})
+            candidate.metadata.update({"strategy_variant":"VIVA_TLBREAK","viva_state":"S0_WATCH","viva_pattern":"TWO_PIVOT_WATCH","viva_watch_line":line_price,"viva_touch_count":2,"viva_watch_points":[dict(watch.first),dict(watch.last)],"public_code":generate_viva_public_code("TLBREAK", style)})
             return candidate
         return None
     atr_t = float((trigger_df["high"] - trigger_df["low"]).tail(14).mean())

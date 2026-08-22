@@ -1202,6 +1202,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     lo, hi = sorted(map(float, zone))
                     ax.fill_between([max(0,count-35), count+future-.5], lo, hi, color=CHART_THEME["liquidity"], alpha=.08, zorder=1)
                     notes.append(("RETEST ZONE", CHART_THEME["liquidity"]))
+                watch_points = md.get("viva_watch_points") or []
+                if len(watch_points) == 2:
+                    xs, ys = [], []
+                    for point in watch_points:
+                        xs.append(float(np.searchsorted(frame.index, pd.Timestamp(str(point.get("timestamp"))))))
+                        ys.append(float(point["price"]))
+                    slope, intercept = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
+                    ax.plot([xs[0], count + future - .5], [slope*xs[0]+intercept, slope*(count+future-.5)+intercept], color=CHART_THEME["liquidity"], linewidth=1.25, linestyle=(0,(3,3)), alpha=.85, zorder=6)
+                    ax.scatter(xs, ys, s=22, color=CHART_THEME["panel"], edgecolors=CHART_THEME["liquidity"], linewidths=1.0, zorder=9)
+                    notes.append(("2-PIVOT WATCH · NO ENTRY", CHART_THEME["liquidity"]))
                 score = md.get("viva_final_score")
                 if score is not None:
                     notes.append((f"VIVA SCORE  {float(score):.1f}/10", CHART_THEME["text"]))
