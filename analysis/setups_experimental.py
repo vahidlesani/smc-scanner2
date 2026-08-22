@@ -271,7 +271,11 @@ def detect_trendline_breakout(bundle: MarketBundle, style: str) -> Optional[Sign
     last_open = float(context_df["open"].iloc[-1])
 
     for direction in ("LONG", "SHORT"):
-        fit = _fit_channel_line(context_df, direction)
+        if getattr(settings, "viva_tlbreak_enabled", False):
+            from analysis.viva_tlbreak import fit_viva_breakout_line
+            fit = fit_viva_breakout_line(context_df, direction)
+        else:
+            fit = _fit_channel_line(context_df, direction)
         if not fit:
             continue
         atr_c = fit["atr"]
@@ -375,7 +379,8 @@ def detect_trendline_breakout(bundle: MarketBundle, style: str) -> Optional[Sign
                 pattern = "CHANNEL"
         pattern_fa = {"TRIANGLE": "الگوی مثلث", "WEDGE": "الگوی وج",
                       "CHANNEL": "کانال داینامیک", "TRENDLINE": "ترندلاین داینامیک"}[pattern]
-        candidate.strategy_fa = ("شکست " if stage == "JUST_BROKE" else "برخوردِ نزدیک به ") + pattern_fa
+        viva_mode = bool(getattr(settings, "viva_tlbreak_enabled", False))
+        candidate.strategy_fa = ("VIVA-TLBREAK | " if viva_mode else "") + (("شکست " if stage == "JUST_BROKE" else "برخوردِ نزدیک به ") + pattern_fa)
         candidate.metadata.update({
             "tl_a_index": int(fit["a"]["index"]), "tl_a_price": float(fit["a"]["price"]),
             "tl_a_ts": str(fit["a"].get("timestamp", "")),
@@ -390,6 +395,8 @@ def detect_trendline_breakout(bundle: MarketBundle, style: str) -> Optional[Sign
             "tl_base_kind": base["kind"] if stage == "JUST_BROKE" else "LINE_WATCH",
             "tl_pattern": pattern,
             "tl_pattern_fa": pattern_fa,
+            "strategy_variant": "VIVA_TLBREAK" if viva_mode else "LEGACY_TLBREAK",
+            "tl_fit_error_atr": float(fit.get("fit_error_atr", 0) or 0),
         })
         return candidate
     return None

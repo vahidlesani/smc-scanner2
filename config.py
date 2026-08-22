@@ -104,6 +104,7 @@ class Settings:
     experimental_p1234_symbols: str = "SOLUSDT"
     # Experimental TLBREAK (trendline/channel breakout) detector.
     experimental_tlbreak_enabled: bool = False
+    viva_tlbreak_enabled: bool = False
     experimental_tlbreak_symbols: str = ""  # empty = no symbol restriction
     tlbreak_min_adx: float = 0.0            # ADX(14) gate on context TF; 0 = off
     # Override the context timeframe for the channel lines (e.g. "1d" for the
@@ -199,6 +200,7 @@ class Settings:
             experimental_p1234_enabled=_bool("EXPERIMENTAL_P1234_ENABLED", cls.experimental_p1234_enabled),
             experimental_p1234_symbols=os.getenv("EXPERIMENTAL_P1234_SYMBOLS", cls.experimental_p1234_symbols),
             experimental_tlbreak_enabled=_bool("EXPERIMENTAL_TLBREAK_ENABLED", cls.experimental_tlbreak_enabled),
+            viva_tlbreak_enabled=_bool("VIVA_TLBREAK_ENABLED", cls.viva_tlbreak_enabled),
             experimental_tlbreak_symbols=os.getenv("EXPERIMENTAL_TLBREAK_SYMBOLS", cls.experimental_tlbreak_symbols),
             tlbreak_min_adx=_float("TLBREAK_MIN_ADX", cls.tlbreak_min_adx),
             tlbreak_tp1_height_frac=_float("TLBREAK_TP1_HEIGHT_FRAC", cls.tlbreak_tp1_height_frac),

@@ -135,3 +135,31 @@ def classify_pattern(upper: Optional[ValidatedLine], lower: Optional[ValidatedLi
     if upper.slope <= 0 and lower.slope <= 0:
         return "WEDGE_FALLING"
     return "TRIANGLE"
+
+
+def fit_viva_breakout_line(df: pd.DataFrame, direction: str, cfg: Optional[VivaTLBreakConfig] = None) -> Optional[dict]:
+    """Return a Scanner-2 compatible validated line for live paper alerts."""
+    cfg = cfg or load_config()
+    side: Literal["HIGH", "LOW"] = "HIGH" if str(direction).upper() == "LONG" else "LOW"
+    line = fit_validated_line(df, side, cfg)
+    if line is None:
+        return None
+    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right)
+    opposite = lows if side == "HIGH" else highs
+    after = [p for p in opposite if p["index"] > line.first_index]
+    if not after:
+        return None
+    anchor = (min if side == "HIGH" else max)(after, key=lambda p: float(p["price"]))
+    n = len(df)
+    bound_now = float(anchor["price"] + line.slope * (n - 1 - anchor["index"]))
+    line_now = line.price_at(n - 1)
+    height = line_now - bound_now if side == "HIGH" else bound_now - line_now
+    atr = _atr(df)
+    if height < 1.5 * atr or height > 25 * atr:
+        return None
+    return {
+        "a": line.points[0], "b": line.points[-1], "anchor": anchor,
+        "slope": line.slope, "line_now": line_now, "line_prev": line.price_at(n - 2),
+        "bound_now": bound_now, "height": height, "touches": line.touch_count,
+        "forward_touches": 0, "fit_error_atr": line.fit_residual_atr, "atr": atr,
+    }

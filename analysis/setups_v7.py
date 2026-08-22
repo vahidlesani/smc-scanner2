@@ -996,7 +996,7 @@ def _active_detectors() -> List:
         import analysis.setups_experimental as exp
         if getattr(SETTINGS, "experimental_p1234_enabled", False):
             detectors.extend(exp.EXPERIMENTAL_DETECTORS)
-        if getattr(SETTINGS, "experimental_tlbreak_enabled", False):
+        if getattr(SETTINGS, "experimental_tlbreak_enabled", False) or getattr(SETTINGS, "viva_tlbreak_enabled", False):
             detectors.extend(exp.TLBREAK_DETECTORS)
         if getattr(SETTINGS, "pinv_enabled", True):
             detectors.extend(exp.PINVAL_DETECTORS)
