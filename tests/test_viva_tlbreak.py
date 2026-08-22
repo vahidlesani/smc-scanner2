@@ -103,3 +103,17 @@ from analysis.viva_tlbreak import fit_two_pivot_watch
 
 def test_two_pivot_watch_never_claims_valid_line_on_monotonic_data():
     assert fit_two_pivot_watch(_frame(), "HIGH") is None
+
+from analysis.viva_tlbreak_replay import walk_forward
+
+
+def test_walk_forward_never_exposes_future_rows():
+    frame = _frame()
+    seen = []
+    def evaluator(window):
+        seen.append(len(window))
+        return type("E", (), {"state":"WATCH", "pattern":"TRENDLINE", "final_score":2.0, "disqualified_reason":""})()
+    events = walk_forward(frame, evaluator, warmup=60)
+    assert events
+    assert seen[0] == 61
+    assert seen[-1] == len(frame)
