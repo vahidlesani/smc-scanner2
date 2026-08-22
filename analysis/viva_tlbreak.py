@@ -235,3 +235,85 @@ def structure_score(line: ValidatedLine, cfg: Optional[VivaTLBreakConfig] = None
     if span >= cfg.pivot_left * 6:
         score += 0.6
     return min(2.0, score)
+
+@dataclass(frozen=True)
+class RetestAssessment:
+    retest_index: int
+    line_price: float
+    rejection_kind: str
+    reentry_atr: float
+    score: float
+    passed: bool
+
+
+def assess_retest_rejection(
+    trigger_df: pd.DataFrame,
+    line: ValidatedLine,
+    direction: str,
+    *,
+    breakout_index: int,
+    pattern_height: float,
+    max_window_bars: int,
+) -> Optional[RetestAssessment]:
+    """Find first retest of broken line/base and a closed rejection candle."""
+    atr = _atr(trigger_df)
+    if atr <= 0 or pattern_height <= 0:
+        return None
+    is_long = str(direction).upper() == "LONG"
+    end = min(len(trigger_df), breakout_index + max_window_bars + 1)
+    for i in range(breakout_index + 1, end):
+        row = trigger_df.iloc[i]
+        prev = trigger_df.iloc[i - 1]
+        line_price = line.price_at(i)
+        touches = float(row["low"]) <= line_price + 0.15 * atr and float(row["high"]) >= line_price - 0.15 * atr
+        if not touches:
+            continue
+        # Retest cannot close deeply back inside the old structure.
+        reentry = (line_price - float(row["close"])) if is_long else (float(row["close"]) - line_price)
+        if reentry > 0.50 * pattern_height:
+            return RetestAssessment(i, line_price, "DEEP_REENTRY", reentry / atr, 0.0, False)
+        body = abs(float(row["close"]) - float(row["open"]))
+        rng = max(float(row["high"]) - float(row["low"]), 1e-12)
+        if is_long:
+            pin = float(row["close"]) >= float(row["low"]) + .65 * rng and (min(float(row["open"]), float(row["close"])) - float(row["low"])) >= .55 * rng
+            engulf = float(prev["close"]) < float(prev["open"]) and float(row["close"]) > float(row["open"]) and float(row["open"]) <= float(prev["close"])
+            close_reclaim = float(row["close"]) >= line_price
+        else:
+            pin = float(row["close"]) <= float(row["high"]) - .65 * rng and (float(row["high"]) - max(float(row["open"]), float(row["close"]))) >= .55 * rng
+            engulf = float(prev["close"]) > float(prev["open"]) and float(row["close"]) < float(row["open"]) and float(row["open"]) >= float(prev["close"])
+            close_reclaim = float(row["close"]) <= line_price
+        if pin:
+            return RetestAssessment(i, line_price, "PIN_REJECTION", reentry / atr, 2.0, True)
+        if engulf and body >= .40 * atr:
+            return RetestAssessment(i, line_price, "ENGULF_REJECTION", reentry / atr, 2.0, True)
+        if close_reclaim and body >= .35 * atr:
+            return RetestAssessment(i, line_price, "CLOSE_RECLAIM", reentry / atr, 1.3, True)
+    return None
+
+
+@dataclass(frozen=True)
+class MicroBOSAssessment:
+    index: int
+    level: float
+    body_atr: float
+    passed: bool
+
+
+def assess_micro_bos(confirm_df: pd.DataFrame, direction: str, *, not_before_index: int) -> Optional[MicroBOSAssessment]:
+    """Closed 5M BOS after rejection; no same-candle hindsight."""
+    atr = _atr(confirm_df)
+    if atr <= 0:
+        return None
+    is_long = str(direction).upper() == "LONG"
+    for i in range(max(3, not_before_index + 1), len(confirm_df)):
+        row = confirm_df.iloc[i]
+        prev_window = confirm_df.iloc[max(not_before_index, i - 3):i]
+        if prev_window.empty:
+            continue
+        level = float(prev_window["high"].max()) if is_long else float(prev_window["low"].min())
+        body = abs(float(row["close"]) - float(row["open"]))
+        directional = float(row["close"]) > float(row["open"]) if is_long else float(row["close"]) < float(row["open"])
+        broken = float(row["close"]) > level if is_long else float(row["close"]) < level
+        if directional and broken and body >= .40 * atr:
+            return MicroBOSAssessment(i, level, body / atr, True)
+    return None

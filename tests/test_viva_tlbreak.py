@@ -38,3 +38,21 @@ def test_closed_breakout_scores_only_closed_directional_strength():
 def test_structure_score_rewards_validated_not_two_point_line():
     line = ValidatedLine("HIGH", -0.1, 100, 3, 0.1, 1, 35, tuple())
     assert structure_score(line) >= 1.0
+
+from analysis.viva_tlbreak import RetestAssessment, assess_retest_rejection, assess_micro_bos
+
+
+def test_retest_rejection_and_micro_bos_are_separate_states():
+    rows=[]
+    for i in range(40):
+        rows.append({"timestamp":pd.Timestamp("2026-01-01")+pd.Timedelta(minutes=15*i),"open":100.,"high":101.,"low":99.,"close":100.,"volume":1000.,"turnover":100000.})
+    # breakout candle, retest pin, then BOS
+    rows[30].update({"open":100.,"high":104.,"low":99.8,"close":103.5})
+    rows[31].update({"open":101.,"high":101.5,"low":99.6,"close":101.3})
+    rows[32].update({"open":101.2,"high":103.5,"low":101.,"close":103.2})
+    df=pd.DataFrame(rows)
+    line=ValidatedLine("HIGH",0.0,101.,3,.1,1,25,tuple())
+    retest=assess_retest_rejection(df,line,"LONG",breakout_index=30,pattern_height=4,max_window_bars=5)
+    assert retest is not None and retest.passed
+    bos=assess_micro_bos(df,"LONG",not_before_index=retest.retest_index)
+    assert bos is not None and bos.passed
