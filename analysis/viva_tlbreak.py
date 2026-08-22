@@ -163,3 +163,75 @@ def fit_viva_breakout_line(df: pd.DataFrame, direction: str, cfg: Optional[VivaT
         "bound_now": bound_now, "height": height, "touches": line.touch_count,
         "forward_touches": 0, "fit_error_atr": line.fit_residual_atr, "atr": atr,
     }
+
+@dataclass(frozen=True)
+class BreakoutAssessment:
+    direction: str
+    line_price: float
+    close: float
+    body_atr: float
+    body_range_ratio: float
+    outer_close: bool
+    beyond_atr: float
+    passed: bool
+    score: float
+    reasons: tuple[str, ...]
+
+
+def assess_closed_breakout(
+    trigger_df: pd.DataFrame,
+    line: ValidatedLine,
+    direction: str,
+) -> Optional[BreakoutAssessment]:
+    """Closed-candle breakout score from the Viva config contract.
+
+    This is deliberately independent from entry/retest. A valid break is only
+    state S2; it never becomes an executable signal by itself.
+    """
+    if len(trigger_df) < 20:
+        return None
+    atr = _atr(trigger_df)
+    if atr <= 0:
+        return None
+    row = trigger_df.iloc[-1]
+    close, opn = float(row["close"]), float(row["open"])
+    high, low = float(row["high"]), float(row["low"])
+    rng = max(high - low, 1e-12)
+    body = abs(close - opn)
+    line_price = line.price_at(len(trigger_df) - 1)
+    is_long = str(direction).upper() == "LONG"
+    beyond = (close - line_price) / atr if is_long else (line_price - close) / atr
+    directional = close > opn if is_long else close < opn
+    outer_close = (close >= high - 0.30 * rng) if is_long else (close <= low + 0.30 * rng)
+    body_ratio = body / rng
+    reasons = []
+    score = 0.0
+    if beyond >= 0.25:
+        score += 0.8; reasons.append("close beyond line >= 0.25 ATR")
+    if body_ratio >= 0.50:
+        score += 0.6; reasons.append("body/range >= 0.50")
+    if outer_close:
+        score += 0.6; reasons.append("close in outer 30%")
+    passed = directional and score >= 1.4
+    return BreakoutAssessment(
+        direction="LONG" if is_long else "SHORT", line_price=line_price,
+        close=close, body_atr=body / atr, body_range_ratio=body_ratio,
+        outer_close=outer_close, beyond_atr=beyond, passed=passed,
+        score=score, reasons=tuple(reasons),
+    )
+
+
+def structure_score(line: ValidatedLine, cfg: Optional[VivaTLBreakConfig] = None) -> float:
+    """0..2 structure-quality score: touch count, residual and pattern span."""
+    cfg = cfg or load_config()
+    score = 0.0
+    if line.touch_count >= 4:
+        score += 0.7
+    elif line.touch_count >= cfg.min_touches:
+        score += 0.4
+    if line.fit_residual_atr <= cfg.max_fit_residual_atr:
+        score += 0.7
+    span = line.last_index - line.first_index
+    if span >= cfg.pivot_left * 6:
+        score += 0.6
+    return min(2.0, score)
