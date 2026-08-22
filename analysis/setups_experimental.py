@@ -340,6 +340,10 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             "viva_structural_target": plan.structural_target, "viva_state": "S2_BREAKOUT_CLOSED",
             "tl_context_tf": refine_tf, "tl_pattern": pattern, "tl_pattern_fa": pattern,
             "tl_line": breakout.line_price, "tl_touches": line.touch_count,
+            "viva_upper_points": [dict(p) for p in (upper.points if upper else ())],
+            "viva_lower_points": [dict(p) for p in (lower.points if lower else ())],
+            "viva_breakout_line": breakout.line_price,
+            "viva_retest_zone": [poi["bottom"], poi["top"]],
         })
         return candidate
     return None

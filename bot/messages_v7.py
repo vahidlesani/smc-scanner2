@@ -1174,6 +1174,40 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception as exc:
                 print(f"Range overlay warning: {exc}")
 
+        # ── VIVA-TLBREAK validated geometry overlay ─────────────────────
+        if md.get("strategy_variant") == "VIVA_TLBREAK":
+            try:
+                for key, color, label in (("viva_upper_points", CHART_THEME["supply"], "VALID UPPER LINE"), ("viva_lower_points", CHART_THEME["demand"], "VALID LOWER LINE")):
+                    points = md.get(key) or []
+                    if len(points) < 2:
+                        continue
+                    xs, ys = [], []
+                    for point in points:
+                        ts = pd.Timestamp(str(point.get("timestamp")))
+                        x = float(np.searchsorted(frame.index, ts))
+                        xs.append(x); ys.append(float(point["price"]))
+                    if len(xs) < 2:
+                        continue
+                    slope, intercept = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
+                    x0, x1 = min(xs), count + future - .5
+                    ax.plot([x0, x1], [slope*x0+intercept, slope*x1+intercept], color=color, linewidth=1.65, alpha=.90, zorder=7, solid_capstyle="round")
+                    ax.scatter(xs, ys, s=24, color=CHART_THEME["panel"], edgecolors=color, linewidths=1.1, zorder=9)
+                    notes.append((f"{label} · {len(xs)} PIVOTS", color))
+                line = md.get("viva_breakout_line") or md.get("viva_break_line")
+                if line:
+                    ax.hlines(float(line), max(0, count-45), count+future-.5, color=CHART_THEME["structure"], linewidth=1.15, linestyles=(0,(5,3)), zorder=6)
+                    notes.append((f"BREAK LINE  {_price(float(line))}", CHART_THEME["structure"]))
+                zone = md.get("viva_retest_zone")
+                if zone and len(zone) == 2:
+                    lo, hi = sorted(map(float, zone))
+                    ax.fill_between([max(0,count-35), count+future-.5], lo, hi, color=CHART_THEME["liquidity"], alpha=.08, zorder=1)
+                    notes.append(("RETEST ZONE", CHART_THEME["liquidity"]))
+                score = md.get("viva_final_score")
+                if score is not None:
+                    notes.append((f"VIVA SCORE  {float(score):.1f}/10", CHART_THEME["text"]))
+            except Exception as exc:
+                print(f"Viva TLBREAK overlay warning: {exc}")
+
         # ── Viva v7.6 · dynamic trendline/channel on every chart ─────────
         # The same fitter that powers TLBREAK, projected onto whatever frame
         # is being drawn — dashed so it never fights a TLBREAK alert's own
