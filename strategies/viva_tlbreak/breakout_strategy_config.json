@@ -1,0 +1,282 @@
+{
+  "strategy_name": "Dynamic Structure Breakout System",
+  "version": "1.0",
+  "scope": "Trendline / Channel / Rising-Falling Wedge / Symmetrical-Ascending-Descending Triangle / Horizontal S-R breakouts, bullish and bearish, crypto perpetual/spot",
+  "disclaimer_no_profit_guarantee": "Rule-based framework only. Requires walk-forward backtest + real-time demo validation before live capital. No parameter set guarantees win rate.",
+
+  "asset_universe": {
+    "source": "CoinMarketCap top 80 by market cap",
+    "exchanges": ["OKX", "Bybit"],
+    "min_24h_quote_volume_usd": 20000000,
+    "min_avg_bar_volume_percentile_vs_symbol_own_history": 40,
+    "exclude_categories": ["stablecoin_pairs", "new_listing_younger_than_30_days", "delisting_or_low_depth_flagged"],
+    "rescan_interval": "daily_00_00_utc",
+    "session_model": "24_7_no_session_close",
+    "low_liquidity_hours_utc_flag": ["00:00-04:00"],
+    "low_liquidity_hour_score_penalty": -0.5
+  },
+
+  "data_feeds_required_live": {
+    "ohlcv": ["1m", "5m", "15m", "1h", "4h", "1d"],
+    "indicators": ["RSI_14", "ATR_14", "EMA_20", "EMA_50", "VOLUME", "VOLUME_SMA_20"],
+    "source": "OKX / Bybit REST + WebSocket"
+  },
+
+  "timeframe_profiles": {
+    "swing": {
+      "position_type": "swing",
+      "structure_tf": "1D",
+      "refine_tf": "4H",
+      "trigger_tf": "1H",
+      "monitor_confirmation_tf": ["5m"],
+      "min_pattern_length_bars_on_structure_tf": 15,
+      "max_pattern_length_bars_on_structure_tf": 90,
+      "retest_window_bars_on_trigger_tf": 24,
+      "max_extension_atr_multiple_without_retest": 2.0,
+      "atr_period_for_buffers": 14,
+      "atr_tf_for_buffers": "refine_tf"
+    },
+    "daytrade": {
+      "position_type": "intraday",
+      "structure_tf": "4H",
+      "refine_tf": "1H",
+      "trigger_tf": "15m",
+      "monitor_confirmation_tf": ["1m", "5m"],
+      "min_pattern_length_bars_on_structure_tf": 12,
+      "max_pattern_length_bars_on_structure_tf": 80,
+      "retest_window_bars_on_trigger_tf": 16,
+      "max_extension_atr_multiple_without_retest": 1.5,
+      "atr_period_for_buffers": 14,
+      "atr_tf_for_buffers": "refine_tf"
+    }
+  },
+
+  "pivot_detection": {
+    "method": "fractal_swing_pivot",
+    "left_bars": 5,
+    "right_bars": 5,
+    "min_touches_required_per_line": 3,
+    "touch_tolerance_atr_fraction": 0.15,
+    "line_fit_method": "linear_regression_on_confirmed_pivots",
+    "max_line_fit_residual_atr_fraction": 0.25
+  },
+
+  "pattern_types": {
+    "trendline": {
+      "definition": "single dynamic line connecting >=3 swing highs (descending, resistance) or >=3 swing lows (ascending, support)",
+      "bullish_breakout_condition": "descending_trendline broken upward",
+      "bearish_breakout_condition": "ascending_trendline broken downward",
+      "min_slope_abs_deg_on_chart_normalized": 3,
+      "max_slope_abs_deg_on_chart_normalized": 75
+    },
+    "channel": {
+      "definition": "two near-parallel lines, upper from swing highs, lower from swing lows",
+      "parallel_tolerance_pct": 15,
+      "bullish_breakout_condition": "close above upper_channel_line while channel_slope <= 0 (descending or flat channel) OR close above upper_line after channel accumulation",
+      "bearish_breakout_condition": "close below lower_channel_line while channel_slope >= 0 (ascending or flat channel)",
+      "note": "breakout in direction opposite the prevailing channel slope is weighted higher (trend-exhaustion breakout); breakout in direction of channel slope (continuation) uses standard weights"
+    },
+    "wedge_rising": {
+      "definition": "two converging upward-sloping lines, both positive slope, upper slope < lower slope magnitude convergence",
+      "expected_breakout_direction": "bearish",
+      "bearish_breakout_condition": "close below lower_wedge_line",
+      "counter_bias_bullish_breakout_allowed": true,
+      "counter_bias_score_penalty": -1.0
+    },
+    "wedge_falling": {
+      "definition": "two converging downward-sloping lines, both negative slope",
+      "expected_breakout_direction": "bullish",
+      "bullish_breakout_condition": "close above upper_wedge_line",
+      "counter_bias_bearish_breakout_allowed": true,
+      "counter_bias_score_penalty": -1.0
+    },
+    "triangle_symmetrical": {
+      "definition": "upper line negative slope, lower line positive slope, converging toward apex",
+      "breakout_direction": "either, determined by first valid close beyond a line",
+      "apex_proximity_filter": "do not score entries within final 10% of triangle length before apex (too tight, low reliability)"
+    },
+    "triangle_ascending": {
+      "definition": "upper line ~flat (abs slope < 5% of pattern height per bar), lower line positive slope",
+      "expected_breakout_direction": "bullish",
+      "counter_bias_score_penalty": -1.0
+    },
+    "triangle_descending": {
+      "definition": "lower line ~flat, upper line negative slope",
+      "expected_breakout_direction": "bearish",
+      "counter_bias_score_penalty": -1.0
+    },
+    "horizontal_sr": {
+      "definition": "flat line from >=3 touches at highs (resistance) or lows (support), tolerance band = touch_tolerance_atr_fraction",
+      "bullish_breakout_condition": "close above resistance",
+      "bearish_breakout_condition": "close below support"
+    }
+  },
+
+  "scoring_system": {
+    "max_base_score": 10.0,
+    "entry_score_threshold": 7.0,
+    "components": {
+      "structure_quality": {
+        "max_points": 2.0,
+        "criteria": [
+          {"name": "touch_count_gte_4_each_line", "points": 0.7},
+          {"name": "line_fit_residual_within_tolerance", "points": 0.7},
+          {"name": "pattern_length_within_min_max_bars", "points": 0.6}
+        ]
+      },
+      "breakout_candle_strength": {
+        "max_points": 2.0,
+        "criteria": [
+          {"name": "close_beyond_line_by_gte_0_25_atr", "points": 0.8},
+          {"name": "candle_body_to_range_ratio_gte_0_5", "points": 0.6},
+          {"name": "close_in_outer_30pct_of_candle_range_in_breakout_direction", "points": 0.6}
+        ]
+      },
+      "retest_confirmation": {
+        "max_points": 2.0,
+        "criteria": [
+          {"name": "retest_occurs_within_retest_window_bars", "points": 0.6},
+          {"name": "retest_does_not_close_back_beyond_50pct_of_pattern_height_past_line", "points": 0.7},
+          {"name": "reversal_candle_pattern_at_retest_confirmation_tf", "points": 0.7}
+        ],
+        "no_retest_alternative": "if aggressive_entry_mode is true, this component is scored 0 and entry_logic.aggressive_entry rules apply instead"
+      },
+      "volume_confirmation": {
+        "max_points": 1.5,
+        "criteria": [
+          {"name": "breakout_candle_volume_gte_1_5x_volume_sma_20", "points": 1.0},
+          {"name": "retest_candle_volume_lt_breakout_candle_volume", "points": 0.5}
+        ]
+      },
+      "multi_timeframe_alignment": {
+        "max_points": 1.5,
+        "criteria": [
+          {"name": "structure_tf_trend_direction_matches_breakout_direction", "points": 1.0},
+          {"name": "refine_tf_ema20_slope_matches_breakout_direction", "points": 0.5}
+        ],
+        "counter_trend_breakout_rule": "if structure_tf trend opposes breakout direction, do not zero this component; instead require retest_confirmation and volume_confirmation to both score their full max_points, else disqualify"
+      },
+      "rsi_confirmation": {
+        "max_points": 1.0,
+        "criteria": [
+          {"name": "rsi_14_on_trigger_tf_above_50_for_bullish_or_below_50_for_bearish", "points": 0.5},
+          {"name": "rsi_14_not_in_extreme_zone_gte_75_or_lte_25_at_breakout_candle_unless_pattern_is_reversal_type", "points": 0.5}
+        ]
+      }
+    },
+    "bonus_modifiers": {
+      "key_level_confluence": {"points": 0.5, "condition": "breakout level within touch_tolerance_atr_fraction of a prior major HTF swing high/low or round number"}
+    },
+    "penalty_modifiers": {
+      "recent_failed_breakout_same_level": {"points": -1.5, "condition": "a breakout attempt at the same line within the last min(10, retest_window_bars) trigger_tf bars already failed (closed back inside structure)"},
+      "low_liquidity_hour": {"points": -0.5, "condition": "current UTC hour in asset_universe.low_liquidity_hours_utc_flag"},
+      "over_extension_without_retest": {"points": "auto_disqualify", "condition": "price extended beyond breakout line by more than max_extension_atr_multiple_without_retest before any retest occurred"}
+    },
+    "final_score_formula": "final_score = sum(components achieved points) + bonus_modifiers achieved - penalty_modifiers triggered",
+    "entry_decision_rule": "consider_entry = (final_score >= entry_score_threshold) AND (no auto_disqualify penalty triggered) AND (risk_management.min_risk_reward_ratio satisfied by planned TP1/SL)"
+  },
+
+  "entry_logic": {
+    "default_mode": "breakout_plus_retest",
+    "breakout_plus_retest": {
+      "step_1": "on structure_tf, detect and validate pattern per pattern_types + pivot_detection rules",
+      "step_2": "on refine_tf, recompute line coordinates with higher-resolution pivots, track price approach to line",
+      "step_3": "on trigger_tf, detect breakout candle satisfying breakout_candle_strength criteria",
+      "step_4": "on monitor_confirmation_tf, watch for retest of the broken line within retest_window_bars_on_trigger_tf (converted to monitor_tf bars)",
+      "step_5_entry_trigger": "enter on close of the first reversal-confirmation candle at retest on monitor_confirmation_tf, OR via resting limit order at broken_line_price +/- 0.1*ATR in the breakout direction",
+      "cancel_condition": "if retest closes beyond invalidation defined in scoring_system.retest_confirmation, cancel and mark pattern as failed_breakout for penalty tracking"
+    },
+    "aggressive_entry_mode": {
+      "enabled_by_default": false,
+      "condition_to_allow": "final_score computed WITHOUT retest_confirmation component >= (entry_score_threshold + 1.0), i.e. stronger evidence bar required",
+      "entry_trigger": "enter on the close of the breakout candle itself on trigger_tf",
+      "note": "higher win-rate variance; recommend backtesting both modes separately per symbol/timeframe profile before choosing default"
+    },
+    "max_concurrent_setups_per_symbol": 1,
+    "cooldown_after_stopped_out_bars_on_structure_tf": 5,
+    "monthly_signal_cap": "none — frequency is an output of scoring thresholds and asset universe size, not a fixed artificial limit"
+  },
+
+  "stop_loss": {
+    "buffer_atr_multiple": 0.35,
+    "buffer_atr_tf": "refine_tf",
+    "placement_by_pattern": {
+      "trendline": "beyond the last confirmed swing pivot that formed the broken line, minus/plus buffer",
+      "channel": "beyond the opposite channel boundary's nearest recent touch, or beyond last swing pivot on the broken side, whichever is closer to entry while still beyond structure",
+      "wedge_rising": "for bearish breakout: above the most recent lower-high pivot inside the wedge, plus buffer",
+      "wedge_falling": "for bullish breakout: below the most recent higher-low pivot inside the wedge, minus buffer",
+      "triangle_symmetrical": "beyond the most recent pivot on the broken side, or 50% retracement of triangle height at breakout x-coordinate, whichever is tighter but still beyond structure",
+      "triangle_ascending": "for bullish breakout: below the last higher-low pivot of the rising lower line, minus buffer",
+      "triangle_descending": "for bearish breakout: above the last lower-high pivot of the falling upper line, plus buffer",
+      "horizontal_sr": "beyond the flat line by buffer, using the far edge of the touch_tolerance band, not the exact line"
+    },
+    "max_allowed_risk_pct_of_account": 1.0,
+    "if_sl_distance_exceeds_max_risk": "reduce position size to fit max_allowed_risk_pct_of_account; never widen the structural stop to fit a fixed position size"
+  },
+
+  "take_profit": {
+    "tp1": {
+      "method": "measured_move",
+      "definition": "pattern_height (max_high - min_low of the pattern on structure_tf) projected from the breakout price in the breakout direction",
+      "close_position_pct_at_tp1": 40
+    },
+    "tp2": {
+      "method": "next_structural_level",
+      "definition": "nearest opposing major swing high/low or channel boundary on structure_tf beyond tp1",
+      "close_position_pct_at_tp2": 35
+    },
+    "tp3_runner": {
+      "method": "trailing_stop_managed",
+      "close_position_pct": 25,
+      "managed_by": "trailing_stop section"
+    },
+    "min_risk_reward_ratio_tp1_vs_sl": 1.5,
+    "if_rr_below_minimum": "do not enter regardless of score"
+  },
+
+  "trailing_stop": {
+    "activation_rule": "move SL to entry + 0.1*ATR (breakeven+buffer) once price reaches 1.0R profit; begin active trailing once price reaches TP1",
+    "methods": {
+      "structure_based": {
+        "description": "after TP1, on refine_tf, each newly confirmed swing pivot in favor of the trade becomes the new SL reference (beyond that pivot by buffer_atr_multiple)",
+        "recompute_trigger": "on close of each new confirmed refine_tf swing pivot"
+      },
+      "atr_chandelier": {
+        "description": "alternative/parallel method for the tp3_runner portion",
+        "formula_long": "trail_stop = highest_close_since_entry - atr_multiplier * ATR_14(refine_tf)",
+        "formula_short": "trail_stop = lowest_close_since_entry + atr_multiplier * ATR_14(refine_tf)",
+        "atr_multiplier": 2.5
+      },
+      "selection_rule": "use structure_based as primary; use atr_chandelier trail if structure_based has not produced a new pivot within 2x the structure_tf's typical pivot spacing (fallback to avoid stagnant stop)"
+    }
+  },
+
+  "invalidation_and_disqualifiers": {
+    "pattern_disqualified_if": [
+      "min_touches_required_per_line not met",
+      "pattern_length_bars outside min/max range",
+      "price already extended beyond max_extension_atr_multiple_without_retest before evaluation",
+      "symbol fails asset_universe liquidity/volume filters at evaluation time"
+    ],
+    "signal_disqualified_if": [
+      "final_score < entry_score_threshold",
+      "min_risk_reward_ratio_tp1_vs_sl not met",
+      "max_concurrent_setups_per_symbol already open",
+      "symbol still in cooldown_after_stopped_out_bars_on_structure_tf"
+    ]
+  },
+
+  "risk_management": {
+    "max_risk_per_trade_pct_of_account": 1.0,
+    "max_concurrent_open_risk_pct_of_account": 4.0,
+    "position_sizing_formula": "position_size = (account_equity * max_risk_per_trade_pct_of_account/100) / sl_distance_in_price"
+  },
+
+  "backtest_and_validation_protocol": {
+    "phase_1_historical_backtest": "walk-forward test on >=18 months of 1m-1d data across the full asset_universe, per timeframe_profile separately",
+    "phase_2_realtime_demo": "minimum 60 signals or 60 calendar days (whichever is longer) on demo/paper account with live data feeds before touching real capital",
+    "phase_3_live_small_size": "start at <=25% of intended max_risk_per_trade_pct_of_account for the first 30 live signals",
+    "metrics_to_track": ["win_rate", "avg_R_multiple", "expectancy", "max_drawdown", "sl_touch_rate", "tp1_touch_rate", "score_bucket_performance (7-8 vs 8-9 vs 9-10)"],
+    "reoptimization_rule": "re-tune atr multipliers and score weights only after >=100 closed signals in a given phase, using out-of-sample data, never in-sample only"
+  }
+}
