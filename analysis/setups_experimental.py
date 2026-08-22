@@ -266,7 +266,7 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
     then waits for the configured retest/5M confirmation.
     """
     from analysis.viva_tlbreak import (
-        build_pattern_plan, classify_pattern, fit_validated_line,
+        build_pattern_plan, classify_pattern, fit_validated_line, fit_two_pivot_watch,
         assess_projected_breakout, score_confluences, structure_score,
         pattern_length_ok, pattern_geometry_ok, recent_failed_breakout_penalty,
     )
@@ -277,6 +277,28 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
     upper = fit_validated_line(refine_df, "HIGH")
     lower = fit_validated_line(refine_df, "LOW")
     if upper is None and lower is None:
+        # Two-pivot preview: visible chart watch only, never lifecycle/entry.
+        for direction, side in (("LONG", "HIGH"), ("SHORT", "LOW")):
+            watch = fit_two_pivot_watch(refine_df, side)
+            if watch is None:
+                continue
+            line_price = watch.price_at(len(refine_df) - 1)
+            atr_watch = float((trigger_df["high"] - trigger_df["low"]).tail(14).mean())
+            if atr_watch <= 0:
+                continue
+            candidate = SignalCandidate(
+                signal_id=f"viva-vtlwatch-{bundle.symbol}-{trigger_tf}-{str(trigger_df['timestamp'].iloc[-1])[:16]}",
+                symbol=bundle.symbol, style=str(style).upper(), setup_code="TLBREAK",
+                setup_name="VIVA TLBREAK 2-Pivot Watch", strategy_fa="VIVA-TLBREAK | خط دوپیوتی در انتظار اعتبار", direction=direction,
+                score=6, status="EDUCATIONAL", entry_zone_bottom=line_price-.15*atr_watch,
+                entry_zone_top=line_price+.15*atr_watch, planned_entry=float(trigger_df['close'].iloc[-1]),
+                sl=float(trigger_df['low'].iloc[-1] if direction=="LONG" else trigger_df['high'].iloc[-1]),
+                tp1=0.0, tp2=0.0, rr_tp1=0.0, rr_tp2=0.0,
+                bias="BULLISH" if direction=="LONG" else "BEARISH", trigger_timeframe=trigger_tf,
+                mandatory_gates={"viva_watch_only": False},
+            )
+            candidate.metadata.update({"strategy_variant":"VIVA_TLBREAK","viva_state":"S0_WATCH","viva_pattern":"TWO_PIVOT_WATCH","viva_watch_line":line_price,"viva_touch_count":2,"public_code":generate_viva_public_code("TLBREAK", style)})
+            return candidate
         return None
     atr_t = float((trigger_df["high"] - trigger_df["low"]).tail(14).mean())
     if atr_t <= 0:
