@@ -258,8 +258,70 @@ def _intrabar_base(bundle: MarketBundle, context_df, trigger_tf: str, direction:
     return {"bottom": lo, "top": hi, "kind": "INTRABAR_BASE", "bars": n_in}
 
 
+def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
+    """Live-paper adapter for isolated Viva-TLBREAK v1.
+
+    Existing strategies are untouched. This creates a WATCH candidate only
+    after validated geometry and a closed trigger breakout; generic lifecycle
+    then waits for the configured retest/5M confirmation.
+    """
+    from analysis.viva_tlbreak import (
+        build_pattern_plan, classify_pattern, fit_validated_line,
+        assess_projected_breakout, score_confluences,
+    )
+    structure_tf, refine_tf, trigger_tf = timeframe_profile(style)
+    if not _ensure_frames(bundle, (structure_tf, refine_tf, trigger_tf)):
+        return None
+    structure_df, refine_df, trigger_df = bundle.get(structure_tf), bundle.get(refine_tf), bundle.get(trigger_tf)
+    upper = fit_validated_line(refine_df, "HIGH")
+    lower = fit_validated_line(refine_df, "LOW")
+    if upper is None and lower is None:
+        return None
+    atr_t = float((trigger_df["high"] - trigger_df["low"]).tail(14).mean())
+    if atr_t <= 0:
+        return None
+    for direction, line in (("LONG", upper), ("SHORT", lower)):
+        if line is None:
+            continue
+        breakout = assess_projected_breakout(trigger_df, line, direction)
+        if breakout is None or not breakout.passed:
+            continue
+        pattern = classify_pattern(upper, lower, len(refine_df) - 1)
+        plan = build_pattern_plan(refine_df, upper, lower, direction)
+        if plan is None:
+            continue
+        poi = {"bottom": breakout.line_price - .15 * atr_t, "top": breakout.line_price + .15 * atr_t, "touches": 0, "type": f"VIVA {pattern} BREAK/RETEST"}
+        bias = structure_bias(structure_df, 5)
+        context = {"bias": bias.get("bias", "NEUTRAL")}
+        special = EvidenceItem("viva_tlbreak", "VIVA-TLBREAK شکست ساختاری", f"{pattern} با {line.touch_count} پیوت تاییدشده و خطای فیت {line.fit_residual_atr:.2f} ATR؛ کلوز شکست {breakout.beyond_atr:.2f} ATR بیرون خط است.", True, 2, level=breakout.line_price, timeframe=refine_tf)
+        impulse = {"index": len(trigger_df)-1, "level": breakout.line_price, "valid": True, "direction": "BULLISH" if direction=="LONG" else "BEARISH", "body_atr": breakout.body_atr, "volume_ratio": 1.0}
+        candidate = _base_candidate(bundle, style, "TLBREAK", direction, structure_tf, trigger_tf, context, poi, impulse, special, "viva_tlbreak_geometry", True)
+        if candidate is None:
+            continue
+        confluence = score_confluences(structure_df, refine_df, trigger_df, direction, retest_score=0.0)
+        # Counter trend is allowed only after the lifecycle gets full retest/BOS.
+        candidate.mandatory_gates["htf_alignment"] = True  # counter-trend is enforced by retest/BOS lifecycle, not a dead gate
+        candidate.mandatory_gates["viva_tlbreak_geometry"] = True
+        candidate.strategy_fa = f"VIVA-TLBREAK | شکست {pattern} در انتظار Retest و BOS پنج‌دقیقه"
+        candidate.metadata.update({
+            "strategy_variant": "VIVA_TLBREAK", "viva_pattern": pattern,
+            "viva_touch_count": line.touch_count, "viva_fit_error_atr": line.fit_residual_atr,
+            "viva_break_line": breakout.line_price, "viva_breakout_score": breakout.score,
+            "viva_breakout_body_atr": breakout.body_atr, "viva_counter_trend": confluence.counter_trend,
+            "viva_confluence_score": confluence.total, "viva_confluence": list(confluence.reasons),
+            "viva_stop_anchor": plan.stop_anchor, "viva_measured_target": plan.measured_target,
+            "viva_structural_target": plan.structural_target, "viva_state": "S2_BREAKOUT_CLOSED",
+            "tl_context_tf": refine_tf, "tl_pattern": pattern, "tl_pattern_fa": pattern,
+            "tl_line": breakout.line_price, "tl_touches": line.touch_count,
+        })
+        return candidate
+    return None
+
+
 def detect_trendline_breakout(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
     settings = get_settings()
+    if getattr(settings, "viva_tlbreak_enabled", False):
+        return detect_viva_tlbreak(bundle, style)
     override_tf = (getattr(settings, "tlbreak_context_tf", "") or "").strip()
     context_tf, _middle_tf, trigger_tf = timeframe_profile(style)
     context_tf = override_tf or context_tf
