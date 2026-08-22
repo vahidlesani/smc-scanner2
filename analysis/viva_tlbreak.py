@@ -452,3 +452,90 @@ def score_confluences(
         # Keep visible, but disallow entry at adapter stage.
     total = htf_score + ema_score + rsi_score + volume_score
     return ConfluenceScore(volume_score, rsi_score, ema_score, htf_score, counter, total, tuple(reasons))
+
+@dataclass(frozen=True)
+class VivaTLBreakEvaluation:
+    pattern: str
+    direction: str
+    structure_score: float
+    breakout: BreakoutAssessment
+    retest: Optional[RetestAssessment]
+    micro_bos: Optional[MicroBOSAssessment]
+    confluence: ConfluenceScore
+    plan: Optional[PatternPlan]
+    disqualified_reason: str = ""
+
+    @property
+    def final_score(self) -> float:
+        return min(10.0, self.structure_score + self.breakout.score + (self.retest.score if self.retest and self.retest.passed else 0.0) + self.confluence.total)
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.retest and self.retest.passed and self.micro_bos and self.micro_bos.passed and not self.disqualified_reason)
+
+
+def assess_projected_breakout(trigger_df: pd.DataFrame, line: ValidatedLine, direction: str) -> Optional[BreakoutAssessment]:
+    """Breakout candle against the refine-TF line projected by timestamp."""
+    if len(trigger_df) < 20:
+        return None
+    atr = _atr(trigger_df)
+    if atr <= 0:
+        return None
+    row = trigger_df.iloc[-1]
+    close, opn = float(row["close"]), float(row["open"])
+    high, low = float(row["high"]), float(row["low"])
+    rng, body = max(high-low, 1e-12), abs(close-opn)
+    line_price = line_price_at_time(line, row["timestamp"])
+    is_long = str(direction).upper() == "LONG"
+    beyond = (close-line_price)/atr if is_long else (line_price-close)/atr
+    directional = close > opn if is_long else close < opn
+    outer = close >= high-.30*rng if is_long else close <= low+.30*rng
+    ratio = body/rng
+    score = (0.8 if beyond>=.25 else 0)+(0.6 if ratio>=.50 else 0)+(0.6 if outer else 0)
+    reasons = tuple(x for x, ok in (("close beyond projected line",beyond>=.25),("body/range",ratio>=.50),("outer close",outer)) if ok)
+    return BreakoutAssessment("LONG" if is_long else "SHORT",line_price,close,body/atr,ratio,outer,beyond,directional and score>=1.4,score,reasons)
+
+
+def evaluate_viva_tlbreak(
+    structure_df: pd.DataFrame,
+    refine_df: pd.DataFrame,
+    trigger_df: pd.DataFrame,
+    confirm_df: pd.DataFrame,
+    direction: str,
+    *,
+    cfg: Optional[VivaTLBreakConfig] = None,
+) -> Optional[VivaTLBreakEvaluation]:
+    """Composite evaluator for the isolated strategy; still caller-controlled.
+
+    It produces a transparent assessment/candidate input and does not mutate
+    any existing scanner or global strategy.
+    """
+    cfg = cfg or load_config()
+    upper = fit_validated_line(refine_df, "HIGH", cfg)
+    lower = fit_validated_line(refine_df, "LOW", cfg)
+    chosen = upper if str(direction).upper()=="LONG" else lower
+    if chosen is None:
+        return None
+    pattern = classify_pattern(upper, lower, len(refine_df)-1)
+    breakout = assess_projected_breakout(trigger_df, chosen, direction)
+    if breakout is None:
+        return None
+    structure = structure_score(chosen, cfg)
+    # Retest is assessed on trigger data using a timestamp-projected line;
+    # use a temporary line whose index coordinate maps to trigger bars only
+    # for the local retest state. Price projection remains time-based above.
+    retest = None
+    if breakout.passed:
+        # We only evaluate the newest closed breakout here; subsequent scans
+        # advance the stored candidate state in the adapter layer.
+        synthetic = ValidatedLine(chosen.side, 0.0, breakout.line_price, chosen.touch_count, chosen.fit_residual_atr, 0, len(trigger_df)-1, chosen.points)
+        retest = assess_retest_rejection(trigger_df, synthetic, direction, breakout_index=len(trigger_df)-2, pattern_height=max(_atr(refine_df)*1.5, abs((upper.price_at(len(refine_df)-1) if upper else 0)-(lower.price_at(len(refine_df)-1) if lower else 0))), max_window_bars=cfg.retest_window_bars_daytrade)
+    micro = assess_micro_bos(confirm_df, direction, not_before_index=0) if retest and retest.passed else None
+    confluence = score_confluences(structure_df, refine_df, trigger_df, direction, retest_score=retest.score if retest else 0.0)
+    plan = build_pattern_plan(refine_df, upper, lower, direction) if breakout.passed else None
+    disqualify = ""
+    if breakout.beyond_atr > cfg.extension_cap_atr_daytrade:
+        disqualify = "OVER_EXTENSION_WITHOUT_RETEST"
+    if confluence.counter_trend and (not retest or retest.score < 2.0):
+        disqualify = "COUNTER_TREND_RETEST_INCOMPLETE"
+    return VivaTLBreakEvaluation(pattern, str(direction).upper(), structure, breakout, retest, micro, confluence, plan, disqualify)

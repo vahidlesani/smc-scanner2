@@ -87,3 +87,13 @@ def test_confluence_score_is_independent_from_pattern_score():
     frame = pd.DataFrame({"timestamp":idx,"open":[100+i*.1 for i in range(60)],"high":[101+i*.1 for i in range(60)],"low":[99+i*.1 for i in range(60)],"close":[100.5+i*.1 for i in range(60)],"volume":[1000]*59+[2000],"turnover":[100000]*60})
     out = score_confluences(frame, frame, frame, "LONG")
     assert out.total >= 0
+
+from analysis.viva_tlbreak import assess_projected_breakout
+
+
+def test_projected_breakout_uses_timestamp_line_price():
+    idx = pd.date_range("2026-01-01", periods=30, freq="15min")
+    df = pd.DataFrame({"timestamp":idx,"open":[100.]*30,"high":[101.]*29+[105.],"low":[99.]*30,"close":[100.]*29+[104.5],"volume":[1000.]*30,"turnover":[100000.]*30})
+    line = ValidatedLine("HIGH", -0.001, 102., 3, .1, 0, 20, ({"index":0,"price":102,"timestamp":idx[0]},{"index":20,"price":101.7,"timestamp":idx[20]}))
+    out = assess_projected_breakout(df,line,"LONG")
+    assert out and out.passed
