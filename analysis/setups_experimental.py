@@ -268,6 +268,7 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
     from analysis.viva_tlbreak import (
         build_pattern_plan, classify_pattern, fit_validated_line,
         assess_projected_breakout, score_confluences, structure_score,
+        pattern_length_ok, pattern_geometry_ok, recent_failed_breakout_penalty,
     )
     structure_tf, refine_tf, trigger_tf = timeframe_profile(style)
     if not _ensure_frames(bundle, (structure_tf, refine_tf, trigger_tf)):
@@ -286,7 +287,10 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         breakout = assess_projected_breakout(trigger_df, line, direction)
         if breakout is None or not breakout.passed:
             continue
-        pattern = classify_pattern(upper, lower, len(refine_df) - 1)
+        geometry_ok, pattern = pattern_geometry_ok(upper, lower, len(refine_df) - 1)
+        if not geometry_ok or not pattern_length_ok(line, style):
+            continue
+        failed_penalty = recent_failed_breakout_penalty(trigger_df, line, direction)
         plan = build_pattern_plan(refine_df, upper, lower, direction)
         if plan is None:
             continue
@@ -301,7 +305,7 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         confluence = score_confluences(structure_df, refine_df, trigger_df, direction, retest_score=0.0)
         # VIVA-TLBREAK owns its score/geometry; generic candidate values are
         # replaced only for this isolated strategy.
-        viva_score = structure_score(line) + breakout.score + confluence.total
+        viva_score = structure_score(line) + breakout.score + confluence.total + failed_penalty
         refine_atr = float((refine_df["high"] - refine_df["low"]).tail(14).mean())
         buffer = max(0.35 * refine_atr, abs(candidate.planned_entry) * 0.0005)
         pattern_sl = plan.stop_anchor - buffer if direction == "LONG" else plan.stop_anchor + buffer
@@ -329,7 +333,8 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             "viva_break_line": breakout.line_price, "viva_breakout_score": breakout.score,
             "viva_breakout_body_atr": breakout.body_atr, "viva_counter_trend": confluence.counter_trend,
             "viva_confluence_score": confluence.total, "viva_confluence": list(confluence.reasons),
-            "viva_structure_score": structure_score(line), "viva_final_score": viva_score,
+            "viva_structure_score": structure_score(line), "viva_failed_breakout_penalty": failed_penalty,
+            "viva_final_score": viva_score,
             "viva_stop_anchor": plan.stop_anchor, "viva_measured_target": plan.measured_target,
             "viva_final_target": final_target,
             "viva_structural_target": plan.structural_target, "viva_state": "S2_BREAKOUT_CLOSED",

@@ -32,6 +32,12 @@ class VivaTLBreakConfig:
     retest_window_trigger_bars_swing: int = 24
     extension_cap_atr_daytrade: float = 1.5
     extension_cap_atr_swing: float = 2.0
+    min_pattern_bars_daytrade: int = 12
+    max_pattern_bars_daytrade: int = 80
+    min_pattern_bars_swing: int = 15
+    max_pattern_bars_swing: int = 90
+    channel_parallel_tolerance_pct: float = 15.0
+    triangle_apex_max_progress: float = 0.90
 
 
 def load_config(path: Path = DEFAULT_CONFIG) -> VivaTLBreakConfig:
@@ -50,6 +56,12 @@ def load_config(path: Path = DEFAULT_CONFIG) -> VivaTLBreakConfig:
         retest_window_trigger_bars_swing=int(profiles["swing"]["retest_window_bars_on_trigger_tf"]),
         extension_cap_atr_daytrade=float(profiles["daytrade"]["max_extension_atr_multiple_without_retest"]),
         extension_cap_atr_swing=float(profiles["swing"]["max_extension_atr_multiple_without_retest"]),
+        min_pattern_bars_daytrade=int(profiles["daytrade"]["min_pattern_length_bars_on_structure_tf"]),
+        max_pattern_bars_daytrade=int(profiles["daytrade"]["max_pattern_length_bars_on_structure_tf"]),
+        min_pattern_bars_swing=int(profiles["swing"]["min_pattern_length_bars_on_structure_tf"]),
+        max_pattern_bars_swing=int(profiles["swing"]["max_pattern_length_bars_on_structure_tf"]),
+        channel_parallel_tolerance_pct=float(raw["pattern_types"]["channel"]["parallel_tolerance_pct"]),
+        triangle_apex_max_progress=0.90,
     )
 
 
@@ -539,3 +551,47 @@ def evaluate_viva_tlbreak(
     if confluence.counter_trend and (not retest or retest.score < 2.0):
         disqualify = "COUNTER_TREND_RETEST_INCOMPLETE"
     return VivaTLBreakEvaluation(pattern, str(direction).upper(), structure, breakout, retest, micro, confluence, plan, disqualify)
+
+
+def pattern_length_ok(line: ValidatedLine, style: str, cfg: Optional[VivaTLBreakConfig] = None) -> bool:
+    cfg = cfg or load_config()
+    span = line.last_index - line.first_index
+    if str(style).upper() == "SWING":
+        return cfg.min_pattern_bars_swing <= span <= cfg.max_pattern_bars_swing
+    return cfg.min_pattern_bars_daytrade <= span <= cfg.max_pattern_bars_daytrade
+
+def pattern_geometry_ok(upper: Optional[ValidatedLine], lower: Optional[ValidatedLine], index: int, cfg: Optional[VivaTLBreakConfig] = None) -> tuple[bool, str]:
+    cfg = cfg or load_config()
+    pattern = classify_pattern(upper, lower, index)
+    if upper is None or lower is None:
+        return True, pattern
+    if pattern == "CHANNEL":
+        denom = max(abs(upper.slope), abs(lower.slope), 1e-12)
+        slope_gap = abs(upper.slope - lower.slope) / denom * 100
+        return slope_gap <= cfg.channel_parallel_tolerance_pct, pattern
+    if pattern.startswith("TRIANGLE"):
+        den = upper.slope - lower.slope
+        if abs(den) < 1e-12:
+            return False, pattern
+        apex = (lower.intercept - upper.intercept) / den
+        start = max(upper.first_index, lower.first_index)
+        progress = (index - start) / max(apex - start, 1e-12)
+        return progress <= cfg.triangle_apex_max_progress, pattern
+    return True, pattern
+
+def recent_failed_breakout_penalty(trigger_df: pd.DataFrame, line: ValidatedLine, direction: str, lookback: int = 10) -> float:
+    """Penalty when price recently broke the same line then closed back inside."""
+    if len(trigger_df) < 4:
+        return 0.0
+    is_long = str(direction).upper() == "LONG"
+    start = max(1, len(trigger_df) - lookback - 1)
+    was_outside = False
+    for i in range(start, len(trigger_df)):
+        price = line_price_at_time(line, trigger_df["timestamp"].iloc[i])
+        close = float(trigger_df["close"].iloc[i])
+        outside = close > price if is_long else close < price
+        inside = close <= price if is_long else close >= price
+        if was_outside and inside:
+            return -1.5
+        was_outside = outside
+    return 0.0
