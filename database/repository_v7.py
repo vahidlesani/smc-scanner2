@@ -40,6 +40,7 @@ SIGNAL_COLUMNS = {
     "confirmation_sent": "BOOLEAN DEFAULT FALSE",
     "confirmation_sent_at": "TEXT",
     "last_checked_at": "TEXT",
+    "partial_win": "BOOLEAN DEFAULT FALSE",
     "session_name": "TEXT DEFAULT ''",
     "pnl_usd": "REAL DEFAULT 0",
     "target_state_json": "TEXT DEFAULT '{}'",
@@ -63,6 +64,7 @@ ACTIVE_COLUMNS = {
     "confirmation_sent": "BOOLEAN DEFAULT FALSE",
     "confirmation_sent_at": "TEXT",
     "last_checked_at": "TEXT",
+    "partial_win": "BOOLEAN DEFAULT FALSE",
     "target_state_json": "TEXT DEFAULT '{}'",
     "pro_message_id": "INTEGER DEFAULT 0",
     "strategy_variant": "TEXT DEFAULT ''",
@@ -861,6 +863,9 @@ def monitor_confirmed_trades() -> List[Dict]:
                 if ladder.get("closed"):
                     break
             with legacy_db.db_cursor() as cursor:
+                if int(ladder.get("hit_index") or 0) >= 1:
+                    cursor.execute(f"UPDATE signals SET tp1_hit={truth}, partial_win={truth} WHERE signal_id={p}", (signal_id,))
+                    cursor.execute(f"UPDATE active_signals SET tp1_hit={truth}, partial_win={truth} WHERE signal_id={p}", (signal_id,))
                 if latest_checked is not None:
                     checked_text = latest_checked.isoformat(sep=" ", timespec="seconds")
                     cursor.execute(f"UPDATE signals SET target_state_json={p}, sl={p}, last_checked_at={p} WHERE signal_id={p}",

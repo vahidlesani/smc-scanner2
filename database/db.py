@@ -708,7 +708,7 @@ def get_performance_stats() -> dict:
     with db_cursor() as c:
         c.execute(f"""
             SELECT source, COUNT(*) as total,
-                   SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN result='WIN' OR partial_win=TRUE THEN 1 ELSE 0 END) as wins,
                    SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) as losses,
                    AVG(pnl_pct) as avg_pnl
             FROM signals
@@ -736,7 +736,7 @@ def get_strategy_performance() -> list:
         c.execute(f"""
             SELECT source, strategy_fa,
                    COUNT(*) as total,
-                   SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN result='WIN' OR partial_win=TRUE THEN 1 ELSE 0 END) as wins,
                    SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) as losses,
                    SUM(CASE WHEN result='PENDING' THEN 1 ELSE 0 END) as pending,
                    AVG(pnl_pct) as avg_pnl,
@@ -876,7 +876,7 @@ def get_backtest_stats() -> list:
         c.execute("""
             SELECT strategy,
                    COUNT(*) as total,
-                   SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN result='WIN' OR partial_win=TRUE THEN 1 ELSE 0 END) as wins,
                    SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) as losses,
                    AVG(pnl_pct) as avg_pnl,
                    MAX(pnl_pct) as best,
@@ -939,7 +939,7 @@ def get_dashboard_summary() -> dict:
         c.execute(f"""
             SELECT
                 COUNT(*) as total,
-                SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN result='WIN' OR partial_win=TRUE THEN 1 ELSE 0 END) as wins,
                 SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) as losses,
                 SUM(CASE WHEN result='PENDING' THEN 1 ELSE 0 END) as pending,
                 AVG(CASE WHEN result != 'PENDING' THEN pnl_pct END) as avg_pnl,
