@@ -130,7 +130,7 @@ class Settings:
     portfolio_guard_enabled: bool = False
     # Paper-research capacity per symbol/trigger. Correlated samples are tagged
     # separately in analytics and do not imply live portfolio sizing.
-    max_signals_per_symbol_trigger: int = 1
+    max_signals_per_symbol_trigger: int = 3
     max_open_trades: int = 5
     max_correlated_trades: int = 2
     daily_loss_limit_percent: float = 3.0
@@ -139,10 +139,10 @@ class Settings:
     fee_rate_percent: float = 0.06
     slippage_percent: float = 0.03
 
-    watchlist_top_turnover: int = 50
+    watchlist_top_turnover: int = 100
     watchlist_top_relative_volume: int = 20
-    watchlist_max_symbols: int = 70
-    watchlist_prefilter_symbols: int = 90
+    watchlist_max_symbols: int = 100
+    watchlist_prefilter_symbols: int = 200
     watchlist_refresh_minutes: int = 60
     watchlist_min_turnover_usd: float = 5_000_000.0
     watchlist_max_spread_percent: float = 0.25

@@ -122,7 +122,7 @@ class DynamicUniverse:
         # Native-crypto whitelist is independent of execution venue volume.
         # It removes tokenized equities/RWA wrappers even when they look liquid.
         from data.marketcap import top_crypto_bases
-        crypto_whitelist = top_crypto_bases(80)
+        crypto_whitelist = top_crypto_bases(100)
         instruments = {str(i.get("symbol", "")).upper(): i for i in get_instruments() or [] if i.get("symbol")}
         bybit_tickers = {str(t.get("symbol", "")): t for t in (get_tickers(use_cache=False) or [])}
         ourbit_rows = {}

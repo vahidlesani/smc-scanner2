@@ -404,9 +404,8 @@ def portfolio_guard(candidate: SignalCandidate) -> Tuple[bool, str]:
 
 
 def has_open_pre_tp1_signal(symbol: str, trigger_timeframe: str) -> bool:
-    """Paper-test capacity: allow up to N concurrent signals per symbol/TF.
-    They are correlated samples, but must not starve the same high-quality pool.
-    """
+    """Paper-test capacity: allow up to N concurrent signals on the same
+    high-quality symbol/trigger. No weaker replacement universe is needed."""
     p = legacy_db._ph()
     truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
     with legacy_db.db_cursor() as cursor:
