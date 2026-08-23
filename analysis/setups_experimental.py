@@ -756,48 +756,70 @@ def _albrox_spike_context(df: np.ndarray | object) -> dict | None:
 
 
 def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
-    """ALBROX v1: current Pinwall quality only after a suspicious sweep/base context.
+    """ALBROX original: spike/reclaim → base building → base break.
 
-    This preserves Pinwall itself; ALBROX is a separately labelled paper branch.
+    Pinwall is optional confirmation only; its own strategy remains untouched.
     """
     settings = get_settings()
-    base = detect_pinbar_zone(bundle, style)
-    if base is None:
+    structure_tf, refine_tf, trigger_tf = timeframe_profile(style)
+    if not _ensure_frames(bundle, (structure_tf, refine_tf, trigger_tf)):
         return None
-    df = bundle.get(base.trigger_timeframe)
-    if df is None or len(df) < 40:
+    df, context_df = bundle.get(trigger_tf), bundle.get(structure_tf)
+    if len(df) < 120:
         return None
-    atr_v = float((df["high"] - df["low"]).tail(14).mean())
-    if atr_v <= 0:
-        return None
-    # A large sweep in the preceding 40 bars is the Albrox context. The pin
-    # itself still uses the existing calibrated PINWALL anatomy/location.
-    spike_found = False
-    for i in range(max(14, len(df)-40), len(df)-2):
-        row = df.iloc[i]
-        rng = float(row["high"]-row["low"])
-        local_atr = float((df["high"]-df["low"]).iloc[max(0,i-14):i].mean() or 0)
-        if local_atr <= 0 or rng < 5.0*local_atr:
+    ranges = df["high"] - df["low"]
+    atrs = ranges.rolling(14).mean()
+    # Search recent closed spike; enough post-spike candles must exist to form a base.
+    for spike_i in range(max(14, len(df)-40), len(df)-7):
+        spike = df.iloc[spike_i]
+        atr_i = float(atrs.iloc[spike_i] or 0)
+        if atr_i <= 0 or float(ranges.iloc[spike_i]) < 5.0 * atr_i:
             continue
-        if base.direction == "LONG" and float(row["close"]) > float(row["low"]) + .45*rng:
-            spike_found = True; break
-        if base.direction == "SHORT" and float(row["close"]) < float(row["high"]) - .45*rng:
-            spike_found = True; break
-    if not spike_found:
-        return None
-    candidate = SignalCandidate.from_dict(base.to_dict())
-    candidate.signal_id = f"viva-albrox-{bundle.symbol}-{base.trigger_timeframe}-{str(df['timestamp'].iloc[-1])[:16]}"
-    candidate.setup_code = "ALBROX"
-    candidate.setup_name = SETUP_NAMES["ALBROX"]
-    candidate.strategy_fa = SETUP_NAMES_FA["ALBROX"]
-    candidate.score = min(10, candidate.score + 1)
-    candidate.metadata.update({
-        "strategy_variant": "ALBROX",
-        "albrox_spike_context": True,
-        "albrox_mode": "PINWALL_LOCATION_PLUS_SPIKE_RECLAIM",
-        "public_code": generate_viva_public_code("ALBROX", style),
-    })
-    return candidate
+        prior = df.iloc[max(0, spike_i-96):spike_i]
+        if prior.empty:
+            continue
+        rng = float(ranges.iloc[spike_i])
+        long_spike = float(spike["low"]) < float(prior["low"].min()) and float(spike["close"]) >= float(spike["low"]) + .45*rng
+        short_spike = float(spike["high"]) > float(prior["high"].max()) and float(spike["close"]) <= float(spike["high"]) - .45*rng
+        if not (long_spike or short_spike):
+            continue
+        direction = "LONG" if long_spike else "SHORT"
+        post = df.iloc[spike_i+1:]
+        # Original Albrox base route: first 6-10 post-spike candles compact,
+        # current close breaks that base in the reclaim direction.
+        if len(post) < 7:
+            continue
+        base = post.iloc[:min(10, len(post)-1)]
+        base_low, base_high = float(base["low"].min()), float(base["high"].max())
+        base_atr = float(ranges.iloc[spike_i+1:spike_i+1+len(base)].mean())
+        if base_atr <= 0 or (base_high-base_low) > 2.5*base_atr:
+            continue
+        current = df.iloc[-1]
+        broke = float(current["close"]) > base_high if direction == "LONG" else float(current["close"]) < base_low
+        if not broke:
+            continue
+        poi = {"bottom": base_low, "top": base_high, "touches": 0, "type": "ALBROX SPIKE RECLAIM BASE"}
+        context = structure_bias(context_df, 5)
+        impulse = {"index": len(df)-1, "level": base_high if direction=="LONG" else base_low, "valid": True, "direction":"BULLISH" if direction=="LONG" else "BEARISH", "body_atr":abs(float(current["close"])-float(current["open"]))/max(base_atr,1e-12), "volume_ratio":1.0}
+        special = EvidenceItem("albrox_spike", "ALBROX اسپایک و بیس", "کندل اسپایک غیرطبیعی sweep/reclaim ثبت شد؛ بعد از آن بیس 6 تا 10 کندلی ساخته و با Close شکسته شده است.", True, 2, timeframe=trigger_tf)
+        candidate = _base_candidate(bundle, style, "ALBROX", direction, structure_tf, trigger_tf, context, poi, impulse, special, "albrox_spike_base", True)
+        if candidate is None:
+            continue
+        # Albrox owns its structural stop: base distal plus 0.5 ATR.
+        candidate.sl = base_low - .5*base_atr if direction=="LONG" else base_high + .5*base_atr
+        pin = detect_pinbar_zone(bundle, style)
+        pinwall_confirm = bool(pin and pin.direction == direction)
+        candidate.score = min(10, candidate.score + (1 if pinwall_confirm else 0))
+        candidate.mandatory_gates["htf_alignment"] = True
+        candidate.strategy_fa = "ALBROX | اسپایک، بازپس‌گیری و شکست بیس"
+        candidate.metadata.update({
+            "strategy_variant":"ALBROX_ORIGINAL", "albrox_spike_index":spike_i,
+            "albrox_base_range":[base_low,base_high], "albrox_spike_reclaim":True,
+            "albrox_base_candles":len(base), "albrox_pinwall_confirm":pinwall_confirm,
+            "public_code":generate_viva_public_code("ALBROX",style),
+        })
+        return candidate
+    return None
 
 
 ALBROX_DETECTORS = [detect_albrox]
