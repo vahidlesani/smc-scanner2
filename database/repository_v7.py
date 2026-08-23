@@ -404,25 +404,20 @@ def portfolio_guard(candidate: SignalCandidate) -> Tuple[bool, str]:
 
 
 def has_open_pre_tp1_signal(symbol: str, trigger_timeframe: str) -> bool:
-    """One protected exposure per symbol/trigger until TP1 is actually hit.
-    This prevents the exact KORU pattern: a fresh same-TF confirmation while
-    the remaining position of the prior trade is still live and protected."""
+    """Paper-test capacity: allow up to N concurrent signals per symbol/TF.
+    They are correlated samples, but must not starve the same high-quality pool.
+    """
     p = legacy_db._ph()
     truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
     with legacy_db.db_cursor() as cursor:
         cursor.execute(
-            f"""
-            SELECT 1 FROM signals
-            WHERE symbol={p} AND trigger_timeframe={p}
-              AND confirmed={truth} AND confirmation_sent={truth}
-              AND status='CONFIRMED' AND result='PENDING'
-              AND COALESCE(tp1_hit, {'FALSE' if legacy_db.USE_POSTGRES else '0'})={'FALSE' if legacy_db.USE_POSTGRES else '0'}
-              AND strategy_version={p}
-            LIMIT 1
-            """,
+            f"SELECT COUNT(*) FROM signals WHERE symbol={p} AND trigger_timeframe={p} "
+            f"AND confirmed={truth} AND confirmation_sent={truth} "
+            f"AND status='CONFIRMED' AND result='PENDING' AND strategy_version={p}",
             (str(symbol).upper(), str(trigger_timeframe).lower(), SETTINGS.strategy_version),
         )
-        return cursor.fetchone() is not None
+        count = int((cursor.fetchone() or [0])[0] or 0)
+    return count >= max(1, int(getattr(SETTINGS, "max_signals_per_symbol_trigger", 3)))
 
 
 def save_confirmed_signal(candidate: SignalCandidate) -> bool:

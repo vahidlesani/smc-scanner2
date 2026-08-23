@@ -128,6 +128,9 @@ class Settings:
     # Paper/test mode must never drop a technically-confirmed signal because
     # a portfolio allocation cap is full. Turn on explicitly for live execution.
     portfolio_guard_enabled: bool = False
+    # Paper-research capacity per symbol/trigger. Correlated samples are tagged
+    # separately in analytics and do not imply live portfolio sizing.
+    max_signals_per_symbol_trigger: int = 3
     max_open_trades: int = 5
     max_correlated_trades: int = 2
     daily_loss_limit_percent: float = 3.0
@@ -217,6 +220,7 @@ class Settings:
             max_risk_percent=_float("MAX_RISK_PERCENT", cls.max_risk_percent),
             max_margin_percent=_float("MAX_MARGIN_PERCENT", cls.max_margin_percent),
             portfolio_guard_enabled=_bool("PORTFOLIO_GUARD_ENABLED", cls.portfolio_guard_enabled),
+            max_signals_per_symbol_trigger=_int("MAX_SIGNALS_PER_SYMBOL_TRIGGER", cls.max_signals_per_symbol_trigger),
             max_open_trades=_int("MAX_OPEN_TRADES", cls.max_open_trades),
             max_correlated_trades=_int("MAX_CORRELATED_TRADES", cls.max_correlated_trades),
             daily_loss_limit_percent=_float("DAILY_LOSS_LIMIT_PERCENT", cls.daily_loss_limit_percent),
