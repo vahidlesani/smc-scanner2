@@ -54,6 +54,8 @@ class Settings:
     core_v7_setups_enabled: bool = False
     # Pinbar-in-zone alerts (5m/15m/1h) — bullish 🔴/🟢 alert + verdict reply
     pinv_enabled: bool = True
+    albrox_enabled: bool = False
+    albrox_symbols: str = ""
     pinv_min_wick_body: float = 2.0      # dominant wick / body
     pinv_max_body_frac: float = 0.35     # body / range
     pinv_min_range_atr: float = 0.6      # candle range / ATR floor
@@ -167,6 +169,8 @@ class Settings:
             monitor_offset_minute=_int("MONITOR_OFFSET_MINUTE", cls.monitor_offset_minute),
             core_v7_setups_enabled=_bool("CORE_V7_SETUPS_ENABLED", cls.core_v7_setups_enabled),
             pinv_enabled=_bool("PINVAL_ENABLED", cls.pinv_enabled),
+            albrox_enabled=_bool("ALBROX_ENABLED", cls.albrox_enabled),
+            albrox_symbols=os.getenv("ALBROX_SYMBOLS", cls.albrox_symbols),
             pinv_min_wick_body=_float("PINVAL_MIN_WICK_BODY", cls.pinv_min_wick_body),
             pinv_max_body_frac=_float("PINVAL_MAX_BODY_FRAC", cls.pinv_max_body_frac),
             pinv_min_range_atr=_float("PINVAL_MIN_RANGE_ATR", cls.pinv_min_range_atr),

@@ -38,6 +38,8 @@ from data.fetcher import MarketBundle
 
 SETUP_NAMES["P1234"] = "1-2-3-4 Reversal + Point-2 Break Retest"
 SETUP_NAMES_FA["P1234"] = "الگوی برگشتی ۱-۲-۳-۴ و اولین پولبک به نقطه ۲"
+SETUP_NAMES["ALBROX"] = "ALBROX Spike Reclaim + Base + Pinbar"
+SETUP_NAMES_FA["ALBROX"] = "ALBROX | اسپایک، بازپس‌گیری، بیس و پین‌بار"
 
 
 def _find_1234(df, direction: str) -> Optional[dict]:
@@ -747,5 +749,57 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             best = candidate
     return best
 
+
+def _albrox_spike_context(df: np.ndarray | object) -> dict | None:
+    # Placeholder marker; detector below works with pandas dataframes.
+    return None
+
+
+def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
+    """ALBROX v1: current Pinwall quality only after a suspicious sweep/base context.
+
+    This preserves Pinwall itself; ALBROX is a separately labelled paper branch.
+    """
+    settings = get_settings()
+    base = detect_pinbar_zone(bundle, style)
+    if base is None:
+        return None
+    df = bundle.get(base.trigger_timeframe)
+    if df is None or len(df) < 40:
+        return None
+    atr_v = float((df["high"] - df["low"]).tail(14).mean())
+    if atr_v <= 0:
+        return None
+    # A large sweep in the preceding 40 bars is the Albrox context. The pin
+    # itself still uses the existing calibrated PINWALL anatomy/location.
+    spike_found = False
+    for i in range(max(14, len(df)-40), len(df)-2):
+        row = df.iloc[i]
+        rng = float(row["high"]-row["low"])
+        local_atr = float((df["high"]-df["low"]).iloc[max(0,i-14):i].mean() or 0)
+        if local_atr <= 0 or rng < 5.0*local_atr:
+            continue
+        if base.direction == "LONG" and float(row["close"]) > float(row["low"]) + .45*rng:
+            spike_found = True; break
+        if base.direction == "SHORT" and float(row["close"]) < float(row["high"]) - .45*rng:
+            spike_found = True; break
+    if not spike_found:
+        return None
+    candidate = SignalCandidate.from_dict(base.to_dict())
+    candidate.signal_id = f"viva-albrox-{bundle.symbol}-{base.trigger_timeframe}-{str(df['timestamp'].iloc[-1])[:16]}"
+    candidate.setup_code = "ALBROX"
+    candidate.setup_name = SETUP_NAMES["ALBROX"]
+    candidate.strategy_fa = SETUP_NAMES_FA["ALBROX"]
+    candidate.score = min(10, candidate.score + 1)
+    candidate.metadata.update({
+        "strategy_variant": "ALBROX",
+        "albrox_spike_context": True,
+        "albrox_mode": "PINWALL_LOCATION_PLUS_SPIKE_RECLAIM",
+        "public_code": generate_viva_public_code("ALBROX", style),
+    })
+    return candidate
+
+
+ALBROX_DETECTORS = [detect_albrox]
 
 PINVAL_DETECTORS = [detect_pinbar_zone]
