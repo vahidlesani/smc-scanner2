@@ -841,7 +841,8 @@ def monitor_confirmed_trades() -> List[Dict]:
                         "strategy_version": strategy_version, "confirmed_at": str(confirmed_at),
                         "confirmation_sent": True, "pro_message_id": int(pro_message_id or 0), "public_code": public_code,
                         "entry": float(entry), "sl": float(ladder["current_sl"]), "original_sl": float(original_sl),
-                        "trigger_timeframe": str(trigger_timeframe or ""), "targets": list(ladder["targets"]), "hit_index": int(ladder["hit_index"]), "last_tp_message_id": int(ladder.get("last_tp_message_id") or 0),
+                        "leverage": int(leverage or 1), "margin": float(margin or 0), "live_price": float(candle["close"]),
+                        "event_at": str(candle["close_time"] if "close_time" in candle else candle["timestamp"]), "trigger_timeframe": str(trigger_timeframe or ""), "targets": list(ladder["targets"]), "hit_index": int(ladder["hit_index"]), "last_tp_message_id": int(ladder.get("last_tp_message_id") or 0),
                     })
                     notional = float(margin or 0) * int(leverage or 1)
                     risk_pct_move = abs(float(entry) - float(original_sl)) / float(entry) * 100
@@ -970,6 +971,9 @@ def monitor_confirmed_trades() -> List[Dict]:
                     "confirmation_sent": True,
                     "pro_message_id": int(pro_message_id or 0), "public_code": public_code,
                     "trigger_timeframe": str(trigger_timeframe or ""), "original_sl": float(original_sl),
+                    "entry": float(entry), "leverage": int(leverage or 1), "margin": float(margin or 0),
+                    "live_price": float(resolution_candle.close) if "resolution_candle" in locals() else float(entry),
+                    "event_at": str(resolved_at),
                     "first_tp_message_id": int(first_tp_message_id or 0),
                 })
         if tp1_event:

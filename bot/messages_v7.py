@@ -1657,6 +1657,30 @@ def _published_lifecycle_event(event: dict) -> bool:
     return allowed
 
 
+def _event_clock(event: dict) -> tuple[str, str, str]:
+    def parse(value):
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if dt.tzinfo is None: dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+            return dt
+        except Exception: return None
+    opened, happened = parse(event.get("confirmed_at")), parse(event.get("event_at"))
+    iran = happened.astimezone(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M") if happened else "—"
+    if opened and happened:
+        delta = happened - opened
+        mins = max(0, int(delta.total_seconds() // 60))
+        duration = f"{mins//1440:02d}D {mins%1440//60:02d}H {mins%60:02d}M"
+    else: duration = "—"
+    latency = "—"
+    return iran, duration, latency
+
+
+def _tp_status_lines(event: dict) -> str:
+    hit = int(event.get("hit_index") or 0)
+    weights = [35,35,20,5,5]
+    return "\n".join((f"✅ TP{i+1}: {weights[i]}% بسته شد" if i < hit else f"⏳ TP{i+1}: در انتظار") for i in range(5))
+
+
 def send_tp1_event(signal: dict) -> bool:
     if not str(signal.get("event") or "").startswith("TP") or not _published_lifecycle_event(signal):
         return False
@@ -1759,27 +1783,37 @@ def _event_chart_candidate(event: dict) -> SignalCandidate:
 
 
 def send_ladder_event(event: dict) -> bool:
-    """TP/trailing reply with a fresh market chart in VivaMon."""
+    """Detailed live TP/trailing reply in VivaMon."""
     kind = str(event.get("event") or "")
     if kind not in {"TP1", "TP2", "TP3", "TP4", "TP5", "TRAIL_STOP", "STOP"}:
         return False
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
     reply_id = (int(event.get("last_tp_message_id") or 0) or int(event.get("pro_message_id") or 0) or None) if kind.startswith("TP") else (int(event.get("pro_message_id") or 0) or None)
+    iran, duration, latency = _event_clock(event)
+    code = _e(event.get("public_code") or event.get("signal_id"))
+    common = (
+        f"🪙 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('style'))} • {_e(event.get('direction'))}\n"
+        f"🕓 ایران: {iran}  •  ⏱ مدت: {duration}\n"
+        f"\n🎯 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
+        f"🛑 First Stop: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
+        f"📈 Live Price: <b>{_price(float(event.get('live_price') or 0))}</b>\n"
+    )
     if kind.startswith("TP"):
         text = (
-            f"🏁 <b>{_e(kind)} HIT</b> • {_e(event.get('source') or 'SETUP')}\n"
-            f"🪙 {_e(event.get('symbol'))} • {_e(event.get('style'))}\n"
-            f"✅ {float(event.get('weight', 0)):.0f}% خروج انجام شد.\n"
-            f"🔒 Trailing SL → <b>{_price(float(event.get('new_sl') or event.get('sl') or 0))}</b>\n"
-            f"🆔 <code>{_e(event.get('public_code') or event.get('signal_id'))}</code>"
+            f"🏁 <b>{_e(kind)} HIT</b> • <code>{code}</code>\n\n" + common + "\n" + _tp_status_lines(event) + "\n\n"
+            f"📊 حرکت قیمت این مرحله: <b>{float(event.get('leg_price_move_pct', 0)):+.2f}%</b>\n"
+            f"💼 اهرم: <b>{int(event.get('leverage') or 1)}x</b> • Margin: <b>${float(event.get('margin') or 0):.2f}</b>\n"
+            f"💰 سود این مرحله: <b>${float(event.get('leg_profit_usd', 0)):+.2f}</b>\n"
+            f"🚀 ROI با اهرم: <b>{float(event.get('leg_margin_roi_pct', 0)):+.2f}%</b>\n"
+            f"\n🔒 Trailing SL جدید: <b>{_price(float(event.get('new_sl') or event.get('sl') or 0))}</b>"
         )
     else:
-        title = "TRAILING STOP HIT" if kind == "TRAIL_STOP" else "STOP LOSS HIT"
+        title = "PROFIT PROTECTED EXIT" if kind == "TRAIL_STOP" else "STOP LOSS HIT"
         text = (
-            f"🔒 <b>{title}</b>\n"
-            f"🪙 {_e(event.get('symbol'))} • {_e(event.get('source') or 'SETUP')}\n"
+            f"🔒 <b>{title}</b> • <code>{code}</code>\n\n" + common + "\n" + _tp_status_lines(event) + "\n\n"
             f"📍 Stop اجرا شد: <b>{_price(float(event.get('stop') or event.get('sl') or 0))}</b>\n"
-            f"🆔 <code>{_e(event.get('public_code') or event.get('signal_id'))}</code>"
+            f"💰 سود/ضرر تجمعی: <b>${float(event.get('realized_profit_usd', 0)):+.2f}</b>\n"
+            f"🚀 ROI با اهرم: <b>{float(event.get('realized_margin_roi_pct', 0)):+.2f}%</b>"
         )
     try:
         from data.fetcher import get_klines
