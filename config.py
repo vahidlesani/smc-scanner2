@@ -56,6 +56,8 @@ class Settings:
     pinv_enabled: bool = True
     albrox_enabled: bool = False
     albrox_symbols: str = ""
+    pinwall_quality_enabled: bool = False
+    pinwall_quality_min_score: float = 78.0
     pinv_min_wick_body: float = 2.0      # dominant wick / body
     pinv_max_body_frac: float = 0.35     # body / range
     pinv_min_range_atr: float = 0.6      # candle range / ATR floor
@@ -174,6 +176,8 @@ class Settings:
             pinv_enabled=_bool("PINVAL_ENABLED", cls.pinv_enabled),
             albrox_enabled=_bool("ALBROX_ENABLED", cls.albrox_enabled),
             albrox_symbols=os.getenv("ALBROX_SYMBOLS", cls.albrox_symbols),
+            pinwall_quality_enabled=_bool("PINWALL_QUALITY_ENABLED", cls.pinwall_quality_enabled),
+            pinwall_quality_min_score=_float("PINWALL_QUALITY_MIN_SCORE", cls.pinwall_quality_min_score),
             pinv_min_wick_body=_float("PINVAL_MIN_WICK_BODY", cls.pinv_min_wick_body),
             pinv_max_body_frac=_float("PINVAL_MAX_BODY_FRAC", cls.pinv_max_body_frac),
             pinv_min_range_atr=_float("PINVAL_MIN_RANGE_ATR", cls.pinv_min_range_atr),

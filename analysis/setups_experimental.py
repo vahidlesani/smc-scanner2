@@ -40,6 +40,8 @@ SETUP_NAMES["P1234"] = "1-2-3-4 Reversal + Point-2 Break Retest"
 SETUP_NAMES_FA["P1234"] = "الگوی برگشتی ۱-۲-۳-۴ و اولین پولبک به نقطه ۲"
 SETUP_NAMES["ALBROX"] = "ALBROX Spike Reclaim + Base + Pinbar"
 SETUP_NAMES_FA["ALBROX"] = "ALBROX | اسپایک، بازپس‌گیری، بیس و پین‌بار"
+SETUP_NAMES["PINWALLQ"] = "Pinwall Quality v1"
+SETUP_NAMES_FA["PINWALLQ"] = "PINWALL Quality | کیفیت، موقعیت و کامپرشن"
 
 
 def _find_1234(df, direction: str) -> Optional[dict]:
@@ -749,6 +751,48 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             best = candidate
     return best
 
+
+def _pinwall_quality_score(df, direction: str, base: SignalCandidate) -> tuple[float, dict]:
+    row = df.iloc[-1]; rng=max(float(row["high"])-float(row["low"]),1e-12); body=abs(float(row["close"])-float(row["open"]))
+    is_long=direction=="LONG"; main_wick=(min(float(row["open"]),float(row["close"]))-float(row["low"])) if is_long else (float(row["high"])-max(float(row["open"]),float(row["close"])))
+    opp_wick=(float(row["high"])-max(float(row["open"]),float(row["close"]))) if is_long else (min(float(row["open"]),float(row["close"]))-float(row["low"]))
+    anatomy=0.0
+    if main_wick/rng>=.70: anatomy+=12
+    elif main_wick/rng>=.60: anatomy+=6
+    close_pos=((float(row["close"])-float(row["low"]))/rng) if is_long else ((float(row["high"])-float(row["close"]))/rng)
+    if close_pos>=.75: anatomy+=10
+    elif close_pos>=.60: anatomy+=5
+    atr_v=float((df["high"]-df["low"]).tail(14).mean())
+    if body<.5*atr_v: anatomy+=8
+    if opp_wick/rng>.15: anatomy=max(0,anatomy-6)
+    md=base.metadata or {}; location=15.0 if md.get("pin_zone_kind") in {"FVG","FLIP","SD_FRESH"} else 0.0
+    # Existing detector only emits fresh FVG/context candidates; award first-visit quality.
+    if not md.get("touched", False): location+=12
+    recent=df.iloc[max(0,len(df)-6):len(df)-1]; avg=float((recent["high"]-recent["low"]).mean()) if not recent.empty else 0
+    context=12.0 if atr_v>0 and avg<.6*atr_v else 0.0
+    if any(abs(float(r["close"])-float(r["open"]))<=.12*max(float(r["high"])-float(r["low"]),1e-12) for _,r in recent.tail(2).iterrows()): context+=8
+    bias_score=10.0 if base.bias==("BULLISH" if is_long else "BEARISH") else (3.0 if anatomy+location>=45 else 0.0)
+    total=anatomy+location+context+bias_score
+    return total,{"anatomy":anatomy,"location":location,"context":context,"bias":bias_score,"total":total}
+
+
+def detect_pinwall_quality(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
+    base=detect_pinbar_zone(bundle,style)
+    if base is None: return None
+    df=bundle.get(base.trigger_timeframe)
+    if df is None or len(df)<20: return None
+    score, details=_pinwall_quality_score(df,base.direction,base)
+    settings=get_settings()
+    if score<float(getattr(settings,"pinwall_quality_min_score",78.0)):
+        return None
+    candidate=SignalCandidate.from_dict(base.to_dict())
+    candidate.signal_id=f"viva-pinwallq-{bundle.symbol}-{base.trigger_timeframe}-{str(df['timestamp'].iloc[-1])[:16]}"
+    candidate.setup_code="PINWALLQ"; candidate.setup_name=SETUP_NAMES["PINWALLQ"]; candidate.strategy_fa=SETUP_NAMES_FA["PINWALLQ"]; candidate.score=min(10,max(6,round(score/10)))
+    candidate.metadata.update({"strategy_variant":"PINWALL_QUALITY","pinwall_quality":details,"public_code":generate_viva_public_code("PINWALLQ",style)})
+    return candidate
+
+
+PINWALL_QUALITY_DETECTORS=[detect_pinwall_quality]
 
 def _albrox_spike_context(df: np.ndarray | object) -> dict | None:
     # Placeholder marker; detector below works with pandas dataframes.
