@@ -130,7 +130,7 @@ class Settings:
     portfolio_guard_enabled: bool = False
     # Paper-research capacity per symbol/trigger. Correlated samples are tagged
     # separately in analytics and do not imply live portfolio sizing.
-    max_signals_per_symbol_trigger: int = 3
+    max_signals_per_symbol_trigger: int = 1
     max_open_trades: int = 5
     max_correlated_trades: int = 2
     daily_loss_limit_percent: float = 3.0
