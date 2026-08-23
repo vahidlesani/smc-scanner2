@@ -647,6 +647,7 @@ def _setup_badge(candidate: SignalCandidate) -> tuple[str, str]:
         "PINVAL": "VIVA ✦ PINVAL",
         "TLBREAK": "VIVA ✦ TREND BREAK",
         "P1234": "VIVA ✦ 1-2-3-4",
+        "ALBROX": "VIVA ✦ ALBROX",
         "LSR": "VIVA ✦ LIQUIDITY",
         "SDR": "VIVA ✦ SUPPLY/DEMAND",
         "BOS1": "VIVA ✦ BOS RETEST",
