@@ -1664,15 +1664,15 @@ def send_tp1_event(signal: dict) -> bool:
     link_id = int(signal.get("pro_event_message_id") or signal.get("first_tp_message_id") or signal.get("pro_message_id") or 0)
     link = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, link_id)
     code = _e(signal.get("public_code") or signal.get("signal_id"))
-    link_line = f'<a href="{link}">🔗 {code} • چارت TP/Confirmed</a>\n' if link else ""
+    code_line = f'<a href="{link}">🆔 <code>{code}</code></a>' if link else f"🆔 <code>{code}</code>"
     return send_message(
-        f"🥇 <b>{_e(signal.get('event') or 'TP')} HIT</b>\n"
-        f"🪙 <b>{_e(signal['symbol'])}</b> • {_e(signal.get('style', ''))}\n"
+        f"🏁 <b>{_e(signal.get('event') or 'TP')} HIT</b>\n"
+        f"🪙 <b>{_e(signal['symbol'])}</b> • {_e(signal.get('trigger_timeframe') or signal.get('style', ''))}\n"
         f"🎯 <b>{_e(signal.get('source') or signal.get('strategy_fa') or 'SETUP')}</b>\n"
-        f"🆔 <code>{code}</code>\n"
-        f"{link_line}\n"
-        f"✅ {float(signal.get('weight', SETTINGS.partial_tp1_percent)):.0f}% پوزیشن بسته شد.\n"
-        f"🔒 Trailing SL → {_price(float(signal.get('new_sl') or signal.get('sl') or 0))}",
+        f"{code_line}\n\n"
+        f"✅ خروج: {float(signal.get('weight', 0)):.0f}% • حرکت قیمت {float(signal.get('leg_price_move_pct', 0)):+.2f}%\n"
+        f"💰 سود: <b>${float(signal.get('leg_profit_usd', 0)):+.2f}</b> • ROI با اهرم: <b>{float(signal.get('leg_margin_roi_pct', 0)):+.2f}%</b>\n"
+        f"🔒 Trailing SL → <b>{_price(float(signal.get('new_sl') or signal.get('sl') or 0))}</b>",
         target,
     )
 
@@ -1704,12 +1704,13 @@ def send_trade_result(event: dict) -> bool:
     send_signal_separator(target)
     emoji = "✅" if result == "WIN" else "❌"
     link = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, int(event.get("pro_message_id") or 0))
-    link_line = f'<a href="{link}">🔗 چارت و Confirmed اصلی</a>\n' if link else ""
+    code = _e(event.get("public_code") or event.get("signal_id"))
+    link_line = f'<a href="{link}">🆔 <code>{code}</code></a>\n' if link else f"🆔 <code>{code}</code>\n"
     return send_message(
         f"{emoji} <b>نتیجه سیگنال Confirmed</b>\n"
         f"🪙 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('style', ''))}\n"
         f"🎯 <b>{_e(event.get('source') or event.get('strategy_fa') or 'SETUP')}</b>\n"
-        f"🆔 <code>{_e(event.get('signal_id'))}</code>\n"
+        f"{link_line}"
         f"📊 نتیجه: <b>{_e(result)}</b>\n"
         f"📈 بازده قیمت: <b>{float(event.get('pnl', 0)):+.2f}%</b>\n"
         f"💰 P&amp;L تقریبی: <b>${float(event.get('profit_usd', 0)):+.2f}</b>\n"

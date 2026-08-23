@@ -845,7 +845,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                         "signal_id": signal_id, "symbol": symbol, "direction": direction,
                         "style": style, "source": source, "strategy_fa": strategy_fa,
                         "strategy_version": strategy_version, "confirmed_at": str(confirmed_at),
-                        "confirmation_sent": True, "pro_message_id": int(pro_message_id or 0),
+                        "confirmation_sent": True, "pro_message_id": int(pro_message_id or 0), "public_code": public_code,
                         "entry": float(entry), "sl": float(ladder["current_sl"]), "original_sl": float(original_sl),
                         "trigger_timeframe": str(trigger_timeframe or ""), "targets": list(ladder["targets"]), "hit_index": int(ladder["hit_index"]), "last_tp_message_id": int(ladder.get("last_tp_message_id") or 0),
                     })
