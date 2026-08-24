@@ -136,6 +136,10 @@ def main_menu_keyboard(user_id=None):
             {"text": "🧪 بک‌تست (ادمین)", "callback_data": "backtest_menu"},
             {"text": "🧹 پاکسازی هشدارها", "callback_data": "purge_alerts"},
         ])
+        rows.append([
+            {"text": "🧾 حسابرسی نتایج", "callback_data": "protected_audit"},
+            {"text": "🧬 حسابرسی منبع بازار", "callback_data": "market_audit"},
+        ])
     return {"inline_keyboard": rows}
 
 
@@ -262,7 +266,8 @@ def handle_status(chat_id, user_id=None):
         "🧭 چیدمان اسکن (هم‌راستا با بستن کندل):\n"
         f"├ اسکن کامل: هر {SETTINGS.full_scan_minutes} دقیقه\n"
         f"└ مانیتور: هر {SETTINGS.monitor_minutes} دقیقه (دقیقه ۱ هر کندل)\n"
-        "📊 MTF: 1D→4H→1H→15M | 1H→15M→5M"
+        "📊 MTF: 1D→4H→1H→15M | 1H→15M→5M\n"
+        "🛡 Lifecycle: Entry Fill Gate • حداکثر ۳ پوزیشن مستقل / Symbol+Trigger • لینک یکتای -K######"
     )
     send_message(text, chat_id, main_menu_keyboard(user_id))
 
@@ -275,7 +280,7 @@ def handle_stats(chat_id, user_id=None):
         lines = [
             "📊 <b>آمار کانال</b>",
             "━━━━━━━━━━━━━━━━━━",
-            f"📈 کل سیگنال‌ها: <b>{s['total_signals']}</b>  (✅ {s['wins']} | ❌ {s['losses']} | ⏳ {s['pending']})",
+            f"📈 کل سیگنال‌ها: <b>{s['total_signals']}</b>  (✅ {s['wins']} | ❌ {s['losses']} | ⏳ {s['pending']} | ⚪ No Trade {s.get('no_trade', 0)})",
             f"{wr_e} Win Rate: <b>{s['winrate']}%</b>",
             f"💰 میانگین PnL: <b>{s['avg_pnl']:+.2f}%</b>",
             f"🚀 بهترین: {s['best_pnl']:+.2f}%  •  🕳 بدترین: {s['worst_pnl']:+.2f}%",
@@ -852,6 +857,12 @@ def handle_callback(callback_query):
             answer_callback(callback_id, "این بخش فقط برای ادمینه 🔒")
     elif data == "status":
         handle_status(chat_id, uid)
+    elif data == "protected_audit":
+        if _is_admin(uid): handle_protected_exit_audit(chat_id)
+        else: answer_callback(callback_id, "این بخش فقط برای ادمینه 🔒")
+    elif data == "market_audit":
+        if _is_admin(uid): handle_market_source_audit(chat_id)
+        else: answer_callback(callback_id, "این بخش فقط برای ادمینه 🔒")
     elif data == "purge_alerts":
         if _is_admin(uid):
             from bot.messages_v7 import purge_resolved_alert_posts
