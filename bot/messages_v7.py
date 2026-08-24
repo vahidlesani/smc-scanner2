@@ -1567,6 +1567,18 @@ def send_approaching(candidate: SignalCandidate, current_price: float, distance_
     return bool(mid)
 
 
+def _exact_event_message_id(signal_id: str, event_key: str, fallback: int = 0) -> int:
+    """Resolve one immutable Telegram receipt, never by symbol/timeframe/code."""
+    try:
+        from database.repository_v7 import get_telegram_event_message_id
+        message_id = get_telegram_event_message_id(str(signal_id), str(event_key))
+        if message_id:
+            return int(message_id)
+    except Exception as exc:
+        print(f"Telegram receipt lookup warning {signal_id}/{event_key}: {exc}")
+    return int(fallback or 0)
+
+
 def _telegram_message_link(chat_id: str, message_id: int) -> str:
     """Member-visible direct channel/supergroup permalink."""
     raw = str(chat_id or "")
@@ -1686,7 +1698,11 @@ def send_tp1_event(signal: dict) -> bool:
         return False
     target = CHAT_ID_RESULTS or CHAT_ID_ADMIN
     send_signal_separator(target)
-    link_id = int(signal.get("pro_event_message_id") or signal.get("first_tp_message_id") or signal.get("pro_message_id") or 0)
+    event_key = str(signal.get("event") or "TP1")
+    link_id = _exact_event_message_id(
+        str(signal.get("signal_id") or ""), event_key,
+        int(signal.get("pro_event_message_id") or signal.get("first_tp_message_id") or signal.get("pro_message_id") or 0),
+    )
     link = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, link_id)
     code = _e(signal.get("public_code") or signal.get("signal_id"))
     code_line = f'<a href="{link}">🆔 <code>{code}</code></a>' if link else f"🆔 <code>{code}</code>"
@@ -1745,7 +1761,10 @@ def send_trade_result(event: dict) -> bool:
     target = CHAT_ID_RESULTS or CHAT_ID_ADMIN
     send_signal_separator(target)
     emoji = "✅" if result == "WIN" else "❌"
-    link = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, int(event.get("pro_message_id") or 0))
+    confirmed_mid = _exact_event_message_id(
+        str(event.get("signal_id") or ""), "CONFIRMED", int(event.get("pro_message_id") or 0)
+    )
+    link = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, confirmed_mid)
     code = _e(event.get("public_code") or event.get("signal_id"))
     link_line = f'<a href="{link}">🆔 <code>{code}</code></a>\n' if link else f"🆔 <code>{code}</code>\n"
     return send_message(

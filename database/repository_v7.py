@@ -129,6 +129,20 @@ def init_v7_schema() -> None:
                 updated_at TEXT NOT NULL
             )
         """)
+        # Telegram posts are immutable receipts.  The key is the database
+        # signal_id + lifecycle event, never symbol, timeframe or public code.
+        # This prevents two allowed positions on the same symbol from borrowing
+        # each other's Confirmed/TP permalink.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS signal_telegram_events (
+                signal_id TEXT NOT NULL,
+                event_key TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                message_id BIGINT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (signal_id, event_key)
+            )
+        """)
         if legacy_db.USE_POSTGRES:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS backtest_runs (
@@ -657,6 +671,49 @@ def set_pro_message_id(signal_id: str, message_id: int) -> None:
     with legacy_db.db_cursor() as cursor:
         cursor.execute(f"UPDATE signals SET pro_message_id={p} WHERE signal_id={p}", (int(message_id), signal_id))
         cursor.execute(f"UPDATE active_signals SET pro_message_id={p} WHERE signal_id={p}", (int(message_id), signal_id))
+
+
+def record_telegram_event(signal_id: str, event_key: str, chat_id: str, message_id: int) -> int:
+    """Store and return the canonical Telegram receipt for one exact lifecycle event.
+
+    First write wins deliberately.  A retry may create a duplicate Telegram post,
+    but it must never silently repoint historical Win Rate links to a newer trade
+    with the same symbol or to a later retry.
+    """
+    signal_id, event_key = str(signal_id or ""), str(event_key or "").upper()
+    if not signal_id or not event_key or not chat_id or not message_id:
+        return 0
+    p = legacy_db._ph()
+    with legacy_db.db_cursor() as cursor:
+        if legacy_db.USE_POSTGRES:
+            cursor.execute(
+                f"INSERT INTO signal_telegram_events (signal_id,event_key,chat_id,message_id,created_at) "
+                f"VALUES ({p},{p},{p},{p},{p}) ON CONFLICT (signal_id,event_key) DO NOTHING",
+                (signal_id, event_key, str(chat_id), int(message_id), _now()),
+            )
+        else:
+            cursor.execute(
+                "INSERT OR IGNORE INTO signal_telegram_events (signal_id,event_key,chat_id,message_id,created_at) VALUES (?,?,?,?,?)",
+                (signal_id, event_key, str(chat_id), int(message_id), _now()),
+            )
+        cursor.execute(
+            f"SELECT message_id FROM signal_telegram_events WHERE signal_id={p} AND event_key={p}",
+            (signal_id, event_key),
+        )
+        row = cursor.fetchone()
+    return int(row[0]) if row else 0
+
+
+def get_telegram_event_message_id(signal_id: str, event_key: str) -> int:
+    """Resolve only by immutable position id + event type; never by symbol."""
+    p = legacy_db._ph()
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"SELECT message_id FROM signal_telegram_events WHERE signal_id={p} AND event_key={p}",
+            (str(signal_id), str(event_key).upper()),
+        )
+        row = cursor.fetchone()
+    return int(row[0]) if row else 0
 
 
 def set_first_tp_message_id(signal_id: str, message_id: int) -> None:

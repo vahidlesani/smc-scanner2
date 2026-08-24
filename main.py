@@ -29,6 +29,7 @@ from analysis.quality_engine import (
 )
 from bot.commands import start_command_listener
 from bot.messages_v7 import (
+    CHAT_ID_EXECUTION,
     send_approaching,
     send_candidate_cancelled,
     send_confirmed,
@@ -68,6 +69,7 @@ from database.repository_v7 import (
     repair_legacy_tp1_misclassified_results,
     release_symbol_lock,
     save_confirmed_signal,
+    record_telegram_event,
     set_pro_message_id,
     set_first_tp_message_id,
     set_last_tp_message_id,
@@ -171,9 +173,10 @@ def run_discovery_scan() -> Dict[str, int]:
                     stats["suppressed_pre_tp1"] = stats.get("suppressed_pre_tp1", 0) + 1
                     continue
                 previous = find_similar(candidate)
-                if previous and previous.metadata.get("public_code"):
-                    # Every alert update/confirmation/result belongs to one stable lineage code.
-                    candidate.metadata["public_code"] = previous.metadata["public_code"]
+                # A generated candidate is a separate possible position.  Never
+                # inherit an earlier candidate's public code merely because its
+                # symbol/trigger matches: multiple paper trades are allowed on
+                # that pair and each confirmed trade must retain its own links.
                 if previous and not is_material_update(previous, candidate):
                     continue  # identical state: leave the visible alert alone
                 # A materially newer scenario replaces every live alert package
@@ -457,7 +460,14 @@ def monitor_candidates() -> Dict[str, int]:
                             update_candidate(candidate)
                             mark_confirmation_published(candidate.signal_id)
                             if candidate.metadata.get("confirmation_chart_message_id"):
-                                set_pro_message_id(candidate.signal_id, candidate.metadata["confirmation_chart_message_id"])
+                                confirmed_mid = record_telegram_event(
+                                    candidate.signal_id, "CONFIRMED",
+                                    str(CHAT_ID_EXECUTION or ""),
+                                    int(candidate.metadata["confirmation_chart_message_id"]),
+                                )
+                                # Keep legacy column as a same-signal fallback;
+                                # canonical linking is the immutable receipt above.
+                                set_pro_message_id(candidate.signal_id, confirmed_mid or int(candidate.metadata["confirmation_chart_message_id"]))
                             # Confirmed is a reply under the final-watch chart in Pro;
                             # the full educational alert remains reachable through its link.
                         except Exception as exc:
@@ -501,12 +511,17 @@ def monitor_confirmed_results() -> int:
         if str(event.get("event", "")).startswith("TP"):
             pro_tp_mid = send_ladder_event(event)
             if pro_tp_mid:
-                event["pro_event_message_id"] = int(pro_tp_mid)
-                set_last_tp_message_id(event["signal_id"], int(pro_tp_mid))
+                canonical_mid = record_telegram_event(
+                    event["signal_id"], str(event.get("event") or "TP"),
+                    str(CHAT_ID_EXECUTION or ""), int(pro_tp_mid),
+                )
+                # Use the stored first receipt, not the last same-symbol post.
+                event["pro_event_message_id"] = canonical_mid or int(pro_tp_mid)
+                set_last_tp_message_id(event["signal_id"], event["pro_event_message_id"])
                 if event.get("event") == "TP1":
-                    set_first_tp_message_id(event["signal_id"], int(pro_tp_mid))
-                    event["first_tp_message_id"] = int(pro_tp_mid)
-            send_tp1_event(event)  # immutable win-rate feed, linked to this exact TP
+                    set_first_tp_message_id(event["signal_id"], event["pro_event_message_id"])
+                    event["first_tp_message_id"] = event["pro_event_message_id"]
+            send_tp1_event(event)  # immutable Win Rate link to this exact TP receipt
         elif event.get("event") in {"TRAIL_STOP", "STOP"}:
             send_ladder_event(event)
         elif event.get("event") == "CLOSED":

@@ -704,8 +704,16 @@ def handle_result_detail(chat_id, token):
         raw = str(CHAT_ID_EXECUTION or "")
         return f"https://t.me/c/{raw[4:]}/{int(mid)}" if raw.startswith("-100") and mid else ""
     rows = []
-    confirmed_url = _msg_url(item.get("pro_message_id"))
-    tp_url = _msg_url(item.get("first_tp_message_id"))
+    # Resolve by immutable position id + event key.  Same-symbol positions are
+    # allowed, so a symbol/timeframe lookup is intentionally forbidden here.
+    try:
+        from database.repository_v7 import get_telegram_event_message_id
+        confirmed_mid = get_telegram_event_message_id(str(item.get("signal_id") or ""), "CONFIRMED") or item.get("pro_message_id")
+        tp_mid = get_telegram_event_message_id(str(item.get("signal_id") or ""), "TP1") or item.get("first_tp_message_id")
+    except Exception:
+        confirmed_mid, tp_mid = item.get("pro_message_id"), item.get("first_tp_message_id")
+    confirmed_url = _msg_url(confirmed_mid)
+    tp_url = _msg_url(tp_mid)
     if confirmed_url: rows.append([{"text":"📌 چارت Confirmed اصلی", "url":confirmed_url}])
     if tp_url: rows.append([{"text":"🏁 چارت تاریخی TP1", "url":tp_url}])
     markup = {"inline_keyboard": rows} if rows else None
