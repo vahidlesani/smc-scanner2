@@ -1718,10 +1718,25 @@ def send_tp1_event(signal: dict) -> bool:
     )
 
 
+def _final_lifecycle_anchor(event: dict) -> int:
+    """Choose the only valid parent for a final result of this exact position.
+
+    Initial-stop LOSS belongs below its own Confirmed chart.  A WIN belongs
+    below the last reached TP (TP1..TP5), including a protected remainder that
+    exits at Entry+5 ticks / prior-TP+5 ticks.
+    """
+    signal_id = str(event.get("signal_id") or "")
+    result = str(event.get("result") or "").upper()
+    hit_index = max(0, min(5, int(event.get("hit_index") or 0)))
+    if result == "WIN" and hit_index:
+        return _exact_event_message_id(signal_id, f"TP{hit_index}")
+    return _exact_event_message_id(signal_id, "CONFIRMED", int(event.get("pro_message_id") or 0))
+
+
 def send_trade_close_event(event: dict) -> bool:
-    """Final realized outcome with live chart, always under Confirmed."""
+    """Final result with a live chart under its exact lifecycle parent."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
-    reply_id = int(event.get("pro_message_id") or 0) or None
+    reply_id = _final_lifecycle_anchor(event) or None
     result = str(event.get("result") or "")
     emoji = "✅" if result == "WIN" else "❌" if result == "LOSS" else "⚪"
     iran, duration, _ = _event_clock(event)
@@ -1761,10 +1776,8 @@ def send_trade_result(event: dict) -> bool:
     target = CHAT_ID_RESULTS or CHAT_ID_ADMIN
     send_signal_separator(target)
     emoji = "✅" if result == "WIN" else "❌"
-    confirmed_mid = _exact_event_message_id(
-        str(event.get("signal_id") or ""), "CONFIRMED", int(event.get("pro_message_id") or 0)
-    )
-    link = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, confirmed_mid)
+    anchor_mid = _final_lifecycle_anchor(event)
+    link = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, anchor_mid)
     code = _e(event.get("public_code") or event.get("signal_id"))
     link_line = f'<a href="{link}">🆔 <code>{code}</code></a>\n' if link else f"🆔 <code>{code}</code>\n"
     return send_message(
@@ -1813,7 +1826,8 @@ def _event_chart_candidate(event: dict) -> SignalCandidate:
         direction=direction, score=0, status="CONFIRMED", entry_zone_bottom=entry,
         entry_zone_top=entry, planned_entry=entry, sl=sl, tp1=tp1, tp2=tp2,
         rr_tp1=rr1, rr_tp2=rr2, bias="BULLISH" if direction == "LONG" else "BEARISH",
-        trigger_timeframe="5m" if str(event.get("style")) == "SCALP" else "15m",
+        # Final live chart must stay on the position's own trigger timeframe.
+        trigger_timeframe=str(event.get("trigger_timeframe") or ("5m" if str(event.get("style")) == "SCALP" else "15m")),
         metadata={"target_event": str(event.get("event") or ""), "public_code": event.get("public_code") or event.get("signal_id")},
     )
 
@@ -1844,10 +1858,18 @@ def send_ladder_event(event: dict) -> bool:
             f"\n🔒 Trailing SL جدید: <b>{_price(float(event.get('new_sl') or event.get('sl') or 0))}</b>"
         )
     else:
-        title = "PROFIT PROTECTED EXIT" if kind == "TRAIL_STOP" else "STOP LOSS HIT"
+        hit_index = max(0, min(5, int(event.get("hit_index") or 0)))
+        if kind == "TRAIL_STOP" and hit_index:
+            # Once any TP is hit, the remaining size is a protected exit — it
+            # must never be presented to members as a stop-loss.
+            title = f"TP{hit_index} HIT • خروج محافظت‌شده باقی‌مانده"
+            price_label = "📍 قیمت بسته‌شدن باقی‌مانده"
+        else:
+            title = "STOP LOSS HIT"
+            price_label = "📍 Stop اجرا شد"
         text = (
             f"🔒 <b>{title}</b> • <code>{code}</code>\n\n" + common + "\n" + _tp_status_lines(event) + "\n\n"
-            f"📍 Stop اجرا شد: <b>{_price(float(event.get('stop') or event.get('sl') or 0))}</b>\n"
+            f"{price_label}: <b>{_price(float(event.get('stop') or event.get('sl') or 0))}</b>\n"
             f"💰 سود/ضرر تجمعی: <b>${float(event.get('realized_profit_usd', 0)):+.2f}</b>\n"
             f"🚀 ROI با اهرم: <b>{float(event.get('realized_margin_roi_pct', 0)):+.2f}%</b>"
         )

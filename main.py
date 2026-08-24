@@ -523,7 +523,15 @@ def monitor_confirmed_results() -> int:
                     event["first_tp_message_id"] = event["pro_event_message_id"]
             send_tp1_event(event)  # immutable Win Rate link to this exact TP receipt
         elif event.get("event") in {"TRAIL_STOP", "STOP"}:
-            send_ladder_event(event)
+            lifecycle_mid = send_ladder_event(event)
+            if lifecycle_mid:
+                # Keep the protected-exit/stop receipt attached to this exact
+                # position too. Final WIN links still deliberately anchor to
+                # the last TP reached; final LOSS anchors to Confirmed.
+                record_telegram_event(
+                    event["signal_id"], str(event.get("event") or "STOP"),
+                    str(CHAT_ID_EXECUTION or ""), int(lifecycle_mid),
+                )
         elif event.get("event") == "CLOSED":
             send_trade_close_event(event)
             send_trade_result(event)
