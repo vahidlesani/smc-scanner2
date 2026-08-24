@@ -57,6 +57,10 @@ class V7ModelTests(unittest.TestCase):
         value = generate_viva_signal_id("ETHUSDT", "SCALP", "TLR")
         self.assertTrue(value.startswith("viva-ETH-SC-TLR-"))
 
+    def test_public_code_has_k_prefix_and_six_digits(self):
+        from analysis.models import generate_viva_public_code
+        self.assertRegex(generate_viva_public_code("PINVAL"), r"^VIVA-PINBAR-K\d{6}$")
+
     def test_educational_label_is_unambiguous(self):
         text = build_educational_message(make_candidate())
         self.assertIn("این پیام تأیید ورود نیست", text)
@@ -269,6 +273,18 @@ class V7PersistenceTests(unittest.TestCase):
 
     def tearDown(self):
         self.tempdir.cleanup()
+
+    def test_public_code_registry_retries_collision_and_never_reassigns(self):
+        from database.repository_v7 import reserve_public_code
+        first, second = make_candidate("EDUCATIONAL", 7), make_candidate("EDUCATIONAL", 7)
+        first.metadata["public_code"] = "VIVA-PINBAR-K100000"
+        second.metadata["public_code"] = "VIVA-PINBAR-K100000"
+        first_code = reserve_public_code(first)
+        second_code = reserve_public_code(second)
+        self.assertEqual(first_code, "VIVA-PINBAR-K100000")
+        self.assertNotEqual(second_code, first_code)
+        self.assertRegex(second_code, r"^VIVA-[A-Z0-9]+-K\d{6}$")
+        self.assertEqual(reserve_public_code(first), first_code)
 
     def test_unconfirmed_cannot_enter_signal_history(self):
         from database.repository_v7 import save_confirmed_signal

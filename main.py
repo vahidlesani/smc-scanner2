@@ -69,6 +69,7 @@ from database.repository_v7 import (
     monitor_confirmed_trades,
     repair_legacy_tp1_misclassified_results,
     release_symbol_lock,
+    reserve_public_code,
     save_confirmed_signal,
     record_telegram_event,
     set_pro_message_id,
@@ -154,6 +155,14 @@ def run_discovery_scan() -> Dict[str, int]:
             for candidate in candidates:
                 if candidate.score < SETTINGS.educational_min_score:
                     continue
+                # Reserve before *any* public alert. A display code is a real
+                # position identity, not a random label that may later change.
+                try:
+                    reserve_public_code(candidate)
+                except Exception as exc:
+                    stats["errors"] += 1
+                    print(f"Public-code reservation failed {candidate.signal_id}: {exc}")
+                    continue  # fail closed; never publish an unreserved code
                 if SETTINGS.skip_dead_gate_candidates and not candidate.execution_ready:
                     # A failing mandatory gate can never be repaired later, so
                     # this candidate can never confirm. Keep it educational,

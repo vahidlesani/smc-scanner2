@@ -123,9 +123,13 @@ def generate_viva_public_code(setup_code: str = "", style: str = "") -> str:
     """Stable human-facing lineage code; never embeds update time or symbol."""
     import secrets
     label_map = {
-        "PINVAL": "PINBAR", "TLBREAK": "TLBREAK", "P1234": "P1234",
-        "LSR": "LSR", "SDR": "SDR", "BOS1": "BOS", "IFVG": "IFVG", "TLR": "TLR",
+        "PINVAL": "PINBAR", "PINWALLQ": "PINWALLQ", "TLBREAK": "TLBREAK",
+        "ALBROX": "ALBROX", "P1234": "P1234", "LSR": "LSR", "SDR": "SDR",
+        "BOS1": "BOS", "IFVG": "IFVG", "TLR": "TLR",
     }
     raw = "".join(ch for ch in str(setup_code).upper() if ch.isalnum())[:12]
     label = label_map.get(raw, raw or "SETUP")
-    return f"VIVA-{label}-CODE{secrets.randbelow(90000) + 10000}"
+    # Human-readable proposal only. Before any Telegram publication it is
+    # atomically reserved in PostgreSQL by `reserve_public_code`, so randomness
+    # never becomes the uniqueness guarantee.
+    return f"VIVA-{label}-K{secrets.randbelow(900000) + 100000}"

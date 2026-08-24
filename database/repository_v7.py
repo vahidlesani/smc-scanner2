@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from analysis.models import SignalCandidate
+from analysis.models import SignalCandidate, generate_viva_public_code
 from analysis.risk import build_money_management
 from analysis.trade_management import build_ladder, advance_ladder, entry_touched
 from config import get_settings
@@ -156,6 +156,15 @@ def init_v7_schema() -> None:
                 message_id BIGINT NOT NULL,
                 created_at TEXT NOT NULL,
                 PRIMARY KEY (signal_id, event_key)
+            )
+        """)
+        # A public code is a permanent, human-facing position identity. The
+        # primary key makes duplicate issuance impossible even across workers.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS signal_public_code_registry (
+                public_code TEXT PRIMARY KEY,
+                signal_id TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
             )
         """)
         if legacy_db.USE_POSTGRES:
@@ -462,6 +471,9 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
         raise ValueError("Candidate does not meet execution quality gates")
     if confirmed_exists(candidate.signal_id):
         return False
+    # Defensive second reservation: discovery reserves before educational
+    # publication, while this protects direct/manual confirmation paths too.
+    reserve_public_code(candidate)
 
     allowed, reason = portfolio_guard(candidate)
     if not allowed:
@@ -684,6 +696,51 @@ def mark_confirmation_published(signal_id: str) -> None:
             """,
             (published_at, signal_id, SETTINGS.strategy_version),
         )
+
+
+def reserve_public_code(candidate: SignalCandidate) -> str:
+    """Atomically reserve the only public code a position may ever use.
+
+    Six digits are for readability/capacity; the registry primary key, not
+    probability, is the guarantee. A collision retries before any Telegram
+    message is published. The signal id has a UNIQUE constraint too, making
+    retries/restarts return its original code.
+    """
+    p = legacy_db._ph()
+    signal_id = str(candidate.signal_id)
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(f"SELECT public_code FROM signal_public_code_registry WHERE signal_id={p}", (signal_id,))
+        existing = cursor.fetchone()
+        if existing:
+            code = str(existing[0])
+            candidate.metadata["public_code"] = code
+            return code
+
+        preferred = str((candidate.metadata or {}).get("public_code") or "")
+        for attempt in range(64):
+            code = preferred if attempt == 0 and preferred else generate_viva_public_code(candidate.setup_code, candidate.style)
+            # Never reuse a historical code even if it predates the registry.
+            cursor.execute(f"SELECT 1 FROM signals WHERE public_code={p} LIMIT 1", (code,))
+            if cursor.fetchone():
+                continue
+            if legacy_db.USE_POSTGRES:
+                cursor.execute(
+                    f"INSERT INTO signal_public_code_registry (public_code,signal_id,created_at) "
+                    f"VALUES ({p},{p},{p}) ON CONFLICT DO NOTHING",
+                    (code, signal_id, _now()),
+                )
+            else:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO signal_public_code_registry (public_code,signal_id,created_at) VALUES (?,?,?)",
+                    (code, signal_id, _now()),
+                )
+            cursor.execute(f"SELECT public_code FROM signal_public_code_registry WHERE signal_id={p}", (signal_id,))
+            row = cursor.fetchone()
+            if row:
+                code = str(row[0])
+                candidate.metadata["public_code"] = code
+                return code
+    raise RuntimeError(f"Could not reserve unique public code for {signal_id}")
 
 
 def set_pro_message_id(signal_id: str, message_id: int) -> None:
