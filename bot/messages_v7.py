@@ -1712,7 +1712,8 @@ def send_tp1_event(signal: dict) -> bool:
         f"🎯 <b>{_e(signal.get('source') or signal.get('strategy_fa') or 'SETUP')}</b>\n"
         f"{code_line}\n\n"
         f"✅ خروج: {float(signal.get('weight', 0)):.0f}% • حرکت قیمت {float(signal.get('leg_price_move_pct', 0)):+.2f}%\n"
-        f"💰 سود: <b>${float(signal.get('leg_profit_usd', 0)):+.2f}</b> • ROI با اهرم: <b>{float(signal.get('leg_margin_roi_pct', 0)):+.2f}%</b>\n"
+        f"💰 سود این پله: <b>${float(signal.get('leg_profit_usd', 0)):+.2f}</b>\n"
+        f"🚀 بازده این پله با اهرم: <b>{float(signal.get('leg_full_roi_pct', 0)):+.2f}%</b> • اثر بر کل مارجین: <b>{float(signal.get('leg_margin_roi_pct', 0)):+.2f}%</b>\n"
         f"🔒 Trailing SL → <b>{_price(float(signal.get('new_sl') or signal.get('sl') or 0))}</b>",
         target,
     )
@@ -1874,7 +1875,8 @@ def send_ladder_event(event: dict) -> bool:
             f"📊 حرکت قیمت این مرحله: <b>{float(event.get('leg_price_move_pct', 0)):+.2f}%</b>\n"
             f"💼 اهرم: <b>{int(event.get('leverage') or 1)}x</b> • Margin: <b>${float(event.get('margin') or 0):.2f}</b>\n"
             f"💰 سود این مرحله: <b>${float(event.get('leg_profit_usd', 0)):+.2f}</b>\n"
-            f"🚀 ROI با اهرم: <b>{float(event.get('leg_margin_roi_pct', 0)):+.2f}%</b>\n"
+            f"🚀 بازده این پله با اهرم: <b>{float(event.get('leg_full_roi_pct', 0)):+.2f}%</b>\n"
+            f"📌 اثر این پله بر کل مارجین: <b>{float(event.get('leg_margin_roi_pct', 0)):+.2f}%</b>\n"
             f"\n🔒 Trailing SL جدید: <b>{_price(float(event.get('new_sl') or event.get('sl') or 0))}</b>"
         )
     else:
