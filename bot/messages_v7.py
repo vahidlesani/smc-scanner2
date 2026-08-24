@@ -1683,7 +1683,13 @@ def _event_clock(event: dict) -> tuple[str, str, str]:
         mins = max(0, int(delta.total_seconds() // 60))
         duration = f"{mins//1440:02d}D {mins%1440//60:02d}H {mins%60:02d}M"
     else: duration = "—"
-    latency = "—"
+    # This is message-publication latency from the closed market event, not
+    # trade duration. Keep it explicit so channel timing is auditable.
+    if happened:
+        lag_seconds = max(0, int((datetime.now(ZoneInfo("UTC")) - happened.astimezone(ZoneInfo("UTC"))).total_seconds()))
+        latency = f"{lag_seconds // 60}m {lag_seconds % 60}s"
+    else:
+        latency = "—"
     return iran, duration, latency
 
 
@@ -1760,12 +1766,12 @@ def send_trade_close_event(event: dict) -> bool:
     reply_id = _final_lifecycle_anchor(event) or None
     result = str(event.get("result") or "")
     emoji = "✅" if result == "WIN" else "❌" if result == "LOSS" else "⚪"
-    iran, duration, _ = _event_clock(event)
+    iran, duration, latency = _event_clock(event)
     code = _e(event.get("public_code") or event.get("signal_id"))
     text = (
         f"{emoji} <b>نتیجه نهایی پوزیشن</b> • <code>{code}</code>\n\n"
         f"🪙 {_e(event.get('symbol'))} • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('style'))}\n"
-        f"🕓 ایران: {iran} • ⏱ مدت: {duration}\n\n"
+        f"🕓 ایران: {iran} • ⏱ مدت: {duration} • 📡 تأخیر ارسال: {latency}\n\n"
         f"🎯 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
         f"🛑 First Stop: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
         f"📈 Live/Exit Price: <b>{_price(float(event.get('live_price') or 0))}</b>\n"
@@ -1864,7 +1870,7 @@ def send_ladder_event(event: dict) -> bool:
     code = _e(event.get("public_code") or event.get("signal_id"))
     common = (
         f"🪙 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('style'))} • {_e(event.get('direction'))}\n"
-        f"🕓 ایران: {iran}  •  ⏱ مدت: {duration}\n"
+        f"🕓 ایران: {iran}  •  ⏱ مدت: {duration} • 📡 تأخیر ارسال: {latency}\n"
         f"\n🎯 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
         f"🛑 First Stop: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
         f"📈 Live Price: <b>{_price(float(event.get('live_price') or 0))}</b>\n"
