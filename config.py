@@ -138,6 +138,11 @@ class Settings:
     daily_loss_limit_percent: float = 3.0
     partial_tp1_percent: float = 60.0
     partial_tp2_percent: float = 40.0
+    # A Confirmed limit scenario is not a trade until price actually touches
+    # Entry. These are maximum *trigger-timeframe closed candles* to wait.
+    entry_fill_max_bars_daytrade: int = 16
+    entry_fill_max_bars_swing: int = 24
+    entry_fill_max_bars_scalp: int = 24
     fee_rate_percent: float = 0.06
     slippage_percent: float = 0.03
 
@@ -230,6 +235,9 @@ class Settings:
             daily_loss_limit_percent=_float("DAILY_LOSS_LIMIT_PERCENT", cls.daily_loss_limit_percent),
             partial_tp1_percent=_float("PARTIAL_TP1_PERCENT", cls.partial_tp1_percent),
             partial_tp2_percent=_float("PARTIAL_TP2_PERCENT", cls.partial_tp2_percent),
+            entry_fill_max_bars_daytrade=_int("ENTRY_FILL_MAX_BARS_DAYTRADE", cls.entry_fill_max_bars_daytrade),
+            entry_fill_max_bars_swing=_int("ENTRY_FILL_MAX_BARS_SWING", cls.entry_fill_max_bars_swing),
+            entry_fill_max_bars_scalp=_int("ENTRY_FILL_MAX_BARS_SCALP", cls.entry_fill_max_bars_scalp),
             fee_rate_percent=_float("FEE_RATE_PERCENT", cls.fee_rate_percent),
             slippage_percent=_float("SLIPPAGE_PERCENT", cls.slippage_percent),
             watchlist_top_turnover=_int("WATCHLIST_TOP_TURNOVER", cls.watchlist_top_turnover),

@@ -42,6 +42,7 @@ from bot.messages_v7 import (
     send_ladder_event,
     send_trade_result,
     send_trade_close_event,
+    send_no_fill_event,
 )
 from config import get_settings
 from data.fetcher import get_klines, get_market_bundle
@@ -532,6 +533,8 @@ def monitor_confirmed_results() -> int:
                     event["signal_id"], str(event.get("event") or "STOP"),
                     str(CHAT_ID_EXECUTION or ""), int(lifecycle_mid),
                 )
+        elif event.get("event") == "NO_FILL":
+            send_no_fill_event(event)
         elif event.get("event") == "CLOSED":
             send_trade_close_event(event)
             send_trade_result(event)

@@ -1,4 +1,10 @@
-from analysis.trade_management import build_ladder, advance_ladder
+from analysis.trade_management import build_ladder, advance_ladder, entry_touched
+
+
+def test_entry_fill_requires_a_real_ohlc_touch():
+    assert entry_touched(100.0, 101.0, 99.9)
+    assert not entry_touched(100.0, 101.0, 100.01)
+    assert not entry_touched(100.0, 99.99, 98.0)
 
 
 def test_ladder_long_targets_and_trail():

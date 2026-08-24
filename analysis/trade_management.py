@@ -9,6 +9,16 @@ from typing import Dict, List, Optional
 DEFAULT_WEIGHTS = (35.0, 35.0, 20.0, 5.0, 5.0)
 
 
+def entry_touched(entry: float, candle_high: float, candle_low: float) -> bool:
+    """True only when the confirmed limit entry was tradeable in this candle.
+
+    A signal is a scenario, not a filled position.  We deliberately require a
+    real OHLC touch and do not infer a fill merely because price later reached
+    a stop or target.
+    """
+    return float(candle_low) <= float(entry) <= float(candle_high)
+
+
 def venue_tick(price: float, market: Optional[Dict] = None) -> float:
     market = market or {}
     try:

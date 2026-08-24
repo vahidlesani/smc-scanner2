@@ -15,7 +15,7 @@ import pandas as pd
 
 from analysis.models import SignalCandidate
 from analysis.risk import build_money_management
-from analysis.trade_management import build_ladder, advance_ladder
+from analysis.trade_management import build_ladder, advance_ladder, entry_touched
 from config import get_settings
 from data.fetcher import get_klines
 from database import db as legacy_db
@@ -48,6 +48,9 @@ SIGNAL_COLUMNS = {
     "strategy_variant": "TEXT DEFAULT ''",
     "public_code": "TEXT DEFAULT ''",
     "first_tp_message_id": "INTEGER DEFAULT 0",
+    "entry_filled": "BOOLEAN DEFAULT FALSE",
+    "entry_filled_at": "TEXT",
+    "cancel_reason": "TEXT DEFAULT ''",
 }
 
 ACTIVE_COLUMNS = {
@@ -70,6 +73,9 @@ ACTIVE_COLUMNS = {
     "strategy_variant": "TEXT DEFAULT ''",
     "public_code": "TEXT DEFAULT ''",
     "first_tp_message_id": "INTEGER DEFAULT 0",
+    "entry_filled": "BOOLEAN DEFAULT FALSE",
+    "entry_filled_at": "TEXT",
+    "cancel_reason": "TEXT DEFAULT ''",
 }
 
 
@@ -117,8 +123,17 @@ def init_v7_schema() -> None:
             # Serialize schema migration across scanner/web containers and
             # Gunicorn workers. The lock is released automatically on commit.
             cursor.execute("SELECT pg_advisory_xact_lock(866712370)")
+        # Existing open positions predate the fill gate. Preserve their state
+        # as already-filled once during this migration; only newly confirmed
+        # records start unfilled.
+        signals_before = _table_columns(cursor, "signals")
+        active_before = _table_columns(cursor, "active_signals")
         _migrate_columns(cursor, "signals", SIGNAL_COLUMNS)
         _migrate_columns(cursor, "active_signals", ACTIVE_COLUMNS)
+        if "entry_filled" not in signals_before:
+            cursor.execute("UPDATE signals SET entry_filled=" + ("TRUE" if legacy_db.USE_POSTGRES else "1") + " WHERE status='CONFIRMED' AND result='PENDING'")
+        if "entry_filled" not in active_before:
+            cursor.execute("UPDATE active_signals SET entry_filled=" + ("TRUE" if legacy_db.USE_POSTGRES else "1") + " WHERE status='CONFIRMED'")
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS signal_symbol_locks (
                 symbol TEXT PRIMARY KEY,
@@ -562,8 +577,9 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
         cursor.execute(active_sql, active_params)
         public_code = str(candidate.metadata.get("public_code") or candidate.signal_id)
         variant = str(candidate.metadata.get("strategy_variant") or "")
-        cursor.execute(f"UPDATE signals SET target_state_json={p}, public_code={p}, strategy_variant={p} WHERE signal_id={p}", (ladder_json, public_code, variant, candidate.signal_id))
-        cursor.execute(f"UPDATE active_signals SET target_state_json={p}, public_code={p}, strategy_variant={p} WHERE signal_id={p}", (ladder_json, public_code, variant, candidate.signal_id))
+        # Every new confirmation begins as a scenario awaiting a real Entry touch.
+        cursor.execute(f"UPDATE signals SET target_state_json={p}, public_code={p}, strategy_variant={p}, entry_filled={_bool_value(False)}, entry_filled_at=NULL, cancel_reason='' WHERE signal_id={p}", (ladder_json, public_code, variant, candidate.signal_id))
+        cursor.execute(f"UPDATE active_signals SET target_state_json={p}, public_code={p}, strategy_variant={p}, entry_filled={_bool_value(False)}, entry_filled_at=NULL, cancel_reason='' WHERE signal_id={p}", (ladder_json, public_code, variant, candidate.signal_id))
     return True
 
 
@@ -841,7 +857,8 @@ def monitor_confirmed_trades() -> List[Dict]:
             SELECT signal_id, symbol, direction, entry, sl_original, tp1, tp2,
                    leverage, margin_usd, trade_style, confirmed_at,
                    last_checked_at, tp1_hit, source, strategy_fa,
-                   strategy_version, pro_message_id, target_state_json, public_code, first_tp_message_id, trigger_timeframe
+                   strategy_version, pro_message_id, target_state_json, public_code, first_tp_message_id, trigger_timeframe,
+                   entry_filled, entry_filled_at
             FROM signals
             WHERE confirmed={truth}
               AND confirmation_sent={truth}
@@ -864,8 +881,10 @@ def monitor_confirmed_trades() -> List[Dict]:
             signal_id, symbol, direction, entry, original_sl, tp1, tp2,
             leverage, margin, style, confirmed_at, last_checked_at,
             tp1_hit, source, strategy_fa, strategy_version, pro_message_id, target_state_json, public_code, first_tp_message_id, trigger_timeframe,
+            entry_filled, entry_filled_at,
         ) = row
-        timeframe = "5m" if style == "SCALP" else "15m"
+        # Monitor the same trigger TF shown in Confirmed, not a generic 15m.
+        timeframe = str(trigger_timeframe or ("5m" if style == "SCALP" else "15m")).lower()
         key = (symbol, timeframe)
         if key not in by_symbol_tf:
             by_symbol_tf[key] = get_klines(symbol, timeframe, 300, closed_only=True, use_cache=False)
@@ -878,6 +897,71 @@ def monitor_confirmed_trades() -> List[Dict]:
             timestamps = timestamps.dt.tz_convert("UTC").dt.tz_localize(None)
         pending = frame.loc[timestamps > start].copy() if start is not None else frame.tail(1).copy()
         if pending.empty:
+            continue
+
+        # ── Entry Fill Gate ──────────────────────────────────────────────
+        # Confirmed means the analysis was approved; it does NOT mean a limit
+        # entry filled. Do not allow pre-entry price to hit a stop/TP and turn
+        # an untouched scenario into a WIN or LOSS.
+        if not bool(entry_filled):
+            confirmed_ts = _naive_timestamp(confirmed_at)
+            max_fill_bars = (
+                SETTINGS.entry_fill_max_bars_swing if str(style).upper() == "SWING"
+                else SETTINGS.entry_fill_max_bars_scalp if str(style).upper() == "SCALP"
+                else SETTINGS.entry_fill_max_bars_daytrade
+            )
+            fill_candle = None
+            ambiguous_entry_stop = False
+            for _, candle in pending.iterrows():
+                high, low = float(candle["high"]), float(candle["low"])
+                if not entry_touched(float(entry), high, low):
+                    continue
+                # OHLC cannot prove ordering if entry and original stop were
+                # both crossed in one candle. Fail closed as NO TRADE rather
+                # than inventing a loss before an executable fill is proven.
+                stop_crossed = low <= float(original_sl) if str(direction).upper() == "LONG" else high >= float(original_sl)
+                if stop_crossed:
+                    ambiguous_entry_stop = True
+                else:
+                    fill_candle = candle
+                break
+
+            if fill_candle is not None:
+                filled_at = _naive_timestamp(fill_candle["timestamp"])
+                filled_text = filled_at.isoformat(sep=" ", timespec="seconds") if filled_at is not None else _now()
+                with legacy_db.db_cursor() as cursor:
+                    cursor.execute(f"UPDATE signals SET entry_filled={truth}, entry_filled_at={p}, last_checked_at={p} WHERE signal_id={p}", (filled_text, filled_text, signal_id))
+                    cursor.execute(f"UPDATE active_signals SET entry_filled={truth}, entry_filled_at={p}, last_checked_at={p} WHERE signal_id={p}", (filled_text, filled_text, signal_id))
+                # Begin TP/stop accounting from the following monitor cycle;
+                # this avoids taking credit for a target crossed before entry.
+                continue
+
+            fill_history = frame.loc[timestamps > confirmed_ts] if confirmed_ts is not None else pending
+            expired = len(fill_history) >= max(1, int(max_fill_bars))
+            if ambiguous_entry_stop or expired:
+                reason = "AMBIGUOUS_ENTRY_STOP_SAME_CANDLE" if ambiguous_entry_stop else "ENTRY_NOT_TOUCHED"
+                closed_at = _now()
+                with legacy_db.db_cursor() as cursor:
+                    cursor.execute(f"UPDATE signals SET status='CANCELLED', result='CANCELLED', cancel_reason={p}, closed_at={p}, last_checked_at={p} WHERE signal_id={p}", (reason, closed_at, closed_at, signal_id))
+                    cursor.execute(f"UPDATE active_signals SET status='CANCELLED', is_cancelled={truth}, cancel_reason={p}, last_checked_at={p} WHERE signal_id={p}", (reason, closed_at, signal_id))
+                    cursor.execute(f"DELETE FROM signal_symbol_locks WHERE symbol={p} AND signal_id={p} AND strategy_version={p}", (symbol, signal_id, SETTINGS.strategy_version))
+                events.append({
+                    "event": "NO_FILL", "signal_id": signal_id, "symbol": symbol, "direction": direction,
+                    "style": style, "source": source, "strategy_fa": strategy_fa, "strategy_version": strategy_version,
+                    "confirmed_at": str(confirmed_at), "confirmation_sent": True, "pro_message_id": int(pro_message_id or 0),
+                    "public_code": public_code, "entry": float(entry), "original_sl": float(original_sl),
+                    "trigger_timeframe": timeframe, "event_at": closed_at, "reason": reason,
+                })
+                continue
+
+            # Still awaiting Entry: move the cursor only. This state has no
+            # PnL and is excluded from Win Rate until a real fill exists.
+            latest = _naive_timestamp(pending.iloc[-1]["timestamp"])
+            if latest is not None:
+                latest_text = latest.isoformat(sep=" ", timespec="seconds")
+                with legacy_db.db_cursor() as cursor:
+                    cursor.execute(f"UPDATE signals SET last_checked_at={p} WHERE signal_id={p}", (latest_text, signal_id))
+                    cursor.execute(f"UPDATE active_signals SET last_checked_at={p} WHERE signal_id={p}", (latest_text, signal_id))
             continue
 
         # New signals carry a durable 5-TP ladder. Legacy rows keep the old

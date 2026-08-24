@@ -1733,6 +1733,26 @@ def _final_lifecycle_anchor(event: dict) -> int:
     return _exact_event_message_id(signal_id, "CONFIRMED", int(event.get("pro_message_id") or 0))
 
 
+def send_no_fill_event(event: dict) -> bool:
+    """Close an untouched confirmed scenario without creating a trade result."""
+    if str(event.get("event") or "") != "NO_FILL":
+        return False
+    target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    reply_id = _exact_event_message_id(
+        str(event.get("signal_id") or ""), "CONFIRMED", int(event.get("pro_message_id") or 0)
+    ) or None
+    code = _e(event.get("public_code") or event.get("signal_id"))
+    reason = "کندل ورود و استاپ هم‌زمان بود؛ ترتیب اجرا از OHLC قابل اثبات نیست." if event.get("reason") == "AMBIGUOUS_ENTRY_STOP_SAME_CANDLE" else "قیمت در مهلت تعیین‌شده به Entry نرسید."
+    return bool(send_message(
+        f"⚪ <b>NO FILL • NO TRADE</b> • <code>{code}</code>\n\n"
+        f"🪙 {_e(event.get('symbol'))} • {_e(event.get('trigger_timeframe') or event.get('style'))}\n"
+        f"🎯 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
+        f"📌 {reason}\n"
+        f"این سناریو Cancelled شد؛ <b>نه Win است، نه Loss و در Win Rate حساب نمی‌شود.</b>",
+        target, reply_to_message_id=reply_id
+    ))
+
+
 def send_trade_close_event(event: dict) -> bool:
     """Final result with a live chart under its exact lifecycle parent."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN

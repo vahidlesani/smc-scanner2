@@ -340,13 +340,19 @@ class V7PersistenceTests(unittest.TestCase):
         mark_confirmation_published(candidate.signal_id)
 
         frame = pd.DataFrame([
+            # Real Entry touch first: confirmation alone must not arm TP/SL.
             {
                 "timestamp": confirmed_time.replace(tzinfo=None) + timedelta(minutes=15),
-                "open": 100.0, "high": 106.5, "low": 99.6, "close": 105.0,
+                "open": 100.0, "high": 100.2, "low": 99.4, "close": 99.8,
                 "volume": 1000, "turnover": 100000,
             },
             {
                 "timestamp": confirmed_time.replace(tzinfo=None) + timedelta(minutes=30),
+                "open": 100.0, "high": 106.5, "low": 100.0, "close": 105.0,
+                "volume": 1000, "turnover": 100000,
+            },
+            {
+                "timestamp": confirmed_time.replace(tzinfo=None) + timedelta(minutes=45),
                 "open": 105.0, "high": 105.2, "low": 99.4, "close": 100.0,
                 "volume": 1000, "turnover": 100000,
             },
@@ -354,6 +360,9 @@ class V7PersistenceTests(unittest.TestCase):
         original = repository_v7.get_klines
         repository_v7.get_klines = lambda *args, **kwargs: frame
         try:
+            # First cycle records only the fill; later candles are managed in
+            # the next cycle, never retroactively credited before Entry.
+            self.assertEqual(repository_v7.monitor_confirmed_trades(), [])
             events = repository_v7.monitor_confirmed_trades()
         finally:
             repository_v7.get_klines = original
