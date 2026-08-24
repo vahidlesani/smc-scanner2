@@ -77,6 +77,18 @@ class V7ModelTests(unittest.TestCase):
         self.assertIn("مدیریت سرمایه بهینه", text)
         self.assertIn("viva-", text)
 
+    def test_lifecycle_chart_escalates_only_when_fixed_tool_would_leave_frame(self):
+        from unittest.mock import patch
+        from bot.messages_v7 import _lifecycle_chart_frame
+        candidate = make_candidate("CONFIRMED", 8)
+        candidate.trigger_timeframe = "15m"
+        narrow = pd.DataFrame({"timestamp": pd.date_range("2026-01-01", periods=3, freq="15min"), "open":[100]*3,"high":[102]*3,"low":[99]*3,"close":[100]*3,"volume":[1]*3})
+        wide = pd.DataFrame({"timestamp": pd.date_range("2026-01-01", periods=3, freq="30min"), "open":[100]*3,"high":[112]*3,"low":[97]*3,"close":[100]*3,"volume":[1]*3})
+        with patch("data.fetcher.get_klines", side_effect=lambda _s, tf, *_a, **_k: narrow if tf == "15m" else wide):
+            frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, candidate.tp1, candidate.tp2])
+        self.assertIs(frame, wide)
+        self.assertEqual(candidate.metadata["chart_view_tf"], "30m")
+
     def test_branded_confirmed_chart_is_exact_1440_by_900_png(self):
         from bot.messages_v7 import generate_chart
 

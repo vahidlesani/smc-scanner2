@@ -661,8 +661,8 @@ def handle_recent_signals(chat_id):
             dir_emoji = "🟢" if s['direction'] == "LONG" else "🔴"
             res = {"WIN": "✅", "LOSS": "❌", "PENDING": "⏳"}.get(s['result'], "⏳")
             lines.append(
-                f"{res} <code>{s['signal_id']}</code>\n"
-                f"🪙 {s['symbol']} | {s['direction']} {dir_emoji} | 🔮 {s['strategy_fa']}\n"
+                f"{res} <code>{s.get('public_code') or s['signal_id']}</code>\n"
+                f"🪙 {s['symbol']} | {s.get('trigger_timeframe') or s.get('trade_style','')} | {s['direction']} {dir_emoji} | 🔮 {s['strategy_fa']}\n"
                 f"🎯 {s['entry']:.4f} | 🛑 {s['sl']:.4f} | {s['pnl_pct']:+.2f}%")
         send_message("\n".join(lines), chat_id, main_menu_keyboard())
     except Exception as e:
@@ -693,9 +693,9 @@ def handle_result_detail(chat_id, token):
     from bot.messages_v7 import generate_chart
     from data.fetcher import get_klines
     entry, sl = float(item.get("entry") or 0), float(item.get("sl") or 0)
-    c = SignalCandidate(signal_id=str(item.get("signal_id")), symbol=str(item.get("symbol")), style=str(item.get("trade_style") or "DAYTRADE"), setup_code=str(item.get("source") or "SETUP"), setup_name=str(item.get("source") or "SETUP"), strategy_fa=str(item.get("strategy_fa") or "SETUP"), direction=str(item.get("direction") or "LONG"), score=int(item.get("score") or 0), status="CONFIRMED", entry_zone_bottom=entry, entry_zone_top=entry, planned_entry=entry, sl=sl, tp1=float(item.get("tp1") or entry), tp2=float(item.get("tp2") or entry), rr_tp1=0, rr_tp2=0, bias="BULLISH" if item.get("direction")=="LONG" else "BEARISH", trigger_timeframe="15m", metadata={"public_code":item.get("public_code") or item.get("signal_id")})
+    c = SignalCandidate(signal_id=str(item.get("signal_id")), symbol=str(item.get("symbol")), style=str(item.get("trade_style") or "DAYTRADE"), setup_code=str(item.get("source") or "SETUP"), setup_name=str(item.get("source") or "SETUP"), strategy_fa=str(item.get("strategy_fa") or "SETUP"), direction=str(item.get("direction") or "LONG"), score=int(item.get("score") or 0), status="CONFIRMED", entry_zone_bottom=entry, entry_zone_top=entry, planned_entry=entry, sl=sl, tp1=float(item.get("tp1") or entry), tp2=float(item.get("tp2") or entry), rr_tp1=0, rr_tp2=0, bias="BULLISH" if item.get("direction")=="LONG" else "BEARISH", trigger_timeframe=str(item.get("trigger_timeframe") or "15m"), metadata={"public_code":item.get("public_code") or item.get("signal_id")})
     try:
-        frame=get_klines(c.symbol, "15m", 180, closed_only=False, use_cache=False)
+        frame=get_klines(c.symbol, c.trigger_timeframe, 180, closed_only=False, use_cache=False)
         chart=generate_chart(frame,c,confirmed=True) if frame is not None else None
     except Exception: chart=None
     result={"WIN":"✅ WIN","LOSS":"❌ LOSS","PENDING":"⏳ OPEN"}.get(item.get("result"),"⏳")

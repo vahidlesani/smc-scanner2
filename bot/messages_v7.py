@@ -1034,7 +1034,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             ladder = (candidate.metadata or {}).get("target_ladder") or {}
             ladder_targets = list(ladder.get("targets") or [candidate.tp1, candidate.tp2])
             ladder_weights = list(ladder.get("weights") or [35, 35])
-            levels = [(candidate.planned_entry, "ENTRY", CHART_THEME["entry"])]
+            levels = [
+                (candidate.planned_entry, "ENTRY", CHART_THEME["entry"]),
+                (candidate.sl, "FIRST STOP", CHART_THEME["invalidation"]),
+            ]
             for i, level in enumerate(ladder_targets):
                 label = f"TP{i+1} {float(ladder_weights[i]) if i < len(ladder_weights) else 0:.0f}%"
                 levels.append((float(level), label, CHART_THEME["tp1"] if i < 3 else CHART_THEME["tp2"]))
@@ -1049,6 +1052,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     zorder=8,
                 )
                 _level_tag(ax, tool_end + 0.35, level, f"{label}  {_price(level)}", color)
+
+            hit_index = int(ladder.get("hit_index") or (candidate.metadata or {}).get("hit_index") or 0)
+            trailing_sl = float((candidate.metadata or {}).get("current_trailing_sl") or 0)
+            if hit_index > 0 and trailing_sl > 0:
+                ax.hlines(trailing_sl, tool_start, tool_end, color=CHART_THEME["liquidity"],
+                          linewidth=1.25, linestyles=(0, (2, 2)), zorder=9)
+                _level_tag(ax, tool_end + 0.35, trailing_sl,
+                           f"TRAILING SL • TP{hit_index}  {_price(trailing_sl)}", CHART_THEME["liquidity"])
 
             scenario_x = [count + 0.6, count + 5.2, count + 9.8]
             if _CHART_SCENARIO_ZIGZAG:
@@ -1223,7 +1234,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # The same fitter that powers TLBREAK, projected onto whatever frame
         # is being drawn — dashed so it never fights a TLBREAK alert's own
         # solid lines. At most one structural pair per chart: no clutter.
-        if _CHART_STRUCTURE_LINES and candidate.setup_code != "TLBREAK":
+        # A generic fitted trendline is never decoration. PINVAL/PINWALL/ALBROX
+        # charts must not acquire unrelated black lines; non-TLBREAK setups opt
+        # in only when their detector explicitly validated that overlay.
+        if _CHART_STRUCTURE_LINES and candidate.setup_code != "TLBREAK" and bool(md.get("chart_validated_trendline")):
             try:
                 from analysis.setups_experimental import _fit_channel_line
 
@@ -1284,7 +1298,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         fig.text(
             0.055,
             0.922,
-            f"{candidate.setup_code}  ·  {_chart_market_label(candidate)}  ·  TRIG {candidate.trigger_timeframe.upper()}  ·  {'VIVA SETUP ✦ CONFIRMED' if confirmed else 'VIVA SETUP ✦ ANALYSIS'}",
+            f"{candidate.setup_code}  ·  {_chart_market_label(candidate)}  ·  TRIG {candidate.trigger_timeframe.upper()}"
+            f"{' • VIEW ' + str(md.get('chart_view_tf')).upper() if md.get('chart_view_tf') else ''}  ·  {'VIVA SETUP ✦ CONFIRMED' if confirmed else 'VIVA SETUP ✦ ANALYSIS'}",
             color=CHART_THEME["muted"],
             fontsize=8,
             va="center",
@@ -1760,6 +1775,37 @@ def send_no_fill_event(event: dict) -> bool:
     ))
 
 
+def _lifecycle_chart_frame(candidate: SignalCandidate, levels: list[float]) -> Optional[pd.DataFrame]:
+    """Keep the full fixed trade tool visible without stretching the chart.
+
+    Render the trigger TF first. Escalate only when Entry/First Stop/TP ladder
+    would leave the visible price range: 15m→30m→1h and 1h→2h→4h.
+    """
+    from data.fetcher import get_klines
+    trigger = str(candidate.trigger_timeframe or "15m").lower()
+    chains = {
+        "5m": ["5m", "15m", "30m", "1h"],
+        "15m": ["15m", "30m", "1h"],
+        "1h": ["1h", "2h", "4h"],
+    }
+    choices = chains.get(trigger, [trigger])
+    usable = [float(v) for v in levels if float(v or 0) > 0]
+    fallback = None
+    for tf in choices:
+        frame = get_klines(candidate.symbol, tf, 180, closed_only=False, use_cache=False)
+        if frame is None or frame.empty:
+            continue
+        fallback = frame
+        low, high = float(frame["low"].min()), float(frame["high"].max())
+        pad = max(high - low, 1e-12) * 0.04
+        if not usable or (min(usable) >= low - pad and max(usable) <= high + pad):
+            candidate.metadata["chart_view_tf"] = tf
+            return frame
+    if fallback is not None:
+        candidate.metadata["chart_view_tf"] = choices[-1]
+    return fallback
+
+
 def send_trade_close_event(event: dict) -> bool:
     """Final result with a live chart under its exact lifecycle parent."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
@@ -1781,9 +1827,9 @@ def send_trade_close_event(event: dict) -> bool:
         f"📌 نتیجه: <b>{_e(result)}</b>"
     )
     try:
-        from data.fetcher import get_klines
         candidate = _event_chart_candidate(event)
-        frame = get_klines(candidate.symbol, candidate.trigger_timeframe, 180, closed_only=False, use_cache=False)
+        ladder = (candidate.metadata or {}).get("target_ladder") or {}
+        frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, *(ladder.get("targets") or []), (candidate.metadata or {}).get("current_trailing_sl", 0)])
         chart = generate_chart(frame, candidate, confirmed=True) if frame is not None else None
     except Exception:
         chart = None
@@ -1855,7 +1901,18 @@ def _event_chart_candidate(event: dict) -> SignalCandidate:
         rr_tp1=rr1, rr_tp2=rr2, bias="BULLISH" if direction == "LONG" else "BEARISH",
         # Final live chart must stay on the position's own trigger timeframe.
         trigger_timeframe=str(event.get("trigger_timeframe") or ("5m" if str(event.get("style")) == "SCALP" else "15m")),
-        metadata={"target_event": str(event.get("event") or ""), "public_code": event.get("public_code") or event.get("signal_id")},
+        metadata={
+            "target_event": str(event.get("event") or ""),
+            "public_code": event.get("public_code") or event.get("signal_id"),
+            # Static Entry / First Stop / five TP geometry is carried into
+            # every lifecycle chart. Only live price and the trailing line move.
+            "target_ladder": {
+                "targets": targets or build_ladder(entry, sl, direction, {}, tp2).get("targets", []),
+                "weights": [35, 35, 20, 5, 5],
+                "hit_index": int(event.get("hit_index") or 0),
+            },
+            "current_trailing_sl": float(event.get("sl") or event.get("new_sl") or 0),
+        },
     )
 
 
@@ -1902,9 +1959,9 @@ def send_ladder_event(event: dict) -> bool:
             f"🚀 ROI با اهرم: <b>{float(event.get('realized_margin_roi_pct', 0)):+.2f}%</b>"
         )
     try:
-        from data.fetcher import get_klines
         candidate = _event_chart_candidate(event)
-        frame = get_klines(candidate.symbol, candidate.trigger_timeframe, 180, closed_only=False, use_cache=False)
+        ladder = (candidate.metadata or {}).get("target_ladder") or {}
+        frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, *(ladder.get("targets") or []), (candidate.metadata or {}).get("current_trailing_sl", 0)])
         chart = generate_chart(frame, candidate, confirmed=True) if frame is not None else None
     except Exception as exc:
         print(f"Live target chart warning {event.get('signal_id')}: {exc}")
