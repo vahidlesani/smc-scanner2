@@ -936,6 +936,43 @@ def get_recent_signals(limit: int = 50) -> list:
     ]
 
 
+def get_market_source_performance() -> list:
+    """Audit results by market eligibility/provenance, never by symbol guesswork."""
+    with db_cursor() as c:
+        c.execute(f"""
+            SELECT market_json, result, pnl_pct, symbol
+            FROM signals WHERE {_published_v7_clause()}
+        """, (get_settings().strategy_version,))
+        rows = c.fetchall()
+    groups = {}
+    for market_json, result, pnl_pct, symbol in rows:
+        try:
+            market = json.loads(market_json or "{}")
+        except Exception:
+            market = {}
+        asset = str(market.get("asset_class") or "UNKNOWN").upper()
+        provenance = str(market.get("eligibility_source") or "LEGACY_UNKNOWN").upper()
+        key = f"{provenance} • {asset}"
+        item = groups.setdefault(key, {"bucket": key, "total": 0, "wins": 0, "losses": 0, "no_trade": 0, "pnl": []})
+        item["total"] += 1
+        if result == "WIN":
+            item["wins"] += 1; item["pnl"].append(float(pnl_pct or 0))
+        elif result == "LOSS":
+            item["losses"] += 1; item["pnl"].append(float(pnl_pct or 0))
+        elif result == "CANCELLED":
+            item["no_trade"] += 1
+    output = []
+    for item in groups.values():
+        closed = item["wins"] + item["losses"]
+        output.append({
+            "bucket": item["bucket"], "total": item["total"], "wins": item["wins"],
+            "losses": item["losses"], "no_trade": item["no_trade"],
+            "winrate": round(item["wins"] / closed * 100, 1) if closed else 0.0,
+            "avg_pnl": round(sum(item["pnl"]) / len(item["pnl"]), 2) if item["pnl"] else 0.0,
+        })
+    return sorted(output, key=lambda x: (x["total"], x["bucket"]), reverse=True)
+
+
 def get_dashboard_summary() -> dict:
     """خلاصه آمار برای داشبورد"""
     with db_cursor() as c:

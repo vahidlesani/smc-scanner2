@@ -739,6 +739,24 @@ def handle_education(chat_id):
 
 # ─── پردازش Callback ───
 
+def handle_market_source_audit(chat_id):
+    from database.db import get_market_source_performance
+    try:
+        rows = get_market_source_performance()
+        lines = ["🧬 <b>حسابرسی منبع بازار</b>", "فقط Win/Loss در WR و Avg PnL حساب می‌شود.", "━━━━━━━━━━━━━━━━━━"]
+        if not rows:
+            lines.append("هنوز رکورد منتشرشده‌ای وجود ندارد.")
+        for row in rows:
+            lines.append(
+                f"<b>{_e(row['bucket'])}</b>\n"
+                f"├ کل {row['total']} • ✅{row['wins']} ❌{row['losses']} • ⚪ No Trade {row['no_trade']}\n"
+                f"└ WR {row['winrate']:.1f}% • Avg {row['avg_pnl']:+.2f}%"
+            )
+        send_message("\n━━━━━━━━━━━━━━━━━━\n".join(lines), chat_id, main_menu_keyboard(chat_id))
+    except Exception as exc:
+        send_message(f"❌ خطا در حسابرسی بازار: {exc}", chat_id, main_menu_keyboard(chat_id))
+
+
 def handle_protected_exit_audit(chat_id):
     from database.repository_v7 import protected_exit_audit
     try:
@@ -942,6 +960,7 @@ def handle_message(message):
             "🔄 بروزرسانی ربات": lambda: handle_start(chat_id, user),
             "🧪 گزارش آزمون": lambda: handle_backtest(chat_id, "BTCUSDT") if _is_admin(uid) else None,
             "🧾 حسابرسی نتایج": lambda: handle_protected_exit_audit(chat_id) if _is_admin(uid) else None,
+            "🧬 حسابرسی منبع بازار": lambda: handle_market_source_audit(chat_id) if _is_admin(uid) else None,
             "🧹 پاکسازی هشدارها": lambda: send_message(f"🧹 {purge_resolved_alert_posts()} پیام پاک شد.", chat_id) if _is_admin(uid) else None,
         }
         if text in quick:
@@ -982,6 +1001,8 @@ def handle_message(message):
         handle_status(chat_id, uid)
     elif cmd == "/audit" and _is_admin(uid):
         handle_protected_exit_audit(chat_id)
+    elif cmd == "/market_audit" and _is_admin(uid):
+        handle_market_source_audit(chat_id)
     elif cmd == "/backtest" and _is_admin(uid):
         symbol = args[0].upper() if args else "BTCUSDT"
         if not symbol.endswith("USDT"):

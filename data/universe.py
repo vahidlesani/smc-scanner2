@@ -197,6 +197,10 @@ class DynamicUniverse:
                 "max_leverage": float(venue_row.get("max_leverage", 20.0)),
                 "relative_volume": 1.0,
                 "rank_source": rank_source,
+                # Persist provenance into every candidate/signal market_json so
+                # results can be audited by native-crypto vs allowed commodity.
+                "eligibility_source": "NATIVE_MARKETCAP" if venue_row.get("asset_class", "CRYPTO") == "CRYPTO" else "ALLOWED_NONCRYPTO",
+                "native_crypto": bool(venue_row.get("asset_class", "CRYPTO") == "CRYPTO" and base in crypto_whitelist),
             })
             seen.add(symbol)
 
