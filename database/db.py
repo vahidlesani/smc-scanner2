@@ -739,9 +739,10 @@ def get_strategy_performance() -> list:
                    SUM(CASE WHEN result='WIN' OR partial_win=TRUE THEN 1 ELSE 0 END) as wins,
                    SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) as losses,
                    SUM(CASE WHEN result='PENDING' THEN 1 ELSE 0 END) as pending,
-                   AVG(pnl_pct) as avg_pnl,
-                   MAX(pnl_pct) as best_pnl,
-                   MIN(pnl_pct) as worst_pnl,
+                   SUM(CASE WHEN result='CANCELLED' THEN 1 ELSE 0 END) as no_trade,
+                   AVG(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) as avg_pnl,
+                   MAX(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) as best_pnl,
+                   MIN(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) as worst_pnl,
                    AVG(score) as avg_score,
                    MAX(created_at) as last_signal
             FROM signals
@@ -753,7 +754,7 @@ def get_strategy_performance() -> list:
 
     result = []
     for row in rows:
-        source, strategy_fa, total, wins, losses, pending, avg_pnl, best_pnl, worst_pnl, avg_score, last_signal = row
+        source, strategy_fa, total, wins, losses, pending, no_trade, avg_pnl, best_pnl, worst_pnl, avg_score, last_signal = row
         wins = wins or 0
         losses = losses or 0
         closed = wins + losses
@@ -764,6 +765,7 @@ def get_strategy_performance() -> list:
             "wins": wins,
             "losses": losses,
             "pending": pending or 0,
+            "no_trade": no_trade or 0,
             "winrate": (wins / closed * 100) if closed > 0 else 0,
             "avg_pnl": round(avg_pnl or 0, 2),
             "best_pnl": round(best_pnl or 0, 2),
@@ -942,9 +944,10 @@ def get_dashboard_summary() -> dict:
                 SUM(CASE WHEN result='WIN' OR partial_win=TRUE THEN 1 ELSE 0 END) as wins,
                 SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) as losses,
                 SUM(CASE WHEN result='PENDING' THEN 1 ELSE 0 END) as pending,
-                AVG(CASE WHEN result != 'PENDING' THEN pnl_pct END) as avg_pnl,
-                MAX(pnl_pct) as best_pnl,
-                MIN(pnl_pct) as worst_pnl,
+                SUM(CASE WHEN result='CANCELLED' THEN 1 ELSE 0 END) as no_trade,
+                AVG(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) as avg_pnl,
+                MAX(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) as best_pnl,
+                MIN(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) as worst_pnl,
                 AVG(score) as avg_score
             FROM signals
             WHERE {_published_v7_clause()}
@@ -955,6 +958,7 @@ def get_dashboard_summary() -> dict:
     wins = row[1] or 0
     losses = row[2] or 0
     pending = row[3] or 0
+    no_trade = row[4] or 0
     closed = wins + losses
 
     return {
@@ -962,11 +966,12 @@ def get_dashboard_summary() -> dict:
         "wins": wins,
         "losses": losses,
         "pending": pending,
+        "no_trade": no_trade,
         "winrate": round((wins / closed * 100) if closed > 0 else 0, 1),
-        "avg_pnl": round(row[4] or 0, 2),
-        "best_pnl": round(row[5] or 0, 2),
-        "worst_pnl": round(row[6] or 0, 2),
-        "avg_score": round(row[7] or 0, 1),
+        "avg_pnl": round(row[5] or 0, 2),
+        "best_pnl": round(row[6] or 0, 2),
+        "worst_pnl": round(row[7] or 0, 2),
+        "avg_score": round(row[8] or 0, 1),
     }
 
 

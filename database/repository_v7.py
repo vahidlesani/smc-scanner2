@@ -471,6 +471,13 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
         raise ValueError("Candidate does not meet execution quality gates")
     if confirmed_exists(candidate.signal_id):
         return False
+    # The discovery check is not sufficient under retries/races. Enforce the
+    # three-position paper capacity again at the persistence boundary.
+    if has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe):
+        raise RuntimeError(
+            f"Paper capacity reached for {candidate.symbol}/{candidate.trigger_timeframe}: "
+            f"max={SETTINGS.max_signals_per_symbol_trigger}"
+        )
     # Defensive second reservation: discovery reserves before educational
     # publication, while this protects direct/manual confirmation paths too.
     reserve_public_code(candidate)
