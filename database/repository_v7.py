@@ -208,11 +208,14 @@ def confirmed_exists(signal_id: str) -> bool:
 
 
 def symbol_lock_key(candidate: SignalCandidate) -> str:
-    """v7.6: locks are per (symbol, trigger timeframe), stored in the existing
-    `symbol` TEXT column as `SYMBOL:tf` — no schema change required. A pending
-    1h swing no longer blocks scalp scenarios on this symbol's 5m trigger."""
+    """Durable lock receipt for one candidate, never a symbol-wide mutex.
+
+    The legacy table has a single text primary key, so include the immutable
+    signal id. This permits Viva's three independent paper positions on one
+    symbol/trigger while retaining restart-safe release by signal_id.
+    """
     tf = str(getattr(candidate, "trigger_timeframe", "") or "").lower()
-    return f"{candidate.symbol.upper()}:{tf}" if tf else candidate.symbol.upper()
+    return f"{candidate.symbol.upper()}:{tf}:{candidate.signal_id}"
 
 
 def acquire_symbol_lock(candidate: SignalCandidate) -> bool:
@@ -289,9 +292,11 @@ def release_symbol_lock(symbol: str, signal_id: str) -> None:
 
 
 def has_unresolved_symbol(symbol: str, exclude_signal_id: str = "", trigger_tf: str = "") -> bool:
-    """Block a duplicate confirmed lifecycle on the SAME symbol+trigger TF until
-    its outcome. A pending PENDING swing on `1h` never blocks this symbol's
-    `5m` scalp confirmations (Viva's per-TF locking rule)."""
+    """Return whether the configured paper capacity is full for a trigger.
+
+    Historical callers used this as a one-position duplicate mutex. It now
+    respects `MAX_SIGNALS_PER_SYMBOL_TRIGGER`, so it cannot silently suppress
+    Viva's permitted independent scenarios."""
     p = legacy_db._ph()
     params = [symbol.upper(), SETTINGS.strategy_version]
     tf_filter = ""
@@ -305,18 +310,18 @@ def has_unresolved_symbol(symbol: str, exclude_signal_id: str = "", trigger_tf: 
     with legacy_db.db_cursor() as cursor:
         cursor.execute(
             f"""
-            SELECT 1 FROM signals
+            SELECT COUNT(*) FROM signals
             WHERE symbol={p} AND strategy_version={p}
               AND confirmed_at IS NOT NULL
               AND status IN ('AWAITING_PUBLICATION', 'CONFIRMED')
               AND result='PENDING'
               {tf_filter}
               {exclude}
-            LIMIT 1
             """,
             tuple(params),
         )
-        return cursor.fetchone() is not None
+        count = int((cursor.fetchone() or [0])[0] or 0)
+        return count >= max(1, int(getattr(SETTINGS, "max_signals_per_symbol_trigger", 3)))
 
 
 def cancel_staged_confirmation(signal_id: str) -> None:

@@ -56,7 +56,7 @@ from database.candidate_store import (
     supersede_similar,
     find_similar,
     is_material_update,
-    supersede_symbol_alerts,
+    supersede_alert_lineage,
 )
 from database.repository_v7 import (
     acquire_symbol_lock,
@@ -165,11 +165,9 @@ def run_discovery_scan() -> Dict[str, int]:
                     if not _dead_gate_recently_alerted(candidate):
                         send_educational_setup(candidate, _chart_frame(candidate, bundle))
                     continue
-                # Same symbol + same trigger TF: remove the older alert package
-                # and publish only the newest live scenario, so strong setups
-                # never disappear inside Telegram clutter.
-                # Once a trade is confirmed on this exact trigger TF, no new
-                # same-symbol candidate is allowed until TP1 protects it or it closes.
+                # Paper research permits several independent positions on a
+                # symbol/trigger. Capacity is counted in confirmed positions;
+                # it must never cause symbol-wide deletion of alerts.
                 if has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe):
                     stats["suppressed_pre_tp1"] = stats.get("suppressed_pre_tp1", 0) + 1
                     continue
@@ -180,10 +178,10 @@ def run_discovery_scan() -> Dict[str, int]:
                 # that pair and each confirmed trade must retain its own links.
                 if previous and not is_material_update(previous, candidate):
                     continue  # identical state: leave the visible alert alone
-                # A materially newer scenario replaces every live alert package
-                # of the same SYMBOL, even if its new signal id/timeframe differs.
-                # This is Telegram hygiene, not a position lock.
-                for prior in supersede_symbol_alerts(candidate.symbol, candidate.signal_id):
+                # Delete Telegram posts only for a proven update of this same
+                # scenario lineage. Same-symbol / same-trigger setups can be
+                # independent and must remain visible.
+                for prior in supersede_alert_lineage(candidate):
                     try:
                         release_symbol_lock(prior.symbol, prior.signal_id)
                     except Exception:

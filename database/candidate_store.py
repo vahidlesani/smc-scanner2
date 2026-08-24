@@ -78,38 +78,88 @@ def _dedupe_key(candidate: SignalCandidate) -> str:
     return f"{candidate.symbol.upper()}:{_trigger_tf(candidate)}"
 
 
-def find_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
+def _zone_kind(candidate: SignalCandidate) -> str:
+    md = candidate.metadata or {}
+    return str(md.get("pin_zone_kind") or md.get("zone_kind") or md.get("viva_pattern") or "").upper()
+
+
+def _same_alert_lineage(previous: SignalCandidate, candidate: SignalCandidate) -> bool:
+    """Conservative identity test for a *single alert scenario*.
+
+    A same-symbol or same-trigger match is never enough: Viva allows multiple
+    paper scenarios there.  Without an explicit detector lineage key, we only
+    consider two alerts one lineage if their setup, direction, zone type and
+    actual zone price are almost identical.  False negatives merely leave an
+    extra alert visible; false positives could delete a valid setup, so they
+    are intentionally avoided.
+    """
+    if (
+        previous.symbol.upper() != candidate.symbol.upper()
+        or _trigger_tf(previous) != _trigger_tf(candidate)
+        or previous.setup_code.upper() != candidate.setup_code.upper()
+        or previous.direction.upper() != candidate.direction.upper()
+        or _zone_kind(previous) != _zone_kind(candidate)
+    ):
+        return False
+    old_key = str((previous.metadata or {}).get("alert_lineage_key") or "")
+    new_key = str((candidate.metadata or {}).get("alert_lineage_key") or "")
+    if old_key or new_key:
+        return bool(old_key and old_key == new_key)
+    old_atr = float((previous.metadata or {}).get("atr", 0) or 0)
+    new_atr = float((candidate.metadata or {}).get("atr", 0) or 0)
+    # 0.08 ATR is deliberately tighter than the 0.20-ATR material-update
+    # threshold. A moved zone is a new scenario, never a deletion candidate.
+    tolerance = max(max(old_atr, new_atr) * 0.08, abs(previous.zone_mid) * 0.0001, 1e-12)
+    return abs(float(previous.zone_mid) - float(candidate.zone_mid)) <= tolerance
+
+
+def _live_candidates_for_symbol_tf(candidate: SignalCandidate) -> List[SignalCandidate]:
     now = iso_now()
-    params = [candidate.symbol.upper(), _trigger_tf(candidate), now]
     with _connection() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             """
             SELECT payload FROM signal_candidates
-            WHERE symbol=?
-              AND trigger_tf=?
-              AND status IN ('EDUCATIONAL', 'APPROACHING')
-              AND expires_at>?
-            ORDER BY created_at DESC LIMIT 1
+            WHERE symbol=? AND trigger_tf=?
+              AND status IN ('EDUCATIONAL', 'APPROACHING') AND expires_at>?
+            ORDER BY created_at DESC
             """,
-            params,
-        ).fetchone()
-    return SignalCandidate.from_json(row["payload"]) if row else None
+            (candidate.symbol.upper(), _trigger_tf(candidate), now),
+        ).fetchall()
+    return [SignalCandidate.from_json(row["payload"]) for row in rows]
+
+
+def find_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
+    """Find only an update of the same scenario — never another BTC setup."""
+    for previous in _live_candidates_for_symbol_tf(candidate):
+        if _same_alert_lineage(previous, candidate):
+            return previous
+    return None
+
+
+def supersede_alert_lineage(candidate: SignalCandidate) -> List[SignalCandidate]:
+    """Supersede only older posts from this exact alert lineage.
+
+    This is intentionally not a symbol-wide cleanup. Independent alerts on the
+    same symbol/trigger remain visible and keep their own Telegram lifecycle.
+    """
+    previous = [
+        item for item in _live_candidates_for_symbol_tf(candidate)
+        if item.signal_id != candidate.signal_id and _same_alert_lineage(item, candidate)
+    ]
+    for item in previous:
+        item.status = "SUPERSEDED"
+        item.metadata["superseded_by"] = candidate.signal_id
+        update_candidate(item)
+    return previous
 
 
 def supersede_symbol_alerts(symbol: str, replacement_id: str) -> List[SignalCandidate]:
-    """Resolve all live alert packages for a symbol before a materially newer
-    scenario is published. Confirmed trades are deliberately excluded."""
-    with _connection() as conn:
-        rows = conn.execute(
-            "SELECT payload FROM signal_candidates WHERE symbol=? AND status IN ('EDUCATIONAL','APPROACHING')",
-            (str(symbol).upper(),),
-        ).fetchall()
-    previous = [SignalCandidate.from_json(row["payload"]) for row in rows]
-    for item in previous:
-        item.status = "SUPERSEDED"
-        item.metadata["superseded_by"] = replacement_id
-        update_candidate(item)
-    return previous
+    """Deprecated safety shim: symbol-only deletion is forbidden.
+
+    Kept only so an accidental old caller cannot erase unrelated alerts.
+    """
+    print(f"Refused unsafe symbol-wide alert supersede for {symbol} -> {replacement_id}")
+    return []
 
 
 def is_material_update(previous: SignalCandidate, candidate: SignalCandidate) -> bool:

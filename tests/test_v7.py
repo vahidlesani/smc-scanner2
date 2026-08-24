@@ -275,28 +275,29 @@ class V7PersistenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             save_confirmed_signal(make_candidate("EDUCATIONAL", 7))
 
-    def test_symbol_is_deduplicated_until_candidate_is_cancelled(self):
-        from database.candidate_store import add_candidate, set_status
+    def test_independent_same_symbol_candidates_can_coexist_but_exact_duplicate_cannot(self):
+        from database.candidate_store import add_candidate
 
         first = make_candidate("EDUCATIONAL", 7)
-        second = make_candidate("EDUCATIONAL", 8)
-        second.style = "SCALP"
-        second.setup_code = "TLR"
-        second.direction = "SHORT"
+        independent = make_candidate("EDUCATIONAL", 8)
+        independent.style = "SCALP"
+        independent.setup_code = "TLR"
+        independent.direction = "SHORT"
+        duplicate = make_candidate("EDUCATIONAL", 8)
         self.assertTrue(add_candidate(first))
-        self.assertFalse(add_candidate(second))
-        set_status(first.signal_id, "CANCELLED")
-        self.assertTrue(add_candidate(second))
+        self.assertTrue(add_candidate(independent))
+        self.assertFalse(add_candidate(duplicate))
 
-    def test_durable_symbol_lock_survives_local_candidate_state(self):
+    def test_durable_lock_is_per_candidate_not_symbol_wide(self):
         from database.repository_v7 import acquire_symbol_lock, release_symbol_lock
 
         first = make_candidate("EDUCATIONAL", 7)
         second = make_candidate("EDUCATIONAL", 8)
         self.assertTrue(acquire_symbol_lock(first))
-        self.assertFalse(acquire_symbol_lock(second))
-        release_symbol_lock(first.symbol, first.signal_id)
         self.assertTrue(acquire_symbol_lock(second))
+        release_symbol_lock(first.symbol, first.signal_id)
+        # Re-acquiring the same live candidate remains correctly rejected.
+        self.assertFalse(acquire_symbol_lock(second))
 
     def test_staged_confirmation_is_hidden_until_publication_is_committed(self):
         from database.repository_v7 import mark_confirmation_published, save_confirmed_signal
@@ -324,7 +325,9 @@ class V7PersistenceTests(unittest.TestCase):
         candidate = make_candidate("CONFIRMED", 8)
         candidate.confirmed_at = iso_now()
         save_confirmed_signal(candidate)
-        self.assertTrue(has_unresolved_symbol(candidate.symbol))
+        # One pending position must not consume Viva's configured 3-position
+        # paper capacity on this symbol/trigger.
+        self.assertFalse(has_unresolved_symbol(candidate.symbol))
         cancel_staged_confirmation(candidate.signal_id)
         self.assertFalse(has_unresolved_symbol(candidate.symbol))
 
