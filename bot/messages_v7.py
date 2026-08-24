@@ -1703,17 +1703,34 @@ def send_tp1_event(signal: dict) -> bool:
 
 
 def send_trade_close_event(event: dict) -> bool:
-    """Final result is always a reply to the original confirmed signal."""
+    """Final realized outcome with live chart, always under Confirmed."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
     reply_id = int(event.get("pro_message_id") or 0) or None
     result = str(event.get("result") or "")
     emoji = "✅" if result == "WIN" else "❌" if result == "LOSS" else "⚪"
+    iran, duration, _ = _event_clock(event)
+    code = _e(event.get("public_code") or event.get("signal_id"))
     text = (
-        f"{emoji} <b>نتیجه نهایی پوزیشن</b>\n"
-        f"🪙 {_e(event.get('symbol'))} • {_e(event.get('source') or 'SETUP')}\n"
-        f"💰 P&L: <b>${float(event.get('profit_usd') or 0):+.2f}</b> • <b>{float(event.get('pnl') or 0):+.2f}%</b>\n"
-        f"🆔 <code>{_e(event.get('public_code') or event.get('signal_id'))}</code>"
+        f"{emoji} <b>نتیجه نهایی پوزیشن</b> • <code>{code}</code>\n\n"
+        f"🪙 {_e(event.get('symbol'))} • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('style'))}\n"
+        f"🕓 ایران: {iran} • ⏱ مدت: {duration}\n\n"
+        f"🎯 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
+        f"🛑 First Stop: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
+        f"📈 Live/Exit Price: <b>{_price(float(event.get('live_price') or 0))}</b>\n"
+        f"🏁 TPهای زده‌شده: <b>{int(event.get('hit_index') or 0)}</b>/5\n\n"
+        f"💰 سود/ضرر نهایی: <b>${float(event.get('profit_usd') or 0):+.2f}</b>\n"
+        f"🚀 ROI نهایی با اهرم: <b>{float(event.get('margin_roi_pct') or 0):+.2f}%</b>\n"
+        f"📌 نتیجه: <b>{_e(result)}</b>"
     )
+    try:
+        from data.fetcher import get_klines
+        candidate = _event_chart_candidate(event)
+        frame = get_klines(candidate.symbol, candidate.trigger_timeframe, 180, closed_only=False, use_cache=False)
+        chart = generate_chart(frame, candidate, confirmed=True) if frame is not None else None
+    except Exception:
+        chart = None
+    if chart:
+        return bool(send_photo(chart, text, target, reply_to_message_id=reply_id))
     return bool(send_message(text, target, reply_to_message_id=reply_id))
 
 

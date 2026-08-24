@@ -855,6 +855,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                         event["leg_pnl_pct"] = event["leg_price_move_pct"] * float(event.get("weight", 0)) / 100
                         event["leg_profit_usd"] = notional * event["leg_pnl_pct"] / 100
                         event["leg_margin_roi_pct"] = event["leg_profit_usd"] / max(float(margin or 0), 1e-12) * 100
+                        event["leg_full_roi_pct"] = event["leg_price_move_pct"] * int(leverage or 1)
                     else:
                         event["realized_pnl_pct"] = float(ladder.get("realized_r", 0)) * risk_pct_move
                         event["realized_profit_usd"] = notional * event["realized_pnl_pct"] / 100
@@ -883,7 +884,18 @@ def monitor_confirmed_trades() -> List[Dict]:
                     cursor.execute(f"UPDATE active_signals SET status='CLOSED', is_cancelled={truth} WHERE signal_id={p}", (signal_id,))
                     cursor.execute(f"DELETE FROM signal_symbol_locks WHERE symbol={p} AND signal_id={p} AND strategy_version={p}",
                                    (symbol, signal_id, SETTINGS.strategy_version))
-                    ladder_events.append({"event":"CLOSED", "signal_id":signal_id,"symbol":symbol,"style":style,"source":source,"strategy_fa":strategy_fa,"strategy_version":strategy_version,"confirmed_at":str(confirmed_at),"confirmation_sent":True,"pro_message_id":int(pro_message_id or 0),"result":result,"pnl":net_pnl,"profit_usd":profit_usd})
+                    ladder_events.append({
+                        "event":"CLOSED", "signal_id":signal_id,"symbol":symbol,"style":style,"source":source,"strategy_fa":strategy_fa,
+                        "strategy_version":strategy_version,"confirmed_at":str(confirmed_at),"confirmation_sent":True,
+                        "pro_message_id":int(pro_message_id or 0),"public_code":public_code,
+                        "result":result,"pnl":net_pnl,"gross_pnl":gross_pnl,"profit_usd":profit_usd,
+                        "margin":float(margin or 0),"leverage":int(leverage or 1),
+                        "margin_roi_pct":profit_usd / max(float(margin or 0),1e-12)*100,
+                        "entry":float(entry),"original_sl":float(original_sl),"sl":float(ladder["current_sl"]),
+                        "targets":list(ladder["targets"]),"hit_index":int(ladder["hit_index"]),
+                        "event_at":str(latest_checked or confirmed_at),"trigger_timeframe":str(trigger_timeframe or ""),
+                        "live_price":float(candle["close"]),
+                    })
             events.extend(ladder_events)
             continue
 
