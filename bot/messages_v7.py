@@ -111,11 +111,23 @@ def _public_code(candidate: SignalCandidate) -> str:
 
 def _iran_time(candidate: SignalCandidate) -> str:
     try:
-        value = str(candidate.created_at).replace("Z", "+00:00")
+        value = str(getattr(candidate, "confirmed_at", "") or candidate.created_at).replace("Z", "+00:00")
         dt = datetime.fromisoformat(value)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=ZoneInfo("UTC"))
         return dt.astimezone(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return "—"
+
+
+def _candidate_send_latency(candidate: SignalCandidate) -> str:
+    try:
+        value = str(getattr(candidate, "confirmed_at", "") or candidate.created_at).replace("Z", "+00:00")
+        then = datetime.fromisoformat(value)
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=ZoneInfo("UTC"))
+        seconds = max(0, int((datetime.now(ZoneInfo("UTC")) - then.astimezone(ZoneInfo("UTC"))).total_seconds()))
+        return f"{seconds // 60}m {seconds % 60}s"
     except Exception:
         return "—"
 
@@ -582,7 +594,7 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
     fig.text(
         0.055,
         0.024,
-        f"{candidate.signal_id}  •  {_chart_market_label(candidate)}",
+        f"{_public_code(candidate)}  •  {_chart_market_label(candidate)}",
         color=CHART_THEME["muted"],
         fontsize=7.5,
         va="center",
@@ -644,8 +656,9 @@ def _setup_badge(candidate: SignalCandidate) -> tuple[str, str]:
     """Branded, setup-specific sticker used consistently on chart and caption."""
     code = str(candidate.setup_code or "SETUP").upper()
     labels = {
-        "PINVAL": "VIVA ✦ PINVAL",
-        "TLBREAK": "VIVA ✦ TREND BREAK",
+        "PINVAL": "VIVA ✦ PINWALL LEGACY",
+        "PINWALLQ": "VIVA ✦ PINWALL QUALITY",
+        "TLBREAK": "VIVA ✦ TLBREAK",
         "P1234": "VIVA ✦ 1-2-3-4",
         "ALBROX": "VIVA ✦ ALBROX",
         "LSR": "VIVA ✦ LIQUIDITY",
@@ -1614,12 +1627,22 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(candidate.trigger_timeframe)} • {_e(style_fa)} • {_e(candidate.direction)}",
         f"🕓 زمان تأیید — ایران: {_iran_time(candidate)}",
         f"📨 زمان ارسال — ایران: {_iran_now()}",
-        f"🎯 Entry {_price(candidate.planned_entry)}  |  SL {_price(candidate.sl)}",
-        *[f"🏁 TP{i+1} {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [35, 35])))],
+        f"📡 تأخیر ارسال: {_candidate_send_latency(candidate)}",
+        "━━━━━━━━━━━━━━━━━━",
+        f"🎯 Entry: <b>{_price(candidate.planned_entry)}</b>",
+        f"🛑 First Stop: <b>{_price(candidate.sl)}</b>",
+        f"📈 Live Price: <b>{_price(float((candidate.metadata or {}).get('live_price') or candidate.planned_entry))}</b>",
+        *[f"🏁 TP{i+1}: {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [35, 35])))],
         f"⚖️ R:R {candidate.rr_tp1:.2f} / {candidate.rr_tp2:.2f} • ⭐ {candidate.score}/10",
     ]
     if mm:
-        rows.append(f"💼 حجم ${mm['position_size']:,.0f} • Margin ${mm['margin']:,.0f} • اهرم {mm['leverage']}x • ریسک {mm['risk_pct']:.2f}%")
+        rows.extend([
+            "━━━━━━━━━━━━━━━━━━",
+            f"💼 حجم پوزیشن: <b>${mm['position_size']:,.0f}</b>",
+            f"🧱 مارجین: <b>${mm['margin']:,.2f}</b>",
+            f"⚙️ اهرم: <b>{mm['leverage']}x</b>",
+            f"🛡 ریسک: <b>{mm['risk_pct']:.2f}%</b>",
+        ])
     rows.append(f"🆔 <code>{_e(candidate.metadata.get('public_code') or candidate.signal_id)}</code>")
     return "\n".join(rows)
 
@@ -1629,6 +1652,8 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
     plus a one-click link back to its educational alert/chart."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
     candidate.metadata["target_ladder"] = build_ladder(candidate.planned_entry, candidate.sl, candidate.direction, candidate.market, candidate.tp2)
+    if chart_df is not None and not chart_df.empty and "close" in chart_df.columns:
+        candidate.metadata["live_price"] = float(chart_df["close"].iloc[-1])
     if not candidate.metadata.get("confirmation_chart_sent"):
         chart = generate_chart(chart_df, candidate, confirmed=True) if chart_df is not None else None
         if not chart:

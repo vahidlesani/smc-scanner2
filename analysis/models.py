@@ -123,7 +123,7 @@ def generate_viva_public_code(setup_code: str = "", style: str = "") -> str:
     """Stable human-facing lineage code; never embeds update time or symbol."""
     import secrets
     label_map = {
-        "PINVAL": "PINBAR", "PINWALLQ": "PINWALLQ", "TLBREAK": "TLBREAK",
+        "PINVAL": "PINWALL", "PINWALLQ": "PINWALLQ", "TLBREAK": "TLBREAK",
         "ALBROX": "ALBROX", "P1234": "P1234", "LSR": "LSR", "SDR": "SDR",
         "BOS1": "BOS", "IFVG": "IFVG", "TLR": "TLR",
     }

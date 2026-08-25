@@ -59,7 +59,7 @@ class V7ModelTests(unittest.TestCase):
 
     def test_public_code_has_k_prefix_and_six_digits(self):
         from analysis.models import generate_viva_public_code
-        self.assertRegex(generate_viva_public_code("PINVAL"), r"^VIVA-PINBAR-K\d{6}$")
+        self.assertRegex(generate_viva_public_code("PINVAL"), r"^VIVA-PINWALL-K\d{6}$")
 
     def test_educational_label_is_unambiguous(self):
         text = build_educational_message(make_candidate())
