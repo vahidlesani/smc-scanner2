@@ -1751,23 +1751,28 @@ def _setup_display(value: str) -> str:
     }.get(code, code or "SETUP")
 
 
-def _event_timing_lines(event: dict) -> str:
-    """One consistent, audit-friendly timing block for every lifecycle post."""
+def _event_timing_lines(event: dict, include_confirmed: bool = False) -> str:
+    """Compact Persian timing block shared by Main and Win Rate templates."""
     def iran(value):
         try:
             dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=ZoneInfo("UTC"))
-            return dt.astimezone(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M:%S")
+            return dt.astimezone(ZoneInfo("Asia/Tehran")).strftime("%m-%d • %H:%M")
         except Exception:
             return "—"
-    event_iran, duration, latency = _event_clock(event)
-    return (
-        f"🕓 Confirmed — ایران: <b>{iran(event.get('confirmed_at'))}</b>\n"
-        f"🕑 رویداد بازار — ایران: <b>{event_iran}</b>\n"
-        f"📨 ارسال ربات — ایران: <b>{_iran_now()}</b>\n"
-        f"📡 تأخیر ارسال: <b>{latency}</b>  •  ⏱ مدت پوزیشن: <b>{duration}</b>"
-    )
+    _event_iran, duration, latency = _event_clock(event)
+    rows = ["⏰️ <b>زمان‌ها — ایران</b>"]
+    if include_confirmed:
+        rows.append(f"🟢 Confirmed: <b>{iran(event.get('confirmed_at'))}</b>")
+    rows.extend([
+        f"🕛 رویداد بازار: <b>{iran(event.get('event_at'))}</b>",
+        f"📨 ارسال ربات: <b>{datetime.now(ZoneInfo('Asia/Tehran')).strftime('%m-%d • %H:%M')}</b>",
+        f"⏱ مدت پوزیشن: <b>{duration}</b>",
+    ])
+    if latency not in {"—", "0m 0s"}:
+        rows.append(f"📡 تأخیر ارسال: <b>{latency}</b>")
+    return "\n".join(rows)
 
 
 def _tp_status_lines(event: dict) -> str:
@@ -1775,8 +1780,10 @@ def _tp_status_lines(event: dict) -> str:
     weights = [35, 35, 20, 5, 5]
     rows = []
     for i, weight in enumerate(weights, start=1):
-        state = "✓ بسته شد" if i <= hit else "○ در انتظار"
-        rows.append(f"TP{i}  |  {weight}%  |  {state}")
+        if i <= hit:
+            rows.append(f"🎯 TP{i}  |  {weight}%  |  ✅️")
+        else:
+            rows.append(f"⏳ TP{i}  |  {weight}%  |  💰")
     return "\n".join(rows)
 
 
@@ -1795,20 +1802,22 @@ def send_tp1_event(signal: dict) -> bool:
     code_line = f'<a href="{link}">🆔 <code>{code}</code></a>' if link else f"🆔 <code>{code}</code>"
     setup = _setup_display(signal.get("source") or signal.get("strategy_fa"))
     return send_message(
-        f"🎯 <b>{_e(signal.get('event') or 'TP')} HIT</b>\n"
-        f"🏷 <b>{_e(setup)}</b>\n{code_line}\n\n"
-        f"🪙 <b>{_e(signal['symbol'])}</b> • {_e(signal.get('trigger_timeframe') or signal.get('style', ''))} • {_e(signal.get('style',''))} • {_e(signal.get('direction',''))}\n"
-        f"{_event_timing_lines(signal)}\n\n"
-        f"🎯 Entry: <b>{_price(float(signal.get('entry') or 0))}</b>\n"
-        f"🛑 First Stop: <b>{_price(float(signal.get('original_sl') or 0))}</b>\n"
-        f"📈 Live Price: <b>{_price(float(signal.get('live_price') or 0))}</b>\n\n"
-        f"📊 <b>خروج این پله</b>\n"
-        f"• حجم بسته‌شده: <b>{float(signal.get('weight', 0)):.0f}%</b>\n"
-        f"• حرکت قیمت: <b>{float(signal.get('leg_price_move_pct', 0)):+.2f}%</b>\n"
-        f"• سود پله: <b>${float(signal.get('leg_profit_usd', 0)):+.2f}</b>\n"
-        f"• بازده پله با اهرم: <b>{float(signal.get('leg_full_roi_pct', 0)):+.2f}%</b>\n"
-        f"• اثر بر کل مارجین: <b>{float(signal.get('leg_margin_roi_pct', 0)):+.2f}%</b>\n\n"
-        f"🔒 Trailing SL: <b>{_price(float(signal.get('new_sl') or signal.get('sl') or 0))}</b>",
+        f"🎯 <b>{_e(signal.get('event') or 'TP')} HIT</b>   {code_line}\n\n"
+        f"🏷 <b>{_e(setup)}</b>\n\n"
+        f"🏦 <b>{_e(signal['symbol'])}</b> • {_e(signal.get('trigger_timeframe') or signal.get('style', ''))} • {_e(signal.get('style',''))} • {_e(signal.get('direction',''))}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n{_event_timing_lines(signal, include_confirmed=True)}\n"
+        f"━━━━━━━━━━━━━━━━━━\n🔰 Entry: <b>{_price(float(signal.get('entry') or 0))}</b>\n"
+        f"⭕️ First Stop: <b>{_price(float(signal.get('original_sl') or 0))}</b>\n"
+        f"📈 Live Price: <b>{_price(float(signal.get('live_price') or 0))}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n📊 <b>جزئیات این پله</b>\n\n"
+        f"• حجم بسته‌شده: <b>{float(signal.get('weight', 0)):.0f}%</b>\n\n"
+        f"• حرکت قیمت: <b>{float(signal.get('leg_price_move_pct', 0)):+.2f}%</b>\n\n"
+        f"• سود پله: <b>${float(signal.get('leg_profit_usd', 0)):+.2f}</b>\n\n"
+        f"• بازده پله با اهرم: <b>{float(signal.get('leg_full_roi_pct', 0)):+.2f}%</b>\n\n"
+        f"• اثر بر کل مارجین: <b>{float(signal.get('leg_margin_roi_pct', 0)):+.2f}%</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n💼 مارجین: <b>${float(signal.get('margin') or 0):.2f}</b>    ⚙️ اهرم: <b>{int(signal.get('leverage') or 1)}x</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n🔒 Trailing SL جدید: <b>{_price(float(signal.get('new_sl') or signal.get('sl') or 0))}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>",
         target,
     )
 
@@ -1890,20 +1899,20 @@ def send_trade_close_event(event: dict) -> bool:
     hit = int(event.get("hit_index") or 0)
     exit_kind = "FULL TP5" if hit >= 5 else (f"TP{hit} + PROTECTED EXIT" if result == "WIN" and hit else "INITIAL STOP LOSS")
     text = (
-        f"{emoji} <b>نتیجه نهایی پوزیشن</b>\n"
-        f"🏷 <b>{_e(setup)}</b>\n"
-        f"🆔 <code>{code}</code>\n\n"
-        f"🪙 {_e(event.get('symbol'))} • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('style'))} • {_e(event.get('direction'))}\n"
-        f"{_event_timing_lines(event)}\n\n"
-        f"━━━━━━━━━━━━━━━━━━\n🎯 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
-        f"🛑 First Stop: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
+        f"{emoji} <b>نتیجه نهایی پوزیشن</b>   🆔 <code>{code}</code>\n\n"
+        f"🏷 <b>{_e(setup)}</b>\n\n"
+        f"🏦 {_e(event.get('symbol'))} • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('style'))} • {_e(event.get('direction'))}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n{_event_timing_lines(event, include_confirmed=True)}\n"
+        f"━━━━━━━━━━━━━━━━━━\n🔰 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
+        f"⭕️ First Stop: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
         f"📈 Live / Exit Price: <b>{_price(float(event.get('live_price') or 0))}</b>\n"
         f"🏁 TPهای زده‌شده: <b>{hit}/5</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n📌 نوع خروج: <b>{exit_kind}</b>\n"
-        f"💰 سود/ضرر نهایی: <b>${float(event.get('profit_usd') or 0):+.2f}</b>\n"
-        f"📈 بازده قیمت: <b>{float(event.get('pnl') or 0):+.2f}%</b>\n"
-        f"🚀 اثر نهایی بر کل مارجین: <b>{float(event.get('margin_roi_pct') or 0):+.2f}%</b>\n"
-        f"📍 نتیجه: <b>{_e(result)}</b>"
+        f"━━━━━━━━━━━━━━━━━━\n📌 نوع خروج: <b>{exit_kind}</b>\n\n"
+        f"• سود/ضرر نهایی: <b>${float(event.get('profit_usd') or 0):+.2f}</b>\n\n"
+        f"• بازده قیمت: <b>{float(event.get('pnl') or 0):+.2f}%</b>\n\n"
+        f"• اثر نهایی بر کل مارجین: <b>{float(event.get('margin_roi_pct') or 0):+.2f}%</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n📍 نتیجه: <b>{_e(result)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>"
     )
     try:
         candidate = _event_chart_candidate(event)
@@ -1934,19 +1943,20 @@ def send_trade_result(event: dict) -> bool:
     link_line = f'<a href="{link}">🆔 <code>{code}</code></a>\n' if link else f"🆔 <code>{code}</code>\n"
     setup = _setup_display(event.get("source") or event.get("strategy_fa"))
     return send_message(
-        f"{emoji} <b>نتیجه نهایی Confirmed</b>\n"
-        f"🏷 <b>{_e(setup)}</b>\n{link_line}\n"
-        f"🪙 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style', ''))} • {_e(event.get('style', ''))} • {_e(event.get('direction',''))}\n"
-        f"{_event_timing_lines(event)}\n\n"
-        f"🎯 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
-        f"🛑 First Stop: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
+        f"{emoji} <b>نتیجه نهایی پوزیشن</b>   {link_line}\n"
+        f"🏷 <b>{_e(setup)}</b>\n\n"
+        f"🏦 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style', ''))} • {_e(event.get('style', ''))} • {_e(event.get('direction',''))}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n{_event_timing_lines(event, include_confirmed=True)}\n"
+        f"━━━━━━━━━━━━━━━━━━\n🔰 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
+        f"⭕️ First Stop: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
         f"📈 Live / Exit Price: <b>{_price(float(event.get('live_price') or 0))}</b>\n"
-        f"🏁 TPهای زده‌شده: <b>{int(event.get('hit_index') or 0)}/5</b>\n\n"
-        f"💰 سود/ضرر نهایی: <b>${float(event.get('profit_usd', 0)):+.2f}</b>\n"
-        f"📈 بازده قیمت: <b>{float(event.get('pnl', 0)):+.2f}%</b>\n"
-        f"🚀 اثر نهایی بر کل مارجین: <b>{float(event.get('margin_roi_pct') or 0):+.2f}%</b>\n"
-        f"📌 نتیجه: <b>{_e(result)}</b>\n"
-        f"📢 <b>{_e(SETTINGS.channel_name)}</b>",
+        f"🏁 TPهای زده‌شده: <b>{int(event.get('hit_index') or 0)}/5</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n📊 <b>نتیجه نهایی</b>\n\n"
+        f"• سود/ضرر نهایی: <b>${float(event.get('profit_usd', 0)):+.2f}</b>\n\n"
+        f"• بازده قیمت: <b>{float(event.get('pnl', 0)):+.2f}%</b>\n\n"
+        f"• اثر نهایی بر کل مارجین: <b>{float(event.get('margin_roi_pct') or 0):+.2f}%</b>\n\n"
+        f"📍 نتیجه: <b>{_e(result)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>",
         target,
     )
 
@@ -2011,27 +2021,27 @@ def send_ladder_event(event: dict) -> bool:
     code = _e(event.get("public_code") or event.get("signal_id"))
     setup = _setup_display(event.get("source") or event.get("strategy_fa"))
     common = (
-        f"🏷 <b>{_e(setup)}</b>\n"
-        f"🆔 <code>{code}</code>\n\n"
-        f"🪙 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('style'))} • {_e(event.get('direction'))}\n"
-        f"{_event_timing_lines(event)}\n\n"
-        f"🎯 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
-        f"🛑 First Stop: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
+        f"🏷 <b>{_e(setup)}</b>\n\n"
+        f"🏦 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('style'))} • {_e(event.get('direction'))}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n{_event_timing_lines(event)}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🔰 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
+        f"⭕️ First Stop: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
         f"📈 Live Price: <b>{_price(float(event.get('live_price') or 0))}</b>\n"
     )
     if kind.startswith("TP"):
         text = (
-            f"🎯 <b>{_e(kind)} HIT</b>\n\n" + common + "\n"
-            f"━━━━━━━━━━━━━━━━━━\n📍 <b>وضعیت اهداف</b>\n{_tp_status_lines(event)}\n"
-            f"━━━━━━━━━━━━━━━━━━\n📊 <b>جزئیات این پله</b>\n"
-            f"• حجم بسته‌شده: <b>{float(event.get('weight', 0)):.0f}%</b>\n"
-            f"• حرکت قیمت: <b>{float(event.get('leg_price_move_pct', 0)):+.2f}%</b>\n"
-            f"• سود پله: <b>${float(event.get('leg_profit_usd', 0)):+.2f}</b>\n"
-            f"• بازده پله با اهرم: <b>{float(event.get('leg_full_roi_pct', 0)):+.2f}%</b>\n"
+            f"🎯 <b>{_e(kind)} HIT</b>   🆔 <code>{code}</code>\n\n" + common + "\n"
+            f"━━━━━━━━━━━━━━━━━━\n📍 <b>وضعیت اهداف</b>\n\n{_tp_status_lines(event)}\n"
+            f"━━━━━━━━━━━━━━━━━━\n📊 <b>جزئیات این پله</b>\n\n"
+            f"• حجم بسته‌شده: <b>{float(event.get('weight', 0)):.0f}%</b>\n\n"
+            f"• حرکت قیمت: <b>{float(event.get('leg_price_move_pct', 0)):+.2f}%</b>\n\n"
+            f"• سود پله: <b>${float(event.get('leg_profit_usd', 0)):+.2f}</b>\n\n"
+            f"• بازده پله با اهرم: <b>{float(event.get('leg_full_roi_pct', 0)):+.2f}%</b>\n\n"
             f"• اثر بر کل مارجین: <b>{float(event.get('leg_margin_roi_pct', 0)):+.2f}%</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n💼 مارجین: <b>${float(event.get('margin') or 0):.2f}</b>\n"
-            f"⚙️ اهرم: <b>{int(event.get('leverage') or 1)}x</b>\n"
-            f"🔒 Trailing SL جدید: <b>{_price(float(event.get('new_sl') or event.get('sl') or 0))}</b>"
+            f"━━━━━━━━━━━━━━━━━━\n💼 مارجین: <b>${float(event.get('margin') or 0):.2f}</b>    ⚙️ اهرم: <b>{int(event.get('leverage') or 1)}x</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n🔒 Trailing SL جدید: <b>{_price(float(event.get('new_sl') or event.get('sl') or 0))}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>"
         )
     else:
         hit_index = max(0, min(5, int(event.get("hit_index") or 0)))
@@ -2045,11 +2055,12 @@ def send_ladder_event(event: dict) -> bool:
             price_label = "📍 Stop اجرا شد"
         icon = "🔐" if kind == "TRAIL_STOP" and hit_index else "⛔"
         text = (
-            f"{icon} <b>{title}</b>\n\n" + common + "\n"
-            f"━━━━━━━━━━━━━━━━━━\n📍 <b>وضعیت اهداف</b>\n{_tp_status_lines(event)}\n"
-            f"━━━━━━━━━━━━━━━━━━\n{price_label}: <b>{_price(float(event.get('stop') or event.get('sl') or 0))}</b>\n"
-            f"💰 سود/ضرر تجمعی: <b>${float(event.get('realized_profit_usd', 0)):+.2f}</b>\n"
-            f"🚀 اثر نهایی بر کل مارجین: <b>{float(event.get('realized_margin_roi_pct', 0)):+.2f}%</b>"
+            f"{icon} <b>{title}</b>   🆔 <code>{code}</code>\n\n" + common + "\n"
+            f"━━━━━━━━━━━━━━━━━━\n📍 <b>وضعیت اهداف</b>\n\n{_tp_status_lines(event)}\n"
+            f"━━━━━━━━━━━━━━━━━━\n{price_label}: <b>{_price(float(event.get('stop') or event.get('sl') or 0))}</b>\n\n"
+            f"• سود/ضرر تجمعی: <b>${float(event.get('realized_profit_usd', 0)):+.2f}</b>\n\n"
+            f"• اثر نهایی بر کل مارجین: <b>{float(event.get('realized_margin_roi_pct', 0)):+.2f}%</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>"
         )
     try:
         candidate = _event_chart_candidate(event)
