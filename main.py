@@ -201,6 +201,13 @@ def run_discovery_scan() -> Dict[str, int]:
                 # symbol locks would hide those updates, so discovery has no lock.
                 if not add_candidate(candidate):
                     continue
+                # Advisory is asynchronous and isolated: a Gemini timeout can
+                # never block detection, confirmation, risk or Telegram send.
+                try:
+                    from ai.gemini_advisor import request_advisory_async
+                    request_advisory_async(candidate)
+                except Exception as exc:
+                    print(f"Gemini advisory enqueue warning {candidate.signal_id}: {exc}")
                 stats["new"] += 1
                 send_educational_setup(candidate, _chart_frame(candidate, bundle))
             if index % 10 == 0:

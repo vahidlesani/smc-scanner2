@@ -1563,6 +1563,8 @@ def _ai_watch_hint(candidate: SignalCandidate) -> str:
 def _approaching_caption(candidate: SignalCandidate, current_price: float, distance_atr: float) -> str:
     why = candidate.strategy_fa
     badge, _ = _setup_badge(candidate)
+    advisory = str((candidate.metadata or {}).get("gemini_advisory") or "").strip()
+    ai_line = f"🤖 <b>نظر AI:</b> {_e(advisory)}\n" if advisory else ""
     return (
         f"🏷 <b>{_e(badge)}</b>\n"
         f"⚡ <b>هشدار نهایی | آماده‌سازی ورود</b> • {_e(candidate.setup_code)}\n"
@@ -1570,7 +1572,7 @@ def _approaching_caption(candidate: SignalCandidate, current_price: float, dista
         f"🕓 زمان رصد — ایران: {_iran_time(candidate)}\n"
         f"📨 زمان ارسال — ایران: {_iran_now()}\n"
         f"🎯 {_e(why)} • ⭐ {candidate.score}/10\n"
-        f"🤖 مشورت AI: {_e(_ai_watch_hint(candidate))}\n"
+        + ai_line +
         f"📍 زون: {_price(candidate.entry_zone_bottom)} – {_price(candidate.entry_zone_top)} • قیمت: {_price(current_price)}\n"
         f"⚖️ در انتظار کلوز تأییدی تایم پایین / MSS • فاصله {distance_atr:.2f} ATR\n"
         f"🛑 ابطال: {_price(candidate.sl)} • 🆔 <code>{_e(_public_code(candidate))}</code>"
@@ -1622,6 +1624,7 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
     mm = build_money_management(candidate)
     style_fa = {"DAYTRADE": "DAYTRADE", "SWING": "SWING", "SCALP": "SCALP"}.get(candidate.style.upper(), candidate.style)
     badge, _ = _setup_badge(candidate)
+    advisory = str((candidate.metadata or {}).get("gemini_advisory") or "").strip()
     rows = [
         f"🏷 <b>{_e(badge)}</b>",
         f"✅ <b>سیگنال تأییدشده</b> • {_e(candidate.setup_code)}",
@@ -1635,8 +1638,9 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         f"📈 Live Price: <b>{_price(float((candidate.metadata or {}).get('live_price') or candidate.planned_entry))}</b>",
         *[f"🏁 TP{i+1}: {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [35, 35])))],
         f"⚖️ R:R {candidate.rr_tp1:.2f} / {candidate.rr_tp2:.2f} • ⭐ {candidate.score}/10",
-        f"🤖 مشورت AI: {_e(_ai_watch_hint(candidate))}",
     ]
+    if advisory:
+        rows.append(f"🤖 <b>نظر AI:</b> {_e(advisory)}")
     if mm:
         rows.extend([
             "━━━━━━━━━━━━━━━━━━",
