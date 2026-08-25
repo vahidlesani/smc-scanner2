@@ -47,6 +47,10 @@ class Settings:
     # after candle closes (e.g. 1 => 5m cycles run at :01/:06/:11 UTC).
     monitor_offset_minute: int = 1
     scan_offset_minute: int = 1
+    # Execution events use live ticker polling; closed candles remain only for
+    # analytical confirmation. This must never wait for a 15m/1h close.
+    realtime_execution_seconds: int = 5
+    candidate_monitor_seconds: int = 10
 
     # ── viva setup era: prune low-evidence core detectors by default ──
     # R&D finding (90d/4-symbol): the five core v7 setups had no standalone
@@ -177,6 +181,8 @@ class Settings:
             monitor_minutes=_int("MONITOR_MINUTES", cls.monitor_minutes),
             live_styles=os.getenv("LIVE_STYLES", cls.live_styles),
             monitor_offset_minute=_int("MONITOR_OFFSET_MINUTE", cls.monitor_offset_minute),
+            realtime_execution_seconds=_int("REALTIME_EXECUTION_SECONDS", cls.realtime_execution_seconds),
+            candidate_monitor_seconds=_int("CANDIDATE_MONITOR_SECONDS", cls.candidate_monitor_seconds),
             core_v7_setups_enabled=_bool("CORE_V7_SETUPS_ENABLED", cls.core_v7_setups_enabled),
             pinv_enabled=_bool("PINVAL_ENABLED", cls.pinv_enabled),
             albrox_enabled=_bool("ALBROX_ENABLED", cls.albrox_enabled),

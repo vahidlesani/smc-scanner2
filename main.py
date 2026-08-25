@@ -513,8 +513,12 @@ def monitor_candidates() -> Dict[str, int]:
     return stats
 
 
-def monitor_confirmed_results() -> int:
-    events = monitor_confirmed_trades()
+_EXECUTION_PUBLISH_LOCK = threading.Lock()
+_CANDIDATE_MONITOR_LOCK = threading.Lock()
+
+
+def _publish_trade_events(events) -> int:
+    """Serialize lifecycle publication so ticker and candle monitors cannot race."""
     for event in events:
         if str(event.get("event", "")).startswith("TP"):
             pro_tp_mid = send_ladder_event(event)
@@ -548,6 +552,38 @@ def monitor_confirmed_results() -> int:
     return len(events)
 
 
+def monitor_confirmed_results() -> int:
+    with _EXECUTION_PUBLISH_LOCK:
+        return _publish_trade_events(monitor_confirmed_trades())
+
+
+def run_realtime_execution_cycle() -> int:
+    """Fresh ticker path: TP/SL messages must not wait for trigger candle close."""
+    try:
+        from data.ourbit import get_ourbit_tickers
+        from data.fetcher import get_tickers
+        from database.realtime_monitor import monitor_realtime_prices
+        prices = {}
+        try:
+            for row in get_ourbit_tickers(use_cache=False):
+                if float(row.get("last_price") or 0) > 0:
+                    prices[str(row.get("symbol") or "").upper()] = float(row["last_price"])
+        except Exception as exc:
+            print(f"Realtime Ourbit ticker warning: {exc}")
+        if not prices:
+            for row in get_tickers(use_cache=False):
+                if float(row.get("lastPrice") or 0) > 0:
+                    prices[str(row.get("symbol") or "").upper()] = float(row["lastPrice"])
+        if not prices:
+            return 0
+        with _EXECUTION_PUBLISH_LOCK:
+            events = monitor_realtime_prices(prices)
+            return _publish_trade_events(events)
+    except Exception as exc:
+        print(f"Realtime execution monitor error: {exc}")
+        return 0
+
+
 def run_monitor_cycle() -> None:
     try:
         trade_events = monitor_confirmed_results()
@@ -555,7 +591,8 @@ def run_monitor_cycle() -> None:
         print(f"Confirmed trade monitor error: {exc}")
         trade_events = 0
     try:
-        stats = monitor_candidates()
+        with _CANDIDATE_MONITOR_LOCK:
+            stats = monitor_candidates()
         if stats["active"] or trade_events:
             print(
                 f"Monitor • candidates={stats['active']} approaching={stats['approaching']} "
@@ -590,6 +627,28 @@ def _next_aligned_scan(now: datetime) -> datetime:
         return (base.replace(minute=offset) + timedelta(hours=1))
     candidate = base.replace(minute=next_minute)
     return candidate if candidate > now else candidate + timedelta(minutes=interval)
+
+
+def _realtime_execution_loop() -> None:
+    """Independent daemon so lengthy discovery scans cannot delay exits."""
+    interval = max(2, int(SETTINGS.realtime_execution_seconds))
+    while not _SHUTDOWN:
+        started = time.monotonic()
+        run_realtime_execution_cycle()
+        time.sleep(max(0.2, interval - (time.monotonic() - started)))
+
+
+def _candidate_monitor_loop() -> None:
+    """Confirmation/final-watch monitor independent of long discovery scans."""
+    interval = max(5, int(SETTINGS.candidate_monitor_seconds))
+    while not _SHUTDOWN:
+        started = time.monotonic()
+        try:
+            with _CANDIDATE_MONITOR_LOCK:
+                monitor_candidates()
+        except Exception as exc:
+            print(f"Realtime candidate monitor error: {exc}")
+        time.sleep(max(0.5, interval - (time.monotonic() - started)))
 
 
 def _daily_report() -> None:
@@ -641,6 +700,11 @@ def main() -> None:
         print("🤖 Telegram command listener active")
     except Exception as exc:
         print(f"Command listener error: {exc}")
+
+    threading.Thread(target=_realtime_execution_loop, name="viva-realtime-execution", daemon=True).start()
+    threading.Thread(target=_candidate_monitor_loop, name="viva-candidate-monitor", daemon=True).start()
+    print(f"⚡ Realtime execution monitor active • every {SETTINGS.realtime_execution_seconds}s")
+    print(f"⚡ Candidate monitor active • every {SETTINGS.candidate_monitor_seconds}s")
 
     now = datetime.now(timezone.utc)
     if SETTINGS.run_scan_on_start:

@@ -1554,6 +1554,8 @@ def _approaching_caption(candidate: SignalCandidate, current_price: float, dista
         f"🏷 <b>{_e(badge)}</b>\n"
         f"⚡ <b>هشدار نهایی | آماده‌سازی ورود</b> • {_e(candidate.setup_code)}\n"
         f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(candidate.style)} • {_e(candidate.direction)}\n"
+        f"🕓 زمان رصد — ایران: {_iran_time(candidate)}\n"
+        f"📨 زمان ارسال — ایران: {_iran_now()}\n"
         f"🎯 {_e(why)} • ⭐ {candidate.score}/10\n"
         f"📍 زون: {_price(candidate.entry_zone_bottom)} – {_price(candidate.entry_zone_top)} • قیمت: {_price(current_price)}\n"
         f"⚖️ در انتظار کلوز تأییدی تایم پایین / MSS • فاصله {distance_atr:.2f} ATR\n"
@@ -1610,7 +1612,8 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         f"🏷 <b>{_e(badge)}</b>",
         f"✅ <b>سیگنال تأییدشده</b> • {_e(candidate.setup_code)}",
         f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(candidate.trigger_timeframe)} • {_e(style_fa)} • {_e(candidate.direction)}",
-        f"🕓 ایران: {_iran_time(candidate)}",
+        f"🕓 زمان تأیید — ایران: {_iran_time(candidate)}",
+        f"📨 زمان ارسال — ایران: {_iran_now()}",
         f"🎯 Entry {_price(candidate.planned_entry)}  |  SL {_price(candidate.sl)}",
         *[f"🏁 TP{i+1} {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [35, 35])))],
         f"⚖️ R:R {candidate.rr_tp1:.2f} / {candidate.rr_tp2:.2f} • ⭐ {candidate.score}/10",

@@ -28,11 +28,13 @@ TF_MAP = {
     "1m": "Min1",
     "5m": "Min5",
     "15m": "Min15",
+    "30m": "Min30",
     "1h": "Min60",
+    "2h": "Hour2",
     "4h": "Hour4",
     "1d": "Day1",
 }
-TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400}
 
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": "viva-signal-bot/7.6"})
@@ -200,9 +202,10 @@ def get_ourbit_klines(
     return df
 
 
-def get_ourbit_tickers() -> List[Dict]:
+def get_ourbit_tickers(use_cache: bool = True) -> List[Dict]:
+    """Venue tickers; execution monitor may explicitly bypass the 60s cache."""
     key = ("ob_tickers",)
-    cached = _cache_get(key)
+    cached = _cache_get(key) if use_cache else None
     if cached is not None:
         return [dict(item) for item in cached]
     data = _get("/api/v1/contract/ticker")
