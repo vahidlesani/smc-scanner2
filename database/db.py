@@ -973,6 +973,34 @@ def get_market_source_performance() -> list:
     return sorted(output, key=lambda x: (x["total"], x["bucket"]), reverse=True)
 
 
+def get_signal_by_public_code(public_code: str) -> dict | None:
+    """Durable journal lookup used after a bot restart; callback state is not trusted."""
+    code = str(public_code or "").strip()
+    if not code:
+        return None
+    with db_cursor() as c:
+        c.execute(f"""
+            SELECT signal_id, symbol, source, strategy_fa, direction,
+                   entry, sl, tp1, tp2, result, pnl_pct, score,
+                   leverage, margin_usd, trade_style, created_at, closed_at,
+                   target_state_json, public_code, pro_message_id, first_tp_message_id, trigger_timeframe
+            FROM signals
+            WHERE {_published_v7_clause()} AND public_code={_ph()}
+            ORDER BY created_at DESC LIMIT 1
+        """, (get_settings().strategy_version, code))
+        r = c.fetchone()
+    if not r:
+        return None
+    return {
+        "signal_id": r[0], "symbol": r[1], "source": r[2], "strategy_fa": r[3], "direction": r[4],
+        "entry": r[5], "sl": r[6], "tp1": r[7], "tp2": r[8], "result": r[9], "pnl_pct": r[10],
+        "score": r[11], "leverage": r[12], "margin_usd": r[13], "trade_style": r[14],
+        "created_at": r[15], "closed_at": r[16], "target_state_json": r[17] or "{}",
+        "public_code": r[18] or "", "pro_message_id": r[19] or 0, "first_tp_message_id": r[20] or 0,
+        "trigger_timeframe": r[21] or "",
+    }
+
+
 def get_dashboard_summary() -> dict:
     """خلاصه آمار برای داشبورد"""
     with db_cursor() as c:

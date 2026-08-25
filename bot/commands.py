@@ -457,7 +457,8 @@ def handle_setups(chat_id, message_id=None):
     tokens = {}
     rows = []
     for i, c in enumerate(cands):
-        tok = f"su_{i}"
+        # Candidate id is durable in SQLite and fits Telegram's 64-byte callback limit.
+        tok = f"su_{c.signal_id}"
         tokens[tok] = c
         dir_e = "🟢" if c.direction == "LONG" else "🔴"
         rows.append([{"text": f"{dir_e} {c.symbol.replace('USDT','')} · {c.setup_code} · ⭐{c.score} · {c.style[:1]}",
@@ -474,8 +475,15 @@ def handle_setups(chat_id, message_id=None):
 
 def handle_setup_detail(chat_id, token):
     c = _setup_tokens.get(str(chat_id), {}).get(token)
+    if c is None and str(token).startswith("su_"):
+        try:
+            from database.candidate_store import get_active_candidates
+            wanted = str(token)[3:]
+            c = next((x for x in get_active_candidates() if x.signal_id == wanted), None)
+        except Exception:
+            c = None
     if c is None:
-        send_message("⏳ این لیست قدیمی شده؛ دوباره «🔔 ستاپ‌های فعال» رو باز کن.",
+        send_message("⏳ این ستاپ دیگر فعال نیست یا منقضی شده؛ دوباره «🔔 ستاپ‌های فعال» رو باز کن.",
                      chat_id, main_menu_keyboard())
         return
     send_message(f"⏳ آماده‌سازی چارت <b>{c.symbol}</b> …", chat_id)
@@ -646,7 +654,10 @@ def handle_setup_results(chat_id, setup_code):
     for i, item in enumerate(signals[:12]):
         result = {"WIN":"✅", "LOSS":"❌", "PENDING":"⏳"}.get(item.get("result"), "⏳")
         lines.append(f"{result} <code>{_e(item.get('public_code') or item.get('signal_id'))}</code> • {_e(item.get('symbol'))} • {float(item.get('pnl_pct') or 0):+.2f}%")
-        token = f"jr{i}"
+        # Public code is short enough for Telegram callback_data and survives
+        # restart; in-memory tokens were the source of dead journal buttons.
+        code_token = str(item.get("public_code") or "")
+        token = f"jr_{code_token}" if code_token else f"jr{i}"
         token_map[token] = item
         rows.append([{"text": f"{result} {item.get('symbol')} • جزئیات و چارت", "callback_data": token}])
     _result_tokens[str(chat_id)] = token_map
@@ -691,8 +702,15 @@ def handle_strategy_detail(chat_id, strategy):
 
 def handle_result_detail(chat_id, token):
     item = _result_tokens.get(str(chat_id), {}).get(token)
+    if not item and str(token).startswith("jr_"):
+        # Journal detail keeps working after Railway restart / callback-memory loss.
+        try:
+            from database.db import get_signal_by_public_code
+            item = get_signal_by_public_code(str(token)[3:])
+        except Exception:
+            item = None
     if not item:
-        send_message("⚠️ این ژورنال منقضی شده؛ دوباره از منوی نتایج بازش کن.", chat_id, main_menu_keyboard())
+        send_message("⚠️ این ژورنال پیدا نشد؛ دوباره از نتایج بازش کن.", chat_id, main_menu_keyboard())
         return
     from analysis.models import SignalCandidate
     from bot.messages_v7 import generate_chart
