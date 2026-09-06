@@ -68,6 +68,18 @@ class Settings:
     pinv_symbols: str = ""               # empty = all symbols
     pinv_allowed_directions: str = "LONG" # temporary live refinement filter
     pinv_allowed_zone_kinds: str = "FVG"  # temporary live refinement filter
+    # ── Zone Polarity Gate (Viva 2026-09 refinement) ──
+    # A pin is only tradable in the direction that agrees with the nearest
+    # higher-TF supply/demand polarity: LONG at demand (or after a valid
+    # overhead-supply breakout/flip), SHORT at supply (or after a valid
+    # demand breakdown/flip). Counter-polarity pins are rejected at DETECTION.
+    pinv_polarity_gate_enabled: bool = True
+    pinv_polarity_near_atr: float = 1.2    # probe within this ATR = "at the zone"
+    pinv_polarity_block_atr: float = 1.8   # opposing wall within this ATR blocks
+    pinv_polarity_breakout_body_atr: float = 0.5  # moderate valid-breakout body
+    # When the polarity gate is enabled, the legacy one-direction/one-zone
+    # band-aid filters are bypassed by default (the gate itself decides).
+    pinv_polarity_bypass_legacy_filters: bool = True
     # How many trigger candles an alert gets before a verdict reply (❌/✅)
     alert_verdict_candles: int = 3
     # Log-scale rendering for higher-context trendline charts
@@ -195,6 +207,11 @@ class Settings:
             pinv_symbols=os.getenv("PINVAL_SYMBOLS", cls.pinv_symbols),
             pinv_allowed_directions=os.getenv("PINVAL_ALLOWED_DIRECTIONS", cls.pinv_allowed_directions),
             pinv_allowed_zone_kinds=os.getenv("PINVAL_ALLOWED_ZONE_KINDS", cls.pinv_allowed_zone_kinds),
+            pinv_polarity_gate_enabled=_bool("PINVAL_POLARITY_GATE_ENABLED", cls.pinv_polarity_gate_enabled),
+            pinv_polarity_near_atr=_float("PINVAL_POLARITY_NEAR_ATR", cls.pinv_polarity_near_atr),
+            pinv_polarity_block_atr=_float("PINVAL_POLARITY_BLOCK_ATR", cls.pinv_polarity_block_atr),
+            pinv_polarity_breakout_body_atr=_float("PINVAL_POLARITY_BREAKOUT_BODY_ATR", cls.pinv_polarity_breakout_body_atr),
+            pinv_polarity_bypass_legacy_filters=_bool("PINVAL_POLARITY_BYPASS_LEGACY_FILTERS", cls.pinv_polarity_bypass_legacy_filters),
             alert_verdict_candles=_int("ALERT_VERDICT_CANDLES", cls.alert_verdict_candles),
             chart_log_htf=_bool("CHART_LOG_HTF", cls.chart_log_htf),
             scan_offset_minute=_int("SCAN_OFFSET_MINUTE", cls.scan_offset_minute),

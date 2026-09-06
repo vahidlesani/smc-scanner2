@@ -1516,10 +1516,12 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
             rule = f"✅ کلوز بالای {_price(hi)} • ❌ کلوز زیر {_price(lo)}"
         else:
             rule = f"✅ کلوز زیر {_price(lo)} • ❌ کلوز بالای {_price(hi)}"
+        polarity_fa = str(md.get("pin_polarity_reason_fa") or "").strip()
+        polarity_line = f"\n🧭 {_e(polarity_fa)}" if polarity_fa else ""
         caption = (
             f"🚨 {_e(candidate.symbol)} • {_e(candidate.trigger_timeframe)} • پین‌بار "
             f"{'🟢 صعودی' if candidate.direction == 'LONG' else '🔴 نزولی'}\n"
-            f"📍 داخل {_e(zone_fa)}" + (f" (کانتکست {_e(ctx_fa)})" if ctx_fa else "") + "\n"
+            f"📍 داخل {_e(zone_fa)}" + (f" (کانتکست {_e(ctx_fa)})" if ctx_fa else "") + polarity_line + "\n"
             f"{_e(rule)}\n"
             f"🕓 ایران: {_iran_time(candidate)}\n"
             f"🆔 <code>{_e(_public_code(candidate))}</code>"

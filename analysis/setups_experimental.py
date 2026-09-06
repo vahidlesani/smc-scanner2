@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 
 from analysis.indicators import adx, atr, structure_bias
 from analysis.models import EvidenceItem, SignalCandidate, generate_viva_public_code
@@ -637,10 +638,33 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
 
         fvg = _unmitigated_fvg_edge(df, direction, atr_v)
         in_fvg = bool(fvg) and fvg["bottom"] - 0.35 * atr_v <= probe <= fvg["top"] + 0.35 * atr_v
-        zone = _context_zone(bundle, ctx_tf, direction, atr_v)
-        in_zone = bool(zone) and abs(probe - zone["level"]) <= 0.7 * atr_v
-        if not (in_fvg or in_zone):
-            continue  # Viva's rule: pinbar matters only inside an important area
+
+        polarity_on = bool(getattr(settings, "pinv_polarity_gate_enabled", False))
+        polarity = None
+        zone_kind = "NONE"
+        if polarity_on:
+            from analysis.zone_polarity import evaluate_polarity
+            ctx_df = bundle.get(ctx_tf)
+            polarity = evaluate_polarity(
+                ctx_df, df, direction, probe, atr_v,
+                near_atr=float(getattr(settings, "pinv_polarity_near_atr", 1.2)),
+                block_atr=float(getattr(settings, "pinv_polarity_block_atr", 1.8)),
+                breakout_body_atr=float(getattr(settings, "pinv_polarity_breakout_body_atr", 0.5)),
+                include_fvg=True,
+            )
+            if not polarity.allowed:
+                # Counter-polarity pin: e.g. a bullish pin under untouched supply
+                # in a correction. Viva's rule — no bullish confirmation there
+                # unless supply has been broken; the scan keeps looking for the
+                # opposing pin at that wall instead.
+                continue
+            zone_kind = polarity.zone_kind
+        else:
+            zone = _context_zone(bundle, ctx_tf, direction, atr_v)
+            in_zone = bool(zone) and abs(probe - zone["level"]) <= 0.7 * atr_v
+            if not (in_fvg or in_zone):
+                continue  # Viva's rule: pinbar matters only inside an important area
+            zone_kind = "FVG" if in_fvg else (zone["kind"] if in_zone else "NONE")
 
         # adjacent doji confluence (previous two candles)
         has_doji = False
@@ -677,15 +701,25 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         if rr1 < float(getattr(settings, "pinv_rr1_floor", 1.30)) or rr2 < float(getattr(settings, "pinv_rr2_floor", 2.0)):
             continue
         tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}.get(str(tf), 300)
-        zone_kind = "FVG" if in_fvg else (zone["kind"] if in_zone else "NONE")
-        allowed_dirs = {x.strip().upper() for x in str(getattr(settings, "pinv_allowed_directions", "") or "").split(",") if x.strip()}
-        allowed_zones = {x.strip().upper() for x in str(getattr(settings, "pinv_allowed_zone_kinds", "") or "").split(",") if x.strip()}
-        if allowed_dirs and direction not in allowed_dirs:
-            continue
-        if allowed_zones and zone_kind.upper() not in allowed_zones:
-            continue
-        zone_fa = {"FVG": "لبهٔ FVG «فلگ‌لیمیت»", "FLIP": "فلیپ‌زون مهم",
-                   "SD_FRESH": "زون تازهٔ عرضه/تقاضای تایم بالاتر", "NONE": "ناحیهٔ مرتبط"}.get(zone_kind, "ناحیهٔ مهم")
+        # Legacy one-direction / one-zone band-aid filters. When the polarity
+        # gate is active it already decides correct direction + zone polarity
+        # (including valid SHORTs at supply and post-break flips), so these
+        # crude filters must be bypassed or they would re-block the good setups.
+        if not (polarity_on and getattr(settings, "pinv_polarity_bypass_legacy_filters", True)):
+            allowed_dirs = {x.strip().upper() for x in str(getattr(settings, "pinv_allowed_directions", "") or "").split(",") if x.strip()}
+            allowed_zones = {x.strip().upper() for x in str(getattr(settings, "pinv_allowed_zone_kinds", "") or "").split(",") if x.strip()}
+            if allowed_dirs and direction not in allowed_dirs:
+                continue
+            if allowed_zones and zone_kind.upper() not in allowed_zones:
+                continue
+        zone_fa = {
+            "FVG": "لبهٔ FVG «فلگ‌لیمیت»",
+            "FLIP": "فلیپ‌زون مهم (پس از شکست معتبر)",
+            "DEMAND": "تقاضای کلیدی تایم بالاتر",
+            "SUPPLY": "عرضهٔ کلیدی تایم بالاتر",
+            "SD_FRESH": "زون تازهٔ عرضه/تقاضای تایم بالاتر",
+            "NONE": "ناحیهٔ مرتبط",
+        }.get(zone_kind, "ناحیهٔ مهم")
         last_ts = df["timestamp"].iloc[-1]
         from analysis.models import iso_now
         created = iso_now()
@@ -742,6 +776,18 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             # as every other setup; it is not a verdict-only pseudo-signal.
             "alert_only": 0,
         })
+        if polarity_on and polarity is not None:
+            active = polarity.active_zone
+            candidate.metadata.update({
+                "pin_polarity_reason": polarity.reason,
+                "pin_polarity_reason_fa": polarity.reason_fa,
+                "pin_polarity_zone_kind": polarity.zone_kind,
+                "pin_polarity_zone_tf": (active.tf if active else ""),
+                "pin_polarity_zone_dist_atr": float(polarity.details.get("zone_dist_atr", 0.0) or 0.0),
+                "pin_nearest_supply_atr": float(polarity.nearest_supply.dist_atr if polarity.nearest_supply else -1),
+                "pin_nearest_demand_atr": float(polarity.nearest_demand.dist_atr if polarity.nearest_demand else -1),
+            })
+            candidate.mandatory_gates["zone_polarity"] = True
         candidate.mandatory_gates = {"pin_zone": True, "structural_targets": True, "risk_reward": True}
         if not candidate.expires_at:
             from datetime import datetime, timedelta, timezone
@@ -765,13 +811,25 @@ def _pinwall_quality_score(df, direction: str, base: SignalCandidate) -> tuple[f
     atr_v=float((df["high"]-df["low"]).tail(14).mean())
     if body<.5*atr_v: anatomy+=8
     if opp_wick/rng>.15: anatomy=max(0,anatomy-6)
-    md=base.metadata or {}; location=15.0 if md.get("pin_zone_kind") in {"FVG","FLIP","SD_FRESH"} else 0.0
+    md=base.metadata or {}; location=15.0 if md.get("pin_zone_kind") in {"FVG","FLIP","SD_FRESH","DEMAND","SUPPLY"} else 0.0
     # Existing detector only emits fresh FVG/context candidates; award first-visit quality.
     if not md.get("touched", False): location+=12
     recent=df.iloc[max(0,len(df)-6):len(df)-1]; avg=float((recent["high"]-recent["low"]).mean()) if not recent.empty else 0
     context=12.0 if atr_v>0 and avg<.6*atr_v else 0.0
     if any(abs(float(r["close"])-float(r["open"]))<=.12*max(float(r["high"])-float(r["low"]),1e-12) for _,r in recent.tail(2).iterrows()): context+=8
-    bias_score=10.0 if base.bias==("BULLISH" if is_long else "BEARISH") else (3.0 if anatomy+location>=45 else 0.0)
+    # HTF/zone alignment must reflect REAL higher-timeframe polarity, not the
+    # pin's own direction (base.bias is derived from the pin candle and would
+    # make this term always true). The polarity gate's verdict is the real
+    # alignment signal: AT_DEMAND/AT_SUPPLY = strong; *_FLIP post-breakout = strong.
+    pol_reason=str(md.get("pin_polarity_reason") or "")
+    if pol_reason in {"AT_DEMAND","AT_SUPPLY"}:
+        bias_score=10.0
+    elif pol_reason in {"SUPPLY_FLIP","DEMAND_FLIP"}:
+        bias_score=8.0
+    else:
+        # Polarity gate absent/disabled: fall back to a neutral small credit
+        # only when anatomy+location are already strong, never a free 10.
+        bias_score=3.0 if anatomy+location>=45 else 0.0
     total=anatomy+location+context+bias_score
     return total,{"anatomy":anatomy,"location":location,"context":context,"bias":bias_score,"total":total}
 
