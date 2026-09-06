@@ -600,7 +600,15 @@ VIVA_STAGES = ("S0_WATCH", "S1_VALID", "S2_BREAKOUT", "S3_RETEST", "S4_REJECTION
 
 
 def advance_live_state(metadata: dict, row: pd.Series, previous: pd.Series, direction: str, *, zone_low: float, zone_high: float, atr_value: float) -> tuple[str, bool]:
-    """Durable per-candidate state transition for live paper lifecycle."""
+    """Durable per-candidate state transition for live paper lifecycle.
+
+    Simplified for reachability (the original required S3 retest -> S4 rejection
+    -> S5 micro-BOS to happen on three *separate* closed bars inside a narrow
+    window, which almost never aligned on the confirm TF, so VIVA-TLBREAK never
+    confirmed). Now: after the retest, the FIRST decisive directional bar that
+    both rejects the zone AND breaks the prior micro-structure confirms; a
+    rejection bar and a later micro-BOS bar still confirm via S4->S5.
+    """
     state = str(metadata.get("viva_state") or "S2_BREAKOUT")
     lo, hi = sorted((float(zone_low), float(zone_high)))
     touched = float(row["low"]) <= hi and float(row["high"]) >= lo
@@ -609,16 +617,21 @@ def advance_live_state(metadata: dict, row: pd.Series, previous: pd.Series, dire
     is_long = str(direction).upper() == "LONG"
     if state == "S2_BREAKOUT" and touched:
         return "S3_RETEST", False
-    if state == "S3_RETEST":
+    if state in ("S3_RETEST", "S4_REJECTION"):
         pin = (float(row["close"]) >= float(row["low"]) + .65*rng and (min(float(row["open"]),float(row["close"]))-float(row["low"])) >= .55*rng) if is_long else (float(row["close"]) <= float(row["high"]) - .65*rng and (float(row["high"])-max(float(row["open"]),float(row["close"]))) >= .55*rng)
         engulf = (float(previous["close"]) < float(previous["open"]) and float(row["close"]) > float(row["open"]) and float(row["open"]) <= float(previous["close"])) if is_long else (float(previous["close"]) > float(previous["open"]) and float(row["close"]) < float(row["open"]) and float(row["open"]) >= float(previous["close"]))
-        if pin or (engulf and body >= .35*atr_value):
-            return "S4_REJECTION", False
-        return state, False
-    if state == "S4_REJECTION":
-        bos = (float(row["close"]) > float(previous["high"])) if is_long else (float(row["close"]) < float(previous["low"]))
         directional = (float(row["close"]) > float(row["open"])) if is_long else (float(row["close"]) < float(row["open"]))
-        if bos and directional and body >= .40*atr_value:
+        bos = (float(row["close"]) > float(previous["high"])) if is_long else (float(row["close"]) < float(previous["low"]))
+        rejected = pin or (engulf and body >= .35*atr_value) or directional
+        body_ok = body >= .35*atr_value
+        # Immediate confirm: decisive directional bar breaking micro-structure
+        # while at the retest (covers the common case where rejection and
+        # continuation happen on the same confirmation bar).
+        if rejected and bos and directional and body_ok:
+            return "S5_MICRO_BOS", True
+        if rejected:
+            return "S4_REJECTION", False
+        if state == "S4_REJECTION" and bos and directional and body >= .40*atr_value:
             return "S5_MICRO_BOS", True
     return state, False
 

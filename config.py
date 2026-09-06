@@ -60,6 +60,12 @@ class Settings:
     pinv_enabled: bool = True
     albrox_enabled: bool = False
     albrox_symbols: str = ""
+    # ALBROX spike/reclaim detection thresholds (env-tunable). The original
+    # 5x-ATR spike bar almost never occurs on liquid crypto, so no candidate
+    # was ever produced; defaults are relaxed to tradeable-but-decisive.
+    albrox_min_spike_atr: float = 3.0
+    albrox_min_reclaim_frac: float = 0.45
+    albrox_base_max_atr: float = 2.5
     pinwall_quality_enabled: bool = False
     pinwall_quality_min_score: float = 78.0
     pinv_min_wick_body: float = 2.0      # dominant wick / body
@@ -199,6 +205,9 @@ class Settings:
             pinv_enabled=_bool("PINVAL_ENABLED", cls.pinv_enabled),
             albrox_enabled=_bool("ALBROX_ENABLED", cls.albrox_enabled),
             albrox_symbols=os.getenv("ALBROX_SYMBOLS", cls.albrox_symbols),
+            albrox_min_spike_atr=_float("ALBROX_MIN_SPIKE_ATR", cls.albrox_min_spike_atr),
+            albrox_min_reclaim_frac=_float("ALBROX_MIN_RECLAIM_FRAC", cls.albrox_min_reclaim_frac),
+            albrox_base_max_atr=_float("ALBROX_BASE_MAX_ATR", cls.albrox_base_max_atr),
             pinwall_quality_enabled=_bool("PINWALL_QUALITY_ENABLED", cls.pinwall_quality_enabled),
             pinwall_quality_min_score=_float("PINWALL_QUALITY_MIN_SCORE", cls.pinwall_quality_min_score),
             pinv_min_wick_body=_float("PINVAL_MIN_WICK_BODY", cls.pinv_min_wick_body),

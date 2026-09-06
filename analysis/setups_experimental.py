@@ -359,7 +359,9 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         candidate.metadata.update({
             "strategy_variant": "VIVA_TLBREAK",
             "viva_state_machine": VivaTLState(stage="S2_BREAKOUT").payload(),
-            "viva_retest_window_bars": 24 if str(style).upper() == "SWING" else 16,
+            # Confirm TF bars: give the retest→rejection→micro-BOS sequence room
+            # to complete (previously 16/24 on a lower TF expired too quickly).
+            "viva_retest_window_bars": 32 if str(style).upper() == "SWING" else 24,
             "viva_pattern": pattern,
             "viva_touch_count": line.touch_count, "viva_fit_error_atr": line.fit_residual_atr,
             "viva_break_line": breakout.line_price, "viva_breakout_score": breakout.score,
@@ -787,8 +789,12 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                 "pin_nearest_supply_atr": float(polarity.nearest_supply.dist_atr if polarity.nearest_supply else -1),
                 "pin_nearest_demand_atr": float(polarity.nearest_demand.dist_atr if polarity.nearest_demand else -1),
             })
-            candidate.mandatory_gates["zone_polarity"] = True
+        # Base gates prove the pin sits in a real zone with executable targets.
         candidate.mandatory_gates = {"pin_zone": True, "structural_targets": True, "risk_reward": True}
+        if polarity_on and polarity is not None:
+            # The zone-polarity gate is the real direction/context test for the
+            # pin family (counter-polarity pins were rejected at detection).
+            candidate.mandatory_gates["zone_polarity"] = True
         if not candidate.expires_at:
             from datetime import datetime, timedelta, timezone
             hours = 24 if style == "SWING" else (10 if style == "DAYTRADE" else 3)
@@ -869,20 +875,23 @@ def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]
     df, context_df = bundle.get(trigger_tf), bundle.get(structure_tf)
     if len(df) < 120:
         return None
+    min_spike_atr = float(getattr(settings, "albrox_min_spike_atr", 3.0))
+    min_reclaim = float(getattr(settings, "albrox_min_reclaim_frac", 0.45))
+    base_max_atr = float(getattr(settings, "albrox_base_max_atr", 2.5))
     ranges = df["high"] - df["low"]
     atrs = ranges.rolling(14).mean()
     # Search recent closed spike; enough post-spike candles must exist to form a base.
     for spike_i in range(max(14, len(df)-40), len(df)-7):
         spike = df.iloc[spike_i]
         atr_i = float(atrs.iloc[spike_i] or 0)
-        if atr_i <= 0 or float(ranges.iloc[spike_i]) < 5.0 * atr_i:
+        if atr_i <= 0 or float(ranges.iloc[spike_i]) < min_spike_atr * atr_i:
             continue
         prior = df.iloc[max(0, spike_i-96):spike_i]
         if prior.empty:
             continue
         rng = float(ranges.iloc[spike_i])
-        long_spike = float(spike["low"]) < float(prior["low"].min()) and float(spike["close"]) >= float(spike["low"]) + .45*rng
-        short_spike = float(spike["high"]) > float(prior["high"].max()) and float(spike["close"]) <= float(spike["high"]) - .45*rng
+        long_spike = float(spike["low"]) < float(prior["low"].min()) and float(spike["close"]) >= float(spike["low"]) + min_reclaim*rng
+        short_spike = float(spike["high"]) > float(prior["high"].max()) and float(spike["close"]) <= float(spike["high"]) - min_reclaim*rng
         if not (long_spike or short_spike):
             continue
         direction = "LONG" if long_spike else "SHORT"
@@ -894,7 +903,7 @@ def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]
         base = post.iloc[:min(10, len(post)-1)]
         base_low, base_high = float(base["low"].min()), float(base["high"].max())
         base_atr = float(ranges.iloc[spike_i+1:spike_i+1+len(base)].mean())
-        if base_atr <= 0 or (base_high-base_low) > 2.5*base_atr:
+        if base_atr <= 0 or (base_high-base_low) > base_max_atr*base_atr:
             continue
         current = df.iloc[-1]
         broke = float(current["close"]) > base_high if direction == "LONG" else float(current["close"]) < base_low
