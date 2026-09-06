@@ -79,7 +79,9 @@ class Settings:
     # higher-TF supply/demand polarity: LONG at demand (or after a valid
     # overhead-supply breakout/flip), SHORT at supply (or after a valid
     # demand breakdown/flip). Counter-polarity pins are rejected at DETECTION.
-    pinv_polarity_gate_enabled: bool = True
+    # Feature-flagged per standing rule: defaults OFF until paper/backtest validated.
+    # Enable live with PINVAL_POLARITY_GATE_ENABLED=true.
+    pinv_polarity_gate_enabled: bool = False
     pinv_polarity_near_atr: float = 1.2    # probe within this ATR = "at the zone"
     pinv_polarity_block_atr: float = 1.8   # opposing wall within this ATR blocks
     pinv_polarity_breakout_body_atr: float = 0.5  # moderate valid-breakout body
