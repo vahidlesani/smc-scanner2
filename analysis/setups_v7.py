@@ -998,8 +998,17 @@ def _active_detectors() -> List:
             detectors.extend(exp.EXPERIMENTAL_DETECTORS)
         if getattr(SETTINGS, "experimental_tlbreak_enabled", False) or getattr(SETTINGS, "viva_tlbreak_enabled", False):
             detectors.extend(exp.TLBREAK_DETECTORS)
-        if getattr(SETTINGS, "pinv_enabled", True):
+        # Viva's four live setups. The pinbar family runs as one: when the
+        # stricter Pinwall-Quality gate is enabled it supersedes the legacy
+        # PINVAL alert for the same bar (PINWALLQ wraps PINVAL and re-scores
+        # it), so we never emit two near-identical pinbar messages.
+        pinwall_q = bool(getattr(SETTINGS, "pinwall_quality_enabled", False))
+        if pinwall_q:
+            detectors.extend(exp.PINWALL_QUALITY_DETECTORS)
+        elif getattr(SETTINGS, "pinv_enabled", True):
             detectors.extend(exp.PINVAL_DETECTORS)
+        if getattr(SETTINGS, "albrox_enabled", False):
+            detectors.extend(exp.ALBROX_DETECTORS)
     except Exception as exc:  # pragma: no cover - defensive
         print(f"Experimental detectors unavailable: {exc}")
     return detectors
@@ -1008,8 +1017,10 @@ def _active_detectors() -> List:
 def _experimental_symbol_allowed(detector_name: str, symbol: str) -> bool:
     if detector_name == "detect_pattern_1234":
         raw = getattr(SETTINGS, "experimental_p1234_symbols", "") or ""
-    elif detector_name == "detect_pinbar_zone":
+    elif detector_name in ("detect_pinbar_zone", "detect_pinwall_quality"):
         raw = getattr(SETTINGS, "pinv_symbols", "") or ""
+    elif detector_name == "detect_albrox":
+        raw = getattr(SETTINGS, "albrox_symbols", "") or ""
     else:
         raw = getattr(SETTINGS, "experimental_tlbreak_symbols", "") or ""
     allowed = {x.strip().upper() for x in raw.split(",") if x.strip()}
