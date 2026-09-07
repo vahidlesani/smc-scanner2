@@ -141,6 +141,16 @@ def run_discovery_scan() -> Dict[str, int]:
     except Exception:
         pass
     stats = {"symbols": len(symbols), "detected": 0, "new": 0, "errors": 0}
+    # Observability only (no behaviour change): tally where each raw detector
+    # candidate goes, per setup, so "0 confirmed" is diagnosable from logs.
+    tally = {}
+
+    def _t(cand):
+        sc = str(getattr(cand, "setup_code", "?") or "?")
+        return tally.setdefault(sc, {
+            "seen": 0, "low_score": 0, "dead_gate": 0, "blocked": {},
+            "suppressed_pre_tp1": 0, "dup": 0, "ready_new": 0,
+        })
     print(
         f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC] "
         f"Discovery scan started for {len(symbols)} dynamic symbols"
@@ -153,7 +163,9 @@ def run_discovery_scan() -> Dict[str, int]:
             candidates = scan_bundle(bundle)
             stats["detected"] += len(candidates)
             for candidate in candidates:
+                _t(candidate)["seen"] += 1
                 if candidate.score < SETTINGS.educational_min_score:
+                    _t(candidate)["low_score"] += 1
                     continue
                 # Reserve before *any* public alert. A display code is a real
                 # position identity, not a random label that may later change.
@@ -167,10 +179,14 @@ def run_discovery_scan() -> Dict[str, int]:
                     # A failing mandatory gate can never be repaired later, so
                     # this candidate can never confirm. Keep it educational,
                     # but do not track it: no Approaching spam, no symbol lock.
-                    candidate.metadata["execution_blocked_gates"] = [
+                    blocked = [
                         gate for gate, valid in candidate.mandatory_gates.items() if not valid
                     ]
+                    candidate.metadata["execution_blocked_gates"] = blocked
                     stats["dead_gate"] = stats.get("dead_gate", 0) + 1
+                    t = _t(candidate); t["dead_gate"] += 1
+                    for g in blocked:
+                        t["blocked"][g] = t["blocked"].get(g, 0) + 1
                     if not _dead_gate_recently_alerted(candidate):
                         send_educational_setup(candidate, _chart_frame(candidate, bundle))
                     continue
@@ -179,6 +195,7 @@ def run_discovery_scan() -> Dict[str, int]:
                 # it must never cause symbol-wide deletion of alerts.
                 if has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe):
                     stats["suppressed_pre_tp1"] = stats.get("suppressed_pre_tp1", 0) + 1
+                    _t(candidate)["suppressed_pre_tp1"] += 1
                     continue
                 previous = find_similar(candidate)
                 # A generated candidate is a separate possible position.  Never
@@ -186,6 +203,7 @@ def run_discovery_scan() -> Dict[str, int]:
                 # symbol/trigger matches: multiple paper trades are allowed on
                 # that pair and each confirmed trade must retain its own links.
                 if previous and not is_material_update(previous, candidate):
+                    _t(candidate)["dup"] += 1
                     continue  # identical state: leave the visible alert alone
                 # Delete Telegram posts only for a proven update of this same
                 # scenario lineage. Same-symbol / same-trigger setups can be
@@ -200,6 +218,7 @@ def run_discovery_scan() -> Dict[str, int]:
                 # Live alerts replace themselves on meaningful new information;
                 # symbol locks would hide those updates, so discovery has no lock.
                 if not add_candidate(candidate):
+                    _t(candidate)["dup"] += 1
                     continue
                 # Advisory is asynchronous and isolated: a Gemini timeout can
                 # never block detection, confirmation, risk or Telegram send.
@@ -209,6 +228,7 @@ def run_discovery_scan() -> Dict[str, int]:
                 except Exception as exc:
                     print(f"Gemini advisory enqueue warning {candidate.signal_id}: {exc}")
                 stats["new"] += 1
+                _t(candidate)["ready_new"] += 1
                 send_educational_setup(candidate, _chart_frame(candidate, bundle))
             if index % 10 == 0:
                 print(f"  scanned {index}/{len(symbols)} • new educational setups: {stats['new']}")
@@ -221,6 +241,15 @@ def run_discovery_scan() -> Dict[str, int]:
         f"Discovery scan finished in {duration:.1f}s • "
         f"detected={stats['detected']} new={stats['new']} errors={stats['errors']}"
     )
+    # Per-setup funnel (observability only): seen -> execution-ready/blocked.
+    for sc in sorted(tally):
+        t = tally[sc]
+        blocked = ",".join(f"{g}:{n}" for g, n in sorted(t["blocked"].items())) or "-"
+        print(
+            f"  funnel {sc:8s} seen={t['seen']} ready_new={t['ready_new']} "
+            f"dead_gate={t['dead_gate']}[{blocked}] low_score={t['low_score']} "
+            f"dup={t['dup']} suppressed_preTp1={t['suppressed_pre_tp1']}"
+        )
     return stats
 
 
