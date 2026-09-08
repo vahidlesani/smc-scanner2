@@ -102,6 +102,14 @@ class Settings:
     confirm_rr2_floor: float = 2.0
     confirm_body_min_atr: float = 0.35
     confirm_require_zone_mid: bool = True
+    # Alternative (multi-candle / higher-TF) trigger engine. The pin bar is a
+    # sign of rejection, never a requirement: a 2..N candle base that aggregates
+    # into a pin/doji-break/engulf/reclaim at the zone confirms the same way.
+    alt_triggers_enabled: bool = True
+    alt_cluster_max_base: int = 9
+    alt_cluster_min_body_atr: float = 0.30
+    alt_mtf_enabled: bool = True
+    alt_fibo_confluence: bool = True
     # Invalidation buffer widths beyond the liquidity anchor, in ATR units.
     sl_buffer_atr_swing: float = 0.35
     sl_buffer_atr_scalp: float = 0.25
@@ -234,6 +242,11 @@ class Settings:
             confirm_rr2_floor=_float("CONFIRM_RR2_FLOOR", cls.confirm_rr2_floor),
             confirm_body_min_atr=_float("CONFIRM_BODY_MIN_ATR", cls.confirm_body_min_atr),
             confirm_require_zone_mid=_bool("CONFIRM_REQUIRE_ZONE_MID", cls.confirm_require_zone_mid),
+            alt_triggers_enabled=_bool("ALT_TRIGGERS_ENABLED", cls.alt_triggers_enabled),
+            alt_cluster_max_base=_int("ALT_CLUSTER_MAX_BASE", cls.alt_cluster_max_base),
+            alt_cluster_min_body_atr=_float("ALT_CLUSTER_MIN_BODY_ATR", cls.alt_cluster_min_body_atr),
+            alt_mtf_enabled=_bool("ALT_MTF_ENABLED", cls.alt_mtf_enabled),
+            alt_fibo_confluence=_bool("ALT_FIBO_CONFLUENCE", cls.alt_fibo_confluence),
             sl_buffer_atr_swing=_float("SL_BUFFER_ATR_SWING", cls.sl_buffer_atr_swing),
             sl_buffer_atr_scalp=_float("SL_BUFFER_ATR_SCALP", cls.sl_buffer_atr_scalp),
             min_stop_pct_daytrade=_float("MIN_STOP_PCT_DAYTRADE", cls.min_stop_pct_daytrade),

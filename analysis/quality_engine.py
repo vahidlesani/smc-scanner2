@@ -139,6 +139,31 @@ def evaluate_confirmation(
 
     row = closed_df.iloc[-1]
     previous = closed_df.iloc[-2]
+    # --- alternative multi-candle / higher-TF trigger evaluation ----------
+    # The pin bar is one sign among several; a base of 2..N closed trigger
+    # candles that aggregates into a pin / doji-break / engulf / reclaim at
+    # the zone is an equally valid trigger. Computed once, consumed by both
+    # the Viva state machine and the generic trigger below.
+    alt = None
+    if bool(getattr(SETTINGS, "alt_triggers_enabled", True)):
+        _atr_alt = float(candidate.metadata.get("atr", 0) or 0)
+        if _atr_alt <= 0:
+            _atr_alt = float((closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
+        try:
+            from analysis.trigger_patterns import multi_candle_trigger
+            alt = multi_candle_trigger(
+                closed_df, candidate.direction,
+                float(candidate.entry_zone_bottom), float(candidate.entry_zone_top),
+                _atr_alt,
+                max_base=int(getattr(SETTINGS, "alt_cluster_max_base", 9)),
+                min_body_atr=float(getattr(SETTINGS, "alt_cluster_min_body_atr", 0.30)),
+                require_zone_mid=bool(SETTINGS.confirm_require_zone_mid),
+                mtf_enabled=bool(getattr(SETTINGS, "alt_mtf_enabled", True)),
+                fibo_enabled=bool(getattr(SETTINGS, "alt_fibo_confluence", True)),
+            )
+        except Exception as _alt_exc:
+            alt = None
+            candidate.metadata["alt_trigger_error"] = str(_alt_exc)[:120]
     # Isolated Viva-TLBREAK state machine: retest, then rejection, then a
     # later closed micro-BOS. Other strategies keep their existing behavior.
     if candidate.metadata.get("strategy_variant") == "VIVA_TLBREAK":
@@ -156,6 +181,16 @@ def evaluate_confirmation(
             machine = advance_viva_state(machine, "CONFIRM", max_retest_bars=int(candidate.metadata.get("viva_retest_window_bars", 16)))
         candidate.metadata["viva_state"] = state
         candidate.metadata["viva_state_machine"] = machine.payload()
+        if not ready and alt is not None and state in ("S3_RETEST", "S4_REJECTION"):
+            # Cluster/MTF rejection at the retest counts as the rejection+BOS
+            # event pair compressed into one base — the state machine may
+            # confirm through it (fast lane), never the other way around.
+            ready = True
+            state = "S5_MICRO_BOS"
+            machine = advance_viva_state(machine, "CONFIRM", max_retest_bars=int(candidate.metadata.get("viva_retest_window_bars", 16)))
+            candidate.metadata["viva_state"] = state
+            candidate.metadata["viva_state_machine"] = machine.payload()
+            candidate.metadata["viva_fast_alt"] = alt.kind
         if not ready:
             return reject("VIVA_TLBREAK_WAIT_" + state, "VIVA-TLBREAK در انتظار Retest → Rejection → BOS پنج‌دقیقه‌ای است.")
     close, open_price = float(row["close"]), float(row["open"])
@@ -188,9 +223,14 @@ def evaluate_confirmation(
         and (structure_trigger or engulfing or pinbar)
         and displacement["body_atr"] >= SETTINGS.confirm_body_min_atr
     )
+    alt_only = False
+    if not trigger_valid and alt is not None:
+        trigger_valid = True
+        alt_only = True
     if not trigger_valid:
         return reject("NO_TRIGGER", (
-            "Retest انجام شده، اما هنوز کندل تأییدی جهت‌دار همراه با شکست Micro Structure بسته نشده است."
+            "Retest انجام شده، اما هنوز نه کندل تکی تأییدی و نه بیس چندکندلی/تایم‌بالاتری "
+            "شدنِ Rejection را نساخته‌اند."
         ))
 
     # The executable entry is the confirmation close, not the historical POI
@@ -232,13 +272,23 @@ def evaluate_confirmation(
         trigger_type = f"{'سقف' if candidate.direction == 'LONG' else 'کف'} Micro Structure قبلی را شکست"
     elif engulfing:
         trigger_type = "یک Engulfing معتبر در جهت سناریو تشکیل داد"
-    else:
+    elif pinbar:
         trigger_type = "یک Pin Bar معتبر با رد قیمت از ناحیه تشکیل داد"
-    trigger_detail = (
-        f"پس از اولین تماس با ناحیه، کندل {candidate.trigger_timeframe.upper()} در جهت {candidate.direction} بسته شد و {trigger_type}. "
-        f"بدنه کندل {displacement['body_atr']:.2f} برابر ATR بود. بنابراین تأیید بر اساس کندل بسته‌شده صادر شده، "
-        f"نه قیمت لحظه‌ای یا Wick موقت."
-    )
+    else:
+        from analysis.trigger_patterns import describe as describe_alt_trigger
+        trigger_type = describe_alt_trigger(alt, candidate.direction)
+    if alt_only:
+        trigger_detail = (
+            f"پس از اولین تماس با ناحیه، هیچ کندل تکیِ پین‌باری وجود نداشت؛ خودِ {trigger_type} "
+            f"تاییدیه‌ی بسته‌شدنِ بیس است. تأیید بر اساس کندل‌های بسته‌شده صادر شده، نه قیمت لحظه‌ای."
+        )
+        candidate.metadata["alt_trigger_kind"] = alt.kind
+    else:
+        trigger_detail = (
+            f"پس از اولین تماس با ناحیه، کندل {candidate.trigger_timeframe.upper()} در جهت {candidate.direction} بسته شد و {trigger_type}. "
+            f"بدنه کندل {displacement['body_atr']:.2f} برابر ATR بود. بنابراین تأیید بر اساس کندل بسته‌شده صادر شده، "
+            f"نه قیمت لحظه‌ای یا Wick موقت."
+        )
     # Replace a previous trigger item without inflating score on publication retries.
     had_trigger = any(item.key == "entry_trigger" for item in candidate.evidence)
     candidate.evidence = [item for item in candidate.evidence if item.key != "entry_trigger"]
