@@ -44,6 +44,18 @@ SETUP_NAMES_FA["ALBROX"] = "ALBROX | اسپایک، بازپس‌گیری، بی
 SETUP_NAMES["PINWALLQ"] = "Pinwall Quality v1"
 SETUP_NAMES_FA["PINWALLQ"] = "PINWALL Quality | کیفیت، موقعیت و کامپرشن"
 
+# Observability only: counts of pinbar candidates the polarity gate rejected
+# in the current scan process, keyed by PolarityVerdict.reason (NO_ZONE,
+# UNDER_SUPPLY, ABOVE_DEMAND...). main.py logs+resets this each discovery scan.
+POLARITY_REJECTS: dict = {}
+
+
+def drain_polarity_rejects() -> dict:
+    """Return and clear the polarity-gate rejection tally (used by diagnostics)."""
+    out = dict(POLARITY_REJECTS)
+    POLARITY_REJECTS.clear()
+    return out
+
 
 def _find_1234(df, direction: str) -> Optional[dict]:
     ph, pl = pivots(df, 3, 3)
@@ -659,6 +671,10 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                 # in a correction. Viva's rule — no bullish confirmation there
                 # unless supply has been broken; the scan keeps looking for the
                 # opposing pin at that wall instead.
+                try:
+                    POLARITY_REJECTS[polarity.reason] = int(POLARITY_REJECTS.get(polarity.reason, 0)) + 1
+                except Exception:
+                    pass
                 continue
             zone_kind = polarity.zone_kind
         else:

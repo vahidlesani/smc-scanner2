@@ -250,6 +250,13 @@ def run_discovery_scan() -> Dict[str, int]:
             f"dead_gate={t['dead_gate']}[{blocked}] low_score={t['low_score']} "
             f"dup={t['dup']} suppressed_preTp1={t['suppressed_pre_tp1']}"
         )
+    try:
+        import analysis.setups_experimental as _exp
+        pol = _exp.drain_polarity_rejects()
+        if pol:
+            print("  polarity-rejects: " + ", ".join(f"{k}:{n}" for k, n in sorted(pol.items())))
+    except Exception as _e:
+        print(f"polarity-rejects diagnostic unavailable: {_e}")
     return stats
 
 
