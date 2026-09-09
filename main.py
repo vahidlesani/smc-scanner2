@@ -255,6 +255,9 @@ def run_discovery_scan() -> Dict[str, int]:
         pol = _exp.drain_polarity_rejects()
         if pol:
             print("  polarity-rejects: " + ", ".join(f"{k}:{n}" for k, n in sorted(pol.items())))
+        rec = _exp.drain_polarity_recovers()
+        if rec:
+            print("  polarity-recovers: " + ", ".join(f"{k}:{n}" for k, n in sorted(rec.items())))
     except Exception as _e:
         print(f"polarity-rejects diagnostic unavailable: {_e}")
     return stats

@@ -48,12 +48,21 @@ SETUP_NAMES_FA["PINWALLQ"] = "PINWALL Quality | کیفیت، موقعیت و ک�
 # in the current scan process, keyed by PolarityVerdict.reason (NO_ZONE,
 # UNDER_SUPPLY, ABOVE_DEMAND...). main.py logs+resets this each discovery scan.
 POLARITY_REJECTS: dict = {}
+# Pins the gate wanted to drop but the legacy location rule (FVG/ctx-zone)
+# re-accepted without touching a counter-polarity wall. Same logging lifecycle.
+POLARITY_RECOVERS: dict = {}
 
 
 def drain_polarity_rejects() -> dict:
     """Return and clear the polarity-gate rejection tally (used by diagnostics)."""
     out = dict(POLARITY_REJECTS)
     POLARITY_REJECTS.clear()
+    return out
+
+
+def drain_polarity_recovers() -> dict:
+    out = dict(POLARITY_RECOVERS)
+    POLARITY_RECOVERS.clear()
     return out
 
 
@@ -656,6 +665,13 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         polarity_on = bool(getattr(settings, "pinv_polarity_gate_enabled", False))
         polarity = None
         zone_kind = "NONE"
+        polarity_recovered = False
+        # The legacy location rule (what discovery used before the gate): the
+        # pin must sit at an unmitigated FVG or a direction-context zone. It is
+        # computed under both modes so the gate can only *remove* locations,
+        # never invent a stricter location catalog than the proven ruleset.
+        legacy_zone = _context_zone(bundle, ctx_tf, direction, atr_v)
+        legacy_in_zone = bool(legacy_zone) and abs(probe - legacy_zone["level"]) <= 0.7 * atr_v
         if polarity_on:
             from analysis.zone_polarity import evaluate_polarity
             ctx_df = bundle.get(ctx_tf)
@@ -667,19 +683,36 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                 include_fvg=True,
             )
             if not polarity.allowed:
-                # Counter-polarity pin: e.g. a bullish pin under untouched supply
-                # in a correction. Viva's rule — no bullish confirmation there
-                # unless supply has been broken; the scan keeps looking for the
-                # opposing pin at that wall instead.
-                try:
-                    POLARITY_REJECTS[polarity.reason] = int(POLARITY_REJECTS.get(polarity.reason, 0)) + 1
-                except Exception:
-                    pass
-                continue
-            zone_kind = polarity.zone_kind
+                wall_block = str(getattr(polarity, "reason", "") or "") in {"UNDER_SUPPLY", "ABOVE_DEMAND"}
+                if not wall_block and (in_fvg or legacy_in_zone):
+                    # Recovery (funnel audit 2026-09-09): the gate rejected with
+                    # "no key zone in its catalog", yet the pin sits on an
+                    # unmitigated FVG / legacy ctx zone that the pre-gate rules
+                    # accepted. Viva's rule is about counter-polarity WALLS, not
+                    # about zone catalogs — so keep the wall block (else-branch)
+                    # and accept this location instead of killing the setup.
+                    try:
+                        key = str(getattr(polarity, "reason", "") or "UNKNOWN")
+                        POLARITY_RECOVERS[key] = int(POLARITY_RECOVERS.get(key, 0)) + 1
+                    except Exception:
+                        pass
+                    zone_kind = "FVG" if in_fvg else str((legacy_zone or {}).get("kind") or "CONTEXT")
+                    polarity_recovered = True
+                else:
+                    # Counter-polarity pin at a real wall: a bullish pin under
+                    # untouched supply (or mirror). No confirmation until the
+                    # wall is validly broken; the scan keeps looking for the
+                    # opposing pin at that wall instead.
+                    try:
+                        POLARITY_REJECTS[polarity.reason] = int(POLARITY_REJECTS.get(polarity.reason, 0)) + 1
+                    except Exception:
+                        pass
+                    continue
+            else:
+                zone_kind = polarity.zone_kind
         else:
-            zone = _context_zone(bundle, ctx_tf, direction, atr_v)
-            in_zone = bool(zone) and abs(probe - zone["level"]) <= 0.7 * atr_v
+            zone = legacy_zone
+            in_zone = legacy_in_zone
             if not (in_fvg or in_zone):
                 continue  # Viva's rule: pinbar matters only inside an important area
             zone_kind = "FVG" if in_fvg else (zone["kind"] if in_zone else "NONE")
@@ -797,6 +830,7 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         if polarity_on and polarity is not None:
             active = polarity.active_zone
             candidate.metadata.update({
+                "pin_polarity_recovered": bool(polarity_recovered),
                 "pin_polarity_reason": polarity.reason,
                 "pin_polarity_reason_fa": polarity.reason_fa,
                 "pin_polarity_zone_kind": polarity.zone_kind,
