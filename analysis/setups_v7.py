@@ -1035,6 +1035,14 @@ def scan_setups(bundle: MarketBundle, style: str) -> List[SignalCandidate]:
         try:
             result = detector(bundle, style)
             if result and result.score >= SETTINGS.educational_min_score:
+                # Zone policy is observational only and must never piggyback on
+                # the zone-context try block: enrichment failures used to
+                # silently skip the policy attachment too (review fix #4).
+                try:
+                    from analysis.zone_policy import attach_zone_policy
+                    attach_zone_policy(result)
+                except Exception as exc:
+                    result.metadata["zone_policy_error"] = str(exc)[:160]
                 candidates.append(result)
         except Exception as exc:
             print(f"Setup detector error {detector.__name__} {bundle.symbol} {style}: {exc}")
