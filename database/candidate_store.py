@@ -39,19 +39,21 @@ def _pg_sql(sql: str) -> str:
 
 class _PgConn:
     """sqlite-flavoured adapter: conn.execute(sql, params) -> cursor with
-    fetchone/fetchall/rowcount; keeps every call site single-path."""
+    fetchone/fetchall/rowcount; keeps every call site single-path.
+    NOTE: psycopg2 exposes execute() on the CURSOR, not the connection."""
 
     def __init__(self, raw):
         self._raw = raw
+        self._cur = raw.cursor()
         self.total_changes = 0
 
     def execute(self, sql, params=()):
-        cur = self._raw.execute(_pg_sql(sql), tuple(params))
+        self._cur.execute(_pg_sql(sql), tuple(params))
         try:
-            self.total_changes += max(0, cur.rowcount)
+            self.total_changes += max(0, self._cur.rowcount)
         except Exception:
             pass
-        return cur
+        return self._cur
 
 
 def _pg_connect():
