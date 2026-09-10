@@ -52,7 +52,7 @@ STATE_FADE = "REJECTION_FADE"
 _EDGE_RULES = {p: {"upper": "LONG", "lower": "SHORT"} for p in (
     "WEDGE_FALLING", "WEDGE_RISING", "TRIANGLE_ASCENDING", "TRIANGLE_DESCENDING",
     "TRIANGLE_SYMMETRICAL", "TRIANGLE", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING",
-    "CHANNEL_FLAT", "CHANNEL", "TRENDLINE", "HORIZONTAL_SR",
+    "CHANNEL_FLAT", "CHANNEL", "TRENDLINE", "HORIZONTAL_SR", "BROADENING",
 )}
 
 PATTERN_FA = {
@@ -68,6 +68,13 @@ PATTERN_FA = {
     "CHANNEL": "کانال",
     "TRENDLINE": "خط روند اصلی",
     "HORIZONTAL_SR": "سطح افقی مهم",
+    "BROADENING": "مگافون گشونده",
+    "HEAD_SHOULDERS": "سر و شانه (H&S)",
+    "INVERSE_HEAD_SHOULDERS": "سر و شانه معکوس",
+    "TRIPLE_TOP": "سقف سه‌برخوردی",
+    "TRIPLE_BOTTOM": "کف سه‌برخوردی",
+    "FLAG_BULL": "پرچم/کنج صعودی",
+    "FLAG_BEAR": "پرچم/کنج نزولی",
 }
 
 # fit windows per timeframe — pattern must be RECENT history, not the whole archive
@@ -167,14 +174,18 @@ def classify_shape(upper, lower, n) -> str:
     flat_l = drift_l <= 0.12 * width_now
     width_then = upper.price_at(start) - lower.price_at(start)
     converging = width_then > 0 and width_now < 0.85 * width_then
+    # slope deadband: a drift under 2% of height over the span IS horizontal
+    tol = 0.02 * width_now / span
     if not converging:
-        sgn = (upper.slope > 0) - (upper.slope < 0)
+        if width_then > 0 and width_now > 1.18 * width_then and upper.slope > tol and lower.slope < -tol:
+            return "BROADENING"          # E&M megaphone: both edges fan outward
+        sgn = (upper.slope > tol) - (upper.slope < -tol)
         return "CHANNEL_ASCENDING" if sgn > 0 else "CHANNEL_DESCENDING" if sgn < 0 else "CHANNEL_FLAT"
-    if flat_u and not flat_l and lower.slope > 0:
+    if flat_u and not flat_l and lower.slope > tol:
         return "TRIANGLE_ASCENDING"
-    if flat_l and not flat_u and upper.slope < 0:
+    if flat_l and not flat_u and upper.slope < -tol:
         return "TRIANGLE_DESCENDING"
-    if upper.slope < 0 < lower.slope:
+    if upper.slope < -tol < lower.slope:
         return "TRIANGLE_SYMMETRICAL"
     if upper.slope <= 0 and lower.slope <= 0:
         return "WEDGE_FALLING"
@@ -238,6 +249,124 @@ def touch_reactions(df: pd.DataFrame, line, side: str, n: int, atr: float) -> Di
         return res
 
 
+def fit_edge_line(df: pd.DataFrame, side: str, cfg, n: int):
+    """Validated edge line with ONE-outlier tolerance (Edwards & Magee / Brooks):
+    a spike that pierced the line and came back (failed break, H&S head, wick
+    noise) must NOT invalidate an otherwise 3-touch line — it is REACTION data.
+    Strict guard: the dropped pivot must lie at least 0.5 ATR OUTSIDE the fitted
+    line, and the newest pivot must remain a touch (recency). Falls back to the
+    plain validator; never loosens it for the other setups."""
+    from analysis.viva_tlbreak import fit_validated_line
+    line = fit_validated_line(df, side, cfg)
+    if line is not None:
+        return line
+    try:
+        import numpy as _np
+        from analysis.viva_tlbreak import pivots as _piv, ValidatedLine
+        highs, lows = _piv(df, cfg.pivot_left, cfg.pivot_right)
+        pts = highs if side == "HIGH" else lows
+        if len(pts) < cfg.min_touches + 1:
+            return None
+        atr = float((df["high"] - df["low"]).tail(14).mean())
+        if atr <= 0:
+            return None
+        recent = pts[-6:]
+        if int(recent[-1]["index"]) > n or n - int(recent[-1]["index"]) > max(6, int(0.30 * n)):
+            return None  # newest pivot must be recent — no archaeology
+        best = None
+        for drop in range(len(recent) - 1):
+            chosen = tuple(p for i, p in enumerate(recent) if i != drop)
+            if len(chosen) < cfg.min_touches:
+                continue
+            xs = _np.asarray([float(p["index"]) for p in chosen])
+            ys = _np.asarray([float(p["price"]) for p in chosen])
+            if xs[-1] - xs[0] < cfg.pivot_left * 3:
+                continue
+            slope, intercept = _np.polyfit(xs, ys, 1)
+            resid = float(_np.max(_np.abs(ys - (slope * xs + intercept))) / atr)
+            if resid > cfg.max_fit_residual_atr:
+                continue
+            out = recent[drop]
+            lvl = slope * float(out["index"]) + intercept
+            pierced = (float(out["price"]) > lvl + 0.5 * atr) if side == "HIGH" \
+                else (float(out["price"]) < lvl - 0.5 * atr)
+            if not pierced:
+                continue
+            cand = ValidatedLine(side=side, slope=float(slope), intercept=float(intercept),
+                                 touch_count=len(chosen), fit_residual_atr=resid,
+                                 first_index=int(xs[0]), last_index=int(xs[-1]), points=chosen)
+            if best is None or cand.touch_count > best.touch_count:
+                best = cand
+        return best
+    except Exception:
+        return None
+
+
+def _structural_refine(df: pd.DataFrame, line, side: str, n: int,
+                       height: float, pattern: str):
+    """Edwards & Magee special formations layered on a validated FLAT line:
+    a swing that protrudes beyond the line between its first two touches is a
+    HEAD (H&S); a flat 3+ touch edge with no head is a multiple top/bottom.
+    Labels are informational — geometry and edge rules are untouched."""
+    try:
+        pts = [int(p.get("index", -1)) for p in (line.points or ())
+               if int(p.get("index", -1)) >= 0]
+        if len(pts) < 3 or height <= 0 or pts[-1] - pts[0] < 6:
+            return pattern, ""
+        if abs(float(line.slope)) * (pts[-1] - pts[0]) > 0.20 * height:
+            return pattern, ""           # not flat: wedge/triangle/channel stands
+        i0, i1 = pts[0], pts[1]
+        if side == "upper":
+            seg = df["high"].iloc[i0:i1 + 1].astype(float)
+            shoulder = max(float(df["high"].iloc[i0]), float(df["high"].iloc[i1]))
+            ext = float(seg.max()) if len(seg) else shoulder
+            protrude = ext - shoulder
+        else:
+            seg = df["low"].iloc[i0:i1 + 1].astype(float)
+            shoulder = min(float(df["low"].iloc[i0]), float(df["low"].iloc[i1]))
+            ext = float(seg.min()) if len(seg) else shoulder
+            protrude = shoulder - ext
+        if len(seg) >= 3 and protrude >= 0.25 * height:
+            if side == "upper":
+                return ("HEAD_SHOULDERS",
+                        "سر و شانه: سر ≥۲۵٪ِ ارتفاع بالاتر از خطِ شانه‌ها — "
+                        "تأییدِ کلاسیک با شکستِ خطِ گردن (ضلعِ مقابل) است")
+            return ("INVERSE_HEAD_SHOULDERS",
+                    "سر و شانه معکوس: سرِ عمیق‌تر از خطِ کف‌ها — "
+                    "تأییدِ کلاسیک با شکستِ خطِ گردن (ضلعِ مقابل) است")
+        if pattern in ("CHANNEL_FLAT", "HORIZONTAL_SR", "TRENDLINE"):
+            return ("TRIPLE_TOP" if side == "upper" else "TRIPLE_BOTTOM",
+                    "خطِ افقیِ ۳برخوردی — ادواردز/مجی: هر برخوردِ بیشتر، اعتبارِ بیشتر")
+        return pattern, ""
+    except Exception:
+        return pattern, ""
+
+
+def _flagpole_strength(df: pd.DataFrame, line, side: str, n: int,
+                       atr_p: float, height: float):
+    """E&M/Brooks flag-pennant: a big directional move immediately BEFORE the
+    first edge touch, then a small sideways/counter channel. Returns signed
+    pole strength in ATRs when the geometry qualifies (continuation only —
+    counter-trend poles are exhaustion, not flags), else None."""
+    try:
+        if atr_p <= 0 or height <= 0:
+            return None
+        pts = [int(p.get("index", -1)) for p in (line.points or ())
+               if int(p.get("index", -1)) >= 0]
+        if not pts or pts[0] < 10:
+            return None
+        c = df["close"].astype(float).to_numpy()
+        i0 = pts[0]
+        pole = float((c[i0] - c[max(0, i0 - 8)]) / atr_p)
+        if abs(pole) < 2.2 or height > 0.9 * abs(pole) * atr_p:
+            return None
+        if (pole > 0) != (side == "upper"):
+            return None
+        return round(pole, 1)
+    except Exception:
+        return None
+
+
 # ── edge scan ──────────────────────────────────────────────────────────────
 def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                pattern_tf: str, live_price: Optional[float] = None) -> List[Dict]:
@@ -249,8 +378,9 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
     if pattern_df is None or len(pattern_df) < 40 or trigger_df is None or len(trigger_df) < 6:
         return events
     cfg = load_config()
-    upper = fit_validated_line(pattern_df, "HIGH", cfg)
-    lower = fit_validated_line(pattern_df, "LOW", cfg)
+    _n0 = len(pattern_df) - 1
+    upper = fit_edge_line(pattern_df, "HIGH", cfg, _n0)
+    lower = fit_edge_line(pattern_df, "LOW", cfg, _n0)
     if upper is None and lower is None:
         return events
     n = len(pattern_df) - 1
@@ -318,6 +448,13 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         else:
             height = max(float(pattern_df["high"].iloc[max(0, n - 40):n + 1].max()) - line_now, 1.5 * atr_p)
         height = min(height, 45.0 * atr_p)
+        # ── E&M special formations & flag-pennant overlay (labels only) ─────
+        pattern, struct_note = _structural_refine(pattern_df, line, side, n, height, pattern)
+        _fp = _flagpole_strength(pattern_df, line, side, n, atr_p, height)
+        if _fp is not None:
+            pattern = "FLAG_BULL" if _fp > 0 else "FLAG_BEAR"
+            struct_note = (f"میله‌ی پرچم: حرکتِ {abs(_fp)}×ATRِ بلافاصله قبل از "
+                           "فشردگی — شکست در جهتِ میله ادامه‌دهنده است (ادواردز/مجی)")
         target = line_now + height if direction == "LONG" else line_now - height
         pct = (target - live) / live * 100.0 if live else 0.0
         ev = {
@@ -335,6 +472,8 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             "base_box": [float(trigger_df["low"].tail(8).min()),
                          float(trigger_df["high"].tail(8).max())],
         }
+        if struct_note:
+            ev["struct_note"] = struct_note
         # ── Alfonso 75% law / Brooks overshoot-fade ─────────────────────────
         if fade_enabled and react["touches"] >= 3 and react["reject_rate"] >= thr \
                 and dist <= 0.35 and (rejected_now or state in (STATE_NEAR, STATE_READY)):
@@ -363,18 +502,45 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
     return events
 
 
-# ── alert cooldown ─────────────────────────────────────────────────────────
-_ALERT_SEEN: Dict[str, float] = {}
+# ── alert cooldown (durable: survives Railway redeploys via bot_kv) ───────
+_ALERT_SEEN: Optional[Dict[str, float]] = None
+_KV_KEY = "tc_alert_seen"
+_KV_TTL = 96 * 3600.0  # stamps older than this are pruned on the next write
+
+
+def _seen() -> Dict[str, float]:
+    global _ALERT_SEEN
+    if _ALERT_SEEN is None:
+        try:
+            from database.bot_kv import get_json
+            raw = get_json(_KV_KEY, {}) or {}
+            now = time.time()
+            _ALERT_SEEN = {str(k): float(v) for k, v in raw.items()
+                           if float(v) > now - _KV_TTL}
+        except Exception:
+            _ALERT_SEEN = {}
+    return _ALERT_SEEN
+
+
+def _seen_store() -> None:
+    try:
+        from database.bot_kv import set_json
+        now = time.time()
+        set_json(_KV_KEY, {k: v for k, v in _seen().items() if v > now - _KV_TTL})
+    except Exception:
+        pass
 
 
 def _cooldown_ok(key: str, state: str) -> bool:
     hours = float(getattr(_s(), "technoclassic_cooldown_hours", 8.0) or 8.0)
     now = time.time()
-    stamp = _ALERT_SEEN.get(key)
+    seen = _seen()
+    stamp = seen.get(key)
     window = hours * 3600.0 if state == STATE_NEAR else (hours / 2) * 3600.0
     if stamp and now - stamp < window:
         return False
-    _ALERT_SEEN[key] = now
+    seen[key] = now
+    _seen_store()
     return True
 
 

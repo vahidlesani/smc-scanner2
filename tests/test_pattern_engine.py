@@ -118,9 +118,18 @@ def test_bonuses_are_bounded_additive_never_negative():
 def test_alert_cooldown_blocks_repeat():
     m = _mod()
     key = "TESTUSDT|4h|WEDGE_FALLING|LONG|upper"
-    m._ALERT_SEEN.clear()
-    assert m._cooldown_ok(key, m.STATE_NEAR) is True
-    assert m._cooldown_ok(key, m.STATE_NEAR) is False
+    from database.bot_kv import set_json
+    set_json(m._KV_KEY, {})          # clean durable slate for the unit run
+    m._ALERT_SEEN = {}               # clean in-memory slate
+    try:
+        assert m._cooldown_ok(key, m.STATE_NEAR) is True
+        assert m._cooldown_ok(key, m.STATE_NEAR) is False
+        m._ALERT_SEEN = {}           # memory wiped (mid-test style reset)...
+        from database.bot_kv import get_json
+        assert key in get_json(m._KV_KEY, {})  # ...but the stamp is durable
+    finally:
+        set_json(m._KV_KEY, {})
+        m._ALERT_SEEN = None
 
 
 def test_detector_disabled_by_default_flag():
@@ -244,3 +253,91 @@ def test_other_setups_stay_pristine():
                       "viva_tc_base_bonus", "compression_bonus(refine_df)",
                       "_tc_comp_bonus + _tc_base_bonus"):
         assert forbidden not in src, f"contamination found: {forbidden}"
+
+
+# ── E&M special formations overlay (labels only; geometry untouched) ───────
+def _flat_frames(u0=100.0, su=0.0, l0=68.0, sl=0.0, head=None, extra=None,
+                 up_idx=(45, 95, 125), lo_idx=(70, 112, 132), n=140, wick=0.6,
+                 keys_override=None):
+    U = lambda i: u0 + su * i
+    L = lambda i: l0 + sl * i
+    if keys_override is not None:
+        keys = sorted(keys_override)
+        vals = np.full(n, float(keys[-1][1]))
+        for (i0, v0), (i1, v1) in zip(keys, keys[1:]):
+            seg = np.linspace(v0, v1, i1 - i0 + 1)
+            vals[i0:i1 + 1] = seg[: i1 - i0 + 1]
+        ts = pd.date_range("2026-01-01", periods=n, freq="4h")
+        pat = pd.DataFrame({"timestamp": ts, "open": vals - 0.01, "high": vals + wick,
+                            "low": vals - wick, "close": vals + 0.01,
+                            "volume": np.full(n, 1000.0)})
+        atr = float((pat["high"] - pat["low"]).tail(14).mean())
+        tn = 34
+        tv = np.full(tn, u0 + su * (n - 1) + 1.2 * atr)
+        trig = pd.DataFrame({"timestamp": pd.date_range("2026-08-01", periods=tn, freq="15min"),
+                             "open": tv - 0.2 * atr, "high": tv + 0.3 * atr, "low": tv - 0.5 * atr,
+                             "close": tv, "volume": np.full(tn, 500.0)})
+        return pat, trig
+    keys = [(0, (U(0) + L(0)) / 2.0)]
+    for i in set(list(up_idx) + list(lo_idx) + ([head] if head is not None else [])
+                 + [k for k, _ in (extra or [])]):
+        if head is not None and i == head:
+            keys.append((i, 108.0))
+        elif i in up_idx:
+            keys.append((i, U(i) - wick))
+        else:
+            keys.append((i, L(i) + wick))
+    for i, v in (extra or []):
+        keys = [(k, v2) for k, v2 in keys if k != i] + [(i, v)]
+    keys.sort()
+    vals = np.full(n, keys[-1][1])
+    for (i0, v0), (i1, v1) in zip(keys, keys[1:]):
+        seg = np.linspace(v0, v1, i1 - i0 + 1)
+        vals[i0:i1 + 1] = seg[: i1 - i0 + 1]
+    ts = pd.date_range("2026-01-01", periods=n, freq="4h")
+    pat = pd.DataFrame({"timestamp": ts, "open": vals - 0.01, "high": vals + wick,
+                        "low": vals - wick, "close": vals + 0.01,
+                        "volume": np.full(n, 1000.0)})
+    atr = float((pat["high"] - pat["low"]).tail(14).mean())
+    tn = 34
+    tv = np.full(tn, U(n - 1) + 1.2 * atr)
+    trig = pd.DataFrame({"timestamp": pd.date_range("2026-08-01", periods=tn, freq="15min"),
+                         "open": tv - 0.2 * atr, "high": tv + 0.3 * atr, "low": tv - 0.5 * atr,
+                         "close": tv, "volume": np.full(tn, 500.0)})
+    return pat, trig
+
+
+def test_head_shoulders_label_and_note():
+    """LS(45)→trough→HEAD(70)→trough→RS(125)→retest(132) — the head pierces
+    the shoulder line; the 1-outlier fit must still validate it (and the raw
+    fitter alone would miss this exact shape)."""
+    m = _mod()
+    pat, trig = _flat_frames(keys_override=[
+        (0, 84.3), (45, 99.4), (52, 80.0), (70, 108.0), (88, 78.0),
+        (105, 99.4), (118, 92.0), (132, 99.4), (139, 84.0)])
+    events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
+    assert events and events[0]["pattern"] == "HEAD_SHOULDERS"
+    assert "گردن" in events[0].get("struct_note", "")
+    assert events[0]["touches"] >= 3
+
+
+def test_triple_top_label():
+    m = _mod()
+    pat, trig = _flat_frames()
+    events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
+    assert events and events[0]["pattern"] == "TRIPLE_TOP"
+
+
+def test_flag_relabels_small_channel_after_pole():
+    m = _mod()
+    pat, trig = _flat_frames(l0=95.0, extra=[(35, 70.0)])
+    events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
+    assert events and events[0]["pattern"] == "FLAG_BULL"
+    assert "پرچم" in events[0].get("struct_note", "")
+
+
+def test_broadening_megaphone():
+    m = _mod()
+    pat, trig = _flat_frames(u0=80.0, su=0.12, l0=80.0, sl=-0.10)
+    events = m.scan_edges(pat, trig, "4h")
+    assert events and events[0]["pattern"] == "BROADENING"

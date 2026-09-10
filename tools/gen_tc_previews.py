@@ -12,9 +12,21 @@ N = 140
 WICK = 0.6
 
 
-def build_pattern(u0, su, l0, sl, up_idx, lo_idx, lower_scatter=False):
+def build_pattern(u0, su, l0, sl, up_idx, lo_idx, lower_scatter=False, keys_override=None):
     U = lambda i: u0 + su * i
     L = lambda i: l0 + sl * i
+    if keys_override is not None:
+        keys = sorted(keys_override)
+        vals = np.zeros(N)
+        for (i0, v0), (i1, v1) in zip(keys, keys[1:]):
+            seg = np.linspace(v0, v1, i1 - i0 + 1)
+            vals[i0:i1 + 1] = seg[: i1 - i0 + 1]
+        ts = pd.date_range("2026-01-01", periods=N, freq="4h")
+        return pd.DataFrame({
+            "timestamp": ts, "open": vals - 0.01, "high": vals + WICK,
+            "low": vals - WICK, "close": vals + 0.01,
+            "volume": np.full(N, 1000.0), "turnover": np.full(N, 50000.0),
+        })
     keys = [(0, (U(0) + L(0)) / 2.0)]
     for i in sorted(set(list(up_idx) + list(lo_idx))):
         if i in up_idx:
@@ -64,10 +76,10 @@ ANCHOR_LINE = {}
 
 
 def preview(name, u0, su, l0, sl, up_idx, lo_idx, side, direction, state_break,
-            lower_scatter=False, fade=False):
+            lower_scatter=False, fade=False, keys_override=None):
     from analysis.pattern_engine import scan_edges, STATE_BREAK
     global ANCHOR_LINE
-    pattern = build_pattern(u0, su, l0, sl, up_idx, lo_idx, lower_scatter)
+    pattern = build_pattern(u0, su, l0, sl, up_idx, lo_idx, lower_scatter, keys_override)
     n = N - 1
     # exact fitted line price at last bar (touches are on the formula line)
     line_now = (u0 + su * n) if side == "upper" else (l0 + sl * n)
@@ -131,6 +143,16 @@ def main():
     made.append(preview("10_descending_channel_NEAR", 100, -0.045, 62, -0.045, up_idx, lo_idx, "upper", "LONG", False))
     made.append(preview("11_support_rejection_FADE", 100, -0.10, 72, -0.04, up_idx, lo_idx, "lower", "SHORT", False, fade=True))
     made.append(preview("12_resistance_rejection_FADE", 100, -0.08, 52, 0.10, up_idx, lo_idx, "upper", "LONG", False, fade=True))
+    made.append(preview("13_head_shoulders_BREAK", 100, 0.0, 70, 0.0, up_idx, lo_idx, "upper", "LONG", True,
+                        keys_override=[(0, 84.3), (45, 99.4), (52, 80.0), (70, 108.0), (88, 78.0),
+                                       (105, 99.4), (118, 92.0), (132, 99.4), (139, 84.0)]))
+    made.append(preview("14_triple_top_FADE", 100, 0.0, 68, 0.0, (45, 95, 125), (58, 112, 132), "upper", "LONG", False, fade=True,
+                        keys_override=[(0, 84.3), (45, 99.4), (60, 74.0), (95, 99.4), (112, 68.6),
+                                       (125, 99.4), (132, 80.0), (139, 84.0)]))
+    made.append(preview("15_broadening_megaphone", 80, 0.12, 80, -0.10, up_idx, lo_idx, "upper", "LONG", False))
+    made.append(preview("16_bull_flag_pennant", 100, 0.0, 95, 0.0, (45, 95, 125), (70, 112, 132), "upper", "LONG", True,
+                        keys_override=[(0, 97.0), (35, 70.0), (45, 99.4), (70, 95.6), (95, 99.4),
+                                       (112, 95.6), (125, 99.4), (139, 97.0)]))
     # contact sheet
     from PIL import Image, ImageDraw
     tiles = []

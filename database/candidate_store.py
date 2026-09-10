@@ -19,6 +19,49 @@ from typing import List, Optional
 from analysis.models import SignalCandidate, iso_now
 
 DB_PATH = os.getenv("CANDIDATE_DB_PATH", "/tmp/viva_candidates.db")
+
+
+def _use_pg() -> bool:
+    """Durability fix (Viva 2026-09-10): the candidate lifecycle is
+    operational state that MUST survive Railway redeploys — /tmp vanishes
+    with the container. When Supabase DATABASE_URL is configured, the same
+    schema lives in Postgres; local dev/tests keep the SQLite fallback."""
+    try:
+        from database import db as _legacy
+        return bool(getattr(_legacy, "USE_POSTGRES", False))
+    except Exception:
+        return False
+
+
+def _pg_sql(sql: str) -> str:
+    return sql.replace("?", "%s")
+
+
+class _PgConn:
+    """sqlite-flavoured adapter: conn.execute(sql, params) -> cursor with
+    fetchone/fetchall/rowcount; keeps every call site single-path."""
+
+    def __init__(self, raw):
+        self._raw = raw
+        self.total_changes = 0
+
+    def execute(self, sql, params=()):
+        cur = self._raw.execute(_pg_sql(sql), tuple(params))
+        try:
+            self.total_changes += max(0, cur.rowcount)
+        except Exception:
+            pass
+        return cur
+
+
+def _pg_connect():
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    from database.db import DATABASE_URL
+    url = DATABASE_URL
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    return psycopg2.connect(url, sslmode="require", cursor_factory=RealDictCursor)
 # Non-confirmed lifecycles are throwaway: once resolved they are removed fast.
 # Confirmed rows persist a bit longer (they are the only ones ALSO in Supabase).
 RESOLVED_RETENTION_HOURS = int(os.getenv("CANDIDATE_RESOLVED_RETENTION_HOURS", "6"))
@@ -27,6 +70,17 @@ CONFIRMED_RETENTION_HOURS = int(os.getenv("CANDIDATE_CONFIRMED_RETENTION_HOURS",
 
 @contextmanager
 def _connection():
+    if _use_pg():
+        raw = _pg_connect()
+        try:
+            yield _PgConn(raw)
+            raw.commit()
+        except Exception:
+            raw.rollback()
+            raise
+        finally:
+            raw.close()
+        return
     conn = sqlite3.connect(DB_PATH, timeout=20)
     conn.row_factory = sqlite3.Row
     try:
@@ -60,10 +114,13 @@ def init_candidate_store() -> None:
             )
             """
         )
-        # Migration: per-timeframe locking needs the trigger TF as a column.
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(signal_candidates)")}
-        if "trigger_tf" not in columns:
-            conn.execute("ALTER TABLE signal_candidates ADD COLUMN trigger_tf TEXT NOT NULL DEFAULT ''")
+        # Migration (SQLite only): per-timeframe locking needs trigger TF as a column.
+        if not _use_pg():
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(signal_candidates)")}
+            if "trigger_tf" not in columns:
+                conn.execute("ALTER TABLE signal_candidates ADD COLUMN trigger_tf TEXT NOT NULL DEFAULT ''")
+        else:
+            conn.execute("ALTER TABLE signal_candidates ADD COLUMN IF NOT EXISTS trigger_tf TEXT NOT NULL DEFAULT ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_active ON signal_candidates(status, expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_dedupe ON signal_candidates(dedupe_key, status)")
 
@@ -193,13 +250,20 @@ def add_candidate(candidate: SignalCandidate) -> bool:
         return False
     now = iso_now()
     with _connection() as conn:
-        conn.execute(
-            """
+        insert_sql = """
+            INSERT INTO signal_candidates
+            (signal_id, dedupe_key, symbol, style, setup_code, direction,
+             score, status, approaching_sent, payload, created_at, updated_at, expires_at, trigger_tf)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (signal_id) DO NOTHING
+            """ if _use_pg() else """
             INSERT OR IGNORE INTO signal_candidates
             (signal_id, dedupe_key, symbol, style, setup_code, direction,
              score, status, approaching_sent, payload, created_at, updated_at, expires_at, trigger_tf)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            """
+        conn.execute(
+            insert_sql,
             (
                 candidate.signal_id,
                 _dedupe_key(candidate),
