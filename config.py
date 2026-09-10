@@ -170,6 +170,10 @@ class Settings:
     daily_loss_limit_percent: float = 3.0
     partial_tp1_percent: float = 60.0
     partial_tp2_percent: float = 40.0
+    # Journal fairness: at most one closed WIN/LOSS per symbol inside this
+    # rolling window feeds strategy_stats (repeated same-move confirmations
+    # must not multiply a single outcome into 12 wins or 12 losses). 0 = off.
+    stats_dedup_hours: float = 24.0
     # A Confirmed limit scenario is not a trade until price actually touches
     # Entry. These are maximum *trigger-timeframe closed candles* to wait.
     entry_fill_max_bars_daytrade: int = 16
@@ -282,6 +286,7 @@ class Settings:
             daily_loss_limit_percent=_float("DAILY_LOSS_LIMIT_PERCENT", cls.daily_loss_limit_percent),
             partial_tp1_percent=_float("PARTIAL_TP1_PERCENT", cls.partial_tp1_percent),
             partial_tp2_percent=_float("PARTIAL_TP2_PERCENT", cls.partial_tp2_percent),
+            stats_dedup_hours=_float("STATS_DEDUP_HOURS", cls.stats_dedup_hours),
             entry_fill_max_bars_daytrade=_int("ENTRY_FILL_MAX_BARS_DAYTRADE", cls.entry_fill_max_bars_daytrade),
             entry_fill_max_bars_swing=_int("ENTRY_FILL_MAX_BARS_SWING", cls.entry_fill_max_bars_swing),
             entry_fill_max_bars_scalp=_int("ENTRY_FILL_MAX_BARS_SCALP", cls.entry_fill_max_bars_scalp),

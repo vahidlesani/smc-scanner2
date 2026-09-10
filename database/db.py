@@ -778,10 +778,37 @@ def get_strategy_performance() -> list:
 
 
 def update_strategy_stats(sig: dict, result: str, pnl: float):
-    """آپدیت آمار استراتژی بعد از بسته شدن سیگنال"""
+    """آپدیت آمار استراتژی بعد از بسته شدن سیگنال
+
+    Journal fairness (user-directed, 2026-09-09): at most ONE closed result
+    per symbol may enter the aggregate stats inside `stats_dedup_hours`
+    (default 24h). Multiple setups/confirmations of the same move must not
+    multiply one outcome into N wins or N losses. The immutable per-signal
+    row in `signals` keeps every result; only the aggregate is deduped.
+    """
     p = _ph()
     strategy = sig.get("source", "")
     strategy_fa = sig.get("strategy_fa", strategy)
+
+    try:
+        hours = float(get_settings().stats_dedup_hours)
+    except Exception:
+        hours = 24.0
+    symbol = str(sig.get("symbol") or "")
+    signal_id = str(sig.get("signal_id") or "")
+    if hours > 0 and symbol:
+        cutoff = (datetime.now(timezone.utc).replace(tzinfo=None)
+                  - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+        with db_cursor() as c:
+            c.execute(f"""
+                SELECT COUNT(*) FROM signals
+                WHERE symbol={p} AND result IN ('WIN','LOSS')
+                  AND COALESCE(closed_at,'') <> '' AND closed_at >= {p}
+                  AND ({p} = '' OR COALESCE(signal_id,'') <> {p})
+            """, (symbol, cutoff, signal_id, signal_id))
+            row = c.fetchone()
+        if row and int(row[0] or 0) > 0:
+            return False
 
     with db_cursor() as c:
         # اول چک کن آیا ردیف وجود داره
@@ -1126,7 +1153,8 @@ def check_open_signals():
                 total_pnl = pnl_tp1  # فقط سود 60%
                 update_signal_result(sig_id, "WIN", total_pnl)
                 update_strategy_stats(
-                    {"source": "N/A", "strategy_fa": "N/A"},
+                    {"source": "N/A", "strategy_fa": "N/A",
+                     "symbol": symbol, "signal_id": sig_id},
                     "WIN", total_pnl
                 )
                 results.append({
@@ -1142,7 +1170,8 @@ def check_open_signals():
                     pnl = ((entry - sl) / entry) * 100
                 update_signal_result(sig_id, "LOSS", pnl)
                 update_strategy_stats(
-                    {"source": "N/A", "strategy_fa": "N/A"},
+                    {"source": "N/A", "strategy_fa": "N/A",
+                     "symbol": symbol, "signal_id": sig_id},
                     "LOSS", pnl
                 )
                 results.append({
@@ -1163,7 +1192,8 @@ def check_open_signals():
                 total_pnl = pnl_1 + pnl_2
                 update_signal_result(sig_id, "WIN", total_pnl)
                 update_strategy_stats(
-                    {"source": "N/A", "strategy_fa": "N/A"},
+                    {"source": "N/A", "strategy_fa": "N/A",
+                     "symbol": symbol, "signal_id": sig_id},
                     "WIN", total_pnl
                 )
                 results.append({
