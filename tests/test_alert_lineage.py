@@ -22,6 +22,7 @@ def _candidate(symbol="BTCUSDT", setup="PINVAL", direction="LONG", zone=100.0, a
 
 def test_independent_same_symbol_alert_is_not_found_or_deleted(tmp_path, monkeypatch):
     monkeypatch.setenv("CANDIDATE_DB_PATH", str(tmp_path / "candidates.sqlite"))
+    monkeypatch.setenv("CANDIDATE_DB_BACKEND", "sqlite")  # isolate from the shared PG
     import database.candidate_store as store
     store = importlib.reload(store)
     store.init_candidate_store()
@@ -36,6 +37,7 @@ def test_independent_same_symbol_alert_is_not_found_or_deleted(tmp_path, monkeyp
 
 def test_only_same_tight_zone_lineage_is_superseded(tmp_path, monkeypatch):
     monkeypatch.setenv("CANDIDATE_DB_PATH", str(tmp_path / "candidates.sqlite"))
+    monkeypatch.setenv("CANDIDATE_DB_BACKEND", "sqlite")  # isolate from the shared PG
     import database.candidate_store as store
     store = importlib.reload(store)
     store.init_candidate_store()

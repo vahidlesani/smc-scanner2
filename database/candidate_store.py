@@ -26,6 +26,8 @@ def _use_pg() -> bool:
     operational state that MUST survive Railway redeploys — /tmp vanishes
     with the container. When Supabase DATABASE_URL is configured, the same
     schema lives in Postgres; local dev/tests keep the SQLite fallback."""
+    if os.getenv("CANDIDATE_DB_BACKEND", "").strip().lower() == "sqlite":
+        return False   # test/escape-hatch: force the local SQLite file
     try:
         from database import db as _legacy
         return bool(getattr(_legacy, "USE_POSTGRES", False))
