@@ -2205,71 +2205,170 @@ def _technoclassic_preview_candidate(ev: dict):
     )
 
 
+def edit_text_message(message_id: int, chat_id: str, text: str) -> bool:
+    """In-place text edit of an existing message (chart-less fallback of
+    edit_chart_message). Same lifecycle rule: updates replace, never pile up."""
+    if not TOKEN or not chat_id or not message_id:
+        return False
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/editMessageText",
+            json={"chat_id": str(chat_id), "message_id": int(message_id),
+                  "text": text[:4000], "parse_mode": "HTML",
+                  "disable_web_page_preview": True}, timeout=12)
+        return bool(r.ok and (r.json() or {}).get("ok"))
+    except Exception:
+        return False
+
+
+def edit_chart_message(message_id: int, chat_id: str, image: bytes, caption: str) -> bool:
+    """Replace a photo message IN PLACE (chart + caption) — the mechanism that
+    makes 'updates supersede the previous update' real instead of a trail of
+    new posts. Telegram keeps the reply-link to the original anchor."""
+    if not TOKEN or not chat_id or not message_id or not image:
+        return False
+    import json as _j
+    payload = {"chat_id": str(chat_id), "message_id": str(int(message_id)),
+               "media": _j.dumps({"type": "photo", "media": "attach://photo",
+                                  "caption": caption[:1000], "parse_mode": "HTML"})}
+    res = _tg_post(
+        f"https://api.telegram.org/bot{TOKEN}/editMessageMedia",
+        data=payload, files={"photo": ("viva-chart.png", image, "image/png")}, timeout=35)
+    return bool(res and res.get("ok"))
+
+
 def send_technoclassic_preview(ev: dict) -> bool:
     """Edge alert in the SAME caption family as the other setups' approaching
-    alerts (Viva: «قالب تکنوکلاسیک نباید فرق داشته باشه»). Probabilities only —
-    nothing is 100% until the confirmation chain closes."""
+    alerts, on Viva's chain-lifecycle rule (2026-09-11): the FIRST alert is
+    the permanent anchor; every later state of the same (symbol, timeframe)
+    edge is ONE update message that REPLACES the previous update in place and
+    replies to the anchor. Nothing is 100% before confirmation."""
+    import time as _t
     from data.fetcher import get_klines
+    from database.bot_kv import get_json as _gk, set_json as _sk
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
-    state = str(ev.get("state") or "")
+    sym = str(ev["symbol"]).upper()
     tf = str(ev.get("pattern_tf") or "4h")
+    state = str(ev.get("state") or "")
     react = ev.get("reactions") or {}
     fade = ev.get("fade") or {}
     scen = ev.get("scenarios") or {}
     is_fade = state == "REJECTION_FADE"
     cand = None
-    chart = None
+    frame = None
     try:
-        frame = get_klines(str(ev["symbol"]), tf, 150, closed_only=False, use_cache=False)
-        if frame is not None and not frame.empty:
-            cand = _technoclassic_preview_candidate(ev)
-            chart = generate_chart(frame, cand, confirmed=False)
+        frame = get_klines(sym, tf, 150, closed_only=False, use_cache=False)
     except Exception as exc:
-        print(f"TECHCLASSIC preview chart unavailable: {exc}")
-    if cand is None:
-        cand = _technoclassic_preview_candidate(ev)
-    badge, _ = _setup_badge(cand)
-    side_fa = "سقف" if ev.get("side") == "upper" else "کف"
-    plan_line = ""
-    if is_fade and fade:
-        plan_line = (f"↩️ پلنِ بازگشت روی ضلع (کمک‌تأیید قانون آلفونسو): ورود {_price(fade.get('entry'))} • "
-                     f"استاپ {_price(fade.get('stop'))} • TP میانه {_price(fade.get('tp_mid'))} • "
-                     f"TP ضلع مقابل {_price(fade.get('target'))} • R:R {fade.get('rr')}\n")
-    caption = (
-        f"🏷 <b>{_e(badge)}</b>\n"
-        f"⚡ <b>هشدار الگوی کلاسیک | در انتظار تأیید</b> • TECHCLASSIC\n"
-        f"🪙 <b>{_e(str(ev['symbol']))}</b> • SWING • تایم الگو: {tf} • ضلع {side_fa}\n"
-        f"🕓 زمان رصد — ایران: {_iran_time(cand)} • 📨 ارسال — ایران: {_iran_now()}\n"
-        f"📐 {_e(str(ev.get('pattern_fa') or ev.get('pattern')))} • ⭐ {int(ev.get('structure_score') or 0)}/10\n"
-        f"📍 خط: {_price(ev.get('line_price'))} • قیمت: {_price(ev.get('live'))} • "
-        f"فاصله {float(ev.get('distance_atr') or 0):.2f} ATR • برخوردهای معتبر: {ev.get('touches')}\n"
-        f"⚖️ تاریخچۀ خط: {react.get('rejects', 0)} دفع / {react.get('breaks', 0)} شکست "
-        f"(نرخ دفع {int(float(react.get('reject_rate', 0)) * 100)}٪ — کمک‌تأیید، نه شرط قطعی)\n"
-        + plan_line +
-        f"🎬 سناریوی پایایی: {_e(scen.get('hold', ''))}\n"
-        f"🎬 سناریوی شکست: {_e(scen.get('break', ''))}\n"
-        f"⏳ هیچ‌کدام ۱۰۰٪ نیست؛ ربات فقط احتمال را می‌گوید و منتظر نشانه/تأیید می‌ماند\n"
-        f"🆔 <code>{_e(_public_code(cand))}</code>"
-    )
-    try:  # once-per-day separator, like the other approaching alerts — but
-            # previews own no persisted candidate, so the day-stamp lives in KV
-        import datetime as _dtm
-        from database.bot_kv import get_json as _gk, set_json as _sk
-        today = _dtm.datetime.now(_dtm.timezone(_dtm.timedelta(hours=3, minutes=30))).strftime("%Y-%m-%d")
-        if (_gk("tc_pro_sep", {}) or {}).get("day") != today:
-            _mid = send_message("<b>━━━━━━━━ VIVA-MON-LABS ━━━━━━━━</b>", target)
-            if _mid:
-                _sk("tc_pro_sep", {"day": today, "mid": int(_mid)})
-    except Exception:
-        pass
-    mid = send_photo(chart, caption, target) if chart else send_message(caption, target)
-    if mid:
-        # chain-link: TECHCLASSIC confirmations reply to their originating edge alert
+        print(f"TECHCLASSIC preview tape unavailable: {exc}")
+    cand = _technoclassic_preview_candidate(ev)
+
+    def _chart_for(public_code: str):
+        """Chart is rendered AFTER the unique code is settled, so the chart's
+        footer and the caption always carry the identical identifier."""
+        if frame is None or getattr(frame, "empty", True):
+            return None
+        cand.metadata["public_code"] = public_code
         try:
-            import time as _t
-            from database.bot_kv import set_json
-            set_json(f"tc_link|{str(ev['symbol']).upper()}|{tf}",
-                     {"mid": int(mid), "ts": _t.time(), "state": state})
+            return generate_chart(frame, cand, confirmed=False)
         except Exception as exc:
-            print(f"TECHCLASSIC link persist skipped: {exc}")
-    return bool(mid)
+            print(f"TECHCLASSIC preview chart unavailable: {exc}")
+            return None
+
+    side_fa = "سقف" if ev.get("side") == "upper" else "کف"
+    ck = f"tc_chain|{sym}|{tf}"
+    chain = _gk(ck, {}) or {}
+    now = _t.time()
+    fresh = bool(chain.get("anchor")) and (now - float(chain.get("ts") or 0)) < 48 * 3600 \
+        and chain.get("pattern") == str(ev.get("pattern"))
+    if not fresh:
+        # ── new ANCHOR: full alert, permanent, starts a fresh unique code ──
+        badge, _ = _setup_badge(cand)
+        code = f"TC-{sym.replace('USDT', '')}-{tf}-{_iran_now()[:10]}"
+        cand.metadata["public_code"] = code
+        chart = _chart_for(code)
+        plan_line = ""
+        if is_fade and fade:
+            plan_line = (f"↩️ پلنِ بازگشت روی ضلع (کمک‌تأیید قانون آلفونسو): ورود {_price(fade.get('entry'))} • "
+                         f"استاپ {_price(fade.get('stop'))} • TP میانه {_price(fade.get('tp_mid'))} • "
+                         f"TP ضلع مقابل {_price(fade.get('target'))} • R:R {fade.get('rr')}\n")
+        caption = (
+            f"🏷 <b>{_e(badge)}</b>\n"
+            f"⚡ <b>هشدار الگوی کلاسیک | در انتظار تأیید</b> • TECHCLASSIC\n"
+            f"🪙 <b>{_e(sym)}</b> • SWING • تایم الگو: {tf} • ضلع {side_fa}\n"
+            f"🕓 زمان رصد — ایران: {_iran_now()}\n"
+            f"📐 {_e(str(ev.get('pattern_fa') or ev.get('pattern')))} • ⭐ {int(ev.get('structure_score') or 0)}/10\n"
+            f"📍 خط: {_price(ev.get('line_price'))} • قیمت: {_price(ev.get('live'))} • "
+            f"فاصله {float(ev.get('distance_atr') or 0):.2f} ATR • برخوردهای معتبر: {ev.get('touches')}\n"
+            f"⚖️ تاریخچۀ خط: {react.get('rejects', 0)} دفع / {react.get('breaks', 0)} شکست "
+            f"(نرخ دفع {int(float(react.get('reject_rate', 0)) * 100)}٪ — کمک‌تأیید، نه شرط قطعی)\n"
+            + plan_line +
+            f"🎬 سناریوی پایایی: {_e(scen.get('hold', ''))}\n"
+            f"🎬 سناریوی شکست: {_e(scen.get('break', ''))}\n"
+            f"⏳ هیچ‌کدام ۱۰۰٪ نیست؛ ربات فقط احتمال را می‌گوید و منتظر نشانه/تأیید می‌ماند\n"
+            f"🆔 <code>{_e(code)}</code>"
+        )
+        try:  # once-per-day separator
+            today = _iran_now()[:10]
+            if (_gk("tc_pro_sep", {}) or {}).get("day") != today:
+                _mid = send_message("<b>━━━━━━━━ VIVA-MON-LABS ━━━━━━━━</b>", target)
+                if _mid:
+                    _sk("tc_pro_sep", {"day": today, "mid": int(_mid)})
+        except Exception:
+            pass
+        mid = send_photo(chart, caption, target) if chart else send_message(caption, target)
+        if mid:
+            _sk(ck, {"anchor": int(mid), "update": 0, "ts": now, "code": code,
+                     "pattern": str(ev.get("pattern")), "state": state, "fade": bool(is_fade)})
+            # confirmation messages quote the ANCHOR — updates never move that link
+            _sk(f"tc_link|{sym}|{tf}", {"mid": int(mid), "ts": now, "state": state})
+        return bool(mid)
+    # ── existing anchor: state must have MOVED, else stay silent ────────────
+    if chain.get("state") == state and bool(chain.get("fade")) == bool(is_fade):
+        return False
+    code = str(chain.get("code") or cand.metadata.get("public_code") or "")
+    cand.metadata["public_code"] = code
+    chart = _chart_for(code)
+    state_fa = {"REJECTION_FADE": "↩️ کندلِ دفع در کانال — پلنِ بازگشت روی تابلو (تأییدِ تایم‌پایین لازم)",
+                "BREAK_READY": "⏱ آماده‌باشِ شکست — خط تست شد؛ تأییدِ کلوز لازم است",
+                "EDGE_NEAR": "👀 هنوز فقط نزدیکِ ضلع؛ ربات منتظرِ نشانه است"}.get(state, state)
+    plan = ""
+    if is_fade and fade:
+        plan = (f"↩️ پلن: ورود {_price(fade.get('entry'))} • استاپ {_price(fade.get('stop'))} • "
+                f"TP میانه {_price(fade.get('tp_mid'))} • TP مقابل {_price(fade.get('target'))}\n")
+    caption = (
+        f"🔁 <b>به‌روزرسانیِ هشدار (همان شناسه)</b>\n"
+        f"🪙 <b>{_e(sym)}</b> • {tf} • ضلع {side_fa} • {_e(str(ev.get('pattern_fa') or ev.get('pattern')))}\n"
+        f"📍 خط: {_price(ev.get('line_price'))} • قیمت: {_price(ev.get('live'))} • "
+        f"فاصله {float(ev.get('distance_atr') or 0):.2f} ATR\n"
+        f"{state_fa}\n{plan}"
+        f"⏳ همچنان شرطی تا تأییدِ کامل (کلوز + پولبک + BOS)\n"
+        f"🆔 <code>{_e(code)}</code>"
+    )
+    anchor_mid = int(chain.get("anchor") or 0)
+    upd = int(chain.get("update") or 0)
+    done = False
+    if upd and chart:
+        done = edit_chart_message(upd, str(target), chart, caption)
+    elif upd and not chart:
+        done = edit_text_message(upd, str(target), caption)
+    if not done:
+        if upd:  # edit failed (message gone?) → one replacement post, old one removed
+            try:
+                delete_message(str(target), upd)
+            except Exception:
+                pass
+        new_mid = (send_photo(chart, caption, target, reply_to_message_id=anchor_mid) if chart
+                   else send_message(caption, target, reply_to_message_id=anchor_mid))
+        if new_mid:
+            upd = int(new_mid)
+        done = bool(new_mid)
+    if done:
+        _sk(ck, {"anchor": anchor_mid, "update": upd, "ts": now, "code": code,
+                 "pattern": str(ev.get("pattern")), "state": state, "fade": bool(is_fade)})
+        try:  # keep the anchor→confirmation link state fresh without moving it
+            _link = _gk(f"tc_link|{sym}|{tf}", {}) or {}
+            if _link.get("mid"):
+                _sk(f"tc_link|{sym}|{tf}", {"mid": int(_link["mid"]), "ts": now, "state": state})
+        except Exception:
+            pass
+    return done

@@ -481,6 +481,26 @@ def monitor_candidates() -> Dict[str, int]:
                 stats["rejects"] = stats.get("rejects", {})
                 stats["rejects"][code] = int(stats["rejects"].get(code, 0)) + 1
             if confirmed:
+                # Viva 2026-09-11: five identical SOL confirmations on the same
+                # trigger were USELESS. A new confirmed signal must bring NEW
+                # points; an (almost) identical re-fire is cancelled silently.
+                try:
+                    from database.repository_v7 import recent_geometry_duplicate
+                    if not candidate.metadata.get("persistence_staged") and recent_geometry_duplicate(
+                            candidate.symbol, candidate.direction,
+                            candidate.planned_entry or candidate.entry_zone_bottom,
+                            candidate.sl, candidate.tp1):
+                        stats["suppressed_geo_dup"] = stats.get("suppressed_geo_dup", 0) + 1
+                        _t(candidate)["dup"] += 1
+                        candidate.status = "CANCELLED"
+                        candidate.metadata["geo_dup_cancelled"] = True
+                        candidate.metadata["cancel_note_fa"] = (
+                            "نقاط این سیگنال با سیگنالِ تأییدشدهِ ۲۴ ساعتِ اخیرِ همین نماد "
+                            "تقریباً یکسان بود؛ تا تشکیلِ ناحیه‌ی جدید (نقاطِ تازه) منتشر نمی‌شود")
+                        update_candidate(candidate)
+                        continue
+                except RuntimeError as exc:
+                    print(f"geometry-dup gate skipped {candidate.signal_id}: {exc}")
                 was_staged = bool(candidate.metadata.get("persistence_staged"))
                 try:
                     # Stage first, but with AWAITING_PUBLICATION and a false gate.

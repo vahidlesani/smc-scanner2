@@ -464,6 +464,60 @@ def has_open_pre_tp1_signal(symbol: str, trigger_timeframe: str) -> bool:
     return count >= max(1, int(getattr(SETTINGS, "max_signals_per_symbol_trigger", 3)))
 
 
+def recent_geometry_duplicate(symbol: str, direction: str, entry, sl, tp1,
+                              hours: int = 24) -> bool:
+    """Viva 2026-09-11: a confirmed signal must carry NEW points. The same
+    symbol+direction re-firing with (almost) identical entry/stop/target is the
+    SAME trigger re-announced — whatever timeframe or scan cycle produced it.
+    Only price moving to a genuinely new zone yields different geometry and is
+    allowed even while an earlier signal is still open (max-3 capacity aside).
+    History counts: the check spans open AND closed signals in the window."""
+    try:
+        entry, sl = float(entry), float(sl)
+    except (TypeError, ValueError):
+        return False
+    if entry <= 0 or sl <= 0:
+        return False
+    p = legacy_db._ph()
+    truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
+    try:
+        with legacy_db.db_cursor() as cursor:
+            cursor.execute(
+                f"SELECT entry, sl, tp1, confirmed_at FROM signals WHERE symbol={p} "
+                f"AND direction={p} AND confirmed={truth} AND confirmed_at IS NOT NULL "
+                f"AND status='CONFIRMED' AND strategy_version={p} "
+                f"ORDER BY confirmed_at DESC LIMIT 60",
+                (str(symbol).upper(), str(direction).upper(), SETTINGS.strategy_version),
+            )
+            rows = list(cursor.fetchall() or [])
+    except Exception:
+        return False
+    import datetime as _dt
+    cut = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=float(hours))
+
+    def _near(a, b, rel):
+        try:
+            a, b = float(a), float(b)
+        except (TypeError, ValueError):
+            return True  # missing side must not create a "different" signal
+        return abs(a - b) <= max(abs(b) * rel, 1e-9)
+
+    for row in rows:
+        try:
+            e_old, s_old, t_old, ts = row[0], row[1], row[2], row[3]
+            when = _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=_dt.timezone.utc)
+        except Exception:
+            continue
+        if when < cut:
+            break  # rows are newest-first — the rest are older still
+        if _near(entry, e_old, 0.0045) and _near(sl, s_old, 0.0045) \
+                and _near(tp1, t_old, 0.012):
+            return True
+    return False
+
+
 def save_confirmed_signal(candidate: SignalCandidate) -> bool:
     if candidate.status != "CONFIRMED" or not candidate.confirmed_at:
         raise ValueError("Only a CONFIRMED candidate can be persisted")
@@ -478,6 +532,15 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
             f"Paper capacity reached for {candidate.symbol}/{candidate.trigger_timeframe}: "
             f"max={SETTINGS.max_signals_per_symbol_trigger}"
         )
+    # Second line of defense (discovery already filters this): identical
+    # points re-confirmed via a manual/alternate path are refused here too.
+    if recent_geometry_duplicate(candidate.symbol, candidate.direction,
+                                 candidate.planned_entry or candidate.entry_zone_bottom,
+                                 candidate.sl, candidate.tp1):
+        raise RuntimeError(
+            f"Geometry-duplicate signal refused for {candidate.symbol}/{candidate.direction}: "
+            "entry/stop/target match a confirmed signal from the last 24h — a new "
+            "signal on this symbol requires a new zone (different points)")
     # Defensive second reservation: discovery reserves before educational
     # publication, while this protects direct/manual confirmation paths too.
     reserve_public_code(candidate)
