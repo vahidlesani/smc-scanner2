@@ -1009,6 +1009,8 @@ def _active_detectors() -> List:
             detectors.extend(exp.PINVAL_DETECTORS)
         if getattr(SETTINGS, "albrox_enabled", False):
             detectors.extend(exp.ALBROX_DETECTORS)
+        if getattr(SETTINGS, "technoclassic_enabled", False):
+            detectors.extend(exp.TECHCLASSIC_DETECTORS)
     except Exception as exc:  # pragma: no cover - defensive
         print(f"Experimental detectors unavailable: {exc}")
     return detectors
@@ -1021,6 +1023,8 @@ def _experimental_symbol_allowed(detector_name: str, symbol: str) -> bool:
         raw = getattr(SETTINGS, "pinv_symbols", "") or ""
     elif detector_name == "detect_albrox":
         raw = getattr(SETTINGS, "albrox_symbols", "") or ""
+    elif detector_name == "detect_technoclassic":
+        raw = getattr(SETTINGS, "technoclassic_symbols", "") or ""
     else:
         raw = getattr(SETTINGS, "experimental_tlbreak_symbols", "") or ""
     allowed = {x.strip().upper() for x in raw.split(",") if x.strip()}

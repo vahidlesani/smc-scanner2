@@ -91,7 +91,7 @@ def _request_shutdown(signum, _frame) -> None:
 def _chart_frame(candidate: SignalCandidate, bundle) -> pd.DataFrame:
     # TLBREAK alerts show the channel break itself: chart the CONTEXT timeframe
     # (4h/1h/1d) where the trendline lives, not the fine-grained trigger chart.
-    if candidate.setup_code == "TLBREAK":
+    if candidate.setup_code in ("TLBREAK", "TECHCLASSIC"):
         context_tf = candidate.metadata.get("tl_context_tf")
         if context_tf and bundle.get(context_tf) is not None:
             return bundle.get(context_tf)
@@ -161,6 +161,14 @@ def run_discovery_scan() -> Dict[str, int]:
         try:
             bundle = get_market_bundle(symbol, ticker=metrics.get(symbol, {}))
             candidates = scan_bundle(bundle)
+            # TechnoClassic pre-break previews (4H/1D edges). Never a signal;
+            # cooldown-guarded; silently unavailable on any error.
+            if getattr(SETTINGS, "technoclassic_preview_alerts", True):
+                try:
+                    from analysis.pattern_engine import send_prebreak_alerts
+                    send_prebreak_alerts(bundle)
+                except Exception as exc:
+                    print(f"TECHCLASSIC prebreak skipped {symbol}: {exc}")
             stats["detected"] += len(candidates)
             for candidate in candidates:
                 _t(candidate)["seen"] += 1

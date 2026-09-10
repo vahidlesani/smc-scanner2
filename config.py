@@ -141,6 +141,13 @@ class Settings:
     # Experimental TLBREAK (trendline/channel breakout) detector.
     experimental_tlbreak_enabled: bool = False
     viva_tlbreak_enabled: bool = False
+    # TechnoClassic (stage 5): 4H/1D classical-pattern lifecycle. NEAR/READY
+    # pre-break previews + real TECHCLASSIC candidates on confirmed breaks
+    # (retest + lower-TF BOS via the shared VIVA_TLBREAK state machine).
+    technoclassic_enabled: bool = False
+    technoclassic_preview_alerts: bool = True
+    technoclassic_cooldown_hours: float = 8.0
+    technoclassic_symbols: str = ""
     experimental_tlbreak_symbols: str = ""  # empty = no symbol restriction
     tlbreak_min_adx: float = 0.0            # ADX(14) gate on context TF; 0 = off
     # Override the context timeframe for the channel lines (e.g. "1d" for the
@@ -268,6 +275,10 @@ class Settings:
             experimental_p1234_symbols=os.getenv("EXPERIMENTAL_P1234_SYMBOLS", cls.experimental_p1234_symbols),
             experimental_tlbreak_enabled=_bool("EXPERIMENTAL_TLBREAK_ENABLED", cls.experimental_tlbreak_enabled),
             viva_tlbreak_enabled=_bool("VIVA_TLBREAK_ENABLED", cls.viva_tlbreak_enabled),
+            technoclassic_enabled=_bool("TECHCLASSIC_ENABLED", cls.technoclassic_enabled),
+            technoclassic_preview_alerts=_bool("TECHCLASSIC_PREVIEW_ALERTS", cls.technoclassic_preview_alerts),
+            technoclassic_cooldown_hours=_float("TECHCLASSIC_COOLDOWN_HOURS", cls.technoclassic_cooldown_hours),
+            technoclassic_symbols=os.getenv("TECHCLASSIC_SYMBOLS", cls.technoclassic_symbols),
             experimental_tlbreak_symbols=os.getenv("EXPERIMENTAL_TLBREAK_SYMBOLS", cls.experimental_tlbreak_symbols),
             tlbreak_min_adx=_float("TLBREAK_MIN_ADX", cls.tlbreak_min_adx),
             tlbreak_tp1_height_frac=_float("TLBREAK_TP1_HEIGHT_FRAC", cls.tlbreak_tp1_height_frac),

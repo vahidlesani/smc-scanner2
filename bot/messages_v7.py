@@ -143,7 +143,7 @@ def _htf_context_fa(candidate: SignalCandidate) -> str:
     ctx_tf = (md.get("tl_context_tf") or md.get("pin_ctx_tf") or md.get("context_tf") or "").strip()
     if ctx_tf:
         tf_fa = _TF_FA.get(ctx_tf, ctx_tf.upper())
-        if candidate.setup_code == "TLBREAK" and md.get("tl_pattern_fa"):
+        if candidate.setup_code in ("TLBREAK", "TECHCLASSIC") and md.get("tl_pattern_fa"):
             st = "شکسته شده" if md.get("tl_stage") == "JUST_BROKE" else "در آستانهٔ شکست است"
             bits.append(f"{md['tl_pattern_fa']} در تایم {tf_fa} {st}")
         elif candidate.setup_code == "PINVAL":
@@ -659,6 +659,7 @@ def _setup_badge(candidate: SignalCandidate) -> tuple[str, str]:
         "PINVAL": "VIVA ✦ PINWALL LEGACY",
         "PINWALLQ": "VIVA ✦ PINWALL QUALITY",
         "TLBREAK": "VIVA ✦ TLBREAK",
+        "TECHCLASSIC": "VIVA ✦ TECHNOCLASSIC",
         "P1234": "VIVA ✦ 1-2-3-4",
         "ALBROX": "VIVA ✦ ALBROX",
         "LSR": "VIVA ✦ LIQUIDITY",
@@ -667,7 +668,7 @@ def _setup_badge(candidate: SignalCandidate) -> tuple[str, str]:
         "IFVG": "VIVA ✦ FVG FLIP",
         "TLR": "VIVA ✦ TREND RETEST",
     }
-    color = CHART_THEME["structure"] if code in {"P1234", "BOS1", "IFVG"} else (CHART_THEME["trend"] if code == "TLBREAK" else CHART_THEME["demand"])
+    color = CHART_THEME["structure"] if code in {"P1234", "BOS1", "IFVG"} else (CHART_THEME["trend"] if code in {"TLBREAK", "TECHCLASSIC"} else CHART_THEME["demand"])
     return labels.get(code, f"VIVA ✦ {code}"), color
 
 
@@ -869,7 +870,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             getattr(SETTINGS, "chart_log_htf", True)
             and _STYLE_NAME != "dark"
             and (
-                (candidate.setup_code == "TLBREAK" and ctx_for_log in ("4h", "1d"))
+                (candidate.setup_code in ("TLBREAK", "TECHCLASSIC") and ctx_for_log in ("4h", "1d"))
                 or (candidate.trigger_timeframe == "1h" and float(frame["high"].max()) / max(float(frame["low"].min()), 1e-12) > 1.35)
             )
         )
@@ -1215,8 +1216,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         continue
                     slope, intercept = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
                     x0, x1 = min(xs), count + future - .5
-                    ax.plot([x0, x1], [slope*x0+intercept, slope*x1+intercept], color=color, linewidth=1.65, alpha=.90, zorder=7, solid_capstyle="round")
-                    ax.scatter(xs, ys, s=24, color=CHART_THEME["panel"], edgecolors=color, linewidths=1.1, zorder=9)
+                    ax.plot([x0, x1], [slope*x0+intercept, slope*x1+intercept], color=color, linewidth=2.3, alpha=.95, zorder=7, solid_capstyle="round")
+                    ax.scatter(xs, ys, s=42, color=CHART_THEME["panel"], edgecolors=color, linewidths=1.7, zorder=9)
                     notes.append((f"{label} · {len(xs)} PIVOTS", color))
                 line = md.get("viva_breakout_line") or md.get("viva_break_line")
                 if line:
@@ -1297,7 +1298,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
 
         _render_corner_notes(ax, notes, frame, confirmed=confirmed)
 
-        _tf_disp = (md.get("tl_context_tf") if candidate.setup_code == "TLBREAK" else None) \
+        _tf_disp = (md.get("tl_context_tf") if candidate.setup_code in ("TLBREAK", "TECHCLASSIC") else None) \
             or md.get("pin_tf") or candidate.trigger_timeframe or ""
         fig.text(
             0.055,
@@ -1541,7 +1542,7 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
 
 def _approaching_ai_hint(candidate: SignalCandidate) -> str:
     md = candidate.metadata or {}
-    if candidate.setup_code == "TLBREAK":
+    if candidate.setup_code in ("TLBREAK", "TECHCLASSIC"):
         return "فقط بعد از Close معتبر پشت خط و حفظ بیس وارد شو؛ تعقیب قیمت ممنوع."
     if candidate.setup_code == "PINVAL":
         return "پین‌بار فقط location است؛ تأیید با شکست micro-structure تایم پایین معتبر می‌شود."
@@ -1553,7 +1554,7 @@ def _approaching_ai_hint(candidate: SignalCandidate) -> str:
 def _ai_watch_hint(candidate: SignalCandidate) -> str:
     """One concise, deterministic assistant note; never an entry command."""
     md = candidate.metadata or {}
-    if candidate.setup_code == "TLBREAK":
+    if candidate.setup_code in ("TLBREAK", "TECHCLASSIC"):
         return "فقط بعد از Close معتبر پشت خط و حفظ base؛ chase ممنوع."
     if candidate.setup_code == "PINVAL":
         return "پین‌بار فقط rejection است؛ ورود بعد از MSS/BOS تایم پایین."
@@ -2076,3 +2077,65 @@ def send_ladder_event(event: dict) -> bool:
         return send_photo(chart, text, target, reply_to_message_id=reply_id)
     return send_message(text, target, reply_to_message_id=reply_id)
 
+
+
+def _technoclassic_preview_candidate(ev: dict):
+    """Lightweight, never-saved SignalCandidate used ONLY to render a
+    preview chart with the validated pattern lines."""
+    from analysis.models import SignalCandidate, generate_viva_public_code
+    price = float(ev.get("line_price") or 0.0)
+    atr = max(float(ev.get("distance_atr") or 0.0), 0.0)
+    line = price
+    return SignalCandidate(
+        signal_id=f"tc-preview-{ev['symbol']}-{ev.get('pattern_tf')}-{ev.get('ref_ts','')}"[:64],
+        symbol=str(ev["symbol"]), style="SWING", setup_code="TECHCLASSIC",
+        setup_name="TechnoClassic pre-break preview",
+        strategy_fa="تکنوکلاسیک | پیش‌نمایش (نه سیگنال)",
+        direction=str(ev.get("direction") or "LONG"), score=0, status="EDUCATIONAL",
+        entry_zone_bottom=line * 0.999, entry_zone_top=line * 1.001,
+        planned_entry=line, sl=line, tp1=0.0, tp2=0.0, rr_tp1=0.0, rr_tp2=0.0,
+        bias="BULLISH" if ev.get("direction") == "LONG" else "BEARISH",
+        trigger_timeframe=str(ev.get("pattern_tf") or "4h"),
+        mandatory_gates={"technoclassic_preview_only": False},
+        metadata={
+            "strategy_variant": "VIVA_TLBREAK",
+            "tl_context_tf": ev.get("pattern_tf"), "tl_pattern": ev.get("pattern"),
+            "tl_pattern_fa": ev.get("pattern_fa") or ev.get("pattern"),
+            "tl_stage": "NEAR" if ev.get("state") == "EDGE_NEAR" else "JUST_BROKE",
+            "tl_line": line, "tl_touches": ev.get("touches", 0),
+            "viva_upper_points": ev.get("upper_points") or [],
+            "viva_lower_points": ev.get("lower_points") or [],
+            "viva_breakout_line": line,
+        },
+    )
+
+
+def send_technoclassic_preview(ev: dict) -> bool:
+    """NEAR/READY alert with branded high-res chart; explicitly not a signal."""
+    from data.fetcher import get_klines
+    target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    state = str(ev.get("state") or "")
+    tf = str(ev.get("pattern_tf") or "4h")
+    comp = ev.get("compression") or {}
+    head = "🟨 آماده‌باش شکست" if state == "BREAK_READY" else "🔎 در آستانه شکست"
+    dir_fa = "صعودی (LONG)" if ev.get("direction") == "LONG" else "نزولی (SHORT)"
+    caption = (
+        f"{head} — تکنوکلاسیک (پیش‌نمایش؛ سیگنال نیست)\n"
+        f"📐 {ev.get('pattern_fa') or ev.get('pattern')} روی تایم {tf} • ضلع {'بالا' if ev.get('side')=='upper' else 'پایین'}\n"
+        f"🎯 جهت محتمل پس از شکست معتبر: {dir_fa}\n"
+        f"📏 فاصله تا خط: {ev.get('distance_atr')} ATR • پیوت‌های معتبر: {ev.get('touches')} "
+        f"(خطای فیت {ev.get('fit_error_atr')} ATR)\n"
+        f"🌀 کامپرشن: {'سالم (squeeze فعال)' if comp.get('squeeze_ok') else 'ضعیف'} "
+        f"• دوجی/کندل کوچک: {comp.get('doji_count', 0)}\n"
+        "سیگنال واقعی فقط با Close معتبرِ شکست + پولبک اول + BOS تایم پایین صادر می‌شود."
+    )
+    chart = None
+    try:
+        frame = get_klines(str(ev["symbol"]), tf, 150, closed_only=False, use_cache=False)
+        if frame is not None and not frame.empty:
+            cand = _technoclassic_preview_candidate(ev)
+            chart = generate_chart(frame, cand, confirmed=False)
+    except Exception as exc:
+        print(f"TECHCLASSIC preview chart unavailable: {exc}")
+    mid = send_photo(chart, caption, target) if chart else send_message(caption, target)
+    return bool(mid)
