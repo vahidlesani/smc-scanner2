@@ -215,11 +215,13 @@ def test_reaction_history_and_fade_plan():
     assert events, "expected an upper-edge event on the overshoot bar"
     ev = events[0]
     assert ev["reactions"]["touches"] >= 3
-    fade = ev.get("fade")
-    if ev["state"] == m.STATE_FADE:
-        assert fade and fade["direction"] == "SHORT"
-        assert fade["stop"] > fade["entry"] and fade["target"] < fade["entry"]
-        assert fade["rr"] >= 1.3
+    # Viva rule (2026-09-10): triangles/wedges are NOT bounce-played — in a
+    # converging pattern only the break counts, so no fade plan may exist here.
+    assert "fade" not in ev
+    assert ev["reactions"]["reject_rate"] >= 0.5
+    # the rejection history is kept as *supporting* evidence, explained as such
+    assert ev.get("support_note_fa") and "کمک‌تأیید" in ev["support_note_fa"]
+    assert "۱۰۰٪" in ev["scenarios"]["prob"]
 
 
 def test_htf_layer_penalizes_target_beyond_tested_daily_edge():
@@ -341,3 +343,82 @@ def test_broadening_megaphone():
     pat, trig = _flat_frames(u0=80.0, su=0.12, l0=80.0, sl=-0.10)
     events = m.scan_edges(pat, trig, "4h")
     assert events and events[0]["pattern"] == "BROADENING"
+
+
+def _channel_frames(n=140):
+    """Parallel descending CHANNEL (equal slopes) — the only geometry where an
+    edge bounce is tradable. Interior is a monotonic ramp (no stray pivots);
+    touches are single spikes. Last bar = rejection at the floor: wick under
+    the line, close back above."""
+    idx = pd.date_range("2026-01-01", periods=n, freq="4h")
+    touches = {45: "u", 95: "u", 125: "u", 70: "l", 112: "l", 132: "l"}
+    hi, lo = [], []
+    for i in range(n):
+        u, l = 100.0 - 0.045 * i, 72.0 - 0.045 * i
+        mid = (u + l) / 2.0
+        if touches.get(i) == "u":
+            hi.append(u + 0.90); lo.append(u - 0.50)
+        elif touches.get(i) == "l":
+            hi.append(l + 0.50); lo.append(l - 0.55)
+        else:
+            hi.append(mid + 0.60); lo.append(mid - 0.60)
+    hi, lo = np.array(hi), np.array(lo)
+    df = pd.DataFrame({"open": hi - (hi - lo) * 0.4, "high": hi, "low": lo,
+                       "close": lo + (hi - lo) * 0.4}, index=idx)
+    df["timestamp"] = [ts.isoformat() for ts in idx]
+    flr = 72.0 - 0.045 * (n - 1) - 0.55          # fitted floor projection
+    df.iloc[-1, df.columns.get_loc("low")] = flr - 0.45
+    df.iloc[-1, df.columns.get_loc("high")] = flr + 1.80
+    df.iloc[-1, df.columns.get_loc("open")] = flr + 0.60
+    df.iloc[-1, df.columns.get_loc("close")] = flr + 0.15
+    return df
+
+
+def test_parallel_channel_fade_has_mid_target():
+    """In a parallel channel the bounce IS tradable — with the doctrine shape:
+    entry at the rejection, stop beyond the wick, TP1 at the channel mid,
+    TP2 at the opposite edge."""
+    m = _mod()
+    pat = _channel_frames()
+    trig = pat.iloc[:33].copy()
+    trig.iloc[-1] = pat.iloc[-1]
+    live = float(pat["close"].iloc[-1])
+    events = m.scan_edges(pat, trig, "4h", live_price=live)
+    fades = [e for e in events if e.get("state") == m.STATE_FADE]
+    assert fades, "parallel-channel floor rejection must produce a fade"
+    fade = fades[0]["fade"]
+    assert fade["direction"] == "LONG"
+    assert fade["stop"] < fade["entry"] < fade["tp_mid"] < fade["target"]
+    assert "کانال" in fades[0]["scenarios"]["hold"]
+
+
+def test_crossed_line_never_fades():
+    """The ETHFI nonsense: price CLOSED above the ceiling without a rejection.
+    A line that is already broken must never spawn a fade — only break watch."""
+    m = _mod()
+    pattern, trigger = _wedge_frames()
+    n = len(pattern) - 1
+    line = 100.0 - 0.10 * n
+    trig = trigger.copy()
+    trig["open"].iloc[-1] = line
+    trig["close"].iloc[-1] = line + 0.36          # small body -> no displacement
+    trig["high"].iloc[-1] = line + 1.68
+    trig["low"].iloc[-1] = line - 0.12
+    events = m.scan_edges(pattern, trig, "4h", live_price=float(trig["close"].iloc[-1]))
+    up = [e for e in events if e["side"] == "upper"]
+    assert up, "upper-edge event expected on the crossed line"
+    assert up[0]["state"] != m.STATE_FADE
+    assert "fade" not in up[0]
+
+
+def test_choose_primary_keeps_nearest_edge():
+    """ICP got LONG and SHORT previews minutes apart at opposite edges: one
+    alert per symbol+TF cycle — the edge price is closest to wins."""
+    m = _mod()
+    evs = [
+        {"symbol": "AUSDT", "pattern_tf": "4h", "distance_atr": 1.10},
+        {"symbol": "AUSDT", "pattern_tf": "4h", "distance_atr": 0.31},
+        {"symbol": "AUSDT", "pattern_tf": "1h", "distance_atr": 0.90},
+    ]
+    out = m.choose_primary(evs)
+    assert {e["pattern_tf"]: e["distance_atr"] for e in out} == {"4h": 0.31, "1h": 0.90}

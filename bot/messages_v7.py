@@ -1251,26 +1251,37 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         p_from = float(proj.get("from")); p_to = float(proj.get("to"))
                         d = str(proj.get("direction") or "LONG").upper()
                         col = CHART_THEME["demand"] if d == "LONG" else CHART_THEME["supply"]
-                        bx0 = count - 1.5; bx1 = count + future - 0.5
-                        blo, bhi = sorted((p_from, p_to))
-                        ax.fill_between([bx0, bx1], blo, bhi, color=col, alpha=0.13, zorder=3)
-                        ax.plot([bx0, bx1, bx1, bx0, bx0], [blo, blo, bhi, bhi, blo],
-                                color=col, linewidth=1.25, alpha=0.9, zorder=5)
-                        xa = bx1 - (bx1 - bx0) * 0.30
-                        ax.annotate("", xy=(xa, p_to), xytext=(xa, p_from), zorder=8,
-                                    arrowprops=dict(arrowstyle="-|>", color=col,
-                                                    linewidth=1.7, mutation_scale=14))
-                        ax.text(xa + (bx1 - bx0) * 0.10, p_to, _price(p_to), color=col,
-                                fontsize=8.5, fontweight="bold", va="center", zorder=8)
-                        pctv = proj.get("pct")
-                        if pctv is not None:
-                            ax.text(xa, (p_to + p_from) / 2.0, f"{float(pctv):+.1f}%", color=col,
-                                    fontsize=8, fontweight="bold", ha="center", va="center", zorder=8)
+                        if md.get("tc_clean"):
+                            # family style (same as TLBREAK/ALBROX previews): dashed
+                            # level + small right-edge tag — no giant projection box
+                            bx1 = count + future - 0.5
+                            for lvl, tag in ((p_to, "TC TARGET"),
+                                             *(  [(float(md["tc_mid"]), "TC MID")] if md.get("tc_mid") else [])):
+                                if lvl <= 0:
+                                    continue
+                                ax.hlines(lvl, count - 1, bx1, color=col, linewidth=1.0,
+                                          linestyles=(0, (4, 3)), zorder=6)
+                                ax.text(bx1, lvl, f"{tag}  {_price(lvl)}", color="white",
+                                        fontsize=7.5, fontweight="bold", ha="right", va="center", zorder=9,
+                                        bbox=dict(boxstyle="round,pad=0.28", facecolor=col, edgecolor="none"))
+                        else:
+                            bx0 = count - 1.5
+                            bx1 = count + future - 0.5
+                            blo, bhi = sorted((p_from, p_to))
+                            ax.fill_between([bx0, bx1], blo, bhi, color=col, alpha=0.13, zorder=3)
+                            ax.plot([bx0, bx1, bx1, bx0, bx0], [blo, blo, bhi, bhi, blo],
+                                    color=col, linewidth=1.25, alpha=0.9, zorder=5)
+                            xa = bx1 - (bx1 - bx0) * 0.30
+                            ax.annotate("", xy=(xa, p_to), xytext=(xa, p_from), zorder=8,
+                                        arrowprops=dict(arrowstyle="-|>", color=col,
+                                                        linewidth=1.7, mutation_scale=14))
+                            ax.text(xa + (bx1 - bx0) * 0.10, p_to, _price(p_to), color=col,
+                                    fontsize=8.5, fontweight="bold", va="center", zorder=8)
                         notes.append((f"MEASURED TARGET  {_price(p_to)}", col))
                     except Exception:
                         pass
                 bbase = md.get("tc_base")
-                if bbase and len(bbase) == 2:
+                if bbase and len(bbase) == 2 and not md.get("tc_clean"):
                     try:
                         blo, bhi = sorted((float(bbase[0]), float(bbase[1])))
                         x0b = max(0, count - 9)
@@ -2175,6 +2186,8 @@ def _technoclassic_preview_candidate(ev: dict):
         mandatory_gates={"technoclassic_preview_only": False},
         metadata={
             "strategy_variant": "VIVA_TLBREAK",
+            "public_code": f"TC-{str(ev.get('symbol') or '').replace('USDT', '')}-"
+                           f"{ev.get('pattern_tf') or '4h'}-{str(ev.get('ref_ts') or '')[:10]}",
             "tc_clean": True,
             "tc_scenario": "fade" if is_fade else ("ready" if stage == "JUST_BROKE" else "near"),
             "tl_context_tf": ev.get("pattern_tf"), "tl_pattern": ev.get("pattern"),
@@ -2186,40 +2199,25 @@ def _technoclassic_preview_candidate(ev: dict):
             "viva_breakout_line": line,
             "tc_projection": proj,
             "tc_base": ev.get("base_box") or [],
+            "tc_mid": (float(fade.get("tp_mid")) if is_fade and fade.get("tp_mid") else 0.0),
+            "tc_fade": bool(is_fade),
         },
     )
 
 
 def send_technoclassic_preview(ev: dict) -> bool:
-    """NEAR/READY alert with branded high-res chart; explicitly not a signal."""
+    """Edge alert in the SAME caption family as the other setups' approaching
+    alerts (Viva: «قالب تکنوکلاسیک نباید فرق داشته باشه»). Probabilities only —
+    nothing is 100% until the confirmation chain closes."""
     from data.fetcher import get_klines
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
     state = str(ev.get("state") or "")
     tf = str(ev.get("pattern_tf") or "4h")
-    comp = ev.get("compression") or {}
-    fade = ev.get("fade") or {}
-    is_fade = state == "REJECTION_FADE" or bool(fade)
-    head = ("↩️ دفعِ معتبر در ضلع (قانون ۷۵٪)" if state == "REJECTION_FADE"
-            else "🟨 آماده‌باش شکست" if state == "BREAK_READY" else "🔎 در آستانه شکست")
-    _d = str(fade.get("direction") or ev.get("direction") or "LONG")
-    dir_fa = "صعودی (LONG)" if _d == "LONG" else "نزولی (SHORT)"
     react = ev.get("reactions") or {}
-    caption = (
-        f"{head} — تکنوکلاسیک (پیش‌نمایش؛ سیگنال نیست)\n"
-        f"📐 {ev.get('pattern_fa') or ev.get('pattern')} روی تایم {tf} • ضلع {'بالا' if ev.get('side')=='upper' else 'پایین'}\n"
-        f"🎯 جهت محتمل پس از شکست معتبر: {dir_fa}\n"
-        f"📏 فاصله زنده تا خط: {ev.get('distance_atr')} ATR • پیوت‌های معتبر: {ev.get('touches')} "
-        f"(خطای فیت {ev.get('fit_error_atr')} ATR)\n"
-        f"⚖️ تاریخچۀ برخورد روی این خط: {react.get('rejects', 0)} دفع / {react.get('breaks', 0)} شکست "
-        f"از {react.get('touches', 0)} برخورد (نرخ دفع {int(float(react.get('reject_rate', 0)) * 100)}٪)\n"
-        f"🌀 کامپرشن: {'سالم (squeeze فعال)' if comp.get('squeeze_ok') else 'ضعیف'} "
-        f"• دوجی/کندل کوچک: {comp.get('doji_count', 0)}\n"
-        + (f"🎯 پلنِ دفع: ورود {fade.get('entry'):.4f} • استاپ {fade.get('stop'):.4f} • "
-           f"هدف ضلع مقابل {fade.get('target'):.4f} (RR {fade.get('rr')})" if is_fade and fade else "")
-        + "\n" + ("سناریوی اصلی: بازگشت به ضلعِ مقابل؛ شکست فقط با Close معتبر + پولبک + BOS تایم پایین سیگنال می‌شود."
-                  if is_fade else
-                  "سیگنال واقعی فقط با Close معتبرِ شکست + پولبک اول + BOS تایم پایین صادر می‌شود.")
-    )
+    fade = ev.get("fade") or {}
+    scen = ev.get("scenarios") or {}
+    is_fade = state == "REJECTION_FADE"
+    cand = None
     chart = None
     try:
         frame = get_klines(str(ev["symbol"]), tf, 150, closed_only=False, use_cache=False)
@@ -2228,5 +2226,50 @@ def send_technoclassic_preview(ev: dict) -> bool:
             chart = generate_chart(frame, cand, confirmed=False)
     except Exception as exc:
         print(f"TECHCLASSIC preview chart unavailable: {exc}")
+    if cand is None:
+        cand = _technoclassic_preview_candidate(ev)
+    badge, _ = _setup_badge(cand)
+    side_fa = "سقف" if ev.get("side") == "upper" else "کف"
+    plan_line = ""
+    if is_fade and fade:
+        plan_line = (f"↩️ پلنِ بازگشت روی ضلع (کمک‌تأیید قانون آلفونسو): ورود {_price(fade.get('entry'))} • "
+                     f"استاپ {_price(fade.get('stop'))} • TP میانه {_price(fade.get('tp_mid'))} • "
+                     f"TP ضلع مقابل {_price(fade.get('target'))} • R:R {fade.get('rr')}\n")
+    caption = (
+        f"🏷 <b>{_e(badge)}</b>\n"
+        f"⚡ <b>هشدار الگوی کلاسیک | در انتظار تأیید</b> • TECHCLASSIC\n"
+        f"🪙 <b>{_e(str(ev['symbol']))}</b> • SWING • تایم الگو: {tf} • ضلع {side_fa}\n"
+        f"🕓 زمان رصد — ایران: {_iran_time(cand)} • 📨 ارسال — ایران: {_iran_now()}\n"
+        f"📐 {_e(str(ev.get('pattern_fa') or ev.get('pattern')))} • ⭐ {int(ev.get('structure_score') or 0)}/10\n"
+        f"📍 خط: {_price(ev.get('line_price'))} • قیمت: {_price(ev.get('live'))} • "
+        f"فاصله {float(ev.get('distance_atr') or 0):.2f} ATR • برخوردهای معتبر: {ev.get('touches')}\n"
+        f"⚖️ تاریخچۀ خط: {react.get('rejects', 0)} دفع / {react.get('breaks', 0)} شکست "
+        f"(نرخ دفع {int(float(react.get('reject_rate', 0)) * 100)}٪ — کمک‌تأیید، نه شرط قطعی)\n"
+        + plan_line +
+        f"🎬 سناریوی پایایی: {_e(scen.get('hold', ''))}\n"
+        f"🎬 سناریوی شکست: {_e(scen.get('break', ''))}\n"
+        f"⏳ هیچ‌کدام ۱۰۰٪ نیست؛ ربات فقط احتمال را می‌گوید و منتظر نشانه/تأیید می‌ماند\n"
+        f"🆔 <code>{_e(_public_code(cand))}</code>"
+    )
+    try:  # once-per-day separator, like the other approaching alerts — but
+            # previews own no persisted candidate, so the day-stamp lives in KV
+        import datetime as _dtm
+        from database.bot_kv import get_json as _gk, set_json as _sk
+        today = _dtm.datetime.now(_dtm.timezone(_dtm.timedelta(hours=3, minutes=30))).strftime("%Y-%m-%d")
+        if (_gk("tc_pro_sep", {}) or {}).get("day") != today:
+            _mid = send_message("<b>━━━━━━━━ VIVA-MON-LABS ━━━━━━━━</b>", target)
+            if _mid:
+                _sk("tc_pro_sep", {"day": today, "mid": int(_mid)})
+    except Exception:
+        pass
     mid = send_photo(chart, caption, target) if chart else send_message(caption, target)
+    if mid:
+        # chain-link: TECHCLASSIC confirmations reply to their originating edge alert
+        try:
+            import time as _t
+            from database.bot_kv import set_json
+            set_json(f"tc_link|{str(ev['symbol']).upper()}|{tf}",
+                     {"mid": int(mid), "ts": _t.time(), "state": state})
+        except Exception as exc:
+            print(f"TECHCLASSIC link persist skipped: {exc}")
     return bool(mid)

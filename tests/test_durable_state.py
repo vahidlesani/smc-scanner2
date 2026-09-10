@@ -52,7 +52,8 @@ def test_candidate_store_roundtrip_and_idempotent_insert():
         conn.commit()
         conn.close()
     else:
-        conn = sqlite3.connect(os.getenv("CANDIDATE_DB_PATH", "/tmp/viva_candidates.db"))
+        from database.candidate_store import _db_path
+        conn = sqlite3.connect(_db_path())
         conn.execute("DELETE FROM signal_candidates WHERE signal_id=?", (c.signal_id,))
         conn.commit()
         conn.close()

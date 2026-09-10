@@ -385,6 +385,9 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         return events
     n = len(pattern_df) - 1
     pattern = classify_shape(upper, lower, n)
+    # Viva 2026-09-10 (doctrine): edge BOUNCE trades only inside PARALLEL
+    # channels (dynamic or static). Wedges/triangles get warnings + breaks.
+    is_parallel = str(pattern).upper().startswith("CHANNEL")
     rules = _EDGE_RULES.get(str(pattern).upper())
     if not rules:
         return events
@@ -474,9 +477,15 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         }
         if struct_note:
             ev["struct_note"] = struct_note
-        # ── Alfonso 75% law / Brooks overshoot-fade ─────────────────────────
-        if fade_enabled and react["touches"] >= 3 and react["reject_rate"] >= thr \
-                and dist <= 0.35 and (rejected_now or state in (STATE_NEAR, STATE_READY)):
+        # ── Alfonso/Brooks edge fade — SUPPORTING evidence, not the strategy ─
+        # Viva 2026-09-10: (1) fade only in parallel channels; (2) never fade a
+        # line price has ALREADY crossed; (3) reject-rate is a bonus, not a veto.
+        if react["reject_rate"] >= thr:
+            ev["structure_score"] = min(10, int(ev.get("structure_score") or 0) + 1)
+            ev["support_note_fa"] = (f"نرخ دفع تاریخِ این خط {int(float(react['reject_rate']) * 100)}٪ "
+                                     "— کمک‌تأییدِ مثبت (نه شرط قطعی)")
+        if fade_enabled and is_parallel and react["touches"] >= 3 \
+                and abs(dist) <= 0.35 and (not crossed or rejected_now):
             fdir = "SHORT" if side == "upper" else "LONG"
             opp = lower if side == "upper" else upper
             if opp is not None and _line_alive(opp, n):
@@ -491,13 +500,25 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                 risk, rew = live - stop, ftgt - live
             if 0.15 * atr_p <= risk <= 3.0 * atr_p and rew >= 1.3 * max(risk, 1e-9):
                 ev["fade"] = {"direction": fdir, "entry": live, "stop": stop, "target": ftgt,
+                              "tp_mid": round((live + ftgt) / 2.0, 6),
                               "rr": round(rew / max(risk, 1e-12), 2),
                               "reject_rate": react["reject_rate"],
-                              "rule": "Alfonso/Brooks edge-overshoot fade"}
-                if state in (STATE_NEAR, STATE_READY):
-                    ev["state"] = state if not rejected_now else STATE_FADE
-                else:
+                              "rule": "Alfonso/Brooks edge fade in parallel channel"}
+                if rejected_now or abs(dist) <= 0.15:
                     ev["state"] = STATE_FADE
+                else:
+                    ev["fade_pending_note"] = "پلنِ بازگشت فقط با کندلِ دفع (شدو/کلوزِ برگشتی) فعال می‌شود"
+        # ── both scenarios, probabilities only — no 100% before confirmation ─
+        edge_fa = "سقف" if side == "upper" else "کف"
+        opp_fa = "کف" if side == "upper" else "سقف"
+        ev["scenarios"] = {
+            "hold": (f"پایداریِ کانال: بازگشت به سمتِ {opp_fa} — خرید از {edge_fa} / فروشِ تأییدشده؛ "
+                     "ورود فقط با کندلِ دفع + تایم‌پایین" if is_parallel
+                     else f"الگو موازی نیست: ادواردز/مجی — برگشتِ روی ضلع بازی نمی‌شود؛ فقط شکستِ معتبر"),
+            "break": (f"شکستِ {edge_fa}: کلوز معتبر فراتر از خط + پولبکِ اول + BOS تایم پایین "
+                      f"→ سیگنالِ {('صعودی' if direction == 'LONG' else 'نزولی')} با هدفِ اندازه‌گیری‌شده"),
+            "prob": "هیچ‌کدام ۱۰۰٪ نیست؛ همه احتمالی‌ست مگر تأییدِ کاملِ زنجیره",
+        }
         events.append(ev)
     return events
 
@@ -544,10 +565,23 @@ def _cooldown_ok(key: str, state: str) -> bool:
     return True
 
 
+def choose_primary(events: List[Dict]) -> List[Dict]:
+    """One alert per (symbol, pattern_tf): the edge price is CLOSEST to.
+    Announcing LONG and SHORT on the same symbol/TF at the same minute is
+    noise, not analysis — the far edge gets re-announced when it matters."""
+    best: Dict = {}
+    for ev in events:
+        key = (str(ev.get("symbol")), str(ev.get("pattern_tf")))
+        d = float(ev.get("distance_atr") if ev.get("distance_atr") is not None else 9e9)
+        if key not in best or d < float(best[key].get("distance_atr") or 9e9):
+            best[key] = ev
+    return list(best.values())
+
+
 def evaluate_prebreak(symbol: str, pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                       pattern_tf: str, live_price: Optional[float] = None) -> List[Dict]:
     out: List[Dict] = []
-    for ev in scan_edges(pattern_df, trigger_df, pattern_tf, live_price=live_price):
+    for ev in choose_primary(scan_edges(pattern_df, trigger_df, pattern_tf, live_price=live_price)):
         if ev["state"] == STATE_BREAK:
             continue  # real breaks become candidates via the detector, not previews
         key = f"{symbol}|{pattern_tf}|{ev['pattern']}|{ev['state']}|{ev['side']}"
@@ -682,6 +716,17 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
                                special, gate, True)
     if candidate is None:
         return None
+    # chain-link (same contract as the legacy setups): the confirmation message
+    # must quote the edge-alert that announced this level — persisted in KV so
+    # it survives the 5-minute gap and any restart.
+    try:
+        import time as _t
+        from database.bot_kv import get_json
+        link = get_json(f"tc_link|{str(bundle.symbol).upper()}|{structure_tf}", {}) or {}
+        if link.get("mid") and float(link.get("ts") or 0) > _t.time() - 40 * 3600:
+            candidate.metadata["approaching_message_id"] = int(link["mid"])
+    except Exception:
+        pass
     candidate.sl = float(stop)
     tp2 = float(final_target)
     tp1 = entry + (tp2 - entry) * 0.40 if direction == "LONG" else entry - (entry - tp2) * 0.40
@@ -704,7 +749,8 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     candidate.strategy_fa = (f"تکنوکلاسیک | " +
                              (f"شکست {fa_pattern} در {structure_tf} — پولبک اول + BOS تأیید"
                               if is_break else
-                              f"دفع از ضلعِ {fa_pattern} در {structure_tf} (قانون ۷۵٪) — ورودِ بازگشتی با استاپ کوچک"))
+                              f"دفع از ضلعِ کانالِ موازی در {structure_tf} — کمک‌تأییدِ قانون آلفونسو؛ "
+                              f"ورودِ بازگشتی فقط با کندلِ دفع/تأییدِ تایم‌پایین"))
     stage = "S2_BREAKOUT" if is_break else "S3_RETEST"
     candidate.metadata.update({
         "strategy_variant": "VIVA_TLBREAK",

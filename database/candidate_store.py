@@ -18,7 +18,11 @@ from typing import List, Optional
 
 from analysis.models import SignalCandidate, iso_now
 
-DB_PATH = os.getenv("CANDIDATE_DB_PATH", "/tmp/viva_candidates.db")
+def _db_path() -> str:
+    # resolved per call: tests and deploy env may set CANDIDATE_DB_PATH AFTER
+    # this module was imported once — freezing it at import caused order-
+    # dependent writes to the wrong file.
+    return os.getenv("CANDIDATE_DB_PATH", "/tmp/viva_candidates.db")
 
 
 def _use_pg() -> bool:
@@ -85,7 +89,7 @@ def _connection():
         finally:
             raw.close()
         return
-    conn = sqlite3.connect(DB_PATH, timeout=20)
+    conn = sqlite3.connect(_db_path(), timeout=20)
     conn.row_factory = sqlite3.Row
     try:
         yield conn

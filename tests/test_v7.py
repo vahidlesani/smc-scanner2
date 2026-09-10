@@ -278,12 +278,17 @@ class V7PersistenceTests(unittest.TestCase):
         from database import candidate_store
         db.USE_POSTGRES = False
         db.DB_PATH = os.path.join(self.tempdir.name, "signals.db")
-        candidate_store.DB_PATH = os.path.join(self.tempdir.name, "candidates.db")
+        # the supported escape hatch (candidate_store resolves it per call):
+        # keeps these tests hermetic even when Supabase creds sit in the env
+        os.environ["CANDIDATE_DB_BACKEND"] = "sqlite"
+        os.environ["CANDIDATE_DB_PATH"] = os.path.join(self.tempdir.name, "candidates.db")
         candidate_store.init_candidate_store()
         from database.repository_v7 import init_v7_schema
         init_v7_schema()
 
     def tearDown(self):
+        for key in ("CANDIDATE_DB_BACKEND", "CANDIDATE_DB_PATH"):
+            os.environ.pop(key, None)
         self.tempdir.cleanup()
 
     def test_public_code_registry_retries_collision_and_never_reassigns(self):

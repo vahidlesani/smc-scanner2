@@ -101,7 +101,8 @@ def preview(name, u0, su, l0, sl, up_idx, lo_idx, side, direction, state_break,
             trig.iat[-1, trig.columns.get_loc(col)] = val
     # keep the printed chart honest: the live candle on the pattern frame
     # must match the trigger close (production shows both from the same tape)
-    pattern.iat[-1, pattern.columns.get_loc("close")] = float(trig["close"].iloc[-1])
+    for _c in ("open", "close", "high", "low"):
+        pattern.iat[-1, pattern.columns.get_loc(_c)] = float(trig[_c].iloc[-1])
     pattern.iat[-1, pattern.columns.get_loc("high")] = max(float(pattern["high"].iloc[-1]),
                                                            float(trig["high"].iloc[-1]))
     pattern.iat[-1, pattern.columns.get_loc("low")] = min(float(pattern["low"].iloc[-1]),
@@ -141,14 +142,16 @@ def main():
     made.append(preview("08_ascending_channel_BREAK_short", 60, 0.05, 30, 0.05, up_idx, lo_idx, "lower", "SHORT", True))
     made.append(preview("09_majortrendline_BREAK", 100, -0.10, 55, -0.02, up_idx, (70, 112, 132), "upper", "LONG", True, lower_scatter=True))
     made.append(preview("10_descending_channel_NEAR", 100, -0.045, 62, -0.045, up_idx, lo_idx, "upper", "LONG", False))
-    made.append(preview("11_support_rejection_FADE", 100, -0.10, 72, -0.04, up_idx, lo_idx, "lower", "SHORT", False, fade=True))
-    made.append(preview("12_resistance_rejection_FADE", 100, -0.08, 52, 0.10, up_idx, lo_idx, "upper", "LONG", False, fade=True))
+    # 11: bounce trade — allowed only inside a PARALLEL (dynamic) channel
+    made.append(preview("11_channel_floor_bounce_FADE", 100, -0.045, 72, -0.045, up_idx, lo_idx, "lower", "SHORT", False, fade=True))
+    # 12: same rejection candle on a TRIANGLE: no bounce trade — warning only
+    made.append(preview("12_triangle_rejection_NO_BOUNCE", 100, -0.08, 52, 0.10, up_idx, lo_idx, "upper", "LONG", False, fade=True))
     made.append(preview("13_head_shoulders_BREAK", 100, 0.0, 70, 0.0, up_idx, lo_idx, "upper", "LONG", True,
                         keys_override=[(0, 84.3), (45, 99.4), (52, 80.0), (70, 108.0), (88, 78.0),
                                        (105, 99.4), (118, 92.0), (132, 99.4), (139, 84.0)]))
     made.append(preview("14_triple_top_FADE", 100, 0.0, 68, 0.0, (45, 95, 125), (58, 112, 132), "upper", "LONG", False, fade=True,
-                        keys_override=[(0, 84.3), (45, 99.4), (60, 74.0), (95, 99.4), (112, 68.6),
-                                       (125, 99.4), (132, 80.0), (139, 84.0)]))
+                        keys_override=[(0, 84.3), (45, 99.4), (60, 68.6), (95, 99.4), (112, 68.6),
+                                       (125, 99.4), (132, 68.6), (139, 84.0)]))
     made.append(preview("15_broadening_megaphone", 80, 0.12, 80, -0.10, up_idx, lo_idx, "upper", "LONG", False))
     made.append(preview("16_bull_flag_pennant", 100, 0.0, 95, 0.0, (45, 95, 125), (70, 112, 132), "upper", "LONG", True,
                         keys_override=[(0, 97.0), (35, 70.0), (45, 99.4), (70, 95.6), (95, 99.4),

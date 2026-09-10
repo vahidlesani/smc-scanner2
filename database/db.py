@@ -11,11 +11,16 @@ from config import get_settings
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 USE_POSTGRES = bool(DATABASE_URL)
 
+import sqlite3
+DB_PATH = os.environ.get("DB_PATH", "/tmp/signals.db")
 if USE_POSTGRES:
-    import psycopg2
-else:
-    import sqlite3
-    DB_PATH = os.environ.get("DB_PATH", "/tmp/signals.db")
+    try:
+        import psycopg2
+    except ImportError:
+        # A missing driver on the prod image must degrade to local storage,
+        # not crash-loop the bot; and tests may flip USE_POSTGRES at runtime,
+        # which is only safe if sqlite3 is ALWAYS importable here.
+        USE_POSTGRES = False
 
 
 def _safe_float(val, default=0):
