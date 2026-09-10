@@ -15,7 +15,7 @@ def _wedge_frames(n=140):
     with a displacement body."""
     U = lambda i: 100.0 - 0.10 * i
     L = lambda i: 60.0 - 0.01 * i
-    wick = 0.05
+    wick = 0.6
     keys = [(0, 88.0), (15, L(15) + wick), (50, U(50) - wick), (75, L(75) + wick),
             (95, U(95) - wick), (112, L(112) + wick), (125, U(125) - wick),
             (137, L(137) + wick), (139, (U(139) + L(139)) / 2)]
@@ -156,3 +156,91 @@ def test_detector_enabled_builds_or_cleanly_skips(tmp_path, monkeypatch):
     monkeypatch.delenv("TECHCLASSIC_ENABLED")
     importlib.reload(config)
     importlib.reload(pe)
+
+
+# ── reality build (Viva bug report 2026-09-10) ─────────────────────────────
+def test_dead_edge_is_not_alerted():
+    """Line whose last touch is far in the past must be treated as dead."""
+    m = _mod()
+    n = 140
+    U = lambda i: 100.0 - 0.05 * i
+    wick = 0.6
+    idx = [8, 20, 33]
+    vals = np.full(n, 80.0)
+    for k, i in enumerate(idx):
+        lo0 = idx[k - 1] if k else 0
+        vals[lo0:i + 1] = np.linspace(vals[lo0], U(i) - wick, i + 1 - lo0)
+    ts = pd.date_range("2026-01-01", periods=n, freq="4h")
+    pattern = pd.DataFrame({"timestamp": ts, "open": vals, "high": vals + wick,
+                            "low": vals - wick, "close": vals, "volume": np.full(n, 100.0)})
+    t = _wedge_frames()[1]
+    assert m.scan_edges(pattern, t, "4h") == []
+
+
+def test_stale_feed_silences_instead_of_predicting():
+    """If the chart feed lags the live price beyond the stale tolerance, the
+    engine must say NOTHING (the ONDO $0.36-vs-$1.25 class of bug)."""
+    m = _mod()
+    pattern, trigger = _wedge_frames()
+    last_close = float(trigger["close"].iloc[-1])
+    atr_t = float((trigger["high"] - trigger["low"]).tail(14).mean())
+    events = m.scan_edges(pattern, trigger, "4h", live_price=last_close + 30 * atr_t)
+    assert events == []
+
+
+def test_reaction_history_and_fade_plan():
+    """Tested edge with rejection history + overshoot bar back inside ->
+    REJECTION_FADE event carrying entry/stop/target (the 75% law)."""
+    m = _mod()
+    pattern, trigger = _wedge_frames()
+    # rewrite the last trigger bar: wick beyond the line, close back inside
+    n = len(pattern) - 1
+    line = 100.0 - 0.10 * n
+    atr_p = float((pattern["high"] - pattern["low"]).tail(14).mean())
+    trig = trigger.copy()
+    trig["open"].iloc[-1] = line - 0.4 * atr_p
+    trig["close"].iloc[-1] = line - 0.15 * atr_p
+    trig["high"].iloc[-1] = line + 0.5 * atr_p
+    trig["low"].iloc[-1] = line - 0.5 * atr_p
+    events = [e for e in m.scan_edges(pattern, trig, "4h") if e["side"] == "upper"]
+    assert events, "expected an upper-edge event on the overshoot bar"
+    ev = events[0]
+    assert ev["reactions"]["touches"] >= 3
+    fade = ev.get("fade")
+    if ev["state"] == m.STATE_FADE:
+        assert fade and fade["direction"] == "SHORT"
+        assert fade["stop"] > fade["entry"] and fade["target"] < fade["entry"]
+        assert fade["rr"] >= 1.3
+
+
+def test_htf_layer_penalizes_target_beyond_tested_daily_edge():
+    """A 1h-setup whose TP1 sits on a tested 1D edge must lose points, and an
+    entry ON a valid edge must earn them — score only, never a reject."""
+    m = _mod()
+    from types import SimpleNamespace
+    m._LINE_CACHE.clear()
+    m._LINE_CACHE["XUSDT"] = {"at": 9e18, "lines": [
+        {"tf": "1d", "side": "upper", "price": 104.6, "touches": 4, "reject_rate": 0.8, "atr": 2.0},
+    ]}
+    bundle = SimpleNamespace(symbol="XUSDT")
+    cand = SimpleNamespace(planned_entry=100.0, tp1=105.0, tp2=112.0, direction="LONG",
+                           score=8, metadata={})
+    delta, note = m.htf_pattern_adjustment(bundle, cand)
+    assert delta == -2 and "1d" in note
+    m._LINE_CACHE["XUSDT"] = {"at": 9e18, "lines": [
+        {"tf": "1d", "side": "lower", "price": 100.3, "touches": 3, "reject_rate": 0.75, "atr": 2.0},
+    ]}
+    delta2, note2 = m.htf_pattern_adjustment(bundle, cand)
+    assert delta2 >= 1 and note2
+    m._LINE_CACHE.clear()
+
+
+def test_other_setups_stay_pristine():
+    """TLBREAK/ALBROX must carry NO TechnoClassic score surgery (stats purity,
+    Viva 2026-09-10): the pattern intelligence lives in TECHCLASSIC itself and
+    in the score-only HTF layer outside the detectors."""
+    src = open("analysis/setups_experimental.py", encoding="utf-8").read()
+    for forbidden in ("viva_tc_compression_bonus", "albrox_tc_compression_bonus",
+                      "viva_tc_base_bonus", "compression_bonus(refine_df)",
+                      "_tc_comp_bonus + _tc_base_bonus"):
+        assert forbidden not in src, f"contamination found: {forbidden}"

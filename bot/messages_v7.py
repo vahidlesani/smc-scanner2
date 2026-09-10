@@ -1155,7 +1155,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # If the frame contains a real range (top & bottom validated by >=2
         # pivot touches each), draw both boundaries across the chart and say
         # plainly whether price is INSIDE it (entry blocked until a break).
-        if _CHART_RANGE_OVERLAY:
+        if _CHART_RANGE_OVERLAY and not md.get("tc_clean"):
             try:
                 from analysis.indicators import pivots as _rng_piv
 
@@ -1203,6 +1203,22 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # ── VIVA-TLBREAK validated geometry overlay ─────────────────────
         if md.get("strategy_variant") == "VIVA_TLBREAK":
             try:
+                _up0 = md.get("viva_upper_points") or []
+                _lo0 = md.get("viva_lower_points") or []
+                if len(_up0) >= 2 and len(_lo0) >= 2:
+                    try:
+                        def _fitpts(pts):
+                            xs_ = [float(np.searchsorted(frame.index, pd.Timestamp(str(p.get("timestamp"))))) for p in pts]
+                            ys_ = [float(p["price"]) for p in pts]
+                            s_, b_ = np.polyfit(xs_, ys_, 1)
+                            return s_, b_
+                        _su, _bu = _fitpts(_up0)
+                        _sl, _bl = _fitpts(_lo0)
+                        _xf = np.arange(0.0, count + future)
+                        ax.fill_between(_xf, _su * _xf + _bu, _sl * _xf + _bl,
+                                        color=CHART_THEME["structure"], alpha=0.05, zorder=1)
+                    except Exception:
+                        pass
                 for key, color, label in (("viva_upper_points", CHART_THEME["supply"], "VALID UPPER LINE"), ("viva_lower_points", CHART_THEME["demand"], "VALID LOWER LINE")):
                     points = md.get(key) or []
                     if len(points) < 2:
@@ -1215,7 +1231,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     if len(xs) < 2:
                         continue
                     slope, intercept = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
-                    x0, x1 = min(xs), count + future - .5
+                    x0, x1 = min(xs), min(max(xs) + 0.15 * max(1.0, max(xs) - min(xs)),
+                                          count + future - .5)
                     ax.plot([x0, x1], [slope*x0+intercept, slope*x1+intercept], color=color, linewidth=2.3, alpha=.95, zorder=7, solid_capstyle="round")
                     ax.scatter(xs, ys, s=42, color=CHART_THEME["panel"], edgecolors=color, linewidths=1.7, zorder=9)
                     notes.append((f"{label} · {len(xs)} PIVOTS", color))
@@ -1228,6 +1245,44 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     lo, hi = sorted(map(float, zone))
                     ax.fill_between([max(0,count-35), count+future-.5], lo, hi, color=CHART_THEME["liquidity"], alpha=.08, zorder=1)
                     notes.append(("RETEST ZONE", CHART_THEME["liquidity"]))
+                proj = md.get("tc_projection")
+                if proj:
+                    try:
+                        p_from = float(proj.get("from")); p_to = float(proj.get("to"))
+                        d = str(proj.get("direction") or "LONG").upper()
+                        col = CHART_THEME["demand"] if d == "LONG" else CHART_THEME["supply"]
+                        bx0 = count - 1.5; bx1 = count + future - 0.5
+                        blo, bhi = sorted((p_from, p_to))
+                        ax.fill_between([bx0, bx1], blo, bhi, color=col, alpha=0.13, zorder=3)
+                        ax.plot([bx0, bx1, bx1, bx0, bx0], [blo, blo, bhi, bhi, blo],
+                                color=col, linewidth=1.25, alpha=0.9, zorder=5)
+                        xa = bx1 - (bx1 - bx0) * 0.30
+                        ax.annotate("", xy=(xa, p_to), xytext=(xa, p_from), zorder=8,
+                                    arrowprops=dict(arrowstyle="-|>", color=col,
+                                                    linewidth=1.7, mutation_scale=14))
+                        ax.text(xa + (bx1 - bx0) * 0.10, p_to, _price(p_to), color=col,
+                                fontsize=8.5, fontweight="bold", va="center", zorder=8)
+                        pctv = proj.get("pct")
+                        if pctv is not None:
+                            ax.text(xa, (p_to + p_from) / 2.0, f"{float(pctv):+.1f}%", color=col,
+                                    fontsize=8, fontweight="bold", ha="center", va="center", zorder=8)
+                        notes.append((f"MEASURED TARGET  {_price(p_to)}", col))
+                    except Exception:
+                        pass
+                bbase = md.get("tc_base")
+                if bbase and len(bbase) == 2:
+                    try:
+                        blo, bhi = sorted((float(bbase[0]), float(bbase[1])))
+                        x0b = max(0, count - 9)
+                        ax.fill_between([x0b, count], blo, bhi, color=CHART_THEME["muted"],
+                                        alpha=0.10, zorder=2)
+                        ax.plot([x0b, count, count, x0b, x0b], [blo, blo, bhi, bhi, blo],
+                                color=CHART_THEME["muted"], linewidth=1.0, alpha=0.7, zorder=5)
+                        ax.hlines((blo + bhi) / 2, x0b, count, color=CHART_THEME["muted"],
+                                  linestyles=(0, (4, 3)), linewidth=0.8, alpha=0.7, zorder=5)
+                        notes.append(("BASE BOX", CHART_THEME["muted"]))
+                    except Exception:
+                        pass
                 watch_points = md.get("viva_watch_points") or []
                 if len(watch_points) == 2:
                     xs, ys = [], []
@@ -1251,7 +1306,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # A generic fitted trendline is never decoration. PINVAL/PINWALL/ALBROX
         # charts must not acquire unrelated black lines; non-TLBREAK setups opt
         # in only when their detector explicitly validated that overlay.
-        if _CHART_STRUCTURE_LINES and candidate.setup_code != "TLBREAK" and bool(md.get("chart_validated_trendline")):
+        if (_CHART_STRUCTURE_LINES and not md.get("tc_clean")
+                and candidate.setup_code not in ("TLBREAK", "TECHCLASSIC") and bool(md.get("chart_validated_trendline"))):
             try:
                 from analysis.setups_experimental import _fit_channel_line
 
@@ -2081,31 +2137,55 @@ def send_ladder_event(event: dict) -> bool:
 
 def _technoclassic_preview_candidate(ev: dict):
     """Lightweight, never-saved SignalCandidate used ONLY to render a
-    preview chart with the validated pattern lines."""
-    from analysis.models import SignalCandidate, generate_viva_public_code
-    price = float(ev.get("line_price") or 0.0)
-    atr = max(float(ev.get("distance_atr") or 0.0), 0.0)
-    line = price
+    preview chart (break-pending / standby / fade plan) with the validated
+    pattern lines and the E&M/Brooks overlay kit."""
+    from analysis.models import SignalCandidate
+    line = float(ev.get("line_price") or 0.0)
+    fade = ev.get("fade") or {}
+    is_fade = str(ev.get("state")) == "REJECTION_FADE" or bool(fade)
+    direction = str((fade.get("direction") if is_fade else ev.get("direction")) or "LONG").upper()
+    price = float(fade.get("entry") or ev.get("live") or line)
+    stop = line
+    if is_fade:
+        tgt = float(fade.get("target") or line)
+        stop = float(fade.get("stop") or line)
+        pct = (tgt - price) / price * 100.0 if price else 0.0
+        proj = {"from": price, "to": tgt, "direction": direction, "pct": round(pct, 1)}
+        stage = "REJECTED_AT_EDGE"
+    else:
+        proj = dict(ev.get("measured") or {}, direction=str(ev.get("direction") or "LONG"))
+        stage = "JUST_BROKE" if str(ev.get("state")) == "BREAK_READY" else "NEAR"
+    tgt = float(proj.get("to") or 0.0)
+    # real numbers so the renderer's scenario/TP machinery draws the plan, not zeros
+    tp1 = tp2 = tgt
+    risk = abs(price - stop)
+    reward = abs(tgt - price) if tgt else 0.0
+    rr1 = rr2 = round(reward / risk, 2) if risk > 0 and reward > 0 else 0.0
+    atr_band = max(abs(float(proj.get("from") or line) * 0.001), 1e-9)
     return SignalCandidate(
         signal_id=f"tc-preview-{ev['symbol']}-{ev.get('pattern_tf')}-{ev.get('ref_ts','')}"[:64],
         symbol=str(ev["symbol"]), style="SWING", setup_code="TECHCLASSIC",
         setup_name="TechnoClassic pre-break preview",
         strategy_fa="تکنوکلاسیک | پیش‌نمایش (نه سیگنال)",
-        direction=str(ev.get("direction") or "LONG"), score=0, status="EDUCATIONAL",
-        entry_zone_bottom=line * 0.999, entry_zone_top=line * 1.001,
-        planned_entry=line, sl=line, tp1=0.0, tp2=0.0, rr_tp1=0.0, rr_tp2=0.0,
-        bias="BULLISH" if ev.get("direction") == "LONG" else "BEARISH",
+        direction=direction, score=0, status="EDUCATIONAL",
+        entry_zone_bottom=price - 0.15 * atr_band, entry_zone_top=price + 0.15 * atr_band,
+        planned_entry=price, sl=stop, tp1=tp1, tp2=tp2, rr_tp1=rr1, rr_tp2=rr2,
+        bias="BULLISH" if direction == "LONG" else "BEARISH",
         trigger_timeframe=str(ev.get("pattern_tf") or "4h"),
         mandatory_gates={"technoclassic_preview_only": False},
         metadata={
             "strategy_variant": "VIVA_TLBREAK",
+            "tc_clean": True,
+            "tc_scenario": "fade" if is_fade else ("ready" if stage == "JUST_BROKE" else "near"),
             "tl_context_tf": ev.get("pattern_tf"), "tl_pattern": ev.get("pattern"),
             "tl_pattern_fa": ev.get("pattern_fa") or ev.get("pattern"),
-            "tl_stage": "NEAR" if ev.get("state") == "EDGE_NEAR" else "JUST_BROKE",
+            "tl_stage": stage,
             "tl_line": line, "tl_touches": ev.get("touches", 0),
             "viva_upper_points": ev.get("upper_points") or [],
             "viva_lower_points": ev.get("lower_points") or [],
             "viva_breakout_line": line,
+            "tc_projection": proj,
+            "tc_base": ev.get("base_box") or [],
         },
     )
 
@@ -2117,17 +2197,28 @@ def send_technoclassic_preview(ev: dict) -> bool:
     state = str(ev.get("state") or "")
     tf = str(ev.get("pattern_tf") or "4h")
     comp = ev.get("compression") or {}
-    head = "🟨 آماده‌باش شکست" if state == "BREAK_READY" else "🔎 در آستانه شکست"
-    dir_fa = "صعودی (LONG)" if ev.get("direction") == "LONG" else "نزولی (SHORT)"
+    fade = ev.get("fade") or {}
+    is_fade = state == "REJECTION_FADE" or bool(fade)
+    head = ("↩️ دفعِ معتبر در ضلع (قانون ۷۵٪)" if state == "REJECTION_FADE"
+            else "🟨 آماده‌باش شکست" if state == "BREAK_READY" else "🔎 در آستانه شکست")
+    _d = str(fade.get("direction") or ev.get("direction") or "LONG")
+    dir_fa = "صعودی (LONG)" if _d == "LONG" else "نزولی (SHORT)"
+    react = ev.get("reactions") or {}
     caption = (
         f"{head} — تکنوکلاسیک (پیش‌نمایش؛ سیگنال نیست)\n"
         f"📐 {ev.get('pattern_fa') or ev.get('pattern')} روی تایم {tf} • ضلع {'بالا' if ev.get('side')=='upper' else 'پایین'}\n"
         f"🎯 جهت محتمل پس از شکست معتبر: {dir_fa}\n"
-        f"📏 فاصله تا خط: {ev.get('distance_atr')} ATR • پیوت‌های معتبر: {ev.get('touches')} "
+        f"📏 فاصله زنده تا خط: {ev.get('distance_atr')} ATR • پیوت‌های معتبر: {ev.get('touches')} "
         f"(خطای فیت {ev.get('fit_error_atr')} ATR)\n"
+        f"⚖️ تاریخچۀ برخورد روی این خط: {react.get('rejects', 0)} دفع / {react.get('breaks', 0)} شکست "
+        f"از {react.get('touches', 0)} برخورد (نرخ دفع {int(float(react.get('reject_rate', 0)) * 100)}٪)\n"
         f"🌀 کامپرشن: {'سالم (squeeze فعال)' if comp.get('squeeze_ok') else 'ضعیف'} "
         f"• دوجی/کندل کوچک: {comp.get('doji_count', 0)}\n"
-        "سیگنال واقعی فقط با Close معتبرِ شکست + پولبک اول + BOS تایم پایین صادر می‌شود."
+        + (f"🎯 پلنِ دفع: ورود {fade.get('entry'):.4f} • استاپ {fade.get('stop'):.4f} • "
+           f"هدف ضلع مقابل {fade.get('target'):.4f} (RR {fade.get('rr')})" if is_fade and fade else "")
+        + "\n" + ("سناریوی اصلی: بازگشت به ضلعِ مقابل؛ شکست فقط با Close معتبر + پولبک + BOS تایم پایین سیگنال می‌شود."
+                  if is_fade else
+                  "سیگنال واقعی فقط با Close معتبرِ شکست + پولبک اول + BOS تایم پایین صادر می‌شود.")
     )
     chart = None
     try:

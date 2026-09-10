@@ -355,16 +355,6 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         # VIVA-TLBREAK owns its score/geometry; generic candidate values are
         # replaced only for this isolated strategy.
         viva_score = structure_score(line) + breakout.score + confluence.total + failed_penalty
-        # TechnoClassic additive bonuses (compression + base proximity).
-        # Score-only by Viva's explicit rule: never a new rejection gate.
-        try:
-            from analysis.pattern_engine import base_side_bonus, compression_bonus
-            _tc_comp_bonus, _tc_comp = compression_bonus(refine_df)
-            _tc_base_bonus = base_side_bonus(refine_df, float(trigger_df["close"].iloc[-1]), direction)
-            viva_score += _tc_comp_bonus + _tc_base_bonus
-        except Exception:
-            _tc_comp_bonus = _tc_base_bonus = 0.0
-            _tc_comp = {}
         refine_atr = float((refine_df["high"] - refine_df["low"]).tail(14).mean())
         buffer = max(0.35 * refine_atr, abs(candidate.planned_entry) * 0.0005)
         pattern_sl = plan.stop_anchor - buffer if direction == "LONG" else plan.stop_anchor + buffer
@@ -399,8 +389,6 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             "viva_breakout_body_atr": breakout.body_atr, "viva_counter_trend": confluence.counter_trend,
             "viva_confluence_score": confluence.total, "viva_confluence": list(confluence.reasons),
             "viva_structure_score": structure_score(line), "viva_failed_breakout_penalty": failed_penalty,
-            "viva_tc_compression_bonus": _tc_comp_bonus, "viva_tc_base_bonus": _tc_base_bonus,
-            "viva_tc_squeeze": bool(_tc_comp.get("squeeze_ok")),
             "viva_final_score": viva_score,
             "viva_stop_anchor": plan.stop_anchor, "viva_measured_target": plan.measured_target,
             "viva_final_target": final_target,
@@ -982,22 +970,11 @@ def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]
         candidate.sl = base_low - .5*base_atr if direction=="LONG" else base_high + .5*base_atr
         pin = detect_pinbar_zone(bundle, style)
         pinwall_confirm = bool(pin and pin.direction == direction)
-        # TechnoClassic additive bonuses (squeeze before the base-break + price
-        # sitting on a swing base). Never rejects; never gates (Viva rule).
-        try:
-            from analysis.pattern_engine import base_side_bonus as _tc_base, compression_bonus as _tc_comp
-            _albrox_cb, _albrox_cm = _tc_comp(df.tail(40))
-            _albrox_bb = _tc_base(df, float(df["close"].iloc[-1]), direction)
-        except Exception:
-            _albrox_cb = _albrox_bb = 0.0
-            _albrox_cm = {}
-        candidate.score = min(10, candidate.score + (1 if pinwall_confirm else 0) + _albrox_cb + _albrox_bb)
+        candidate.score = min(10, candidate.score + (1 if pinwall_confirm else 0))
         candidate.mandatory_gates["htf_alignment"] = True
         candidate.strategy_fa = "ALBROX | اسپایک، بازپس‌گیری و شکست بیس"
         candidate.metadata.update({
             "strategy_variant":"ALBROX_ORIGINAL", "albrox_spike_index":spike_i,
-            "albrox_tc_compression_bonus": _albrox_cb, "albrox_tc_base_bonus": _albrox_bb,
-            "albrox_tc_squeeze": bool(_albrox_cm.get("squeeze_ok")),
             "albrox_base_range":[base_low,base_high], "albrox_spike_reclaim":True,
             "albrox_base_candles":len(base), "albrox_pinwall_confirm":pinwall_confirm,
             "public_code":generate_viva_public_code("ALBROX",style),

@@ -65,6 +65,24 @@ def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
             enrich_candidate_context(bundle, candidate)
         except Exception:
             pass
+    # TechnoClassic HTF-edge intelligence — SCORE-ONLY for all setups
+    # (Viva 2026-09-10): a tested 1D/4H edge ahead of TP1 costs points, an
+    # entry sitting ON such an edge earns them. Never a gate, never a reject.
+    try:
+        from analysis.pattern_engine import htf_pattern_adjustment
+        for candidate in candidates:
+            if str(candidate.setup_code) == "TECHCLASSIC":
+                continue  # its own geometry is already priced by its detector
+            try:
+                delta, note = htf_pattern_adjustment(bundle, candidate)
+                if delta or note:
+                    candidate.score = int(max(0, min(10, candidate.score + delta)))
+                    candidate.metadata["htf_edge_delta"] = int(delta)
+                    candidate.metadata["htf_edge_note"] = str(note)
+            except Exception:
+                pass
+    except Exception:
+        pass
     return candidates
 
 def _as_utc(value: str) -> datetime:

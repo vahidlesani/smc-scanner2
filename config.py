@@ -148,6 +148,13 @@ class Settings:
     technoclassic_preview_alerts: bool = True
     technoclassic_cooldown_hours: float = 8.0
     technoclassic_symbols: str = ""
+    # reality build (Viva bug report 2026-09-10)
+    technoclassic_pattern_tfs: str = "1h,4h,1d"
+    technoclassic_reject_rate: float = 0.6
+    technoclassic_stale_atr: float = 1.5
+    technoclassic_htf_scoring: bool = True
+    technoclassic_htf_cache_hours: float = 4.0
+    technoclassic_fade_signals: bool = True
     experimental_tlbreak_symbols: str = ""  # empty = no symbol restriction
     tlbreak_min_adx: float = 0.0            # ADX(14) gate on context TF; 0 = off
     # Override the context timeframe for the channel lines (e.g. "1d" for the
@@ -279,6 +286,12 @@ class Settings:
             technoclassic_preview_alerts=_bool("TECHCLASSIC_PREVIEW_ALERTS", cls.technoclassic_preview_alerts),
             technoclassic_cooldown_hours=_float("TECHCLASSIC_COOLDOWN_HOURS", cls.technoclassic_cooldown_hours),
             technoclassic_symbols=os.getenv("TECHCLASSIC_SYMBOLS", cls.technoclassic_symbols),
+            technoclassic_pattern_tfs=os.getenv("TECHCLASSIC_PATTERN_TFS", cls.technoclassic_pattern_tfs),
+            technoclassic_reject_rate=_float("TECHCLASSIC_REJECT_RATE", cls.technoclassic_reject_rate),
+            technoclassic_stale_atr=_float("TECHCLASSIC_STALE_ATR", cls.technoclassic_stale_atr),
+            technoclassic_htf_scoring=_bool("TECHCLASSIC_HTF_SCORING", cls.technoclassic_htf_scoring),
+            technoclassic_htf_cache_hours=_float("TECHCLASSIC_HTF_CACHE_HOURS", cls.technoclassic_htf_cache_hours),
+            technoclassic_fade_signals=_bool("TECHCLASSIC_FADE_SIGNALS", cls.technoclassic_fade_signals),
             experimental_tlbreak_symbols=os.getenv("EXPERIMENTAL_TLBREAK_SYMBOLS", cls.experimental_tlbreak_symbols),
             tlbreak_min_adx=_float("TLBREAK_MIN_ADX", cls.tlbreak_min_adx),
             tlbreak_tp1_height_frac=_float("TLBREAK_TP1_HEIGHT_FRAC", cls.tlbreak_tp1_height_frac),
