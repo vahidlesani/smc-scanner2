@@ -1804,6 +1804,18 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
             chart = generate_chart(chart_df, candidate, confirmed=False)
         except Exception:
             chart = None
+    if chart is None and chart_df is None:
+        # «همه پیامها با چارت» — the update fetches its own live frame when the
+        # caller had none (verdict/expiry paths), never posting chartless.
+        try:
+            from data.fetcher import get_klines
+            _tf = str((candidate.metadata or {}).get("confirm_tf")
+                      or candidate.trigger_timeframe)
+            frame = get_klines(candidate.symbol, _tf, 180, closed_only=False, use_cache=True)
+            if frame is not None and len(frame) >= 30:
+                chart = generate_chart(frame, candidate, confirmed=False)
+        except Exception:
+            chart = None
     caption = _setup_update_caption(
         candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>")
     slot = int(chain.get("upd") or 0)
