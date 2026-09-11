@@ -82,9 +82,10 @@ class Settings:
     # higher-TF supply/demand polarity: LONG at demand (or after a valid
     # overhead-supply breakout/flip), SHORT at supply (or after a valid
     # demand breakdown/flip). Counter-polarity pins are rejected at DETECTION.
-    # Feature-flagged per standing rule: defaults OFF until paper/backtest validated.
-    # Enable live with PINVAL_POLARITY_GATE_ENABLED=true.
-    pinv_polarity_gate_enabled: bool = False
+    # Viva standing rule (2026-09): gate is ON — never default-off. The stray
+    # Sep-6 "OFF until validated" default from the old workspace is reverted;
+    # the env flag PINVAL_POLARITY_GATE_ENABLED can still toggle it explicitly.
+    pinv_polarity_gate_enabled: bool = True
     pinv_polarity_near_atr: float = 1.2    # probe within this ATR = "at the zone"
     pinv_polarity_block_atr: float = 1.8   # opposing wall within this ATR blocks
     pinv_polarity_breakout_body_atr: float = 0.5  # moderate valid-breakout body

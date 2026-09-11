@@ -1185,6 +1185,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         def _fitpts(pts):
                             xs_ = [float(np.searchsorted(frame.index, pd.Timestamp(str(p.get("timestamp"))))) for p in pts]
                             ys_ = [float(p["price"]) for p in pts]
+                            if max(xs_) - min(xs_) < 1e-9:
+                                raise ValueError("degenerate fit span")
                             s_, b_ = np.polyfit(xs_, ys_, 1)
                             return s_, b_
                         _su, _bu = _fitpts(_up0)
@@ -1203,7 +1205,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         ts = pd.Timestamp(str(point.get("timestamp")))
                         x = float(np.searchsorted(frame.index, ts))
                         xs.append(x); ys.append(float(point["price"]))
-                    if len(xs) < 2:
+                    if len(xs) < 2 or max(xs) - min(xs) < 1e-9:
                         continue
                     slope, intercept = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
                     # Viva 2026-09-11 (v2, the «هرچی میگم انجام نمیشه» fix): the
