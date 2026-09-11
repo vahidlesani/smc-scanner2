@@ -39,6 +39,14 @@ class Settings:
 
     full_scan_minutes: int = 15
     monitor_minutes: int = 5
+    # Viva 2026-09-11 (final chain doctrine): per scan cycle only this many
+    # NEW detailed alerts may be published — the rest defer to the next scan.
+    education_max_per_scan: int = 8
+    # One setup may open at most this many alert-chains per symbol per 24h…
+    chains_per_symbol_setup_24h: int = 3
+    # …and never two at once: while one chain of the same symbol+setup is
+    # still unresolved, new detections feed its UPDATE slot instead.
+    chain_slot_gate_enabled: bool = True
     # Live research focus. SCALP is intentionally off by default: lower TF stays
     # available as the confirmation layer for DAYTRADE/SWING, not as a noisy
     # standalone signal stream.
@@ -228,6 +236,9 @@ class Settings:
             strategy_version=os.getenv("STRATEGY_VERSION", cls.strategy_version),
             channel_name=os.getenv("CHANNEL_NAME", cls.channel_name),
             full_scan_minutes=_int("FULL_SCAN_MINUTES", cls.full_scan_minutes),
+            education_max_per_scan=_int("EDUCATION_MAX_PER_SCAN", cls.education_max_per_scan),
+            chains_per_symbol_setup_24h=_int("CHAINS_PER_SYMBOL_SETUP_24H", cls.chains_per_symbol_setup_24h),
+            chain_slot_gate_enabled=_bool("CHAIN_SLOT_GATE_ENABLED", cls.chain_slot_gate_enabled),
             monitor_minutes=_int("MONITOR_MINUTES", cls.monitor_minutes),
             live_styles=os.getenv("LIVE_STYLES", cls.live_styles),
             monitor_offset_minute=_int("MONITOR_OFFSET_MINUTE", cls.monitor_offset_minute),

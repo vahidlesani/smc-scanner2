@@ -475,12 +475,17 @@ def send_verdict_reply(candidate: SignalCandidate, ok: Optional[bool], note_fa: 
     if not mid:
         mid = md.get("approaching_message_id")
         target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
-    dir_fa = "صعودی 🟢" if candidate.direction == "LONG" else "نزولی 🔴"
     head = {True: "✅ <b>تأیید شد</b>", False: "❌ <b>تأیید نشد</b>", None: "⚪ <b>بدون تأیید</b>"}[ok]
+    # Viva 2026-09-11: verdicts never pile up as extra posts — they replace the
+    # chain's single UPDATE slot in the alerts channel (linked to the detail).
+    try:
+        if send_setup_update(candidate, note_fa=note_fa, state_fa=head):
+            return True
+    except Exception as exc:
+        print(f"verdict slot warning {candidate.signal_id}: {exc}")
     text = (
         f"{head}\n"
         f"🪙 {_e(candidate.symbol)} • {_e(candidate.strategy_fa)}\n"
-        f"🧭 سناریوی {dir_fa}\n"
         f"{_e(note_fa)}\n"
         f"🆔 <code>{_e(_public_code(candidate))}</code>"
     )
@@ -1421,6 +1426,59 @@ def _viva_tlbreak_sections(candidate: SignalCandidate) -> str:
     )
 
 
+_SETUP_METHODOLOGY_FA = {
+    "TLBREAK": (
+        "ستاپ بر شکستِ معتبرِ خطِ ترند/سطح استوار است: خط روی حداقل دو پیوتِ ماژور فیت شده، "
+        "کندلِ شکست باید بدنه و حجم قابل‌اتکا داشته باشد (نه Wick) و پس از شکست، "
+        "Retestِ همان خط با کلوزِ معتبرِ تایم تأیید (یک پله پایین‌تر از تایم الگو) بررسی می‌شود. "
+        "شکستِ خالی بدون جابه‌جایی، فقط «لمس» است؛ امتیاز ستاپ تا کامل‌شدن این زنجیره بالا نمی‌رود."),
+    "ALBROX": (
+        "روش ال‌بروکس: تحلیل کند‌به‌کند در چرخهٔ بازار (شکست → کانال → رنج). شکستِ معتبر با "
+        "کندلِ Breakout و ادامهٔ حرکت، سپس Signal/Entry Bar در نیمهٔ قدرتمند کندل و ورود در "
+        "میانهٔ Breakout Bar یا Reversal Bar انتهای کلاستر. در رنج، شکست‌های پشت‌سرهم بی‌اعتبارند؛ "
+        "این ستاپ صبر برای الگوی دوم را روی همه‌چیز ترجیح می‌دهد."),
+    "TECHCLASSIC": (
+        "الگوهای کلاسیک (پرچم، مثلث، دو قله/کف، سر و شانه، گسترده‌شدن): اعتبار الگو با شکستِ "
+        "خط‌الگو همراه با بدنه و حجم سنجیده می‌شود؛ Retestِ خطِ شکسته‌شده نقطهٔ کم‌ریسک است و "
+        "هدف اول از ارتفاعِ خودِ الگو (Measured Move) می‌آید. شکست از هر دوِ ضلع الگو مجاز است."),
+    "PINVAL": (
+        "پین‌بار به‌خودی‌خود سیگنال نیست؛ Location اولویت است: شدوی بلند باید نقدینگیِ پشتِ "
+        "سطح را جمع کرده باشد (Stop-Hunt/Sweep) و بدنه در جهتِ Rejection ببندد. تایید نهایی با "
+        "شکستِ micro-structure در تایم پایین و کلوزِ فراتر از نوکِ شدو صادر می‌شود."),
+    "PINWALLQ": (
+        "نسخهٔ غربال‌شدهٔ پین‌وال: همان منطق اسمارت‌مانی (سوییپِ نقدینگی + Rejection روی سطح "
+        "عرضه/تقاضا) با فیلترِ پولاریتیِ تایم بالاتر؛ پینِ خلافِ جهتِ سطحِ معتبر، بدون Flipِ "
+        "تأییدشده، رد می‌شود."),
+    "LSR": (
+        " جاروی نقدینگی و بازگشت: شکارِ کف/سقفِ هم‌تراز (Equal Lows/Highs) و Close مجدد داخل "
+        "بازه؛ ناحیهٔ ورود لبهٔ Sweep است و تأیید با ساختارِ تایم پایین."),
+    "SDR": (
+        "ناحیهٔ عرضه/تقاضای تازه با Imbalance ثبت‌شده؛ اولین بازگشت (Fresh) بهترین فرصت است — "
+        "لمسِ دوم به‌بعد احتمال Mitigation بالا می‌رود."),
+    "BOS1": (
+        "Break of Structure و پولبکِ کم‌عمق به بلوکِ شکسته‌شده؛ توقفِ حرکت در نیمهٔ مخالفِ "
+        "کندلِ شکست، ستاپ را بی‌اعتبار می‌کند."),
+    "IFVG": (
+        "Inversionِ FVG: شکستِ معکوسِ یک خلأ با کلوزِ پشت آن، سطح را از تقاضا به عرضه (یا برعکس) "
+        "جابه‌جا می‌کند؛ retestِ سطحِ Flip‌شده محل ورود است."),
+    "TLR": (
+        "ادامهٔ روند با retestِ خط روند؛ شکستِ خط یعنی ابطال، نه سیگنالِ مخالف."),
+    "P1234": (
+        "الگوی ۱-۲-۳-۴ِ وارونگی: نقطهٔ ۴ باید قله/درهٔ پیشین را بشکند؛ تثبیتِ قیمت بالای کفِ ۲ "
+        "و ADXِ رو‌به‌رشد، ستاپ را زنده نگه می‌دارد."),
+}
+
+
+def _setup_methodology_fa(candidate: SignalCandidate) -> str:
+    """Viva 2026-09-11: each setup must explain itself with ITS OWN doctrine —
+    «توضیحات مفصل هر ستاپ باید متناسب و مربوط به همون ستاپ باشه، نه یک مدل».
+    Returns "" for unknown setup codes (the message then simply omits the block)."""
+    txt = _SETUP_METHODOLOGY_FA.get(str(candidate.setup_code or "").upper())
+    if not txt:
+        return ""
+    return f"🧠 <b>روش‌شناسی {candidate.setup_code}</b>\n\n{_e(txt)}"
+
+
 def build_educational_message(candidate: SignalCandidate) -> str:
     direction_fa = "سناریوی احتمالی خرید" if candidate.direction == "LONG" else "سناریوی احتمالی فروش"
     evidence_blocks = []
@@ -1441,6 +1499,7 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         f"⭐ امتیاز فعلی: <b>{candidate.score}/10</b>\n"
         f"🆔 <code>{_e(_public_code(candidate))}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        + ((lambda m: f"{m}\n\n━━━━━━━━━━━━━━━━━━━━\n\n" if m else "")(_setup_methodology_fa(candidate)))
         + "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(evidence_blocks)
         + f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
         f"🔎 <b>ناحیه‌ای که زیر نظر داریم</b>\n\n"
@@ -1584,7 +1643,10 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
     head = str(candidate.strategy_fa)
     setup_line = head.split("|", 1)[-1].strip() if "|" in head else head
     dir_fa = "🧭 سناریوی احتمالی خرید" if candidate.direction == "LONG" else "🧭 سناریوی احتمالی فروش"
+    badge, _ = _setup_badge(candidate)
     rows = [
+        f"🏷 <b>{_e(badge)}</b>",
+        VIVA_SEP,
         "📚 <b>تحلیل آموزشی | ستاپ در حال بررسی</b>",
         "⛔ این پیام تأیید ورود نیست",
         "👀 فقط برای رصد بازار و اهداف آموزشی",
@@ -1665,35 +1727,106 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
                                 send_photo(chart, caption, target))
     mid = send_message(build_educational_message(candidate), target)
     _store_alert_message_id(candidate, "education_message_id", mid)
-    # Viva 2026-09-11 chain (Viva's exact spec, applied to EVERY setup):
-    # alerts channel keeps the permanent DETAILED alert and gets one compact
-    # alert replying to it; PRO carries a compact watch post — the single
-    # slot that every later update/final alert replaces in place, linked to
-    # the detailed message via the 📚 button.
+    # Viva 2026-09-11 (final doctrine, verbatim): the main channel receives
+    # ONLY the final alert (and later the Confirmed which replaces it) — the
+    # education phase must never put a text-only watch post there («عالمه
+    # پیام هشدار بدون چارت اومده به کانال اصلی»). The alerts channel keeps the
+    # permanent detailed alert plus ONE compact reply carrying the same live
+    # chart — every message outside the win-rate channel ships with a chart.
     try:
         detail_mid = int(mid or candidate.metadata.get("education_chart_message_id") or 0)
-        short_mid = send_message(
-            _compact_alert_caption(candidate), target,
-            reply_to_message_id=detail_mid if detail_mid else None)
+        if chart:
+            short_mid = send_photo(chart, _compact_alert_caption(candidate), target,
+                                   reply_to_message_id=detail_mid if detail_mid else None)
+        else:
+            short_mid = send_message(_compact_alert_caption(candidate), target,
+                                     reply_to_message_id=detail_mid if detail_mid else None)
         if short_mid:
             candidate.metadata["alerts_short_message_id"] = int(short_mid)
-        link = _telegram_message_link(target, detail_mid) if detail_mid and target else ""
-        markup = ({"inline_keyboard": [[{"text": "📚 توضیحات کامل هشدار", "url": link}]]}
-                  if link else None)
-        pro_target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
         chain = _setup_chain_get(candidate)
-        if pro_target and not int(chain.get("pro") or 0):
-            pro_mid = send_message(_compact_alert_caption(candidate), pro_target, reply_markup=markup)
-            if pro_mid:
-                chain["pro"] = int(pro_mid)
         if mid:
             chain["edu"] = int(mid)
         if short_mid:
             chain["edu_short"] = int(short_mid)
-        if mid or short_mid or chain.get("pro"):
+        if mid or short_mid:
             _setup_chain_set(candidate, chain)
     except Exception as exc:  # pragma: no cover - chain must never kill education
         print(f"setup chain education warning {candidate.signal_id}: {exc}")
+    return bool(mid)
+
+
+def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
+                          state_fa: str = "🔄 <b>به‌روزرسانی رصد</b>") -> str:
+    """One-line-family live status of a chain. Always edited IN PLACE into the
+    single update slot of the alerts channel — updates replace updates."""
+    code = _public_code(candidate)
+    badge, _ = _setup_badge(candidate)
+    dir_fa = "🧭 سناریوی خرید" if candidate.direction == "LONG" else "🧭 سناریوی فروش"
+    advisory = (str((candidate.metadata or {}).get("gemini_advisory") or "").strip()
+                or str(getattr(candidate, "ai_reason", "") or "").strip()
+                or _ai_watch_hint(candidate))
+    confirm_tf = str((candidate.metadata or {}).get("confirm_tf") or "").upper()
+    rows = [
+        f"🏷 <b>{_e(badge)}</b>",
+        VIVA_SEP,
+        state_fa + " • <b>این پیام همیشه جایگزین آخرین آپدیت می‌شود</b>",
+        "⛔ تأیید ورود نیست",
+        VIVA_SEP,
+        f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}",
+        f"📍 ناحیه: {_price(candidate.entry_zone_bottom)} تا {_price(candidate.entry_zone_top)} • ابطال: {_price(candidate.sl)}",
+        f"⭐ امتیاز فعلی: {int(candidate.score)}/10 • {dir_fa}",
+    ]
+    if note_fa:
+        rows += [VIVA_SEP, _e(note_fa)]
+    rows += [
+        VIVA_SEP,
+        "🧩 <b>تأییدهای کمکی</b>",
+        f"• 🤖 <b>نظر AI:</b> {_e(advisory)}",
+        f"• ⚖️ شرط تأیید: کلوز معتبرِ {confirm_tf or 'تایم تأیید'} در جهت سناریو",
+        VIVA_SEP,
+        f"🆔 <code>{_e(code)}</code>",
+    ]
+    return "\n".join(rows)
+
+
+def send_setup_update(candidate: SignalCandidate, chart_df=None,
+                      note_fa: str = "", state_fa: str = "") -> bool:
+    """The single UPDATE message of a chain (alerts channel, reply-linked to the
+    permanent detailed alert). Every newer update EDITS the same message; a
+    chain never accumulates more than one — Viva's «آپدیت جدید با آپدیت قبلی
+    جایگزین میشه» rule. Carries the live chart like every other message."""
+    target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
+    chain = _setup_chain_get(candidate)
+    detail_mid = int(chain.get("edu") or candidate.metadata.get("education_message_id") or 0)
+    chart = None
+    if chart_df is not None:
+        try:
+            chart = generate_chart(chart_df, candidate, confirmed=False)
+        except Exception:
+            chart = None
+    caption = _setup_update_caption(
+        candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>")
+    slot = int(chain.get("upd") or 0)
+    if slot:
+        if chart:
+            if edit_chart_message(slot, str(target), chart, caption):
+                return True
+        elif edit_text_message(slot, str(target), caption):
+            return True
+    link = _telegram_message_link(target, detail_mid) if detail_mid and target else ""
+    markup = ({"inline_keyboard": [[{"text": "📚 توضیحات کامل هشدار", "url": link}]]}
+              if link else None)
+    if chart:
+        mid = send_photo(chart, caption, target,
+                         reply_to_message_id=detail_mid if detail_mid else None,
+                         reply_markup=markup)
+    else:
+        mid = send_message(caption, target,
+                           reply_to_message_id=detail_mid if detail_mid else None,
+                           reply_markup=markup)
+    if mid:
+        chain["upd"] = int(mid)
+        _setup_chain_set(candidate, chain)
     return bool(mid)
 
 
@@ -1865,12 +1998,30 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
         source_mid = candidate.metadata.get("education_chart_message_id") or candidate.metadata.get("education_message_id")
         link = _telegram_message_link(source_chat, int(source_mid)) if source_mid else ""
         keyboard = {"inline_keyboard": [[{"text": "📚 چارت و توضیحات هشدار اولیه", "url": link}]]} if link else None
-        watch_mid = candidate.metadata.get("approaching_message_id")
-        mid = send_photo(chart, _confirmed_chart_caption(candidate), target,
-                         reply_to_message_id=int(watch_mid) if watch_mid else None,
-                         reply_markup=keyboard)
+        # Viva 2026-09-11 (final spec): the Confirmed message REPLACES the
+        # final-alert slot in the main channel — one message per lifecycle
+        # stage, never two side by side. Falls back to a fresh post when the
+        # slot is gone (no final alert was ever sent) or the edit fails.
+        chain = _setup_chain_get(candidate)
+        slot = int(chain.get("pro") or 0) or int(candidate.metadata.get("approaching_message_id") or 0)
+        done = False
+        if slot:
+            done = edit_chart_message(slot, str(target), chart,
+                                      _confirmed_chart_caption(candidate), reply_markup=keyboard)
+        if done:
+            mid = slot
+        else:
+            watch_mid = candidate.metadata.get("approaching_message_id")
+            mid = send_photo(chart, _confirmed_chart_caption(candidate), target,
+                             reply_to_message_id=int(watch_mid) if (watch_mid and not slot) else None,
+                             reply_markup=keyboard)
+            if mid:
+                slot = int(mid)
         if not mid:
             return False
+        if slot and int(chain.get("pro") or 0) != int(slot):
+            chain["pro"] = int(slot)
+            _setup_chain_set(candidate, chain)
         candidate.metadata["confirmation_chart_message_id"] = int(mid)
         candidate.metadata["confirmation_chart_sent"] = True
     # Deliberately no second verbose message in VivaMon Labs Pro.
@@ -1879,11 +2030,31 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
 
 
 def send_candidate_cancelled(candidate: SignalCandidate, reason: str) -> bool:
-    """A cancelled educational scenario disappears from the alert feed instead
-    of becoming another noisy cancellation post. Confirmed/result channels are untouched."""
-    removed = purge_candidate_alert_posts(candidate)
-    pro_removed = purge_pro_watch_post(candidate)
-    print(f"Alert removed {candidate.signal_id}: {reason} • alert_posts={removed} pro_watch={pro_removed}")
+    """Viva 2026-09-11 (final doctrine): the detailed alert is PERMANENT — a
+    cancelled/expired chain never deletes anything. Its single UPDATE slot in
+    the alerts channel is edited to ⛔ (so the chain visibly closes where it
+    started), and an already-published PRO final-alert slot — if any — is
+    edited in place to say the position was never activated."""
+    closed = False
+    try:
+        closed = send_setup_update(
+            candidate, note_fa=f"❌ {reason}",
+            state_fa="⛔ <b>ستاپ بسته شد | پیش از تأیید ابطال/منقضی گردید</b>")
+    except Exception as exc:
+        print(f"cancel update-slot warning {candidate.signal_id}: {exc}")
+    if candidate.metadata.get("approaching_sent"):
+        slot = int(_setup_chain_get(candidate).get("pro") or 0) or int(
+            candidate.metadata.get("approaching_message_id") or 0)
+        if slot:
+            try:
+                edit_text_message(
+                    slot, str(CHAT_ID_EXECUTION or CHAT_ID_ADMIN),
+                    "⛔ <b>ستاپ بسته شد</b> — پوزیشنی فعال نشد.\n"
+                    f"{_e(reason)}\n🆔 <code>{_e(_public_code(candidate))}</code>")
+                closed = True
+            except Exception as exc:
+                print(f"cancel pro-slot warning {candidate.signal_id}: {exc}")
+    print(f"Alert closed in place {candidate.signal_id}: {reason} • slot={closed}")
     return True
 
 

@@ -180,14 +180,19 @@ def test_family_block_template_everywhere():
         assert needle in cap, needle
 
 
-def test_setup_chain_compact_and_pro_slot(monkeypatch):
-    """Viva 2026-09-11 chain for ALL setups: detailed anchor in alerts (permanent)
-    + compact reply there + ONE compact slot in PRO that the final alert edits in
-    place, linked back to the detailed message."""
+def test_setup_chain_final_doctrine(monkeypatch):
+    """Viva 2026-09-11 FINAL doctrine, verbatim-implemented:
+    • education = detailed (permanent, charted) + ONE compact reply — BOTH in
+      the alerts channel; the main channel receives NOTHING at this stage
+      («عالمه پیام هشدار بدون چارت اومده به کانال اصلی» must be impossible).
+    • updates = ONE self-editing message in the alerts channel, reply-linked to
+      the detailed, AI opinion inside «تأییدهای کمکی».
+    • PRO receives only the final alert (⚡ label) — the Confirmed REPLACES that
+      same message in place and keeps the 📚 link to the detailed alert."""
     os.environ["CANDIDATE_DB_BACKEND"] = "sqlite"
     import tempfile as _tf
+    import pandas as pd
     with _tf.TemporaryDirectory() as tmp:
-        os.environ["CANDIDATE_DB_PATH"] = os.path.join(tmp, "cand.db")
         os.environ["CANDIDATE_DB_PATH"] = os.path.join(tmp, "cand.db")
         import database.bot_kv as KV
         KV._TABLE_READY["done"] = False
@@ -197,7 +202,7 @@ def test_setup_chain_compact_and_pro_slot(monkeypatch):
         cand.metadata["public_code"] = "VIVA-TLBREAK-K000001"
         M.CHAT_ID_EDUCATION = "-1004000000001"
         M.CHAT_ID_EXECUTION = "-100TEST"
-        texts, edits_t = [], []
+        texts, edits_t, edits_c = [], [], []
         counter = {"mid": 900}
 
         def _send_message(text, chat_id=None, reply_to_message_id=None, reply_markup=None):
@@ -205,43 +210,150 @@ def test_setup_chain_compact_and_pro_slot(monkeypatch):
             texts.append((counter["mid"], text, chat_id, reply_to_message_id, reply_markup))
             return counter["mid"]
 
-        def _edit_text(mid, chat_id, text):
-            edits_t.append((mid, text))
-            return True
+        def _send_photo(image, caption, chat_id=None, reply_to_message_id=None, reply_markup=None):
+            counter["mid"] += 1
+            texts.append((counter["mid"], caption, chat_id, reply_to_message_id, reply_markup))
+            return counter["mid"]
 
         monkeypatch.setattr(M, "send_message", _send_message)
-        monkeypatch.setattr(M, "send_photo", lambda *a, **k: counter.update(mid=counter["mid"] + 1) or counter["mid"])
-        monkeypatch.setattr(M, "edit_chart_message", lambda *a, **k: False)
-        monkeypatch.setattr(M, "edit_text_message", _edit_text)
+        monkeypatch.setattr(M, "send_photo", _send_photo)
+        monkeypatch.setattr(M, "edit_text_message", lambda mid, chat_id, text: edits_t.append((mid, text)) or True)
+        monkeypatch.setattr(M, "edit_chart_message",
+                            lambda mid, chat_id, image, caption, reply_markup=None: edits_c.append((mid, caption, reply_markup)) or True)
         monkeypatch.setattr(M, "build_educational_message", lambda c: "DETAILED-MSG")
-        monkeypatch.setattr(M, "generate_chart", lambda *a, **k: None)
+        monkeypatch.setattr(M, "generate_chart", lambda *a, **k: b"IMG")
         monkeypatch.setattr(M, "send_signal_separator", lambda *a, **k: None)
         import database.candidate_store as CS
         monkeypatch.setattr(CS, "update_candidate", lambda *a, **k: None)
 
         assert M.send_educational_setup(cand, None) is True
-        # alerts got DETAILED + compact reply; PRO got the compact slot
-        assert any(t[2] == M.CHAT_ID_EDUCATION and t[1] == "DETAILED-MSG" for t in texts)
+        edu_mid = [t for t in texts if t[1] == "DETAILED-MSG"][0][0]
         compacts = [t for t in texts if "📚 <b>تحلیل آموزشی" in t[1]]
-        assert len(compacts) == 2                                    # alerts reply + PRO slot
-        alerts_short = [t for t in compacts if t[2] == M.CHAT_ID_EDUCATION][0]
-        assert alerts_short[3]                                       # replies to the detail post
-        pro_slot = [t for t in compacts if t[2] == M.CHAT_ID_EXECUTION][0]
-        assert pro_slot[4] and "📚" in str(pro_slot[4])               # linked to the detail
+        assert len(compacts) == 1 and compacts[0][2] == M.CHAT_ID_EDUCATION
+        assert compacts[0][3] == edu_mid                       # compact replies to the detail
+        assert "🏷 <b>VIVA ✦" in compacts[0][1]                  # main-channel labels restored
+        assert not any(t[2] == M.CHAT_ID_EXECUTION for t in texts)   # no PRO watch post at all
         chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
-        assert chain.get("pro") == pro_slot[0]
+        assert chain.get("edu") == edu_mid and not chain.get("pro")
 
-        # final alert → edits the SAME PRO slot, never a new post
-        n_before = len(texts)
-        ok = M.send_approaching(cand, 99.7, 0.31)
-        assert ok is True
-        assert edits_t and edits_t[0][0] == pro_slot[0]
-        assert "⚡ <b>هشدار نهایی" in edits_t[0][1]
-        # no fresh PRO final-alert post — the slot edit above IS the replacement
-        assert not any(t[2] == M.CHAT_ID_EXECUTION and "⚡ <b>هشدار نهایی" in t[1] for t in texts)
+        # one update slot in the alerts channel, linked to the detail, AI inside
+        assert M.send_setup_update(cand, None, note_fa="ناحیه جابه‌جا شد") is True
+        upd = [t for t in texts if "به‌روزرسانی رصد" in t[1]][0]
+        assert upd[2] == M.CHAT_ID_EDUCATION and upd[3] == edu_mid
+        assert "🧩 <b>تأییدهای کمکی</b>" in upd[1] and "🤖" in upd[1]
+        assert "ناحیه جابه‌جا شد" in upd[1]
+        chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
+        assert chain.get("upd") == upd[0]
+        assert M.send_setup_update(cand, None, note_fa="ادامه") is True
+        assert len([t for t in texts if "به‌روزرسانی رصد" in t[1]]) == 1      # no pile-up
+        assert edits_t[-1][0] == upd[0] and "ادامه" in edits_t[-1][1]         # replaced in place
+
+        # final alert → new PRO post (no education slot exists)
+        assert M.send_approaching(cand, 99.7, 0.31) is True
+        final = [t for t in texts if t[2] == M.CHAT_ID_EXECUTION and "⚡ <b>هشدار نهایی" in t[1]][0]
+        chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
+        assert chain.get("pro") == final[0]
+
+        # confirmed REPLACES the final-alert slot in place, linked to the detail
+        frame = pd.DataFrame({"open": [99.0], "high": [100.0], "low": [98.8],
+                              "close": [99.6], "volume": [10.0]},
+                             index=pd.date_range("2026-09-11", periods=1, freq="15min"))
+        cand.metadata.pop("confirmation_chart_sent", None)
+        cand.metadata.pop("confirmation_chart_message_id", None)
+        cand.metadata["target_ladder"] = {"targets": [102.0, 105.0], "weights": [35, 35]}
+        assert M.send_confirmed(cand, frame) is True
+        assert edits_c and edits_c[-1][0] == final[0]
+        assert "✅ <b>سیگنال تأییدشده</b>" in edits_c[-1][1]
+        assert edits_c[-1][2] and "📚" in str(edits_c[-1][2])
+        assert cand.metadata["confirmation_chart_message_id"] == final[0]
     os.environ.pop("CANDIDATE_DB_BACKEND", None)
     os.environ.pop("CANDIDATE_DB_PATH", None)
     KV._TABLE_READY["done"] = False
+
+
+def test_rotating_licences_one_chain_per_setup(monkeypatch):
+    """Viva 2026-09-11 («نقش نوبتی»): while one chain of a (symbol, setup) pair
+    is unresolved, a newer detection must NOT open a second alert — it refreshes
+    the live chain and returns the zone-follow note for the update slot. A moved
+    zone (>0.30 ATR) re-arms Approaching. Different setups stay independent."""
+    os.environ["CANDIDATE_DB_BACKEND"] = "sqlite"
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as tmp:
+        os.environ["CANDIDATE_DB_PATH"] = os.path.join(tmp, "lic.db")
+        from database.candidate_store import (add_candidate, open_chains_for,
+                                              absorb_update_into_chain, chains_last_24h,
+                                              init_candidate_store)
+        init_candidate_store()
+        from test_v7 import make_candidate
+        holder = make_candidate()
+        holder.signal_id = "viva-holder-1"
+        holder.status = "EDUCATIONAL"
+        assert add_candidate(holder) is True
+        fresh = make_candidate()
+        fresh.signal_id = "viva-fresh-2"
+        fresh.entry_zone_bottom, fresh.entry_zone_top = 105.0, 105.6   # moved ~6 ATR
+        fresh.planned_entry, fresh.sl, fresh.tp1, fresh.tp2 = 105.3, 103.0, 115.0, 122.0
+        fresh.score = 8
+        live = [c for c in open_chains_for(fresh.symbol, fresh.setup_code) if c.signal_id != fresh.signal_id]
+        assert len(live) == 1 and live[0].signal_id == "viva-holder-1"   # the gate fires
+        note = absorb_update_into_chain(live[0], fresh)
+        assert "جابه‌جا شد" in note
+        refreshed = open_chains_for(fresh.symbol, fresh.setup_code)[0]
+        assert abs(refreshed.entry_zone_bottom - 105.0) < 1e-9           # holder followed
+        assert refreshed.metadata.get("public_code") == holder.metadata.get("public_code")
+        assert int(refreshed.metadata.get("absorbed_scans") or 0) >= 1
+        assert chains_last_24h(fresh.symbol, fresh.setup_code) >= 1      # licence counter
+        assert chains_last_24h(fresh.symbol, "NOSUCHSETUP") == 0         # per-setup isolation
+    os.environ.pop("CANDIDATE_DB_BACKEND", None)
+    os.environ.pop("CANDIDATE_DB_PATH", None)
+
+
+def test_same_zone_quiet_for_24h():
+    """«دیگه واسه یک ارز در یک ناحیه مشخص هی پیام مفصل و مختصر نیاد هر روز» —
+    a zone this symbol+setup watched within 24h is silent even after the chain
+    resolved; only a genuinely new zone may open the next licence."""
+    os.environ["CANDIDATE_DB_BACKEND"] = "sqlite"
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as tmp:
+        os.environ["CANDIDATE_DB_PATH"] = os.path.join(tmp, "quiet.db")
+        from database.candidate_store import (add_candidate, init_candidate_store,
+                                              recent_lineage_zone, update_candidate)
+        from test_v7 import make_candidate
+        init_candidate_store()
+        first = make_candidate()
+        first.signal_id = "viva-quiet-1"
+        assert add_candidate(first) is True
+        update_candidate(first, "CANCELLED")           # chain ended, still within 24h
+        near = make_candidate()
+        near.signal_id = "viva-quiet-2"
+        near.entry_zone_bottom, near.entry_zone_top = first.entry_zone_bottom + 0.01, first.entry_zone_top + 0.01
+        assert recent_lineage_zone(near.symbol, near.setup_code, float(near.zone_mid), 0.2) is not None
+        far = make_candidate()
+        far.signal_id = "viva-quiet-3"
+        far.entry_zone_bottom, far.entry_zone_top = first.entry_zone_top + 6.0, first.entry_zone_top + 6.6
+        assert recent_lineage_zone(far.symbol, far.setup_code, float(far.zone_mid), 0.2) is None
+    os.environ.pop("CANDIDATE_DB_BACKEND", None)
+    os.environ.pop("CANDIDATE_DB_PATH", None)
+
+
+def test_setup_specific_methodology_text():
+    """«توضیحات مفصل هر ستاپ باید متناسب با همون ستاپ باشه، نه یک مدل» — the
+    detailed alert carries a per-setup methodology block."""
+    import bot.messages_v7 as M
+    from test_v7 import make_candidate
+
+    def msg_for(setup):
+        c = make_candidate()
+        c.setup_code = setup
+        c.strategy_fa = f"x | y"
+        return M.build_educational_message(c)
+
+    tlb, alb, pin, tc = msg_for("TLBREAK"), msg_for("ALBROX"), msg_for("PINVAL"), msg_for("TECHCLASSIC")
+    assert "🧠 <b>روش‌شناسی TLBREAK</b>" in tlb and "Retest" in tlb
+    assert "روش‌شناسی ALBROX" in alb and "بروکس" in alb and "کند‌به‌کند" in alb
+    assert "نقدینگی" in pin and "Stop-Hunt" in pin
+    assert "Measured Move" in tc and "پرچم" in tc
+    assert tlb != alb != pin != tc                                     # never one model
 
 
 def test_fast_break_followthrough_confirms_without_retest():

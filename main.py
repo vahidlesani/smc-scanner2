@@ -34,6 +34,7 @@ from bot.messages_v7 import (
     send_candidate_cancelled,
     send_confirmed,
     send_educational_setup,
+    send_setup_update,
     send_message,
     send_startup_message,
     purge_candidate_alert_posts,
@@ -49,6 +50,10 @@ from data.fetcher import get_klines, get_market_bundle
 from data.universe import UNIVERSE
 from database.candidate_store import (
     add_candidate,
+    absorb_update_into_chain,
+    chains_last_24h,
+    open_chains_for,
+    recent_lineage_zone,
     cleanup_candidates,
     get_active_candidates,
     init_candidate_store,
@@ -163,6 +168,17 @@ def run_discovery_scan() -> Dict[str, int]:
     except Exception:
         pass
     stats = {"symbols": len(symbols), "detected": 0, "new": 0, "errors": 0}
+    # Viva 2026-09-11 («یهو ۱۰۰۰ تا هشدار میاد»): one scan cycle may open only a
+    # bounded number of NEW detailed alerts; everything beyond that defers to
+    # the next scan instead of flooding the channels in a single burst.
+    _edu_budget = {"left": max(1, int(getattr(SETTINGS, "education_max_per_scan", 8) or 8))}
+
+    def _educate(cand, frame):
+        if _edu_budget["left"] <= 0:
+            stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
+            return False
+        _edu_budget["left"] -= 1
+        return send_educational_setup(cand, frame)
     # Observability only (no behaviour change): tally where each raw detector
     # candidate goes, per setup, so "0 confirmed" is diagnosable from logs.
     tally = {}
@@ -205,6 +221,55 @@ def run_discovery_scan() -> Dict[str, int]:
                     stats["errors"] += 1
                     print(f"Public-code reservation failed {candidate.signal_id}: {exc}")
                     continue  # fail closed; never publish an unreserved code
+                # ── Viva 2026-09-11 · rotating licences («نقش نوبتی») ──────────────
+                # Per (symbol, setup): at most `chains_per_symbol_setup_24h`
+                # chains in 24h, and NEVER two unresolved at once — while one
+                # chain of the same symbol+setup is still being watched, a new
+                # detection is absorbed into it (its live chain is refreshed
+                # and the alerts-channel UPDATE slot is edited in place).
+                # Different setups on the same symbol stay independent.
+                if SETTINGS.chain_slot_gate_enabled:
+                    try:
+                        live_chains = [
+                            c for c in open_chains_for(candidate.symbol, candidate.setup_code)
+                            if c.signal_id != candidate.signal_id
+                            and str(c.direction).upper() == str(candidate.direction).upper()
+                        ]
+                    except Exception:
+                        live_chains = []
+                    if live_chains:
+                        holder = live_chains[0]
+                        stats["chain_absorbed"] = stats.get("chain_absorbed", 0) + 1
+                        t = _t(candidate)
+                        t["absorbed"] = t.get("absorbed", 0) + 1
+                        try:
+                            if is_material_update(holder, candidate):
+                                absorb_note = absorb_update_into_chain(holder, candidate)
+                                send_setup_update(holder, _chart_frame(holder, bundle),
+                                                  note_fa=absorb_note or "")
+                        except Exception as exc:
+                            print(f"chain absorb warning {candidate.symbol}/{candidate.setup_code}: {exc}")
+                        continue
+                    try:
+                        used = chains_last_24h(candidate.symbol, candidate.setup_code)
+                    except Exception:
+                        used = 0
+                    if used >= max(1, int(getattr(SETTINGS, "chains_per_symbol_setup_24h", 3) or 3)):
+                        stats["chain_license_cap"] = stats.get("chain_license_cap", 0) + 1
+                        continue
+                    # a zone this pair already watched in 24h never re-alerts,
+                    # however the previous chain ended — only NEW zones open
+                    # the next licence.
+                    _atr = max(float((candidate.metadata or {}).get("atr", 0) or 0), 1e-9)
+                    try:
+                        _quiet = recent_lineage_zone(
+                            candidate.symbol, candidate.setup_code,
+                            float(candidate.zone_mid), max(_atr * 0.20, abs(float(candidate.zone_mid)) * 1e-4))
+                    except Exception:
+                        _quiet = None
+                    if _quiet is not None and str(_quiet.signal_id) != str(candidate.signal_id):
+                        stats["same_zone_quiet"] = stats.get("same_zone_quiet", 0) + 1
+                        continue
                 if SETTINGS.skip_dead_gate_candidates and not candidate.execution_ready:
                     # A failing mandatory gate can never be repaired later, so
                     # this candidate can never confirm. Keep it educational,
@@ -218,7 +283,7 @@ def run_discovery_scan() -> Dict[str, int]:
                     for g in blocked:
                         t["blocked"][g] = t["blocked"].get(g, 0) + 1
                     if not _dead_gate_recently_alerted(candidate):
-                        send_educational_setup(candidate, _chart_frame(candidate, bundle))
+                        _educate(candidate, _chart_frame(candidate, bundle))
                     continue
                 # Paper research permits several independent positions on a
                 # symbol/trigger. Capacity is counted in confirmed positions;
@@ -227,7 +292,7 @@ def run_discovery_scan() -> Dict[str, int]:
                     stats["suppressed_pre_tp1"] = stats.get("suppressed_pre_tp1", 0) + 1
                     _t(candidate)["suppressed_pre_tp1"] += 1
                     if not _suppressed_edu_throttled(candidate):
-                        send_educational_setup(candidate, _chart_frame(candidate, bundle))
+                        _educate(candidate, _chart_frame(candidate, bundle))
                     continue
                 previous = find_similar(candidate)
                 # A generated candidate is a separate possible position.  Never
@@ -249,6 +314,9 @@ def run_discovery_scan() -> Dict[str, int]:
                     purge_pro_watch_post(prior)
                 # Live alerts replace themselves on meaningful new information;
                 # symbol locks would hide those updates, so discovery has no lock.
+                if _edu_budget["left"] <= 0:
+                    stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
+                    continue  # not persisted; next scan retries when budget frees
                 if not add_candidate(candidate):
                     _t(candidate)["dup"] += 1
                     continue
@@ -259,9 +327,14 @@ def run_discovery_scan() -> Dict[str, int]:
                     request_advisory_async(candidate)
                 except Exception as exc:
                     print(f"Gemini advisory enqueue warning {candidate.signal_id}: {exc}")
+                # the detailed alert must exist BEFORE the row counts as a new
+                # chain — when the cycle budget is exhausted the candidate is
+                # left unpersisted so the very next scan retries it (nothing
+                # lost, only smoothed).
+                if not _educate(candidate, _chart_frame(candidate, bundle)):
+                    continue
                 stats["new"] += 1
                 _t(candidate)["ready_new"] += 1
-                send_educational_setup(candidate, _chart_frame(candidate, bundle))
             if index % 10 == 0:
                 print(f"  scanned {index}/{len(symbols)} • new educational setups: {stats['new']}")
         except Exception as exc:
@@ -271,7 +344,9 @@ def run_discovery_scan() -> Dict[str, int]:
     duration = time.monotonic() - started
     print(
         f"Discovery scan finished in {duration:.1f}s • "
-        f"detected={stats['detected']} new={stats['new']} errors={stats['errors']}"
+        f"detected={stats['detected']} new={stats['new']} errors={stats['errors']} • "
+        f"absorbed={stats.get('chain_absorbed', 0)} quiet={stats.get('same_zone_quiet', 0)} "
+        f"liccap={stats.get('chain_license_cap', 0)} deferred={stats.get('edu_cycle_deferred', 0)}"
     )
     # Per-setup funnel (observability only): seen -> execution-ready/blocked.
     for sc in sorted(tally):

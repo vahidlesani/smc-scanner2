@@ -253,6 +253,88 @@ def supersede_similar(candidate: SignalCandidate) -> Optional[SignalCandidate]:
     return previous
 
 
+def absorb_update_into_chain(holder: SignalCandidate, fresh: SignalCandidate) -> str:
+    """Viva 2026-09-11 (نقش نوبتی): while a symbol+setup license is still open,
+    a newer detection refreshes THE SAME chain instead of opening a second one.
+
+    The holder keeps its identity (signal id, public code, Telegram message
+    slots); everything market-side is re-anchored to the fresh scan. A zone
+    move bigger than 0.30 ATR re-arms Approaching and returns a Persian note
+    for the update slot («بگو الان در ناحیه جدید، فلان شود تأیید می‌شود»).
+    """
+    atr = max(float((fresh.metadata or {}).get("atr", 0) or 0), 1e-9)
+    old_mid = float(getattr(holder, "zone_mid", 0) or 0)
+    new_mid = float(getattr(fresh, "zone_mid", 0) or 0)
+    moved_atr = abs(new_mid - old_mid) / atr if old_mid else 0.0
+    note = ""
+    if moved_atr > 0.30:
+        note = (f"ناحیه با اسکنِ تازه جابه‌جا شد: میانهٔ قبلی {old_mid:g} → جدید {new_mid:g} "
+                f"(≈{moved_atr:.2f} ATR)؛ شرط تأیید از این پس روی ناحیهٔ جدید بررسی می‌شود.")
+        if holder.approaching_sent:
+            holder.approaching_sent = False
+            holder.status = "EDUCATIONAL"
+    holder.entry_zone_bottom = fresh.entry_zone_bottom
+    holder.entry_zone_top = fresh.entry_zone_top
+    holder.planned_entry = fresh.planned_entry
+    holder.sl = fresh.sl
+    holder.tp1 = fresh.tp1
+    holder.tp2 = fresh.tp2
+    holder.score = fresh.score
+    holder.evidence = fresh.evidence
+    holder.confirmations = fresh.confirmations
+    holder.warnings = fresh.warnings
+    if getattr(fresh, "mandatory_gates", None):
+        holder.mandatory_gates = dict(fresh.mandatory_gates)
+    holder.expires_at = max(str(holder.expires_at or ""), str(fresh.expires_at or "")) or fresh.expires_at
+    keep = {
+        "public_code", "created_at", "confirm_tf",
+        "education_message_id", "education_chart_message_id", "alerts_short_message_id",
+        "education_separator_attempted", "approaching_message_id", "pro_separator_message_id",
+        "chain_opened_at",
+    }
+    for key, value in (fresh.metadata or {}).items():
+        if key in keep or str(key).startswith("education_"):
+            continue
+        holder.metadata[key] = value
+    if moved_atr > 0.30:
+        holder.metadata["last_absorb_note"] = note
+    holder.metadata["absorbed_scans"] = int(holder.metadata.get("absorbed_scans") or 0) + 1
+    update_candidate(holder)
+    return note
+
+
+def recent_lineage_zone(symbol: str, setup_code: str, zone_mid: float, tol: float,
+                        hours: int = 24) -> Optional[SignalCandidate]:
+    """Viva 2026-09-11: «واسه یک ارز در یک ناحیه مشخص هی پیام مفصل و مختصر
+    نیاد هر روز مگر ناحیه یا ستاپ متفاوت باشه» — if a chain for this
+    (symbol, setup) already watched a zone within `tol` in the last 24h,
+    the pair is silent for that zone regardless of how that chain ended."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    since = (_dt.now(_tz.utc) - _td(hours=hours)).isoformat()
+    try:
+        zone_mid = float(zone_mid)
+    except Exception:
+        return None
+    with _connection() as conn:
+        rows = conn.execute(
+            """SELECT payload FROM signal_candidates
+               WHERE symbol=? AND setup_code=? AND created_at>=?
+               ORDER BY created_at DESC""",
+            (symbol.upper(), setup_code.upper(), since),
+        ).fetchall()
+    for row in rows:
+        try:
+            cand = SignalCandidate.from_json(row["payload"])
+        except Exception:
+            continue
+        try:
+            if abs(float(cand.zone_mid) - zone_mid) <= tol:
+                return cand
+        except Exception:
+            continue
+    return None
+
+
 def add_candidate(candidate: SignalCandidate) -> bool:
     if find_similar(candidate):
         return False
@@ -327,6 +409,42 @@ def get_active_candidates() -> List[SignalCandidate]:
             (now,),
         ).fetchall()
     return [SignalCandidate.from_json(row["payload"]) for row in rows]
+
+
+def open_chains_for(symbol: str, setup_code: str) -> List[SignalCandidate]:
+    """Live, unresolved alert-chains for one symbol+setup (Viva's slot gate).
+
+    A chain counts as unresolved while its candidate row still lives in
+    EDUCATIONAL/APPROACHING — exactly the state that holds one of the three
+    rotating licenses; confirmed/cancelled/expired rows release the slot.
+    """
+    now = iso_now()
+    with _connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT payload FROM signal_candidates
+            WHERE symbol=? AND setup_code=?
+              AND status IN ('EDUCATIONAL', 'APPROACHING') AND expires_at>?
+            ORDER BY created_at DESC
+            """,
+            (symbol.upper(), setup_code.upper(), now),
+        ).fetchall()
+    return [SignalCandidate.from_json(row["payload"]) for row in rows]
+
+
+def chains_last_24h(symbol: str, setup_code: str) -> int:
+    """How many alert-chains this symbol+setup started in the last 24 hours."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    since = (_dt.now(_tz.utc) - _td(hours=24)).isoformat()
+    with _connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM signal_candidates WHERE symbol=? AND setup_code=? AND created_at>=?",
+            (symbol.upper(), setup_code.upper(), since),
+        ).fetchone()
+    try:
+        return int(row["n"])
+    except Exception:
+        return int(row[0])
 
 
 def set_status(signal_id: str, status: str) -> None:
