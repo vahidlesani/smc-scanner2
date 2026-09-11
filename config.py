@@ -72,8 +72,11 @@ class Settings:
     pinv_max_body_frac: float = 0.35     # body / range
     pinv_min_range_atr: float = 0.6      # candle range / ATR floor
     pinv_symbols: str = ""               # empty = all symbols
-    pinv_allowed_directions: str = "LONG" # temporary live refinement filter
-    pinv_allowed_zone_kinds: str = "FVG"  # temporary live refinement filter
+    # Viva 2026-09-11: «چرا پینوال کلاً هشدار نمیده» — the LONG-only + FVG-only
+    # temporary refinement filters from an old calibration are REMOVED; every
+    # direction and every validated zone kind alerts again (env can re-tighten).
+    pinv_allowed_directions: str = ""
+    pinv_allowed_zone_kinds: str = ""
     # ── Zone Polarity Gate (Viva 2026-09 refinement) ──
     # A pin is only tradable in the direction that agrees with the nearest
     # higher-TF supply/demand polarity: LONG at demand (or after a valid

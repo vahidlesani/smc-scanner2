@@ -990,24 +990,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             )
             notes.append((f"MSS / BOS  {_price(float(structure_level))}", CHART_THEME["structure"]))
 
-        # The expected direction as one clean schematic path from the entry
-        # zone towards TP1, fully inside the candle-free right margin
-        # (Viva's sketch style: zig-zag polyline with an arrowhead).
-        if not confirmed:
+        # Viva 2026-09-11: the slanted green/red scenario ARROWS were removed
+        # («نه جهت رو نشون میده نه شکلش درسته») — the probable direction is now
+        # a clean horizontal TP1 level with a tag, never a fake-angle sketch.
+        if not confirmed and float(candidate.tp1 or 0) > 0:
             try:
-                _path_kwargs = dict(
-                    ax=ax,
-                    start=(count + 1.0, candidate.planned_entry),
-                    end=(count + future - 2.5, candidate.tp1),
-                    color=CHART_THEME["tp1"] if candidate.direction == "LONG" else CHART_THEME["invalidation"],
-                    alpha=0.7,
-                )
-                if _CHART_SCENARIO_ZIGZAG:
-                    _scenario_path(**_path_kwargs)
-                else:
-                    _scenario_arrow(**_path_kwargs)
-                notes.append((f"EXPECTED MOVE → TP1  {_price(candidate.tp1)}",
-                              CHART_THEME["tp1"]))
+                _tp_col = CHART_THEME["tp1"] if candidate.direction == "LONG" else CHART_THEME["invalidation"]
+                ax.hlines(float(candidate.tp1), max(0, count - 24), count + future - 0.5,
+                          color=_tp_col, linewidth=0.95, linestyles=(0, (7, 4)), alpha=0.8, zorder=6)
+                _level_tag(ax, count + future - 0.9, float(candidate.tp1),
+                           f"TP1  {_price(candidate.tp1)}", _tp_col)
+                notes.append((f"EXPECTED MOVE → TP1  {_price(candidate.tp1)}", _tp_col))
             except Exception:
                 pass
 
@@ -1084,36 +1077,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _level_tag(ax, tool_end + 0.35, trailing_sl,
                            f"TRAILING SL • TP{hit_index}  {_price(trailing_sl)}", CHART_THEME["liquidity"])
 
-            scenario_x = [count + 0.6, count + 5.2, count + 9.8]
-            if _CHART_SCENARIO_ZIGZAG:
-                _scenario_path(ax, (scenario_x[0], candidate.planned_entry),
-                               (scenario_x[1], candidate.tp1), CHART_THEME["text"])
-                _scenario_path(ax, (scenario_x[1], candidate.tp1),
-                               (scenario_x[2], candidate.tp2), CHART_THEME["tp2"])
-            else:
-                _scenario_arrow(ax, (scenario_x[0], candidate.planned_entry),
-                                (scenario_x[1], candidate.tp1), CHART_THEME["text"])
-                _scenario_arrow(ax, (scenario_x[1], candidate.tp1),
-                                (scenario_x[2], candidate.tp2), CHART_THEME["tp2"])
-            _scenario_arrow(
-                ax,
-                (scenario_x[0], candidate.planned_entry),
-                (count + 4.0, candidate.sl),
-                CHART_THEME["invalidation"],
-                alpha=0.58,
-            )
-            scenario_label_y = candidate.planned_entry + 0.45 * (
-                candidate.tp1 - candidate.planned_entry
-            )
-            ax.text(
-                count + 0.7,
-                scenario_label_y,
-                "PROJECTED SCENARIO",
-                color=CHART_THEME["muted"],
-                fontsize=6.8,
-                va="bottom" if candidate.direction == "LONG" else "top",
-                alpha=0.90,
-            )
+            # (Viva 2026-09-11) slanted PROJECTED-SCENARIO arrows removed from
+            # confirmed charts too — the tagged TP ladder lines above are the
+            # direction, drawn at true price levels, not guessed angles.
 
             info = (
                 f"{candidate.direction}  •  {candidate.style}\n"
@@ -1240,17 +1206,27 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     if len(xs) < 2:
                         continue
                     slope, intercept = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
-                    # Viva 2026-09-11: a fitted edge NEVER stops mid-chart — it is
-                    # drawn solid across its touches and then PROJECTED (dashed) to
-                    # a few bars past the live candle so a break is visible on the
-                    # frame itself, without leaving the canvas.
-                    x0 = min(xs)
+                    # Viva 2026-09-11 (v2, the «هرچی میگم انجام نمیشه» fix): the
+                    # edge spans the WHOLE frame — from the first bar where it
+                    # is inside the visible price range (major-pivot start),
+                    # solid through LIVE, dashed past it to the canvas edge.
                     x_edge = count + future - .5
-                    x1 = min(max(xs) + 0.15 * max(1.0, max(xs) - min(xs)), x_edge)
-                    ax.plot([x0, x1], [slope*x0+intercept, slope*x1+intercept], color=color, linewidth=2.3, alpha=.95, zorder=7, solid_capstyle="round")
-                    if x1 < x_edge - 0.6:
-                        ax.plot([x1, x_edge], [slope*x1+intercept, slope*x_edge+intercept],
-                                color=color, linewidth=1.45, alpha=.70, zorder=6,
+                    _pmin = float(frame["low"].min())
+                    _pmax = float(frame["high"].max())
+                    x0 = min(xs)
+                    if abs(slope) > 1e-12:
+                        _xa = (_pmax - intercept) / slope
+                        _xb = (_pmin - intercept) / slope
+                        x_left = max(0.0, min(_xa, _xb))
+                        x0 = min(x0, x_left)
+                    else:
+                        x0 = 0.0
+                    x1 = min(max(xs) + 0.15 * max(1.0, max(xs) - min(xs)), x_edge, count)
+                    ax.plot([x0, max(x1, min(x_edge, count))], [slope*x0+intercept, slope*max(x1, min(x_edge, count))+intercept],
+                            color=color, linewidth=2.3, alpha=.95, zorder=7, solid_capstyle="round")
+                    if count < x_edge - 0.6:
+                        ax.plot([count, x_edge], [slope*count+intercept, slope*x_edge+intercept],
+                                color=color, linewidth=1.5, alpha=.72, zorder=6,
                                 linestyles=(0, (6, 4)), solid_capstyle="butt")
                     ax.scatter(xs, ys, s=42, color=CHART_THEME["panel"], edgecolors=color, linewidths=1.7, zorder=9)
                     notes.append((f"{label} · {len(xs)} PIVOTS", color))
@@ -1283,18 +1259,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                         fontsize=7.5, fontweight="bold", ha="right", va="center", zorder=9,
                                         bbox=dict(boxstyle="round,pad=0.28", facecolor=col, edgecolor="none"))
                         else:
-                            bx0 = count - 1.5
+                            # Viva 2026-09-11: the giant projection RECTANGLE is
+                            # deleted everywhere — even a non-clean candidate now
+                            # renders the tagged-level style instead of a box.
                             bx1 = count + future - 0.5
-                            blo, bhi = sorted((p_from, p_to))
-                            ax.fill_between([bx0, bx1], blo, bhi, color=col, alpha=0.13, zorder=3)
-                            ax.plot([bx0, bx1, bx1, bx0, bx0], [blo, blo, bhi, bhi, blo],
-                                    color=col, linewidth=1.25, alpha=0.9, zorder=5)
-                            xa = bx1 - (bx1 - bx0) * 0.30
-                            ax.annotate("", xy=(xa, p_to), xytext=(xa, p_from), zorder=8,
-                                        arrowprops=dict(arrowstyle="-|>", color=col,
-                                                        linewidth=1.7, mutation_scale=14))
-                            ax.text(xa + (bx1 - bx0) * 0.10, p_to, _price(p_to), color=col,
-                                    fontsize=8.5, fontweight="bold", va="center", zorder=8)
+                            ax.hlines(p_to, count - 1, bx1, color=col, linewidth=1.0,
+                                      linestyles=(0, (4, 3)), zorder=6)
+                            ax.text(bx1, p_to, f"TARGET  {_price(p_to)}", color="white",
+                                    fontsize=7.5, fontweight="bold", ha="right", va="center", zorder=9,
+                                    bbox=dict(boxstyle="round,pad=0.28", facecolor=col, edgecolor="none"))
                         notes.append((f"MEASURED TARGET  {_price(p_to)}", col))
                     except Exception:
                         pass

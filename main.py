@@ -785,6 +785,17 @@ def main() -> None:
 
     init_candidate_store()
     init_v7_schema()
+    # Viva 2026-09-11: deploy heartbeat — the DB becomes proof-of-life, so we
+    # never have to guess whether the NEW build is actually running.
+    try:
+        from database.bot_kv import set_json as _boot_set
+        _boot_set("boot_version", {
+            "sha": os.getenv("COMMIT_SHA", "local")[:12],
+            "build": "2026.09.11-5",
+            "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+    except Exception as _boot_exc:
+        print(f"boot_version heartbeat skipped: {_boot_exc}")
     try:
         repaired = repair_legacy_tp1_misclassified_results()
         print(f"🔎 Legacy protected-exit audit: repaired={repaired}")
