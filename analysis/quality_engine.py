@@ -143,7 +143,42 @@ def evaluate_confirmation(
     if after is None or after.empty:
         return reject("NO_NEW_BAR", "هنوز کندلی بعد از ایجاد ستاپ بسته نشده است.")
 
-    touched = bool(candidate.metadata.get("touched", False))
+    # ── FAST BREAK FOLLOW-THROUGH (Viva 2026-09-11) ──────────────────────
+    # TLBREAK doctrine: the FIRST BREAK is a valid entry — «بگرد ببین چی جلوی
+    # کانفرمد رو گرفته که موقعیت‌ها رو می‌سوزونه». When price broke the fitted
+    # line and prints two consecutive closes beyond it (no close back inside
+    # for the last 4) with a real displacement body, that IS the confirmation:
+    # no retest may be demanded, and NO_TOUCH must not veto it. Scoring stays
+    # additive: the lane never loosens invalidation/chase/RR guards.
+    fast_lane = ""
+    if (candidate.metadata.get("strategy_variant") == "VIVA_TLBREAK"
+            and not candidate.metadata.get("touched", False)):
+        _line = candidate.metadata.get("viva_breakout_line") or candidate.metadata.get("viva_break_line")
+        try:
+            _line = float(_line) if _line else 0.0
+        except Exception:
+            _line = 0.0
+        if _line > 0:
+            _atr = float(candidate.metadata.get("atr", 0) or 0) or float(
+                (closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
+            if _atr > 0 and len(after) >= 2:
+                _is_long = candidate.direction == "LONG"
+                _buf = 0.10 * _atr
+                _tail2 = after.tail(2)
+                _out = [bool(float(r["close"]) >= _line + _buf) if _is_long
+                        else bool(float(r["close"]) <= _line - _buf)
+                        for _, r in _tail2.iterrows()]
+                _bodies = [abs(float(r["close"]) - float(r["open"])) / _atr
+                           for _, r in _tail2.iterrows()]
+                _recent = after.tail(4)
+                _back = (bool((_recent["close"] <= _line - _buf).any()) if _is_long
+                         else bool((_recent["close"] >= _line + _buf).any()))
+                if all(_out) and max(_bodies) >= 0.35 and not _back:
+                    fast_lane = (f"دو کلوز متوالیِ معتبر پشت خطِ شکسته (≥{_buf/_atr:.2f} ATR) "
+                                 f"بدون بازگشتِ کلوز به داخل؛ Body حداکثر {max(_bodies):.2f} ATR")
+                    candidate.metadata["tl_fast_break"] = fast_lane
+
+    touched = bool(candidate.metadata.get("touched", False)) or bool(fast_lane)
     if not touched:
         touched = bool(
             (
@@ -151,7 +186,7 @@ def evaluate_confirmation(
                 & (after["high"] >= candidate.entry_zone_bottom)
             ).any()
         )
-        candidate.metadata["touched"] = touched
+    candidate.metadata["touched"] = touched
     if not touched:
         return reject("NO_TOUCH", "قیمت هنوز اولین Retest ناحیه ورود را انجام نداده است.")
 
@@ -209,6 +244,12 @@ def evaluate_confirmation(
             candidate.metadata["viva_state"] = state
             candidate.metadata["viva_state_machine"] = machine.payload()
             candidate.metadata["viva_fast_alt"] = alt.kind
+        if not ready and fast_lane:
+            machine = advance_viva_state(machine, "FAST_CONFIRM",
+                                         max_retest_bars=int(candidate.metadata.get("viva_retest_window_bars", 16)))
+            candidate.metadata["viva_state_machine"] = machine.payload()
+            candidate.metadata["viva_state"] = "S6_CONFIRMED"
+            ready, state = True, "S6_CONFIRMED"
         if not ready:
             return reject("VIVA_TLBREAK_WAIT_" + state, "VIVA-TLBREAK در انتظار Retest → Rejection → BOS پنج‌دقیقه‌ای است.")
     close, open_price = float(row["close"]), float(row["open"])
@@ -242,6 +283,9 @@ def evaluate_confirmation(
         and displacement["body_atr"] >= SETTINGS.confirm_body_min_atr
     )
     alt_only = False
+    if not trigger_valid and candidate.metadata.get("tl_fast_break"):
+        trigger_valid = True
+        candidate.metadata["trigger_note"] = "شکستِ معتبر + دو کلوز پشت خط (بدون پولبک)"
     if not trigger_valid and alt is not None:
         trigger_valid = True
         alt_only = True

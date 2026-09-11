@@ -122,6 +122,28 @@ def _dead_gate_recently_alerted(candidate: SignalCandidate) -> bool:
     return False
 
 
+_SUPPRESSED_EDU_ALERTED: Dict[str, float] = {}
+
+
+def _suppressed_edu_throttled(candidate) -> bool:
+    """Viva 2026-09-11: a pre-TP1 capacity block must never swallow the FIRST
+    detailed alert — the compact anchor still goes to the alerts channel,
+    throttled per setup identity so 5-min rescans cannot spam it."""
+    key = (f"{candidate.symbol}:{candidate.style}:{candidate.setup_code}:{candidate.direction}:"
+           f"{round(float(candidate.entry_zone_bottom), 6)}")
+    expiry_hours = (
+        SETTINGS.candidate_expiry_hours_swing
+        if candidate.style == "SWING"
+        else SETTINGS.candidate_expiry_hours_scalp
+    )
+    now = time.monotonic()
+    last = _SUPPRESSED_EDU_ALERTED.get(key)
+    if last is not None and (now - last) < expiry_hours * 3600:
+        return True
+    _SUPPRESSED_EDU_ALERTED[key] = now
+    return False
+
+
 def run_discovery_scan() -> Dict[str, int]:
     """Find educational setups; never writes unconfirmed rows to Supabase."""
     started = time.monotonic()
@@ -204,6 +226,8 @@ def run_discovery_scan() -> Dict[str, int]:
                 if has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe):
                     stats["suppressed_pre_tp1"] = stats.get("suppressed_pre_tp1", 0) + 1
                     _t(candidate)["suppressed_pre_tp1"] += 1
+                    if not _suppressed_edu_throttled(candidate):
+                        send_educational_setup(candidate, _chart_frame(candidate, bundle))
                     continue
                 previous = find_similar(candidate)
                 # A generated candidate is a separate possible position.  Never

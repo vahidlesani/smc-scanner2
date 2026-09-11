@@ -960,8 +960,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         )
         notes.append((f"FIRST STOP  {_price(candidate.sl)}", CHART_THEME["invalidation"]))
         live_price = float(frame["close"].iloc[-1])
-        ax.hlines(live_price, max(0, count - 24), count + future - 0.5,
-                  color=CHART_THEME["muted"], linewidth=0.9, linestyles=(0, (1, 3)), alpha=0.75, zorder=6)
+        # Viva 2026-09-11: the live-price DASHED line was removed — only the
+        # LIVE price pill remains (the line duplicated the pill and cluttered
+        # the future margin around it).
         _level_tag(ax, count + 1.0, live_price, f"LIVE  {_price(live_price)}", CHART_THEME["muted"])
 
         sweep_level = candidate.metadata.get("sweep_level")
@@ -1146,13 +1147,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             ph, pl = _piv(frame.reset_index(), 2, 2)
             if ph:
                 hi = max(p["price"] for p in ph[-6:])
-                ax.hlines(float(hi), max(0, count - 50), count + future - 0.5,
+                ax.hlines(float(hi), max(0, count - 50), count - 0.5,
                           color=CHART_THEME["invalidation"], linestyle=(0, (1, 3)),
                           linewidth=0.8, alpha=0.5, zorder=4)
                 notes.append((f"SWING HIGH  {_price(float(hi))}", CHART_THEME["invalidation"]))
             if pl:
                 lo = min(p["price"] for p in pl[-6:])
-                ax.hlines(float(lo), max(0, count - 50), count + future - 0.5,
+                ax.hlines(float(lo), max(0, count - 50), count - 0.5,
                           color=CHART_THEME["demand"], linestyle=(0, (1, 3)),
                           linewidth=0.8, alpha=0.5, zorder=4)
                 notes.append((f"SWING LOW  {_price(float(lo))}", CHART_THEME["demand"]))
@@ -1193,10 +1194,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         rhi = min(his, key=lambda v: abs(v - last_close))
                         rlo = min(los, key=lambda v: abs(v - last_close))
                         if rlo < rhi and (rhi - rlo) >= 2.2 * _atr_now:
-                            ax.hlines(rhi, 0, count + future - 0.5,
+                            ax.hlines(rhi, 0, count - 0.5,
                                       color=CHART_THEME["invalidation"],
                                       linestyle=(0, (8, 5)), linewidth=1.0, alpha=0.55, zorder=3)
-                            ax.hlines(rlo, 0, count + future - 0.5,
+                            ax.hlines(rlo, 0, count - 0.5,
                                       color=CHART_THEME["demand"],
                                       linestyle=(0, (8, 5)), linewidth=1.0, alpha=0.55, zorder=3)
                             notes.append((f"RANGE HIGH  {_price(rhi)}", CHART_THEME["invalidation"]))
@@ -1586,6 +1587,64 @@ def _store_alert_message_id(candidate: SignalCandidate, key: str, mid: Optional[
         print(f"Alert message id persist warning {candidate.signal_id}: {exc}")
 
 
+_BIAS_FA = {"BULLISH": "صعودی 🟢", "BEARISH": "نزولی 🔴", "NEUTRAL": "خنثی ⚪"}
+
+
+def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[list] = None,
+                           score: Optional[int] = None) -> str:
+    """Viva 2026-09-11: the ONE-LINE-FAMILY compact alert (نمونه AAVE) — the
+    full paragraphs live ONLY in the permanent detailed alert of the alerts
+    channel; PRO and the alerts short post use this layout."""
+    code = _public_code(candidate)
+    head = str(candidate.strategy_fa)
+    setup_line = head.split("|", 1)[-1].strip() if "|" in head else head
+    dir_fa = "🧭 سناریوی احتمالی خرید" if candidate.direction == "LONG" else "🧭 سناریوی احتمالی فروش"
+    rows = [
+        "📚 <b>تحلیل آموزشی | ستاپ در حال بررسی</b>",
+        "⛔ این پیام تأیید ورود نیست",
+        "👀 فقط برای رصد بازار و اهداف آموزشی",
+        VIVA_SEP,
+        f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}",
+        f"🌐 {_e(str(candidate.market or 'OURBIT').upper())} • کریپتو",
+        dir_fa,
+        f"🎯 ستاپ: <b>VIVA-{_e(candidate.setup_code)}</b> | {_e(setup_line)}",
+        f"⭐ امتیاز فعلی: {int(candidate.score if score is None else score)}/10",
+        f"🆔 <code>{_e(code)}</code>",
+        VIVA_SEP,
+        "🔎 <b>ناحیه‌ای که زیر نظر داریم</b>",
+        f"از {_price(candidate.entry_zone_bottom)} تا {_price(candidate.entry_zone_top)}",
+        f"سطح ابطال سناریو: {_price(candidate.sl)}",
+    ]
+    for line in (extra_lines or []):
+        rows.append(line)
+    rows += [
+        f"⚖️ <b>شرط تأیید:</b> بازگشت به ناحیه + کلوز معتبر  در جهت سناریو • "
+        f"ابطال: عبور معتبر از {_price(candidate.sl)}",
+        "🧭 <b>کانتکست تایم بالاتر</b>",
+        f"• بایاس ساختاری: {_BIAS_FA.get(str(candidate.bias).upper(), _e(str(candidate.bias)))}",
+        "⛔ Entry، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود.",
+        "✅ در صورت تکمیل شرایط، ابتدا Approaching و سپس Confirmed ارسال می‌شود.",
+        "📢 VivaMon Labs Pro",
+    ]
+    return "\n".join(rows)
+
+
+def _setup_chain_get(candidate: SignalCandidate) -> dict:
+    try:
+        from database.bot_kv import get_json
+        return dict(get_json(f"setup_chain|{_public_code(candidate)}", {}) or {})
+    except Exception:
+        return {}
+
+
+def _setup_chain_set(candidate: SignalCandidate, value: dict) -> None:
+    try:
+        from database.bot_kv import set_json
+        set_json(f"setup_chain|{_public_code(candidate)}", dict(value))
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"setup chain persist warning {candidate.signal_id}: {exc}")
+
+
 def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame]) -> bool:
     target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
     if not candidate.metadata.get("education_separator_attempted"):
@@ -1621,6 +1680,35 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
                                 send_photo(chart, caption, target))
     mid = send_message(build_educational_message(candidate), target)
     _store_alert_message_id(candidate, "education_message_id", mid)
+    # Viva 2026-09-11 chain (Viva's exact spec, applied to EVERY setup):
+    # alerts channel keeps the permanent DETAILED alert and gets one compact
+    # alert replying to it; PRO carries a compact watch post — the single
+    # slot that every later update/final alert replaces in place, linked to
+    # the detailed message via the 📚 button.
+    try:
+        detail_mid = int(mid or candidate.metadata.get("education_chart_message_id") or 0)
+        short_mid = send_message(
+            _compact_alert_caption(candidate), target,
+            reply_to_message_id=detail_mid if detail_mid else None)
+        if short_mid:
+            candidate.metadata["alerts_short_message_id"] = int(short_mid)
+        link = _telegram_message_link(target, detail_mid) if detail_mid and target else ""
+        markup = ({"inline_keyboard": [[{"text": "📚 توضیحات کامل هشدار", "url": link}]]}
+                  if link else None)
+        pro_target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+        chain = _setup_chain_get(candidate)
+        if pro_target and not int(chain.get("pro") or 0):
+            pro_mid = send_message(_compact_alert_caption(candidate), pro_target, reply_markup=markup)
+            if pro_mid:
+                chain["pro"] = int(pro_mid)
+        if mid:
+            chain["edu"] = int(mid)
+        if short_mid:
+            chain["edu_short"] = int(short_mid)
+        if mid or short_mid or chain.get("pro"):
+            _setup_chain_set(candidate, chain)
+    except Exception as exc:  # pragma: no cover - chain must never kill education
+        print(f"setup chain education warning {candidate.signal_id}: {exc}")
     return bool(mid)
 
 
@@ -1696,10 +1784,29 @@ def send_approaching(candidate: SignalCandidate, current_price: float, distance_
     if not candidate.metadata.get("pro_separator_message_id"):
         candidate.metadata["pro_separator_message_id"] = send_message("<b>━━━━━━━━ VIVA-MON-LABS ━━━━━━━━</b>", target)
     caption = _approaching_caption(candidate, current_price, distance_atr)
-    source_mid = candidate.metadata.get("education_chart_message_id") or candidate.metadata.get("education_message_id")
+    source_mid = (candidate.metadata.get("education_chart_message_id")
+                  or candidate.metadata.get("education_message_id")
+                  or _setup_chain_get(candidate).get("edu") or 0)
     source_link = _telegram_message_link(CHAT_ID_EDUCATION or CHAT_ID_ADMIN, int(source_mid)) if source_mid else ""
     markup = {"inline_keyboard": [[{"text": "📚 تحلیل و چارت هشدار اولیه", "url": source_link}]]} if source_link else None
-    mid = send_photo(chart, caption, target, reply_markup=markup) if chart else send_message(caption, target, reply_markup=markup)
+    # The final alert REPLACES the compact watch post in the same PRO slot
+    # (Viva 2026-09-11); only if no slot survives does a fresh post appear.
+    chain = _setup_chain_get(candidate)
+    slot = int(chain.get("pro") or 0) or int(candidate.metadata.get("approaching_message_id") or 0)
+    done = False
+    if slot:
+        done = (edit_chart_message(slot, str(target), chart, caption, reply_markup=markup)
+                if chart else edit_text_message(slot, str(target), caption))
+    if done:
+        mid = slot
+    else:
+        mid = send_photo(chart, caption, target, reply_markup=markup) if chart else send_message(caption, target, reply_markup=markup)
+        if mid:
+            slot = int(mid)
+    if mid:
+        if int(chain.get("pro") or 0) != slot:
+            chain["pro"] = slot
+            _setup_chain_set(candidate, chain)
     _store_alert_message_id(candidate, "approaching_message_id", mid)
     return bool(mid)
 
@@ -2359,22 +2466,39 @@ def send_technoclassic_preview(ev: dict) -> bool:
                     _sk("tc_pro_sep", {"day": today, "mid": int(_mid)})
         except Exception:
             pass
-        # (1) the permanent DETAILED alert goes to the alerts channel — like every
-        # other setup's initial alert; (2) the PRO post carries the same info plus
-        # the 📚 button pointing at it, so TC joins the family chain-link system.
+        # Viva 2026-09-11 family spec (now for EVERY setup incl. TC): the
+        # alerts channel keeps the permanent DETAILED alert and receives a
+        # compact copy replying to it; PRO carries the COMPACT alert as the
+        # single live slot — every later update/final state replaces THIS post
+        # in place and the 📚 button points at the detailed alert.
         edu_chat = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
         edu_mid = (send_photo(chart, caption, edu_chat) if chart
                    else send_message(caption, edu_chat)) if edu_chat else None
+        short = _compact_alert_caption(
+            cand, score=int(ev.get("structure_score") or 0),
+            extra_lines=[
+                f"📍 <b>خط {side_fa}:</b> {_price(ev.get('line_price'))} • "
+                f"<b>قیمت:</b> {_price(ev.get('live'))}",
+                f"🚩 <b>فاصله:</b> {float(ev.get('distance_atr') or 0):.2f} ATR • "
+                f"<b>برخوردهای معتبر:</b> {ev.get('touches')}",
+            ])
+        if edu_mid:
+            try:
+                send_message(short, edu_chat, reply_to_message_id=int(edu_mid))
+            except Exception:
+                pass
         markup = None
         if edu_mid:
             link = _telegram_message_link(edu_chat, int(edu_mid))
             if link:
                 markup = {"inline_keyboard": [[{"text": "📚 چارت و توضیحات هشدار اولیه",
                                                 "url": link}]]}
-        mid = (send_photo(chart, caption, target, reply_markup=markup) if chart
-               else send_message(caption, target, reply_markup=markup))
+        mid = (send_photo(chart, short, target, reply_markup=markup) if chart
+               else send_message(short, target, reply_markup=markup))
         if mid:
-            _sk(ck, {"anchor": int(mid), "edu": int(edu_mid or 0), "update": 0,
+            # PRO anchor slot == update slot: the first state change edits
+            # THIS message instead of stacking another one in PRO.
+            _sk(ck, {"anchor": int(mid), "edu": int(edu_mid or 0), "update": int(mid),
                      "ts": now, "code": code, "pattern": str(ev.get("pattern")),
                      "state": state, "fade": bool(is_fade)})
             # confirmation messages quote the PRO anchor — updates never move that link

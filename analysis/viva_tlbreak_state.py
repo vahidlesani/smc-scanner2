@@ -52,6 +52,11 @@ def advance(state: VivaTLState, event: str, *, max_retest_bars: int, now: dateti
         state.stage, state.confirmed_at = "S5_MICRO_BOS", stamp
     elif event == "CONFIRM" and state.stage == "S5_MICRO_BOS":
         state.stage = "S6_CONFIRMED"
+    elif event == "FAST_CONFIRM" and state.stage in {"S0_WATCH", "S1_VALID", "S2_BREAKOUT"}:
+        # Viva 2026-09-11: first-break doctrine — two consecutive closed
+        # candles beyond the broken line with displacement confirm WITHOUT a
+        # retest (RETEST_WINDOW_EXPIRED must never burn a runaway breakout).
+        state.stage, state.confirmed_at = "S6_CONFIRMED", stamp
     elif event == "CONTINUATION" and state.stage == "S6_CONFIRMED":
         state.stage, state.continuation_count = "S7_CONTINUATION", state.continuation_count + 1
     elif event == "INVALIDATE":
