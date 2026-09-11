@@ -1229,7 +1229,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     if count < x_edge - 0.6:
                         ax.plot([count, x_edge], [slope*count+intercept, slope*x_edge+intercept],
                                 color=color, linewidth=1.5, alpha=.72, zorder=6,
-                                linestyles=(0, (6, 4)), solid_capstyle="butt")
+                                linestyle=(0, (6, 4)), solid_capstyle="butt")
                     ax.scatter(xs, ys, s=42, color=CHART_THEME["panel"], edgecolors=color, linewidths=1.7, zorder=9)
                     notes.append((f"{label} · {len(xs)} PIVOTS", color))
                 line = md.get("viva_breakout_line") or md.get("viva_break_line")
