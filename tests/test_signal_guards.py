@@ -159,3 +159,18 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
     os.environ.pop("CANDIDATE_DB_BACKEND", None)
     os.environ.pop("CANDIDATE_DB_PATH", None)
     KV._TABLE_READY["done"] = False
+
+
+def test_family_block_template_everywhere():
+    """Viva 2026-09-11: every message family uses the SAME block template —
+    🏷 badge, ━ rules between logical blocks, bold section titles, 🆔 last."""
+    from bot.messages_v7 import VIVA_SEP, _approaching_caption
+    from test_v7 import make_candidate
+    cap = _approaching_caption(make_candidate(), 99.7, 0.31)
+    assert cap.count(VIVA_SEP) >= 4                      # blocks separated
+    for needle in ("🏷 <b>VIVA ✦", "⚡ <b>هشدار نهایی", "🪙 <b>BTCUSDT</b>",
+                   "🕓 <b>زمان رصد — ایران:</b>", "📨 <b>زمان ارسال — ایران:</b>",
+                   "🎯 <b>", "🤖 <b>نظر AI:</b>", "📍 <b>زون:</b>", "💲 <b>قیمت:</b>",
+                   "⚖️ <b>در انتظار کلوز تأییدی", "🚩 <b>فاصله:</b> 0.31 ATR",
+                   "🛑 <b>ابطال:</b>", "🆔 <code>"):
+        assert needle in cap, needle

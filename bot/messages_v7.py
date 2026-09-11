@@ -31,6 +31,10 @@ TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID_EDUCATION = os.getenv("CHAT_ID_SIGNALS", "")
 CHAT_ID_EXECUTION = os.getenv("CHAT_ID_APPROACHING", "")
 CHAT_ID_RESULTS = os.getenv("CHAT_ID_RESULTS", "")
+
+# Viva 2026-09-11: ONE block template for every message in every channel —
+# bold section titles, related emoji, ━ rules between logical blocks.
+VIVA_SEP = "━" * 20
 CHAT_ID_ADMIN = os.getenv("CHAT_ID", "")
 
 # Chart identity: Viva's own TradingView look (light, monochrome candles,
@@ -1235,9 +1239,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     if len(xs) < 2:
                         continue
                     slope, intercept = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
-                    x0, x1 = min(xs), min(max(xs) + 0.15 * max(1.0, max(xs) - min(xs)),
-                                          count + future - .5)
+                    # Viva 2026-09-11: a fitted edge NEVER stops mid-chart — it is
+                    # drawn solid across its touches and then PROJECTED (dashed) to
+                    # a few bars past the live candle so a break is visible on the
+                    # frame itself, without leaving the canvas.
+                    x0 = min(xs)
+                    x_edge = count + future - .5
+                    x1 = min(max(xs) + 0.15 * max(1.0, max(xs) - min(xs)), x_edge)
                     ax.plot([x0, x1], [slope*x0+intercept, slope*x1+intercept], color=color, linewidth=2.3, alpha=.95, zorder=7, solid_capstyle="round")
+                    if x1 < x_edge - 0.6:
+                        ax.plot([x1, x_edge], [slope*x1+intercept, slope*x_edge+intercept],
+                                color=color, linewidth=1.45, alpha=.70, zorder=6,
+                                linestyles=(0, (6, 4)), solid_capstyle="butt")
                     ax.scatter(xs, ys, s=42, color=CHART_THEME["panel"], edgecolors=color, linewidths=1.7, zorder=9)
                     notes.append((f"{label} · {len(xs)} PIVOTS", color))
                 line = md.get("viva_breakout_line") or md.get("viva_break_line")
@@ -1637,19 +1650,36 @@ def _ai_watch_hint(candidate: SignalCandidate) -> str:
 def _approaching_caption(candidate: SignalCandidate, current_price: float, distance_atr: float) -> str:
     why = candidate.strategy_fa
     badge, _ = _setup_badge(candidate)
-    advisory = str((candidate.metadata or {}).get("gemini_advisory") or "").strip()
-    ai_line = f"🤖 <b>نظر AI:</b> {_e(advisory)}\n" if advisory else ""
+    advisory = (str((candidate.metadata or {}).get("gemini_advisory") or "").strip()
+                or str(getattr(candidate, "ai_reason", "") or "").strip())
+    # Viva 2026-09-11: the block template is STRUCTURAL — the AI row never disappears.
+    ai_line = (f"🤖 <b>نظر AI:</b> {_e(advisory)}\n" if advisory
+               else "🤖 <b>نظر AI:</b> هنوز خروجیِ قطعی صادر نشده — در حال ارزیابی\n")
+    # Viva 2026-09-11 (UNIUSDT نمونه): 🎯 = VIVA-CODE | setup , 🚨 = رویدادها + امتیاز
+    name, _, event = str(why).partition("|")
+    head = f"VIVA-{_e(candidate.setup_code)}"
+    if event.strip():
+        target_line = (f"🎯 <b>{head}</b> | {_e(name.strip())}\n"
+                       f"🚨{_e(event.strip())} | ⭐ {candidate.score}/10\n")
+    else:
+        target_line = f"🎯 <b>{head}</b> | {_e(why)} • ⭐ {candidate.score}/10\n"
     return (
-        f"🏷 <b>{_e(badge)}</b>\n"
-        f"⚡ <b>هشدار نهایی | آماده‌سازی ورود</b> • {_e(candidate.setup_code)}\n"
+        f"🏷 <b>{_e(badge)}</b>\n{VIVA_SEP}\n"
+        f"⚡ <b>هشدار نهایی | آماده‌سازی ورود</b>\n\n"
         f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(candidate.style)} • {_e(candidate.direction)}\n"
-        f"🕓 زمان رصد — ایران: {_iran_time(candidate)}\n"
-        f"📨 زمان ارسال — ایران: {_iran_now()}\n"
-        f"🎯 {_e(why)} • ⭐ {candidate.score}/10\n"
-        + ai_line +
-        f"📍 زون: {_price(candidate.entry_zone_bottom)} – {_price(candidate.entry_zone_top)} • قیمت: {_price(current_price)}\n"
-        f"⚖️ در انتظار کلوز تأییدی تایم پایین / MSS • فاصله {distance_atr:.2f} ATR\n"
-        f"🛑 ابطال: {_price(candidate.sl)} • 🆔 <code>{_e(_public_code(candidate))}</code>"
+        f"{VIVA_SEP}\n"
+        f"🕓 <b>زمان رصد — ایران:</b> {_iran_time(candidate)}\n"
+        f"📨 <b>زمان ارسال — ایران:</b> {_iran_now()}\n"
+        f"{VIVA_SEP}\n"
+        + target_line + ai_line +
+        f"📍 <b>زون:</b> {_price(candidate.entry_zone_bottom)} – {_price(candidate.entry_zone_top)}\n"
+        f"💲 <b>قیمت:</b> {_price(current_price)}\n"
+        f"{VIVA_SEP}\n"
+        f"⚖️ <b>در انتظار کلوز تأییدی تایم پایین / MSS</b>\n"
+        f"🚩 <b>فاصله:</b> {distance_atr:.2f} ATR\n"
+        f"🛑 <b>ابطال:</b> {_price(candidate.sl)}\n"
+        f"{VIVA_SEP}\n\n"
+        f"🆔 <code>{_e(_public_code(candidate))}</code>"
     )
 
 
@@ -1706,7 +1736,7 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         f"🕓 زمان تأیید — ایران: {_iran_time(candidate)}",
         f"📨 زمان ارسال — ایران: {_iran_now()}",
         f"📡 تأخیر ارسال: {_candidate_send_latency(candidate)}",
-        "━━━━━━━━━━━━━━━━━━",
+        VIVA_SEP,
         f"🎯 Entry: <b>{_price(candidate.planned_entry)}</b>",
         f"🛑 First Stop: <b>{_price(candidate.sl)}</b>",
         f"📈 Live Price: <b>{_price(float((candidate.metadata or {}).get('live_price') or candidate.planned_entry))}</b>",
@@ -1717,7 +1747,7 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         rows.append(f"🤖 <b>نظر AI:</b> {_e(advisory)}")
     if mm:
         rows.extend([
-            "━━━━━━━━━━━━━━━━━━",
+            VIVA_SEP,
             f"💼 حجم پوزیشن: <b>${mm['position_size']:,.0f}</b>",
             f"🧱 مارجین: <b>${mm['margin']:,.2f}</b>",
             f"⚙️ اهرم: <b>{mm['leverage']}x</b>",
@@ -2299,20 +2329,26 @@ def send_technoclassic_preview(ev: dict) -> bool:
             plan_line = (f"↩️ پلنِ بازگشت روی ضلع (کمک‌تأیید قانون آلفونسو): ورود {_price(fade.get('entry'))} • "
                          f"استاپ {_price(fade.get('stop'))} • TP میانه {_price(fade.get('tp_mid'))} • "
                          f"TP ضلع مقابل {_price(fade.get('target'))} • R:R {fade.get('rr')}\n")
+        dir_fa = "نزولی (SHORT)" if str(ev.get("direction")) == "SHORT" else "صعودی (LONG)"
         caption = (
-            f"🏷 <b>{_e(badge)}</b>\n"
-            f"⚡ <b>هشدار الگوی کلاسیک | در انتظار تأیید</b> • TECHCLASSIC\n"
-            f"🪙 <b>{_e(sym)}</b> • SWING • تایم الگو: {tf} • ضلع {side_fa}\n"
-            f"🕓 زمان رصد — ایران: {_iran_now()}\n"
-            f"📐 {_e(str(ev.get('pattern_fa') or ev.get('pattern')))} • ⭐ {int(ev.get('structure_score') or 0)}/10\n"
-            f"📍 خط: {_price(ev.get('line_price'))} • قیمت: {_price(ev.get('live'))} • "
-            f"فاصله {float(ev.get('distance_atr') or 0):.2f} ATR • برخوردهای معتبر: {ev.get('touches')}\n"
-            f"⚖️ تاریخچۀ خط: {react.get('rejects', 0)} دفع / {react.get('breaks', 0)} شکست "
+            f"🏷 <b>{_e(badge)}</b>\n{VIVA_SEP}\n"
+            f"⚡ <b>هشدار الگوی کلاسیک | در انتظار تأیید</b>\n\n"
+            f"🪙 <b>{_e(sym)}</b> • SWING • تایم الگو: {tf}\n"
+            f"{VIVA_SEP}\n"
+            f"🕓 <b>زمان رصد — ایران:</b> {_iran_now()}\n"
+            f"{VIVA_SEP}\n"
+            f"🎯 <b>VIVA-TECHCLASSIC</b> | {_e(str(ev.get('pattern_fa') or ev.get('pattern')))} — ضلع {side_fa}\n"
+            f"🚨 جهتِ محتملِ شکستِ معتبر: {dir_fa} • ⭐ {int(ev.get('structure_score') or 0)}/10\n"
+            f"📍 <b>خط:</b> {_price(ev.get('line_price'))} • <b>قیمت:</b> {_price(ev.get('live'))}\n"
+            f"🚩 <b>فاصله:</b> {float(ev.get('distance_atr') or 0):.2f} ATR • <b>برخوردهای معتبر:</b> {ev.get('touches')}\n"
+            f"⚖️ <b>تاریخچۀ خط:</b> {react.get('rejects', 0)} دفع / {react.get('breaks', 0)} شکست "
             f"(نرخ دفع {int(float(react.get('reject_rate', 0)) * 100)}٪ — کمک‌تأیید، نه شرط قطعی)\n"
             + plan_line +
-            f"🎬 سناریوی پایایی: {_e(scen.get('hold', ''))}\n"
-            f"🎬 سناریوی شکست: {_e(scen.get('break', ''))}\n"
+            f"{VIVA_SEP}\n"
+            f"🎬 <b>پایاییِ ضلع:</b> {_e(scen.get('hold', ''))}\n"
+            f"🎬 <b>شکستِ معتبر:</b> {_e(scen.get('break', ''))}\n"
             f"⏳ هیچ‌کدام ۱۰۰٪ نیست؛ ربات فقط احتمال را می‌گوید و منتظر نشانه/تأیید می‌ماند\n"
+            f"{VIVA_SEP}\n\n"
             f"🆔 <code>{_e(code)}</code>"
         )
         try:  # once-per-day separator
@@ -2358,12 +2394,14 @@ def send_technoclassic_preview(ev: dict) -> bool:
         plan = (f"↩️ پلن: ورود {_price(fade.get('entry'))} • استاپ {_price(fade.get('stop'))} • "
                 f"TP میانه {_price(fade.get('tp_mid'))} • TP مقابل {_price(fade.get('target'))}\n")
     caption = (
-        f"🔁 <b>به‌روزرسانیِ هشدار (همان شناسه)</b>\n"
-        f"🪙 <b>{_e(sym)}</b> • {tf} • ضلع {side_fa} • {_e(str(ev.get('pattern_fa') or ev.get('pattern')))}\n"
-        f"📍 خط: {_price(ev.get('line_price'))} • قیمت: {_price(ev.get('live'))} • "
-        f"فاصله {float(ev.get('distance_atr') or 0):.2f} ATR\n"
+        f"🔁 <b>به‌روزرسانیِ هشدار (همان شناسه)</b>\n{VIVA_SEP}\n"
+        f"🪙 <b>{_e(sym)}</b> • {tf} • {_e(str(ev.get('pattern_fa') or ev.get('pattern')))} — ضلع {side_fa}\n"
+        f"{VIVA_SEP}\n"
+        f"📍 <b>خط:</b> {_price(ev.get('line_price'))} • <b>قیمت:</b> {_price(ev.get('live'))}\n"
+        f"🚩 <b>فاصله:</b> {float(ev.get('distance_atr') or 0):.2f} ATR\n"
         f"{state_fa}\n{plan}"
         f"⏳ همچنان شرطی تا تأییدِ کامل (کلوز + پولبک + BOS)\n"
+        f"{VIVA_SEP}\n\n"
         f"🆔 <code>{_e(code)}</code>"
     )
     anchor_mid = int(chain.get("anchor") or 0)
