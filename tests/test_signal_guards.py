@@ -81,12 +81,13 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         monkeypatch.setattr(F, "get_klines", lambda *a, **k: _fake_frame())
         import bot.messages_v7 as M
         M.CHAT_ID_EXECUTION = "-100TEST"
+        M.CHAT_ID_EDUCATION = "-1004000000001"
         photos, texts, edits, edits_t = [], [], [], []
         counter = {"mid": 5000}
 
         def _send_photo(image, caption, chat_id=None, reply_to_message_id=None, reply_markup=None):
             counter["mid"] += 1
-            photos.append((counter["mid"], caption, reply_to_message_id))
+            photos.append((counter["mid"], caption, reply_to_message_id, chat_id, reply_markup))
             return counter["mid"]
 
         def _send_message(text, chat_id=None, reply_to_message_id=None):
@@ -94,8 +95,8 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
             texts.append((counter["mid"], text))
             return counter["mid"]
 
-        def _edit_photo(mid, chat_id, image, caption):
-            edits.append((mid, caption))
+        def _edit_photo(mid, chat_id, image, caption, reply_markup=None):
+            edits.append((mid, caption, reply_markup))
             return True
 
         def _edit_text(mid, chat_id, text):
@@ -119,32 +120,41 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
                 "target": 94.6, "rr": 25.0, "reject_rate": 1.0}
 
         assert M.send_technoclassic_preview(dict(ev)) is True
-        assert len(photos) == 1 and photos[0][2] is None          # anchor: no reply
-        anchor_mid = photos[0][0]
+        # family chain: detailed anchor in the ALERTS channel, PRO post linked to it
+        assert len(photos) == 2
+        edu_mid, pro_mid = photos[0][0], photos[1][0]
+        assert photos[0][3] == "-1004000000001" and photos[1][3] == "-100TEST"
+        assert photos[1][4] and "📚" in photos[1][4]["inline_keyboard"][0][0]["text"]
+        assert str(edu_mid) in photos[1][4]["inline_keyboard"][0][0]["url"]
+        assert photos[1][2] is None                                # PRO anchor: no reply
         link = KV.get_json("tc_link|GTTSTUSDT|4h", {})
-        assert link.get("mid") == anchor_mid                      # confirmations → anchor
+        assert link.get("mid") == pro_mid                          # confirmations → PRO anchor
         code = photos[0][1].split("<code>")[1].split("</code>")[0]
+        assert code in photos[1][1]                                 # same unique id, both channels
 
         # same state again → silence (no channel spam)
         assert M.send_technoclassic_preview(dict(ev)) is False
-        assert len(photos) == 1
+        assert len(photos) == 2
 
-        # state advances → ONE update, replied to the anchor
+        # state advances → ONE update post, replied to the PRO anchor, button kept
         ev2 = dict(ev, state="REJECTION_FADE", fade=fade)
         assert M.send_technoclassic_preview(ev2) is True
-        assert len(photos) == 2 and photos[1][2] == anchor_mid
-        upd_mid = photos[1][0]
-        assert "🔁" in photos[1][1] and code in photos[1][1]       # same unique id
+        assert len(photos) == 3 and photos[2][2] == pro_mid
+        assert photos[2][4] and str(edu_mid) in photos[2][4]["inline_keyboard"][0][0]["url"]
+        upd_mid = photos[2][0]
+        assert "🔁" in photos[2][1] and code in photos[2][1]         # same unique id
 
         # further advance → the update itself is EDITED, nothing new posted
         ev3 = dict(ev, state="BREAK_READY")
         assert M.send_technoclassic_preview(ev3) is True
-        assert len(photos) == 2 and len(edits) == 1 and edits[0][0] == upd_mid
+        assert len(photos) == 3 and len(edits) == 1 and edits[0][0] == upd_mid
+        assert edits[0][2] and str(edu_mid) in edits[0][2]["inline_keyboard"][0][0]["url"]
         chain = KV.get_json("tc_chain|GTTSTUSDT|4h", {})
-        assert chain.get("anchor") == anchor_mid and chain.get("update") == upd_mid
-        # the confirmation link still points at the ANCHOR, never at an update
+        assert chain.get("anchor") == pro_mid and chain.get("update") == upd_mid
+        assert chain.get("edu") == edu_mid
+        # the confirmation link still points at the PRO anchor, never at an update
         link = KV.get_json("tc_link|GTTSTUSDT|4h", {})
-        assert link.get("mid") == anchor_mid
+        assert link.get("mid") == pro_mid
         assert link.get("state") == "BREAK_READY"
     os.environ.pop("CANDIDATE_DB_BACKEND", None)
     os.environ.pop("CANDIDATE_DB_PATH", None)

@@ -364,6 +364,7 @@ def send_message(
     text: str,
     chat_id: Optional[str] = None,
     reply_to_message_id: Optional[int] = None,
+    reply_markup: Optional[dict] = None,
 ) -> Optional[int]:
     """Send text; returns the first chunk's message_id (truthy) or None."""
     target = chat_id or CHAT_ID_ADMIN
@@ -382,6 +383,9 @@ def send_message(
         if reply_to_message_id:
             payload["reply_to_message_id"] = int(reply_to_message_id)
             payload["allow_sending_without_reply"] = True
+        if reply_markup:
+            import json as _j
+            payload["reply_markup"] = _j.dumps(reply_markup)
         result = _tg_post(url, data=payload, timeout=15)
         if result and first_id is None:
             first_id = int(result.get("result", {}).get("message_id") or 0) or None
@@ -2221,16 +2225,20 @@ def edit_text_message(message_id: int, chat_id: str, text: str) -> bool:
         return False
 
 
-def edit_chart_message(message_id: int, chat_id: str, image: bytes, caption: str) -> bool:
+def edit_chart_message(message_id: int, chat_id: str, image: bytes, caption: str,
+                       reply_markup: Optional[dict] = None) -> bool:
     """Replace a photo message IN PLACE (chart + caption) — the mechanism that
     makes 'updates supersede the previous update' real instead of a trail of
     new posts. Telegram keeps the reply-link to the original anchor."""
     if not TOKEN or not chat_id or not message_id or not image:
         return False
     import json as _j
+    media = {"type": "photo", "media": "attach://photo",
+             "caption": caption[:1000], "parse_mode": "HTML"}
+    if reply_markup:
+        media["reply_markup"] = reply_markup
     payload = {"chat_id": str(chat_id), "message_id": str(int(message_id)),
-               "media": _j.dumps({"type": "photo", "media": "attach://photo",
-                                  "caption": caption[:1000], "parse_mode": "HTML"})}
+               "media": _j.dumps(media)}
     res = _tg_post(
         f"https://api.telegram.org/bot{TOKEN}/editMessageMedia",
         data=payload, files={"photo": ("viva-chart.png", image, "image/png")}, timeout=35)
@@ -2315,11 +2323,25 @@ def send_technoclassic_preview(ev: dict) -> bool:
                     _sk("tc_pro_sep", {"day": today, "mid": int(_mid)})
         except Exception:
             pass
-        mid = send_photo(chart, caption, target) if chart else send_message(caption, target)
+        # (1) the permanent DETAILED alert goes to the alerts channel — like every
+        # other setup's initial alert; (2) the PRO post carries the same info plus
+        # the 📚 button pointing at it, so TC joins the family chain-link system.
+        edu_chat = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
+        edu_mid = (send_photo(chart, caption, edu_chat) if chart
+                   else send_message(caption, edu_chat)) if edu_chat else None
+        markup = None
+        if edu_mid:
+            link = _telegram_message_link(edu_chat, int(edu_mid))
+            if link:
+                markup = {"inline_keyboard": [[{"text": "📚 چارت و توضیحات هشدار اولیه",
+                                                "url": link}]]}
+        mid = (send_photo(chart, caption, target, reply_markup=markup) if chart
+               else send_message(caption, target, reply_markup=markup))
         if mid:
-            _sk(ck, {"anchor": int(mid), "update": 0, "ts": now, "code": code,
-                     "pattern": str(ev.get("pattern")), "state": state, "fade": bool(is_fade)})
-            # confirmation messages quote the ANCHOR — updates never move that link
+            _sk(ck, {"anchor": int(mid), "edu": int(edu_mid or 0), "update": 0,
+                     "ts": now, "code": code, "pattern": str(ev.get("pattern")),
+                     "state": state, "fade": bool(is_fade)})
+            # confirmation messages quote the PRO anchor — updates never move that link
             _sk(f"tc_link|{sym}|{tf}", {"mid": int(mid), "ts": now, "state": state})
         return bool(mid)
     # ── existing anchor: state must have MOVED, else stay silent ────────────
@@ -2346,9 +2368,16 @@ def send_technoclassic_preview(ev: dict) -> bool:
     )
     anchor_mid = int(chain.get("anchor") or 0)
     upd = int(chain.get("update") or 0)
+    edu_mid = int(chain.get("edu") or 0)
+    markup = None
+    if edu_mid:
+        link = _telegram_message_link(CHAT_ID_EDUCATION or CHAT_ID_ADMIN, edu_mid)
+        if link:
+            markup = {"inline_keyboard": [[{"text": "📚 چارت و توضیحات هشدار اولیه",
+                                            "url": link}]]}
     done = False
     if upd and chart:
-        done = edit_chart_message(upd, str(target), chart, caption)
+        done = edit_chart_message(upd, str(target), chart, caption, reply_markup=markup)
     elif upd and not chart:
         done = edit_text_message(upd, str(target), caption)
     if not done:
@@ -2357,14 +2386,17 @@ def send_technoclassic_preview(ev: dict) -> bool:
                 delete_message(str(target), upd)
             except Exception:
                 pass
-        new_mid = (send_photo(chart, caption, target, reply_to_message_id=anchor_mid) if chart
-                   else send_message(caption, target, reply_to_message_id=anchor_mid))
+        new_mid = (send_photo(chart, caption, target, reply_to_message_id=anchor_mid,
+                               reply_markup=markup) if chart
+                   else send_message(caption, target, reply_to_message_id=anchor_mid,
+                                     reply_markup=markup))
         if new_mid:
             upd = int(new_mid)
         done = bool(new_mid)
     if done:
-        _sk(ck, {"anchor": anchor_mid, "update": upd, "ts": now, "code": code,
-                 "pattern": str(ev.get("pattern")), "state": state, "fade": bool(is_fade)})
+        _sk(ck, {"anchor": anchor_mid, "update": upd, "edu": edu_mid, "ts": now,
+                 "code": code, "pattern": str(ev.get("pattern")), "state": state,
+                 "fade": bool(is_fade)})
         try:  # keep the anchor→confirmation link state fresh without moving it
             _link = _gk(f"tc_link|{sym}|{tf}", {}) or {}
             if _link.get("mid"):
