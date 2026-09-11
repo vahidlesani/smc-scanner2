@@ -17,6 +17,7 @@ from matplotlib.patches import FancyArrowPatch, Rectangle
 from matplotlib.ticker import FuncFormatter, MaxNLocator, AutoMinorLocator
 import matplotlib.image as mpimg
 import mplfinance as mpf
+import math
 import numpy as np
 import pandas as pd
 import requests
@@ -1185,7 +1186,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         def _fitpts(pts):
                             xs_ = [float(np.searchsorted(frame.index, pd.Timestamp(str(p.get("timestamp"))))) for p in pts]
                             ys_ = [float(p["price"]) for p in pts]
-                            if max(xs_) - min(xs_) < 1e-9:
+                            if not all(math.isfinite(v) for v in xs_ + ys_) \
+                                    or max(xs_) - min(xs_) < 1e-9:
                                 raise ValueError("degenerate fit span")
                             s_, b_ = np.polyfit(xs_, ys_, 1)
                             return s_, b_
@@ -1205,7 +1207,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         ts = pd.Timestamp(str(point.get("timestamp")))
                         x = float(np.searchsorted(frame.index, ts))
                         xs.append(x); ys.append(float(point["price"]))
-                    if len(xs) < 2 or max(xs) - min(xs) < 1e-9:
+                    if len(xs) < 2 or not all(math.isfinite(v) for v in xs + ys) \
+                            or max(xs) - min(xs) < 1e-9:
                         continue
                     slope, intercept = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
                     # Viva 2026-09-11 (v2, the «هرچی میگم انجام نمیشه» fix): the
@@ -1289,14 +1292,21 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         pass
                 watch_points = md.get("viva_watch_points") or []
                 if len(watch_points) == 2:
-                    xs, ys = [], []
-                    for point in watch_points:
-                        xs.append(float(np.searchsorted(frame.index, pd.Timestamp(str(point.get("timestamp"))))))
-                        ys.append(float(point["price"]))
-                    slope, intercept = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
-                    ax.plot([xs[0], count + future - .5], [slope*xs[0]+intercept, slope*(count+future-.5)+intercept], color=CHART_THEME["liquidity"], linewidth=1.25, linestyle=(0,(3,3)), alpha=.85, zorder=6)
-                    ax.scatter(xs, ys, s=22, color=CHART_THEME["panel"], edgecolors=CHART_THEME["liquidity"], linewidths=1.0, zorder=9)
-                    notes.append(("2-PIVOT WATCH · NO ENTRY", CHART_THEME["liquidity"]))
+                    # own try/except: a degenerate 2-pivot fit must not kill the
+                    # score note below it, and must not spam the overlay warning
+                    try:
+                        xs, ys = [], []
+                        for point in watch_points:
+                            xs.append(float(np.searchsorted(frame.index, pd.Timestamp(str(point.get("timestamp"))))))
+                            ys.append(float(point["price"]))
+                        if not all(math.isfinite(v) for v in xs + ys) or max(xs) - min(xs) < 1e-9:
+                            raise ValueError("degenerate watch fit")
+                        slope, intercept = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
+                        ax.plot([xs[0], count + future - .5], [slope*xs[0]+intercept, slope*(count+future-.5)+intercept], color=CHART_THEME["liquidity"], linewidth=1.25, linestyle=(0,(3,3)), alpha=.85, zorder=6)
+                        ax.scatter(xs, ys, s=22, color=CHART_THEME["panel"], edgecolors=CHART_THEME["liquidity"], linewidths=1.0, zorder=9)
+                        notes.append(("2-PIVOT WATCH · NO ENTRY", CHART_THEME["liquidity"]))
+                    except Exception:
+                        pass
                 score = md.get("viva_final_score")
                 if score is not None:
                     notes.append((f"VIVA SCORE  {float(score):.1f}/10", CHART_THEME["text"]))
