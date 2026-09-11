@@ -236,6 +236,9 @@ def test_setup_chain_final_doctrine(monkeypatch):
         chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
         assert chain.get("edu") == edu_mid and not chain.get("pro")
 
+        # deterministic: the update's self-fetch must not hit the network
+        import data.fetcher as F
+        monkeypatch.setattr(F, "get_klines", lambda *a, **k: None)
         # one update slot in the alerts channel, linked to the detail, AI inside
         assert M.send_setup_update(cand, None, note_fa="ناحیه جابه‌جا شد") is True
         upd = [t for t in texts if "به‌روزرسانی رصد" in t[1]][0]
@@ -246,7 +249,16 @@ def test_setup_chain_final_doctrine(monkeypatch):
         assert chain.get("upd") == upd[0]
         assert M.send_setup_update(cand, None, note_fa="ادامه") is True
         assert len([t for t in texts if "به‌روزرسانی رصد" in t[1]]) == 1      # no pile-up
-        assert edits_t[-1][0] == upd[0] and "ادامه" in edits_t[-1][1]         # replaced in place
+        assert edits_t and edits_t[-1][0] == upd[0] and "ادامه" in edits_t[-1][1]   # replaced in place
+
+        # with a live frame available the SAME slot is edited WITH a fresh chart
+        import pandas as _pd
+        frame_ok = _pd.DataFrame({"open": [99.0]*40, "high": [99.5]*40, "low": [98.5]*40,
+                                  "close": [99.1]*40, "volume": [10.0]*40},
+                                 index=_pd.date_range("2026-09-11", periods=40, freq="15min"))
+        monkeypatch.setattr(F, "get_klines", lambda *a, **k: frame_ok)
+        assert M.send_setup_update(cand, None, note_fa="چارت زنده") is True
+        assert edits_c and edits_c[-1][0] == upd[0] and edits_c[-1][1] and "چارت زنده" in edits_c[-1][1]
 
         # final alert → new PRO post (no education slot exists)
         assert M.send_approaching(cand, 99.7, 0.31) is True
