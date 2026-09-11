@@ -32,6 +32,7 @@ from analysis.setups_v7 import (
     _liquidity_protected_invalidation,
     _structural_targets,
     confirm_timeframe,
+    confirm_timeframe_for_pattern,
     timeframe_profile,
     pivots,
 )
@@ -820,7 +821,7 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             "pin_has_doji": bool(has_doji),
             "pin_verdict_candles": int(getattr(settings, "alert_verdict_candles", 3)),
             "context_tf": ctx_tf,
-            "confirm_tf": confirm_timeframe(style, tf),
+            "confirm_tf": confirm_timeframe_for_pattern(ctx_tf, style, tf),
             "invalidation_liquidity_anchor": invalidation["liquidity_anchor"],
             "invalidation_buffer": invalidation["buffer"],
             # PINVAL is now eligible for the same real confirmation lifecycle

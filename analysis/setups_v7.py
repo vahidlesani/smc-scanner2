@@ -65,6 +65,21 @@ CONFIRM_TF_BY_TRIGGER = {
     "4h": "15m",
 }
 
+# Viva 2026-09-11 confirmation ladder (his explicit rule): a scenario is
+# confirmed by ONE closed candle of the timeframe ONE STEP BELOW the PATTERN
+# timeframe — never a chain of closes, never the pattern TF's own candle:
+#   1D → 4H close   4H → 1H close   1H → 15m close   15m → 5m close
+# If that single close is weak, Viva filters the trade himself — the scanner
+# must not burn the zone waiting for ceremony.
+CONFIRM_TF_BY_PATTERN = {"1d": "4h", "4h": "1h", "1h": "15m", "15m": "5m", "5m": "1m"}
+
+
+def confirm_timeframe_for_pattern(pattern_tf: str, style: str, trigger_tf: str) -> str:
+    tf = str(pattern_tf or "").strip().lower()
+    if tf in CONFIRM_TF_BY_PATTERN:
+        return CONFIRM_TF_BY_PATTERN[tf]
+    return confirm_timeframe(style, trigger_tf)
+
 
 def confirm_timeframe(style: str, fallback: str) -> str:
     """Trigger-TF-driven confirmation grid (see CONFIRM_TF_BY_TRIGGER)."""
@@ -716,7 +731,7 @@ def _base_candidate(
             # retest requirement. Only candles after created_at may set this.
             "touched": False,
             "historical_visit_count": int(poi.get("touches", 0)),
-            "confirm_tf": confirm_timeframe(style, trigger_tf),
+            "confirm_tf": confirm_timeframe_for_pattern(context_tf, style, trigger_tf),
         },
         expires_at=expires.isoformat(timespec="seconds"),
     )

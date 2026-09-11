@@ -305,3 +305,62 @@ def test_fast_break_followthrough_confirms_without_retest():
     cand_slow.metadata["created_at"] = cand_slow.created_at
     ok2, _, reason2 = evaluate_confirmation(cand_slow, df_flat)
     assert ok2 is False  # no touch of the zone, no follow-through → still gated
+
+
+def test_confirmation_ladder_one_step_below_pattern():
+    """Viva 2026-09-11 ladder: 1D→4H, 4H→1H, 1H→15m, 15m→5m, 5m→1m."""
+    from analysis.setups_v7 import confirm_timeframe_for_pattern as f
+    assert f("1d", "SWING", "4h") == "4h"
+    assert f("4h", "SWING", "15m") == "1h"
+    assert f("1H", "DAYTRADE", "15m") == "15m"
+    assert f("15m", "DAYTRADE", "5m") == "5m"
+    assert f("5m", "SCALP", "1m") == "1m"
+    # unknown pattern TF falls back to the legacy trigger grid, never crashes
+    assert f("", "SCALP", "15m") == "5m"
+
+
+def test_single_close_confirms_fast_lane():
+    """ONE valid close on the confirm TF past the line = confirmed (Viva rule);
+    a doji-thin close beyond the line is not enough (0.25 ATR body)."""
+    import pandas as pd
+    from test_v7 import make_candidate
+    from analysis.quality_engine import evaluate_confirmation
+    ts = pd.date_range("2026-09-10 12:00", periods=30, freq="15min")
+    closes = [98.0] * 29 + [100.4]
+    opens = [c - 0.1 for c in closes]
+    opens[-1] = 100.0
+    df = pd.DataFrame({
+        "open": opens, "high": [c + 0.05 for c in closes],
+        "low": [c - 0.2 for c in closes], "close": closes,
+        "volume": [1000.0] * 30,
+    }, index=ts)
+    df.index.name = "timestamp"
+    df["timestamp"] = df.index
+    # the single post-creation candle never dips into the zone (low > zone top):
+    # only the FAST lane can confirm it — and per Viva's rule it must.
+    df.loc[df.index[-1], "low"] = 100.25
+
+    def _cand():
+        c = make_candidate()
+        c.status = "NEAR_CONFIRM"
+        c.entry_zone_bottom, c.entry_zone_top = 99.8, 100.2
+        c.planned_entry, c.sl = 100.1, 98.6
+        c.tp1, c.tp2 = 106.0, 109.0
+        c.metadata.update({"strategy_variant": "VIVA_TLBREAK", "viva_breakout_line": 100.0,
+                           "atr": 1.0, "confirm_tf": "15m",
+                           "viva_state_machine": {"stage": "S2_BREAKOUT"}})
+        c.created_at = (ts[-1]).isoformat()
+        c.metadata["created_at"] = c.created_at
+        return c
+
+    ok, c2, reason = evaluate_confirmation(_cand(), df)
+    assert ok is True, f"single valid close must confirm: {reason}"
+    assert c2.metadata.get("tl_fast_break")
+
+    # no breakout close at all: a thin doji drifting below the line → must not
+    # confirm (the alt-cluster RECLAIM lane is also kept honest this way)
+    weak = df.copy()
+    weak.loc[weak.index[-2], ["close", "open", "high", "low"]] = [99.85, 99.80, 99.90, 99.75]
+    weak.loc[weak.index[-1], ["close", "open", "high", "low"]] = [99.90, 99.88, 99.98, 99.80]
+    ok2, _, _ = evaluate_confirmation(_cand(), weak)
+    assert ok2 is False  # a thin doji past nothing is not the confirmation

@@ -161,21 +161,22 @@ def evaluate_confirmation(
         if _line > 0:
             _atr = float(candidate.metadata.get("atr", 0) or 0) or float(
                 (closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
-            if _atr > 0 and len(after) >= 2:
+            if _atr > 0 and len(after) >= 1:
+                # Viva 2026-09-11: ONE closed candle of the confirmation TF
+                # beyond the broken line is the confirmation — no retest, no
+                # two-close ceremony; weak closes are the trader's filter.
                 _is_long = candidate.direction == "LONG"
                 _buf = 0.10 * _atr
-                _tail2 = after.tail(2)
-                _out = [bool(float(r["close"]) >= _line + _buf) if _is_long
-                        else bool(float(r["close"]) <= _line - _buf)
-                        for _, r in _tail2.iterrows()]
-                _bodies = [abs(float(r["close"]) - float(r["open"])) / _atr
-                           for _, r in _tail2.iterrows()]
-                _recent = after.tail(4)
-                _back = (bool((_recent["close"] <= _line - _buf).any()) if _is_long
-                         else bool((_recent["close"] >= _line + _buf).any()))
-                if all(_out) and max(_bodies) >= 0.35 and not _back:
-                    fast_lane = (f"دو کلوز متوالیِ معتبر پشت خطِ شکسته (≥{_buf/_atr:.2f} ATR) "
-                                 f"بدون بازگشتِ کلوز به داخل؛ Body حداکثر {max(_bodies):.2f} ATR")
+                _r = after.iloc[-1]
+                _out = bool(float(_r["close"]) >= _line + _buf) if _is_long \
+                    else bool(float(_r["close"]) <= _line - _buf)
+                _body = abs(float(_r["close"]) - float(_r["open"])) / _atr
+                _dir_ok = (float(_r["close"]) > float(_r["open"])) if _is_long \
+                    else (float(_r["close"]) < float(_r["open"]))
+                if _out and _body >= 0.25 and _dir_ok:
+                    fast_lane = (f"یک کلوزِ معتبرِ پشت‌خط در تأیید "
+                                 f"{candidate.metadata.get('confirm_tf', '')} "
+                                 f"(≥{_buf / _atr:.2f} ATR فراتر از خط، Body {_body:.2f} ATR)")
                     candidate.metadata["tl_fast_break"] = fast_lane
 
     touched = bool(candidate.metadata.get("touched", False)) or bool(fast_lane)
@@ -305,8 +306,12 @@ def evaluate_confirmation(
     if atr_value > 0:
         chase_atr = abs(executable_entry - zone_mid) / atr_value
         max_chase = float(getattr(SETTINGS, "confirm_max_chase_atr", 0.80))
-        if chase_atr > max_chase:
+        if chase_atr > max_chase and not candidate.metadata.get("tl_fast_break"):
             return reject("ENTRY_TOO_FAR", f"کلوز تأیید {chase_atr:.2f} ATR از زون دور شده؛ Chase مجاز نیست.")
+        if chase_atr > max_chase:
+            # a fresh single-close break IS far from the zone by nature —
+            # annotate the distance for the caption, Viva decides the trade.
+            candidate.metadata["chase_note"] = f"{chase_atr:.2f} ATR از زون"
     rr1 = (
         (candidate.tp1 - executable_entry) / risk
         if candidate.direction == "LONG"
