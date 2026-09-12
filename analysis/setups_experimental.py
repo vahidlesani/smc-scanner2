@@ -347,7 +347,7 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         poi = {"bottom": breakout.line_price - .15 * atr_t, "top": breakout.line_price + .15 * atr_t, "touches": 0, "type": f"VIVA {pattern} BREAK/RETEST"}
         bias = structure_bias(structure_df, 5)
         context = {"bias": bias.get("bias", "NEUTRAL")}
-        special = EvidenceItem("viva_tlbreak", "VIVA-TLBREAK شکست ساختاری", f"{pattern} با {line.touch_count} پیوت تاییدشده و خطای فیت {line.fit_residual_atr:.2f} ATR؛ کلوز شکست {breakout.beyond_atr:.2f} ATR بیرون خط است.", True, 2, level=breakout.line_price, timeframe=refine_tf)
+        special = EvidenceItem("viva_tlbreak", "شکست ساختاری - VIVA-TLBREAK", f"{pattern} با {line.touch_count} پیوت تاییدشده و خطای فیت {line.fit_residual_atr:.2f} ATR؛ کلوز شکست {breakout.beyond_atr:.2f} ATR بیرون خط است.", True, 2, level=breakout.line_price, timeframe=refine_tf)
         impulse = {"index": len(trigger_df)-1, "level": breakout.line_price, "valid": True, "direction": "BULLISH" if direction=="LONG" else "BEARISH", "body_atr": breakout.body_atr, "volume_ratio": 1.0}
         candidate = _base_candidate(bundle, style, "TLBREAK", direction, structure_tf, trigger_tf, context, poi, impulse, special, "viva_tlbreak_geometry", True)
         if candidate is None:

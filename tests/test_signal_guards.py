@@ -348,24 +348,114 @@ def test_same_zone_quiet_for_24h():
     os.environ.pop("CANDIDATE_DB_PATH", None)
 
 
-def test_setup_specific_methodology_text():
-    """«توضیحات مفصل هر ستاپ باید متناسب با همون ستاپ باشه، نه یک مدل» — the
-    detailed alert carries a per-setup methodology block."""
+def test_viva_exact_format_detailed_and_compact():
+    """Viva 2026-09-12, his samples VERBATIM: detailed alert = 🏷 badge, 🆔 on
+    the second line (same as hit messages), educational block, SYMBOL • STYLE •
+    TF line, ━━━ between every concept to the end; compact alert follows the
+    second sample exactly. No English word may START a title; no 🧠 inventions."""
     import bot.messages_v7 as M
     from test_v7 import make_candidate
+    c = make_candidate()
+    c.setup_code = "TLBREAK"
+    c.metadata["confirm_tf"] = "15m"
+    from analysis.models import EvidenceItem
+    _titles = ["ساختار و موقعیت تایم‌فریم بالاتر", "شکست ساختار و Displacement", "ناحیه ورود و Freshness", "اهداف ساختاری و نسبت سود به زیان", "نقدشوندگی و شرایط بازار", "شکست ساختاری - VIVA-TLBREAK"]
+    _keys = ["htf", "displacement", "poi", "rr", "market", "viva"]
+    c.evidence = [EvidenceItem(k, t, "جزئیات نمونه.", i % 2 == 0, 2)
+                  for i, (k, t) in enumerate(zip(_keys, _titles))]
+    msg = M.build_educational_message(c)
+    lines = [ln for ln in msg.split("\n")]
+    assert lines[0].startswith("🏷 <b>VIVA-TLBREAK</b>")
+    nonempty = [ln for ln in lines if ln.strip()]
+    assert nonempty[1].startswith("🆔 <code>")          # id right under the badge
+    assert lines[1].startswith("🆔 <code>") and lines[2].startswith("━")  # id directly under badge, separator next
+    assert "🎯 ستاپ: <b>VIVA-TLBREAK</b> |" in msg
+    assert "📚 <b>تحلیل آموزشی | ستاپ در حال بررسی</b>" in msg
+    assert "⛔ <b>این پیام تأیید ورود نیست</b>" in msg
+    _sym_ln = msg.split("🪙")[1].split("\n")[0]
+    assert "<b>BTCUSDT</b>" in _sym_ln and "SWING" in _sym_ln and "15M" in _sym_ln  # TF beside symbol
+    assert "🧠" not in msg                                      # no invented sections
+    assert "⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود" in msg
+    assert "⛔ Entry،" not in msg                               # English-first lines banned
+    assert msg.count("━━━━━━━━") >= 6                           # separators to the end
+    # every bold section title is Persian-first (emoji, then Persian, English allowed later)
+    for title in _titles:
 
-    def msg_for(setup):
-        c = make_candidate()
-        c.setup_code = setup
-        c.strategy_fa = f"x | y"
-        return M.build_educational_message(c)
+        assert f"<b>{title}</b>" in msg, title
 
-    tlb, alb, pin, tc = msg_for("TLBREAK"), msg_for("ALBROX"), msg_for("PINVAL"), msg_for("TECHCLASSIC")
-    assert "🧠 <b>روش‌شناسی TLBREAK</b>" in tlb and "Retest" in tlb
-    assert "روش‌شناسی ALBROX" in alb and "بروکس" in alb and "کند‌به‌کند" in alb
-    assert "نقدینگی" in pin and "Stop-Hunt" in pin
-    assert "Measured Move" in tc and "پرچم" in tc
-    assert tlb != alb != pin != tc                                     # never one model
+    cap = M._compact_alert_caption(c)
+    assert cap.split("\n")[0].startswith("🏷 <b>VIVA ✦ TLBREAK</b>")
+    assert "🪙 <b>BTCUSDT</b>  •  SWING  •  15M" in cap
+    assert "⭐ امتیاز فعلی: 6/10\n🆔 <code>" in cap or "🆔" in cap.split("⭐ امتیاز فعلی")[1][:60]
+    assert "کلوز معتبر ۱۵ دقیقه" in cap                        # Persian TF name, no gap
+    assert "⛔ Entry،" not in cap and "⛔ ورود، اهرم" in cap
+    assert "📢 VivaMon Labs Pro" in cap
+
+    ap = M._approaching_caption(c, 99.6, 0.31)
+    _ap_ln = ap.split("🪙")[1].split("\n")[0]
+    assert "BTCUSDT" in _ap_ln and "15M" in _ap_ln       # TF beside the symbol
+
+
+def test_teclassic_public_code_family():
+    """«VIVA-TECLASSIC-T000000» — the zeros become unique digits; own letter for
+    TechnoClassic, K stays for the rest."""
+    import re
+    from analysis.models import generate_viva_public_code
+    tc = generate_viva_public_code("TECHCLASSIC", "SWING")
+    assert re.fullmatch(r"VIVA-TECLASSIC-T\d{6}", tc), tc
+    digits = tc.rsplit("T", 1)[1]
+    assert len(set(digits)) >= 2          # never a uniform block
+    tlb = generate_viva_public_code("TLBREAK", "SWING")
+    assert re.fullmatch(r"VIVA-TLBREAK-K\d{6}", tlb), tlb
+
+
+def test_s6_fast_confirm_survives_later_ticks():
+    """The bug that killed runaways: the fast lane marked S6, a same-tick RR/
+    chase rejection threw the chain back, and every later tick froze in
+    WAIT_S6_CONFIRMED. The one-close verdict must now persist while the
+    scenario is not invalidated."""
+    import pandas as pd
+    from datetime import datetime, timedelta, timezone
+    from test_v7 import make_candidate
+    from analysis.quality_engine import evaluate_confirmation
+    t0 = datetime(2026, 9, 11, 12, 0, tzinfo=timezone.utc)
+    rows = []
+    for i in range(32):
+        base = 98.0 if i < 28 else 100.2
+        rows.append({"timestamp": t0 + timedelta(minutes=15 * i), "open": base - 0.02,
+                     "high": base + 0.05, "low": base - 0.10, "close": base, "volume": 1000.0})
+    df = pd.DataFrame(rows).set_index("timestamp")
+    df.index.name = "timestamp"
+    df["timestamp"] = df.index
+    cand = make_candidate()
+    cand.setup_code = "TLBREAK"
+    cand.status = "NEAR_CONFIRM"
+    cand.entry_zone_bottom, cand.entry_zone_top = 99.8, 100.2
+    cand.planned_entry, cand.sl = 100.1, 98.6
+    cand.tp1, cand.tp2 = 106.0, 109.0
+    cand.created_at = (t0 + timedelta(minutes=15 * 27)).isoformat()
+    cand.metadata.update({
+        "strategy_variant": "VIVA_TLBREAK", "viva_breakout_line": 100.0, "atr": 1.0,
+        "confirm_tf": "15m", "touched": True, "viva_state": "S6_CONFIRMED",
+        "viva_state_machine": {"stage": "S6_CONFIRMED"},
+    })
+    ok, _c, reason = evaluate_confirmation(cand, df)
+    assert ok is True, f"S6 chain must stay confirmable: {reason}"
+    # invalidation still owns the kill switch: a LONG whose close breaks BELOW
+    # the SL must never confirm, S6 or not
+    df2 = df.copy()
+    df2.loc[df2.index[-1], ["close", "open", "low"]] = [98.0, 98.4, 97.8]
+    cand2 = make_candidate()
+    cand2.setup_code = "TLBREAK"
+    cand2.status = "NEAR_CONFIRM"
+    cand2.entry_zone_bottom, cand2.entry_zone_top = 99.8, 100.2
+    cand2.planned_entry, cand2.sl = 100.1, 98.6
+    cand2.tp1, cand2.tp2 = 106.0, 109.0
+    cand2.created_at = cand.created_at
+    cand2.metadata.update(dict(cand.metadata, viva_state="S6_CONFIRMED"))
+    ok2, _c3, why2 = evaluate_confirmation(cand2, df2)
+    assert ok2 is False and "ابطال" in (why2 or "") or "INVALIDATION" in str(
+        cand2.metadata.get("last_reject_code") or "")
 
 
 def test_fast_break_followthrough_confirms_without_retest():

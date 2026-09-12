@@ -251,6 +251,14 @@ def evaluate_confirmation(
             candidate.metadata["viva_state_machine"] = machine.payload()
             candidate.metadata["viva_state"] = "S6_CONFIRMED"
             ready, state = True, "S6_CONFIRMED"
+        if not ready and str(candidate.metadata.get("viva_state") or "") == "S6_CONFIRMED":
+            # Viva 2026-09-12: once the ONE-CLOSE law has fired (fast lane set
+            # S6 on an earlier tick), the verdict must survive — a downstream
+            # RR/chase rejection on that tick used to freeze the chain in
+            # WAIT_S6_CONFIRMED forever, which is exactly what killed the
+            # runaways («یه چیزی داره جلوی تاییدها رو میگیره»). Invalidation and
+            # expiry keep full veto over the scenario; the close itself does not.
+            state, ready = "S6_CONFIRMED", True
         if not ready:
             return reject("VIVA_TLBREAK_WAIT_" + state, "VIVA-TLBREAK در انتظار Retest → Rejection → BOS پنج‌دقیقه‌ای است.")
     close, open_price = float(row["close"]), float(row["open"])
@@ -284,6 +292,9 @@ def evaluate_confirmation(
         and displacement["body_atr"] >= SETTINGS.confirm_body_min_atr
     )
     alt_only = False
+    if not trigger_valid and str(candidate.metadata.get("viva_state") or "") == "S6_CONFIRMED" \
+            and candidate.metadata.get("strategy_variant") == "VIVA_TLBREAK":
+        trigger_valid = True  # the valid close that set S6 was the trigger
     if not trigger_valid and candidate.metadata.get("tl_fast_break"):
         trigger_valid = True
         candidate.metadata["trigger_note"] = "شکستِ معتبر + دو کلوز پشت خط (بدون پولبک)"

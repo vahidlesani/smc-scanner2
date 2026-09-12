@@ -1426,59 +1426,6 @@ def _viva_tlbreak_sections(candidate: SignalCandidate) -> str:
     )
 
 
-_SETUP_METHODOLOGY_FA = {
-    "TLBREAK": (
-        "ستاپ بر شکستِ معتبرِ خطِ ترند/سطح استوار است: خط روی حداقل دو پیوتِ ماژور فیت شده، "
-        "کندلِ شکست باید بدنه و حجم قابل‌اتکا داشته باشد (نه Wick) و پس از شکست، "
-        "Retestِ همان خط با کلوزِ معتبرِ تایم تأیید (یک پله پایین‌تر از تایم الگو) بررسی می‌شود. "
-        "شکستِ خالی بدون جابه‌جایی، فقط «لمس» است؛ امتیاز ستاپ تا کامل‌شدن این زنجیره بالا نمی‌رود."),
-    "ALBROX": (
-        "روش ال‌بروکس: تحلیل کند‌به‌کند در چرخهٔ بازار (شکست → کانال → رنج). شکستِ معتبر با "
-        "کندلِ Breakout و ادامهٔ حرکت، سپس Signal/Entry Bar در نیمهٔ قدرتمند کندل و ورود در "
-        "میانهٔ Breakout Bar یا Reversal Bar انتهای کلاستر. در رنج، شکست‌های پشت‌سرهم بی‌اعتبارند؛ "
-        "این ستاپ صبر برای الگوی دوم را روی همه‌چیز ترجیح می‌دهد."),
-    "TECHCLASSIC": (
-        "الگوهای کلاسیک (پرچم، مثلث، دو قله/کف، سر و شانه، گسترده‌شدن): اعتبار الگو با شکستِ "
-        "خط‌الگو همراه با بدنه و حجم سنجیده می‌شود؛ Retestِ خطِ شکسته‌شده نقطهٔ کم‌ریسک است و "
-        "هدف اول از ارتفاعِ خودِ الگو (Measured Move) می‌آید. شکست از هر دوِ ضلع الگو مجاز است."),
-    "PINVAL": (
-        "پین‌بار به‌خودی‌خود سیگنال نیست؛ Location اولویت است: شدوی بلند باید نقدینگیِ پشتِ "
-        "سطح را جمع کرده باشد (Stop-Hunt/Sweep) و بدنه در جهتِ Rejection ببندد. تایید نهایی با "
-        "شکستِ micro-structure در تایم پایین و کلوزِ فراتر از نوکِ شدو صادر می‌شود."),
-    "PINWALLQ": (
-        "نسخهٔ غربال‌شدهٔ پین‌وال: همان منطق اسمارت‌مانی (سوییپِ نقدینگی + Rejection روی سطح "
-        "عرضه/تقاضا) با فیلترِ پولاریتیِ تایم بالاتر؛ پینِ خلافِ جهتِ سطحِ معتبر، بدون Flipِ "
-        "تأییدشده، رد می‌شود."),
-    "LSR": (
-        " جاروی نقدینگی و بازگشت: شکارِ کف/سقفِ هم‌تراز (Equal Lows/Highs) و Close مجدد داخل "
-        "بازه؛ ناحیهٔ ورود لبهٔ Sweep است و تأیید با ساختارِ تایم پایین."),
-    "SDR": (
-        "ناحیهٔ عرضه/تقاضای تازه با Imbalance ثبت‌شده؛ اولین بازگشت (Fresh) بهترین فرصت است — "
-        "لمسِ دوم به‌بعد احتمال Mitigation بالا می‌رود."),
-    "BOS1": (
-        "Break of Structure و پولبکِ کم‌عمق به بلوکِ شکسته‌شده؛ توقفِ حرکت در نیمهٔ مخالفِ "
-        "کندلِ شکست، ستاپ را بی‌اعتبار می‌کند."),
-    "IFVG": (
-        "Inversionِ FVG: شکستِ معکوسِ یک خلأ با کلوزِ پشت آن، سطح را از تقاضا به عرضه (یا برعکس) "
-        "جابه‌جا می‌کند؛ retestِ سطحِ Flip‌شده محل ورود است."),
-    "TLR": (
-        "ادامهٔ روند با retestِ خط روند؛ شکستِ خط یعنی ابطال، نه سیگنالِ مخالف."),
-    "P1234": (
-        "الگوی ۱-۲-۳-۴ِ وارونگی: نقطهٔ ۴ باید قله/درهٔ پیشین را بشکند؛ تثبیتِ قیمت بالای کفِ ۲ "
-        "و ADXِ رو‌به‌رشد، ستاپ را زنده نگه می‌دارد."),
-}
-
-
-def _setup_methodology_fa(candidate: SignalCandidate) -> str:
-    """Viva 2026-09-11: each setup must explain itself with ITS OWN doctrine —
-    «توضیحات مفصل هر ستاپ باید متناسب و مربوط به همون ستاپ باشه، نه یک مدل».
-    Returns "" for unknown setup codes (the message then simply omits the block)."""
-    txt = _SETUP_METHODOLOGY_FA.get(str(candidate.setup_code or "").upper())
-    if not txt:
-        return ""
-    return f"🧠 <b>روش‌شناسی {candidate.setup_code}</b>\n\n{_e(txt)}"
-
-
 def build_educational_message(candidate: SignalCandidate) -> str:
     direction_fa = "سناریوی احتمالی خرید" if candidate.direction == "LONG" else "سناریوی احتمالی فروش"
     evidence_blocks = []
@@ -1487,19 +1434,26 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         evidence_blocks.append(f"{status} <b>{_e(item.title)}</b>\n\n{_e(item.detail)}")
     confirmations = "\n".join(f"• {_e(item)}" for item in candidate.confirmations) or "• تأیید کمکی اضافه‌ای ثبت نشده است."
     warnings = "\n".join(f"• {_e(item)}" for item in candidate.warnings)
+    tf_tag = str(candidate.trigger_timeframe or "").upper()
+    head = str(candidate.strategy_fa)
+    setup_line_fa = head.split("|", 1)[-1].strip() if "|" in head else head
     return (
+        # Viva 2026-09-12 (verbatim skeleton): 🏷 label first, the unique 🆔
+        # code right under it (same rule as the hit messages), then the fixed
+        # educational header block; every concept separated by ━━━ to the end.
+        f"🏷 <b>VIVA-{_e(candidate.setup_code)}</b>\n"
+        f"🆔 <code>{_e(_public_code(candidate))}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📚 <b>تحلیل آموزشی | ستاپ در حال بررسی</b>\n"
         f"⛔ <b>این پیام تأیید ورود نیست</b>\n"
         f"👀 فقط برای رصد بازار و اهداف آموزشی\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}\n"
+        f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}  •  {_e(tf_tag)}\n"
         f"🌐 {_e(_market_label(candidate))}\n"
         f"🧭 {_e(direction_fa)}\n"
-        f"🎯 ستاپ: <b>{_e(candidate.strategy_fa)}</b>\n"
+        f"🎯 ستاپ: <b>VIVA-{_e(candidate.setup_code)}</b> | {_e(setup_line_fa)}\n"
         f"⭐ امتیاز فعلی: <b>{candidate.score}/10</b>\n"
-        f"🆔 <code>{_e(_public_code(candidate))}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        + ((lambda m: f"{m}\n\n━━━━━━━━━━━━━━━━━━━━\n\n" if m else "")(_setup_methodology_fa(candidate)))
         + "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(evidence_blocks)
         + f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
         f"🔎 <b>ناحیه‌ای که زیر نظر داریم</b>\n\n"
@@ -1509,8 +1463,9 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         f"{_htf_context_fa(candidate)}\n\n"
         f"🧩 <b>تأییدهای کمکی</b>\n{confirmations}\n\n"
         f"⚠️ <b>شرایط و هشدارها</b>\n{warnings}\n\n"
-        f"⛔ Entry، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود.\n"
+        f"⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود\n"
         f"✅ در صورت تکمیل شرایط، ابتدا Approaching و سپس Confirmed ارسال می‌شود.\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📢 <b>{_e(SETTINGS.channel_name)}</b>"
     )
 
@@ -1644,14 +1599,15 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
     setup_line = head.split("|", 1)[-1].strip() if "|" in head else head
     dir_fa = "🧭 سناریوی احتمالی خرید" if candidate.direction == "LONG" else "🧭 سناریوی احتمالی فروش"
     badge, _ = _setup_badge(candidate)
+    tf_tag = str(candidate.trigger_timeframe or "").upper()
     rows = [
         f"🏷 <b>{_e(badge)}</b>",
         VIVA_SEP,
         "📚 <b>تحلیل آموزشی | ستاپ در حال بررسی</b>",
-        "⛔ این پیام تأیید ورود نیست",
+        "⛔ <b>این پیام تأیید ورود نیست</b>",
         "👀 فقط برای رصد بازار و اهداف آموزشی",
         VIVA_SEP,
-        f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}",
+        f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}  •  {_e(tf_tag)}",
         f"🌐 {_e(str(candidate.market or 'OURBIT').upper())} • کریپتو",
         dir_fa,
         f"🎯 ستاپ: <b>VIVA-{_e(candidate.setup_code)}</b> | {_e(setup_line)}",
@@ -1661,16 +1617,21 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
         "🔎 <b>ناحیه‌ای که زیر نظر داریم</b>",
         f"از {_price(candidate.entry_zone_bottom)} تا {_price(candidate.entry_zone_top)}",
         f"سطح ابطال سناریو: {_price(candidate.sl)}",
+        "",
+    ]
+    rows.append(_confirm_rule_fa(candidate))          # carries the Persian TF name
+    rows.append("")
+    rows += [
+        "🧭 <b>کانتکست تایم بالاتر</b>",
+        f"• بایاس ساختاری: {_BIAS_FA.get(str(candidate.bias).upper(), _e(str(candidate.bias)))}",
     ]
     for line in (extra_lines or []):
         rows.append(line)
     rows += [
-        f"⚖️ <b>شرط تأیید:</b> بازگشت به ناحیه + کلوز معتبر  در جهت سناریو • "
-        f"ابطال: عبور معتبر از {_price(candidate.sl)}",
-        "🧭 <b>کانتکست تایم بالاتر</b>",
-        f"• بایاس ساختاری: {_BIAS_FA.get(str(candidate.bias).upper(), _e(str(candidate.bias)))}",
-        "⛔ Entry، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود.",
+        VIVA_SEP,
+        "⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود",
         "✅ در صورت تکمیل شرایط، ابتدا Approaching و سپس Confirmed ارسال می‌شود.",
+        VIVA_SEP,
         "📢 VivaMon Labs Pro",
     ]
     return "\n".join(rows)
@@ -1772,7 +1733,7 @@ def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
         state_fa + " • <b>این پیام همیشه جایگزین آخرین آپدیت می‌شود</b>",
         "⛔ تأیید ورود نیست",
         VIVA_SEP,
-        f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}",
+        f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}  •  {_e(str(candidate.trigger_timeframe or '').upper())}",
         f"📍 ناحیه: {_price(candidate.entry_zone_bottom)} تا {_price(candidate.entry_zone_top)} • ابطال: {_price(candidate.sl)}",
         f"⭐ امتیاز فعلی: {int(candidate.score)}/10 • {dir_fa}",
     ]
@@ -1884,7 +1845,8 @@ def _approaching_caption(candidate: SignalCandidate, current_price: float, dista
     return (
         f"🏷 <b>{_e(badge)}</b>\n{VIVA_SEP}\n"
         f"⚡ <b>هشدار نهایی | آماده‌سازی ورود</b>\n\n"
-        f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(candidate.style)} • {_e(candidate.direction)}\n"
+        f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(str(candidate.trigger_timeframe or '').upper())} • "
+        f"{_e(candidate.style)} • {_e(candidate.direction)}\n"
         f"{VIVA_SEP}\n"
         f"🕓 <b>زمان رصد — ایران:</b> {_iran_time(candidate)}\n"
         f"📨 <b>زمان ارسال — ایران:</b> {_iran_now()}\n"

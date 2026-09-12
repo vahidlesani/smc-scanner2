@@ -126,10 +126,15 @@ def generate_viva_public_code(setup_code: str = "", style: str = "") -> str:
         "PINVAL": "PINWALL", "PINWALLQ": "PINWALLQ", "TLBREAK": "TLBREAK",
         "ALBROX": "ALBROX", "P1234": "P1234", "LSR": "LSR", "SDR": "SDR",
         "BOS1": "BOS", "IFVG": "IFVG", "TLR": "TLR",
+        # Viva 2026-09-12: TechnoClassic keeps its OWN family code
+        # «VIVA-TECLASSIC-T######» — different letter, unique digits reserved
+        # atomically by reserve_public_code (never the randomness).
+        "TECHCLASSIC": "TECLASSIC",
     }
     raw = "".join(ch for ch in str(setup_code).upper() if ch.isalnum())[:12]
     label = label_map.get(raw, raw or "SETUP")
+    letter = "T" if raw == "TECHCLASSIC" else "K"
     # Human-readable proposal only. Before any Telegram publication it is
     # atomically reserved in PostgreSQL by `reserve_public_code`, so randomness
     # never becomes the uniqueness guarantee.
-    return f"VIVA-{label}-K{secrets.randbelow(900000) + 100000}"
+    return f"VIVA-{label}-{letter}{secrets.randbelow(900000) + 100000}"

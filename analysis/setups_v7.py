@@ -629,7 +629,7 @@ def _base_candidate(
     evidence = [
         EvidenceItem("htf", "ساختار و موقعیت تایم‌فریم بالاتر", htf_detail, context_aligned and lower_aligned and location_ok, 2),
         special_evidence,
-        EvidenceItem("displacement", "Displacement و شکست ساختار", displacement_detail, bool(impulse.get("valid")), 2),
+        EvidenceItem("displacement", "شکست ساختار و Displacement", displacement_detail, bool(impulse.get("valid")), 2),
         EvidenceItem("poi", "ناحیه ورود و Freshness", poi_detail, poi.get("touches", 0) <= 1, 2),
         EvidenceItem("rr", "اهداف ساختاری و نسبت سود به زیان", rr_detail, rr_ok, 1),
         EvidenceItem("market", "نقدشوندگی و شرایط بازار", market_detail, market_ok, market_points),

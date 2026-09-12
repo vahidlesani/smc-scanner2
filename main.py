@@ -345,6 +345,7 @@ def run_discovery_scan() -> Dict[str, int]:
     print(
         f"Discovery scan finished in {duration:.1f}s • "
         f"detected={stats['detected']} new={stats['new']} errors={stats['errors']} • "
+        f"deadgate={stats.get('dead_gate', 0)} "
         f"absorbed={stats.get('chain_absorbed', 0)} quiet={stats.get('same_zone_quiet', 0)} "
         f"liccap={stats.get('chain_license_cap', 0)} deferred={stats.get('edu_cycle_deferred', 0)}"
     )
