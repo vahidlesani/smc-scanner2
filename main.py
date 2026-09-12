@@ -867,7 +867,7 @@ def main() -> None:
         from database.bot_kv import set_json as _boot_set
         _boot_set("boot_version", {
             "sha": os.getenv("COMMIT_SHA", "local")[:12],
-            "build": "2026.09.11-5",
+            "build": "2026.09.12-1 (format-law + S6-unfreeze)",
             "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     except Exception as _boot_exc:
