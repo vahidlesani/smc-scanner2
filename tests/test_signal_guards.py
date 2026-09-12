@@ -159,8 +159,9 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         assert M.send_technoclassic_preview(ev2) is True
         assert len(edits) == 0 and len(photos) == 3              # never edited, always appended
         upd1 = photos[2]
-        assert upd1[2] == pro_mid                                # replies to the ANCHOR post
-        assert "\U0001f501" in upd1[1] and "\u0622\u067e\u062f\u06cc\u062a \u06f1" in upd1[1]   # «• آپدیت ۱»
+        assert upd1[3] == "-1004000000001" and upd1[2] == edu_mid   # updates post in the ALERTS channel, under the detail — never main
+        assert "\U0001f501" in upd1[1] and "\u0622\u067e\u062f\u06cc\u062a \u06f1" in upd1[1]   # «آخرین آپدیت • آپدیت ۱»
+        assert "\U0001fa99" in upd1[1] and "\u2696\ufe0f" in upd1[1]                # shared update layout with every other setup
         assert code in upd1[1]                                    # same unique id
         assert upd1[4] and str(edu_mid) in upd1[4]["inline_keyboard"][0][0]["url"]
         assert pro_mid not in deletes                             # anchor is PERMANENT
@@ -175,7 +176,7 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         assert M.send_technoclassic_preview(ev3) is True
         assert len(photos) == 4 and len(edits) == 0
         upd2 = photos[3]
-        assert upd2[2] == pro_mid and "آپدیت ۲" in upd2[1]
+        assert upd2[2] == edu_mid and upd2[3] == "-1004000000001" and "آپدیت ۲" in upd2[1]
         assert deletes == [upd1[0]]                               # only the superseded one, never the anchor
         assert upd2[4] and str(edu_mid) in upd2[4]["inline_keyboard"][0][0]["url"]
         chain = KV.get_json("tc_chain|GTTSTUSDT|4h", {})
@@ -613,3 +614,126 @@ def test_single_close_confirms_fast_lane():
     weak.loc[weak.index[-1], ["close", "open", "high", "low"]] = [99.90, 99.88, 99.98, 99.80]
     ok2, _, _ = evaluate_confirmation(_cand(), weak)
     assert ok2 is False  # a thin doji past nothing is not the confirmation
+
+
+def test_one_close_law_confirms_first_break_for_every_setup():
+    """Viva 2026-09-12 (the rage fix): NOBODY said confirmation requires a
+    retest. One valid closed candle beyond the break edge confirms — for a
+    TECHCLASSIC-style candidate with no VIVA_TLBREAK variant and never a zone
+    touch after creation."""
+    import pandas as pd
+    from datetime import datetime, timedelta, timezone
+    from test_v7 import make_candidate
+    from analysis.quality_engine import evaluate_confirmation
+    t0 = datetime(2026, 9, 11, 12, 0, tzinfo=timezone.utc)
+    rows = []
+    for i in range(32):
+        if i < 30:
+            o = h = l = c = 99.0
+        elif i == 30:
+            o, h, l, c = 99.9, 100.95, 99.85, 100.9
+        else:
+            o, h, l, c = 100.55, 101.25, 100.5, 101.2
+        rows.append({"timestamp": t0 + timedelta(minutes=5 * i), "open": o, "high": h,
+                     "low": l, "close": c, "volume": 1000.0})
+    df = pd.DataFrame(rows)
+    df["timestamp"] = df.index
+    cand = make_candidate()
+    cand.setup_code = "TECHCLASSIC"
+    cand.status = "NEAR_CONFIRM"
+    cand.direction = "LONG"
+    cand.entry_zone_bottom, cand.entry_zone_top = 100.0, 100.4
+    cand.planned_entry, cand.sl = 100.2, 99.2
+    cand.tp1, cand.tp2 = 105.0, 108.0
+    cand.created_at = (t0 + timedelta(minutes=5 * 29)).isoformat()
+    cand.metadata.pop("strategy_variant", None)
+    cand.metadata.update({"atr": 0.8, "confirm_tf": "5m", "touched": False})
+    cand.mandatory_gates = {"liquidity": True, "displacement": True, "location": True}
+    ok, out, why = evaluate_confirmation(cand, df)
+    assert ok is True, f"clean first break must confirm without any pullback: {why}"
+    assert out.status == "CONFIRMED"
+    assert "پولبک شرط نیست" in str(out.metadata.get("tl_fast_break") or "")
+    # and the wait-reject now only fires when price has NOT even reached the edge
+    cand2 = make_candidate()
+    cand2.setup_code = "TECHCLASSIC"
+    cand2.status = "NEAR_CONFIRM"
+    cand2.direction = "LONG"
+    cand2.entry_zone_bottom, cand2.entry_zone_top = 103.0, 103.4
+    cand2.planned_entry, cand2.sl = 103.2, 99.2
+    cand2.tp1, cand2.tp2 = 107.0, 109.0
+    cand2.created_at = cand.created_at
+    cand2.metadata.pop("strategy_variant", None)
+    cand2.metadata.update({"atr": 0.8, "confirm_tf": "5m", "touched": False})
+    cand2.mandatory_gates = {"liquidity": True, "displacement": True, "location": True}
+    ok2, _o2, _w2 = evaluate_confirmation(cand2, df)
+    assert ok2 is False   # price never touched nor passed that zone — still waiting
+
+
+def test_identical_updates_are_swallowed():
+    """«توی ثانیه چه تغییری شده که آپدیت میده؟!» — an update posts only when
+    the content actually changed; a repeat with identical content dies before
+    Telegram."""
+    import bot.messages_v7 as M
+    import database.bot_kv as KV
+    KV._TABLE_READY["done"] = False
+    from test_v7 import make_candidate
+    os.environ["CANDIDATE_DB_BACKEND"] = "sqlite"
+    import tempfile, os as _os
+    fd, path = tempfile.mkstemp(suffix=".db"); _os.close(fd)
+    os.environ["CANDIDATE_DB_PATH"] = path
+    KV._TABLE_READY["done"] = False
+    sent = {"n": 0}
+    old_send = M.send_message
+    M.CHAT_ID_EDUCATION = "-1004000000001"
+
+    def fake_send(text, chat_id=None, reply_to_message_id=None, reply_markup=None):
+        sent["n"] += 1
+        return 7000 + sent["n"]
+    M.send_message = fake_send
+    try:
+        KV.set_json("setup_chain|VIVA-TLBREAK-K333333", {"edu": 5, "upd": 0, "upd_n": 0})
+        c = make_candidate()
+        c.metadata["public_code"] = "VIVA-TLBREAK-K333333"
+        import data.fetcher as F
+        old_kl = F.get_klines
+        F.get_klines = lambda *a, **k: None
+        try:
+            assert M.send_setup_update(c, None, note_fa="تازه") is True
+            n1 = sent["n"]
+            assert M.send_setup_update(c, None, note_fa="تازه") is False   # identical → swallowed
+            assert sent["n"] == n1                                          # nothing new posted
+            assert M.send_setup_update(c, None, note_fa="ناحیه جابه‌جا شد") is True
+            assert sent["n"] == n1 + 1
+        finally:
+            F.get_klines = old_kl
+    finally:
+        M.send_message = old_send
+        for k in ("CANDIDATE_DB_BACKEND", "CANDIDATE_DB_PATH"):
+            os.environ.pop(k, None)
+        KV._TABLE_READY["done"] = False
+        try:
+            _os.unlink(path)
+        except OSError:
+            pass
+
+
+def test_confirm_rule_law_text_and_no_gaps():
+    import bot.messages_v7 as M
+    from test_v7 import make_candidate
+    c = make_candidate()
+    c.setup_code = "TLBREAK"
+    rule = M._confirm_rule_fa(c)
+    assert "پولبک شرط نیست" in rule
+    assert "بازگشت به ناحیه" not in rule
+    assert "کلوز معتبر  " not in rule and " معتبر \u0641ر" not in rule   # never a blank TF
+    c.metadata.pop("confirm_tf", None)
+    rule2 = M._confirm_rule_fa(c)
+    import re as _re
+    assert not _re.search(r"کلوز معتبر ف", rule2.replace("فراتر", "فَراتر")) or "  " not in rule2.replace("‌", "")
+    # thin candidate: NO empty separator gap, NO empty ⚠️ block
+    c.evidence = []
+    c.warnings = []
+    msg = M.build_educational_message(c)
+    assert "\u2501"*20 + "\n\n\n\n" not in msg
+    assert "</b>\n\n━━━━━━━━━━━━━━━━━━━━\n🔎" in msg   # ONE separator, then 🔎 — no empty block
+    assert "فقط رصد بازار است" in msg                       # default warnings carry meaning

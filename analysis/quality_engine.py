@@ -143,45 +143,46 @@ def evaluate_confirmation(
     if after is None or after.empty:
         return reject("NO_NEW_BAR", "هنوز کندلی بعد از ایجاد ستاپ بسته نشده است.")
 
-    # ── FAST BREAK FOLLOW-THROUGH (Viva 2026-09-11) ──────────────────────
-    # TLBREAK doctrine: the FIRST BREAK is a valid entry — «بگرد ببین چی جلوی
-    # کانفرمد رو گرفته که موقعیت‌ها رو می‌سوزونه». When price broke the fitted
-    # line and prints two consecutive closes beyond it (no close back inside
-    # for the last 4) with a real displacement body, that IS the confirmation:
-    # no retest may be demanded, and NO_TOUCH must not veto it. Scoring stays
-    # additive: the lane never loosens invalidation/chase/RR guards.
+    # ── ONE-CLOSE LAW, EVERY SETUP (Viva 2026-09-12, final) ──────────────
+    # «کی به تو گفته تأیید سیگنال حتماً باید ریتست ناحیه باشه؟!» — nobody.
+    # Confirmation is exactly ONE closed candle of the confirm timeframe that
+    # prints a valid close beyond the break edge: the fitted line when the
+    # setup has one, else the zone's entry edge, ≥0.10 ATR past it, directional
+    # with body ≥0.25 ATR. First break is confirmable WITHOUT any pullback; a
+    # missing zone-touch may never hard-reject it. Everything else (invalidation,
+    # expiry, RR floor, mandatory gates) keeps full veto.
     fast_lane = ""
-    if (candidate.metadata.get("strategy_variant") == "VIVA_TLBREAK"
-            and not candidate.metadata.get("touched", False)):
-        _line = candidate.metadata.get("viva_breakout_line") or candidate.metadata.get("viva_break_line")
+    _edge = 0.0
+    for _k in ("viva_breakout_line", "viva_break_line", "viva_watch_line"):
         try:
-            _line = float(_line) if _line else 0.0
+            _v = float(candidate.metadata.get(_k) or 0.0)
         except Exception:
-            _line = 0.0
-        if _line > 0:
-            _atr = float(candidate.metadata.get("atr", 0) or 0) or float(
-                (closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
-            if _atr > 0 and len(after) >= 1:
-                # Viva 2026-09-11: ONE closed candle of the confirmation TF
-                # beyond the broken line is the confirmation — no retest, no
-                # two-close ceremony; weak closes are the trader's filter.
-                _is_long = candidate.direction == "LONG"
-                _buf = 0.10 * _atr
-                _r = after.iloc[-1]
-                _out = bool(float(_r["close"]) >= _line + _buf) if _is_long \
-                    else bool(float(_r["close"]) <= _line - _buf)
-                _body = abs(float(_r["close"]) - float(_r["open"])) / _atr
-                _dir_ok = (float(_r["close"]) > float(_r["open"])) if _is_long \
-                    else (float(_r["close"]) < float(_r["open"]))
-                if _out and _body >= 0.25 and _dir_ok:
-                    fast_lane = (f"یک کلوزِ معتبرِ پشت‌خط در تأیید "
-                                 f"{candidate.metadata.get('confirm_tf', '')} "
-                                 f"(≥{_buf / _atr:.2f} ATR فراتر از خط، Body {_body:.2f} ATR)")
-                    candidate.metadata["tl_fast_break"] = fast_lane
-
-    touched = bool(candidate.metadata.get("touched", False)) or bool(fast_lane)
+            _v = 0.0
+        if _v > 0:
+            _edge = _v
+            break
+    if _edge <= 0:
+        _edge = float(candidate.entry_zone_top if candidate.direction == "LONG"
+                      else candidate.entry_zone_bottom)
+    _atr = float(candidate.metadata.get("atr", 0) or 0) or float(
+        (closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
+    touched = bool(candidate.metadata.get("touched", False))
+    if _atr > 0 and len(after) >= 1 and _edge > 0:
+        _is_long = candidate.direction == "LONG"
+        _buf = 0.10 * _atr
+        _r = after.iloc[-1]
+        _out = bool(float(_r["close"]) >= _edge + _buf) if _is_long \
+            else bool(float(_r["close"]) <= _edge - _buf)
+        _body = abs(float(_r["close"]) - float(_r["open"])) / _atr
+        _dir_ok = (float(_r["close"]) > float(_r["open"])) if _is_long \
+            else (float(_r["close"]) < float(_r["open"]))
+        if _out and _body >= 0.25 and _dir_ok:
+            _ctf = str(candidate.metadata.get("confirm_tf") or "").strip()
+            fast_lane = (f"یک کلوزِ معتبرِ فراتر از لبه در تأیید {_ctf} "
+                         f"(≥{_buf / _atr:.2f} ATR پشت لبه، Body {_body:.2f} ATR) — پولبک شرط نیست")
+            candidate.metadata["tl_fast_break"] = fast_lane
     if not touched:
-        touched = bool(
+        touched = bool(fast_lane) or bool(
             (
                 (after["low"] <= candidate.entry_zone_top)
                 & (after["high"] >= candidate.entry_zone_bottom)
@@ -189,7 +190,7 @@ def evaluate_confirmation(
         )
     candidate.metadata["touched"] = touched
     if not touched:
-        return reject("NO_TOUCH", "قیمت هنوز اولین Retest ناحیه ورود را انجام نداده است.")
+        return reject("NO_TOUCH", "قیمت هنوز به لبهٔ ناحیه/خط نرسیده؛ با یک کلوزِ معتبرِ فراتر از لبه تأیید می‌شود.")
 
     row = closed_df.iloc[-1]
     previous = closed_df.iloc[-2]

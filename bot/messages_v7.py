@@ -227,9 +227,19 @@ def _confirm_rule_fa(candidate: SignalCandidate) -> str:
             kill = f"کلوز {tf_fa} بالای {_price(hi)}"
         return f"⚖️ <b>شرط تأیید (تا {n} کندل {tf_fa} بعد):</b> {cond} • <b>ابطال:</b> {kill}"
     ctf = str(md.get("confirm_tf") or "").upper()
-    ctf_fa = _TF_FA.get(str(md.get("confirm_tf") or "").lower(), ctf)
+    if not ctf:
+        # never print a blank timeframe: fall back to the standard ladder
+        # (one step below the pattern TF) — same rule the engine confirms on
+        try:
+            from analysis.setups_v7 import confirm_timeframe_for_pattern, timeframe_profile
+            _ctx, _mid_tf, _trg = timeframe_profile(candidate.style)
+            ctf = str(confirm_timeframe_for_pattern(
+                _ctx, candidate.style, candidate.trigger_timeframe or _trg) or "").upper()
+        except Exception:
+            ctf = ""
+    ctf_fa = _TF_FA.get(ctf.lower(), ctf) or "تایم تأیید"
     return (
-        f"⚖️ <b>شرط تأیید:</b> بازگشت به ناحیه + کلوز معتبر {ctf_fa} در جهت سناریو"
+        f"⚖️ <b>شرط تأیید:</b> یک کلوز معتبر {ctf_fa} فراتر از لبهٔ ناحیه در جهت سناریو (پولبک شرط نیست)"
         f" • <b>ابطال:</b> عبور معتبر از {_price(candidate.sl)}"
     )
 
@@ -1433,7 +1443,19 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         status = "✅" if item.confirmed else "⚠️"
         evidence_blocks.append(f"{status} <b>{_e(item.title)}</b>\n\n{_e(item.detail)}")
     confirmations = "\n".join(f"• {_e(item)}" for item in candidate.confirmations) or "• تأیید کمکی اضافه‌ای ثبت نشده است."
-    warnings = "\n".join(f"• {_e(item)}" for item in candidate.warnings)
+    warn_items = [str(x) for x in (candidate.warnings or []) if str(x).strip()]
+    if not warn_items:
+        warn_items = ["این پیام فقط رصد بازار است؛ شرط تبدیل به سیگنال در خط ⚖️ آمده است.",
+                      f"عبور معتبر از {_price(candidate.sl)} سناریو را باطل می‌کند."]
+    warnings = "\n".join(f"• {_e(x)}" for x in warn_items)
+    # empty sections never print as a gap between two separators (Viva law
+    # 2026-09-12): the block exists only when it carries content
+    if evidence_blocks:
+        evidence_sec = ("\n\n" + VIVA_SEP + "\n\n"
+                        + ("\n\n" + VIVA_SEP + "\n\n").join(evidence_blocks)
+                        + "\n\n" + VIVA_SEP + "\n")
+    else:
+        evidence_sec = "\n" + VIVA_SEP + "\n"
     tf_tag = str(candidate.trigger_timeframe or "").upper()
     head = str(candidate.strategy_fa)
     setup_line_fa = head.split("|", 1)[-1].strip() if "|" in head else head
@@ -1453,16 +1475,17 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         f"🧭 {_e(direction_fa)}\n"
         f"🎯 ستاپ: <b>VIVA-{_e(candidate.setup_code)}</b> | {_e(setup_line_fa)}\n"
         f"⭐ امتیاز فعلی: <b>{candidate.score}/10</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        + "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(evidence_blocks)
-        + f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔎 <b>ناحیه‌ای که زیر نظر داریم</b>\n\n"
+        + evidence_sec
+        +        f"🔎 <b>ناحیه‌ای که زیر نظر داریم</b>\n\n"
         f"از <b>{_price(candidate.entry_zone_bottom)}</b> تا <b>{_price(candidate.entry_zone_top)}</b>\n"
         f"سطح ابطال سناریو: <b>{_price(candidate.sl)}</b>\n\n"
-        f"{_confirm_rule_fa(candidate)}\n\n"
-        f"{_htf_context_fa(candidate)}\n\n"
-        f"🧩 <b>تأییدهای کمکی</b>\n{confirmations}\n\n"
-        f"⚠️ <b>شرایط و هشدارها</b>\n{warnings}\n\n"
+        f"{_confirm_rule_fa(candidate)}\n"
+        f"{VIVA_SEP}\n"
+        f"{_htf_context_fa(candidate)}\n"
+        f"{VIVA_SEP}\n"
+        f"🧩 <b>تأییدهای کمکی</b>\n{confirmations}\n"
+        f"{VIVA_SEP}\n"
+        f"⚠️ <b>شرایط و هشدارها</b>\n{warnings}\n"
         f"⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود\n"
         f"✅ در صورت تکمیل شرایط، ابتدا Approaching و سپس Confirmed ارسال می‌شود.\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -1756,7 +1779,7 @@ def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
         VIVA_SEP,
         "🧩 <b>تأییدهای کمکی</b>",
         f"• 🤖 <b>نظر AI:</b> {_e(advisory)}",
-        f"• ⚖️ شرط تأیید: کلوز معتبرِ {confirm_tf or 'تایم تأیید'} در جهت سناریو",
+        _confirm_rule_fa(candidate).replace("⚖️ ", "• ⚖️ "),
         VIVA_SEP,
         f"🆔 <code>{_e(code)}</code>",
     ]
@@ -1790,6 +1813,19 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
                 chart = generate_chart(frame, candidate, confirmed=False)
         except Exception:
             chart = None
+    import time as _time
+    import hashlib as _hash
+    # Viva 2026-09-12: «توی ثانیه چه تغییری شده که آپدیت میده؟!» — an update
+    # must carry NEWS; identical content repeats are swallowed before Telegram
+    # ever sees them. Real changes (absorb note, verdict, closure) differ in
+    # the signature and always pass.
+    sig = _hash.md5("|".join([
+        str(state_fa), str(note_fa), str(candidate.score),
+        f"{candidate.entry_zone_bottom:.10g}", f"{candidate.entry_zone_top:.10g}",
+        f"{candidate.sl:.10g}",
+    ]).encode()).hexdigest()
+    if chain.get("upd_sig") == sig:
+        return False
     upd_n = int(chain.get("upd_n") or 0) + 1
     caption = _setup_update_caption(
         candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>", upd_n)
@@ -1817,6 +1853,8 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
                 print(f"update supersede delete warning {candidate.signal_id}: {exc}")
         chain["upd"] = int(mid)
         chain["upd_n"] = upd_n
+        chain["upd_sig"] = sig
+        chain["upd_ts"] = _time.time()
         _setup_chain_set(candidate, chain)
     return bool(mid)
 def _approaching_ai_hint(candidate: SignalCandidate) -> str:
@@ -2692,18 +2730,13 @@ def send_technoclassic_preview(ev: dict) -> bool:
     plan = ""
     if is_fade and fade:
         plan = (f"↩️ پلن: ورود {_price(fade.get('entry'))} • استاپ {_price(fade.get('stop'))} • "
-                f"TP میانه {_price(fade.get('tp_mid'))} • TP مقابل {_price(fade.get('target'))}\n")
-    caption = (
-        f"🔁 <b>آخرین آپدیت • آپدیت {_fa_num(upd_n)} (همان شناسه)</b>\n{VIVA_SEP}\n"
-        f"🪙 <b>{_e(sym)}</b> • {tf} • {_e(str(ev.get('pattern_fa') or ev.get('pattern')))} — ضلع {side_fa}\n"
-        f"{VIVA_SEP}\n"
-        f"📍 <b>خط:</b> {_price(ev.get('line_price'))} • <b>قیمت:</b> {_price(ev.get('live'))}\n"
-        f"🚩 <b>فاصله:</b> {float(ev.get('distance_atr') or 0):.2f} ATR\n"
-        f"{state_fa}\n{plan}"
-        f"⏳ همچنان شرطی تا تأییدِ کامل (کلوز + پولبک + BOS)\n"
-        f"{VIVA_SEP}\n\n"
-        f"🆔 <code>{_e(code)}</code>"
-    )
+                f"TP میانه {_price(fade.get('tp_mid'))} • TP مقابل {_price(fade.get('target'))}")
+    # ONE update template for EVERY setup (Viva 2026-09-12): same numbered
+    # caption, separators, rule line and 🆔 position as TLBREAK/ALBROX/PINVAL
+    # — only the note carries the preview state.
+    caption = _setup_update_caption(
+        cand, note_fa=(state_fa + "\n" + plan) if plan else state_fa,
+        state_fa="🔁 <b>به‌روزرسانیِ پیش‌نمایش (همان شناسه)</b>", upd_n=upd_n)
     anchor_mid = int(chain.get("anchor") or 0)
     upd = int(chain.get("update") or 0)
     edu_mid = int(chain.get("edu") or 0)
@@ -2713,25 +2746,31 @@ def send_technoclassic_preview(ev: dict) -> bool:
         if link:
             markup = {"inline_keyboard": [[{"text": "📚 چارت و توضیحات هشدار اولیه",
                                             "url": link}]]}
-    # Viva 2026-09-12 (latest-update law, TC channel too): every state change
-    # POSTS a new numbered update replying to the anchor; the message it
-    # supersedes is deleted. The anchor itself is permanent — never deleted.
+    # Viva 2026-09-12: «چرا در کانال اصلی پیام آپدیت میاد؟!» — never again.
+    # TC state changes post UNDER the detailed alert in the alerts channel;
+    # the main channel keeps only its permanent compact anchor. A legacy chain
+    # without a stored edu id falls back to the old PRO-slot behaviour.
+    _alerts_chat = str(CHAT_ID_EDUCATION or CHAT_ID_ADMIN or "")
+    _under_detail = bool(edu_mid) and bool(_alerts_chat)
+    upd_chat = _alerts_chat if _under_detail else str(target)
+    reply_to = (int(edu_mid) if _under_detail else (anchor_mid or None)) or None
     if chart:
-        new_mid = send_photo(chart, caption, str(target),
-                             reply_to_message_id=anchor_mid or None, reply_markup=markup)
+        new_mid = send_photo(chart, caption, upd_chat,
+                             reply_to_message_id=reply_to, reply_markup=markup)
     else:
-        new_mid = send_message(caption, str(target),
-                               reply_to_message_id=anchor_mid or None, reply_markup=markup)
+        new_mid = send_message(caption, upd_chat,
+                               reply_to_message_id=reply_to, reply_markup=markup)
     done = bool(new_mid)
     if done:
         if upd and upd != anchor_mid:
             try:
-                delete_message(str(target), upd)
+                delete_message(str(chain.get("upd_chat") or target), upd)
             except Exception:
                 pass
         upd = int(new_mid)
         _sk(ck, {"anchor": anchor_mid, "update": upd, "edu": edu_mid, "ts": now,
-                 "upd_n": upd_n, "code": code, "pattern": str(ev.get("pattern")),
+                 "upd_n": upd_n, "upd_chat": upd_chat, "code": code,
+                 "pattern": str(ev.get("pattern")),
                  "state": state, "fade": bool(is_fade)})
         try:  # keep the anchor→confirmation link state fresh without moving it
             _link = _gk(f"tc_link|{sym}|{tf}", {}) or {}

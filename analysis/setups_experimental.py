@@ -324,7 +324,19 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
                 bias="BULLISH" if direction=="LONG" else "BEARISH", trigger_timeframe=trigger_tf,
                 mandatory_gates={"viva_watch_only": False},
             )
-            candidate.metadata.update({"strategy_variant":"VIVA_TLBREAK","viva_state":"S0_WATCH","viva_pattern":"TWO_PIVOT_WATCH","viva_watch_line":line_price,"viva_touch_count":2,"viva_watch_points":[dict(watch.first),dict(watch.last)],"public_code":generate_viva_public_code("TLBREAK", style)})
+            _px = float(trigger_df["close"].iloc[-1])
+            _dist = abs(_px - line_price) / atr_watch
+            candidate.evidence = [
+                EvidenceItem("tl_watch", "اعتبار خط دوپیوتی", f"خط از ۲ پیوتِ معتبر روی {refine_tf} ساخته شده؛ هر دو پیوت در جهتِ سناریو تست شده‌اند. این نسخه هنوز «در انتظار اعتبار» است و با یک کلوزِ معتبرِ فراتر از خط به ستاپ تمام‌عیار تبدیل می‌شود.", False, 1, level=line_price, timeframe=refine_tf),
+                EvidenceItem("tl_position", "موقعیت قیمت نسبت به خط", f"قیمت فعلی {_px:.6g} در فاصله‌ی {_dist:.2f} ATR از خطِ {_price_watch := line_price:.6g} است؛ شرط تأیید: یک کلوزِ معتبر فراتر از خط در جهت سناریو (پولبک شرط نیست).", False, 1, level=line_price, timeframe=trigger_tf),
+            ]
+            candidate.warnings = [
+                "این تحلیل تا بسته‌شدنِ یک کندلِ تأییدیِ معتبر، دستور ورود نیست.",
+                f"عبور معتبر قیمت از {_sl := candidate.sl:.6g} سناریوی تحلیلی را باطل می‌کند.",
+            ]
+            candidate.metadata.update({"strategy_variant":"VIVA_TLBREAK","viva_state":"S0_WATCH","viva_pattern":"TWO_PIVOT_WATCH","viva_watch_line":line_price,"viva_touch_count":2,"viva_watch_points":[dict(watch.first),dict(watch.last)],"public_code":generate_viva_public_code("TLBREAK", style),
+                                       "confirm_tf": confirm_timeframe_for_pattern(structure_tf, style, trigger_tf),
+                                       "touched": False})
             return candidate
         return None
     atr_t = float((trigger_df["high"] - trigger_df["low"]).tail(14).mean())
