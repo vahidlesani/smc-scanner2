@@ -131,6 +131,21 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         assert link.get("mid") == pro_mid                          # confirmations → PRO anchor
         code = photos[0][1].split("<code>")[1].split("</code>")[0]
         assert code in photos[1][1]                                 # same unique id, both channels
+        # Viva 2026-09-12 format law, now enforced on the TECHCLASSIC preview
+        # channel too: registry-unique T-code + the exact detailed skeleton.
+        import re as _re
+        assert _re.fullmatch(r"VIVA-TECLASSIC-T\d{6}", code), code
+        _hdr = photos[0][1].split("\n")
+        assert _hdr[0] == "🏷 <b>VIVA-TECLASSIC</b>"
+        assert _hdr[1].startswith("🆔 <code>") and _hdr[2] == M.VIVA_SEP
+        for _need in ("📚 <b>تحلیل آموزشی | ستاپ در حال بررسی</b>",
+                      "⛔ <b>این پیام تأیید ورود نیست</b>",
+                      "👀 فقط برای رصد بازار و اهداف آموزشی",
+                      "🪙 <b>GTTSTUSDT</b>  •  SWING  •  4H",
+                      "🔎 <b>ناحیه،ای که زیر نظر داریم</b>" if False else "🔎 <b>ناحیه‌ای که زیر نظر داریم</b>",
+                      "⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود"):
+            assert _need in photos[0][1], _need
+        assert "🧠" not in photos[0][1] and "⚡ <b>هشدار الگو" not in photos[0][1]
 
         # same state again → silence (no channel spam)
         assert M.send_technoclassic_preview(dict(ev)) is False

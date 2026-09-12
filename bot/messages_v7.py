@@ -2457,8 +2457,7 @@ def _technoclassic_preview_candidate(ev: dict):
         mandatory_gates={"technoclassic_preview_only": False},
         metadata={
             "strategy_variant": "VIVA_TLBREAK",
-            "public_code": f"TC-{str(ev.get('symbol') or '').replace('USDT', '')}-"
-                           f"{ev.get('pattern_tf') or '4h'}-{str(ev.get('ref_ts') or '')[:10]}",
+            "public_code": "",  # registry-reserved in send_technoclassic_preview
             "tc_clean": True,
             "tc_scenario": "fade" if is_fade else ("ready" if stage == "JUST_BROKE" else "near"),
             "tl_context_tf": ev.get("pattern_tf"), "tl_pattern": ev.get("pattern"),
@@ -2558,35 +2557,65 @@ def send_technoclassic_preview(ev: dict) -> bool:
     if not fresh:
         # ── new ANCHOR: full alert, permanent, starts a fresh unique code ──
         badge, _ = _setup_badge(cand)
-        code = f"TC-{sym.replace('USDT', '')}-{tf}-{_iran_now()[:10]}"
-        cand.metadata["public_code"] = code
+        # Viva 2026-09-12: the preview channel shares the ONE identifier
+        # engine — registry-backed unique VIVA-TECLASSIC-T##### codes. The old
+        # TC-SYM-tf-date mashup was not unique at all and broke the format law.
+        try:
+            from database.repository_v7 import reserve_public_code as _reserve
+            code = _reserve(cand)
+        except Exception:
+            from analysis.models import generate_viva_public_code
+            code = generate_viva_public_code("TECHCLASSIC", "SWING")
+            cand.metadata["public_code"] = code
         chart = _chart_for(code)
         plan_line = ""
         if is_fade and fade:
             plan_line = (f"↩️ پلنِ بازگشت روی ضلع (کمک‌تأیید قانون آلفونسو): ورود {_price(fade.get('entry'))} • "
                          f"استاپ {_price(fade.get('stop'))} • TP میانه {_price(fade.get('tp_mid'))} • "
                          f"TP ضلع مقابل {_price(fade.get('target'))} • R:R {fade.get('rr')}\n")
-        dir_fa = "نزولی (SHORT)" if str(ev.get("direction")) == "SHORT" else "صعودی (LONG)"
+        dir_fa = ("سناریوی احتمالی فروش" if str(ev.get("direction")) == "SHORT"
+                    else "سناریوی احتمالی خرید")
+        plan_sec = (VIVA_SEP + "\n" + plan_line) if plan_line else ""
+        # Viva 2026-09-12 (format law, verbatim skeleton): 🏷 + 🆔 header,
+        # educational block, 🪙 with STYLE + TF beside the symbol, ━━━ sections,
+        # 🔎 zone block, the standard ⛔/✅ tail and 📢 footer.
         caption = (
-            f"🏷 <b>{_e(badge)}</b>\n{VIVA_SEP}\n"
-            f"⚡ <b>هشدار الگوی کلاسیک | در انتظار تأیید</b>\n\n"
-            f"🪙 <b>{_e(sym)}</b> • SWING • تایم الگو: {tf}\n"
+            f"🏷 <b>VIVA-TECLASSIC</b>\n"
+            f"🆔 <code>{_e(code)}</code>\n"
             f"{VIVA_SEP}\n"
-            f"🕓 <b>زمان رصد — ایران:</b> {_iran_now()}\n"
+            f"📚 <b>تحلیل آموزشی | ستاپ در حال بررسی</b>\n"
+            f"⛔ <b>این پیام تأیید ورود نیست</b>\n"
+            f"👀 فقط برای رصد بازار و اهداف آموزشی\n"
             f"{VIVA_SEP}\n"
-            f"🎯 <b>VIVA-TECHCLASSIC</b> | {_e(str(ev.get('pattern_fa') or ev.get('pattern')))} — ضلع {side_fa}\n"
-            f"🚨 جهتِ محتملِ شکستِ معتبر: {dir_fa} • ⭐ {int(ev.get('structure_score') or 0)}/10\n"
-            f"📍 <b>خط:</b> {_price(ev.get('line_price'))} • <b>قیمت:</b> {_price(ev.get('live'))}\n"
-            f"🚩 <b>فاصله:</b> {float(ev.get('distance_atr') or 0):.2f} ATR • <b>برخوردهای معتبر:</b> {ev.get('touches')}\n"
-            f"⚖️ <b>تاریخچۀ خط:</b> {react.get('rejects', 0)} دفع / {react.get('breaks', 0)} شکست "
-            f"(نرخ دفع {int(float(react.get('reject_rate', 0)) * 100)}٪ — کمک‌تأیید، نه شرط قطعی)\n"
-            + plan_line +
+            f"🪙 <b>{_e(sym)}</b>  •  SWING  •  {_e(tf.upper())}\n"
+            f"🌐 {_e(_market_label(cand))}\n"
+            f"🧭 {_e(dir_fa)}\n"
+            f"🎯 ستاپ: <b>VIVA-TECLASSIC</b> | {_e(str(ev.get('pattern_fa') or ev.get('pattern')))} — ضلع {side_fa}\n"
+            f"⭐ امتیاز فعلی: <b>{int(ev.get('structure_score') or 0)}/10</b>\n"
             f"{VIVA_SEP}\n"
-            f"🎬 <b>پایاییِ ضلع:</b> {_e(scen.get('hold', ''))}\n"
-            f"🎬 <b>شکستِ معتبر:</b> {_e(scen.get('break', ''))}\n"
+            f"🕓 <b>زمان رصد — ایران</b>\n{_iran_now()}\n"
+            f"{VIVA_SEP}\n"
+            f"📍 <b>خط و موقعیت قیمت</b>\n"
+            f"خط: <b>{_price(ev.get('line_price'))}</b> • قیمت: <b>{_price(ev.get('live'))}</b>\n"
+            f"🚩 فاصله: {float(ev.get('distance_atr') or 0):.2f} ATR • برخوردهای معتبر: {ev.get('touches')}\n"
+            f"{VIVA_SEP}\n"
+            f"⚖️ <b>تاریخچۀ خط</b>\n"
+            f"{react.get('rejects', 0)} دفع / {react.get('breaks', 0)} شکست (نرخ دفع {int(float(react.get('reject_rate', 0)) * 100)}٪ — کمک‌تأیید، نه شرط قطعی)\n"
+            + plan_sec +
+            f"{VIVA_SEP}\n"
+            f"🎬 <b>سناریوهای محتمل</b>\n"
+            f"🎬 پایاییِ ضلع: {_e(scen.get('hold', ''))}\n"
+            f"🎬 شکستِ معتبر: {_e(scen.get('break', ''))}\n"
             f"⏳ هیچ‌کدام ۱۰۰٪ نیست؛ ربات فقط احتمال را می‌گوید و منتظر نشانه/تأیید می‌ماند\n"
-            f"{VIVA_SEP}\n\n"
-            f"🆔 <code>{_e(code)}</code>"
+            f"{VIVA_SEP}\n"
+            f"🔎 <b>ناحیه‌ای که زیر نظر داریم</b>\n"
+            f"از <b>{_price(cand.entry_zone_bottom)}</b> تا <b>{_price(cand.entry_zone_top)}</b>\n"
+            f"سطح خط (مرجع ابطال): <b>{_price(ev.get('line_price'))}</b>\n"
+            f"{VIVA_SEP}\n"
+            f"⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود\n"
+            f"✅ در صورت حرکتِ وضعیت، همین هشدار با همان شناسه به‌روزرسانی می‌شود.\n"
+            f"{VIVA_SEP}\n"
+            f"📢 <b>{_e(SETTINGS.channel_name)}</b>"
         )
         try:  # once-per-day separator
             today = _iran_now()[:10]
