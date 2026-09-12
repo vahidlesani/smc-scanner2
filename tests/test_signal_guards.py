@@ -151,26 +151,36 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         assert M.send_technoclassic_preview(dict(ev)) is False
         assert len(photos) == 2
 
-        # state advances → the PRO COMPACT SLOT is edited in place (no new post)
+        # state advances → a NEW numbered update post, replying to the anchor;
+        # the superseded message is deleted (Viva 2026-09-12 latest-update law)
+        deletes = []
+        monkeypatch.setattr(M, "delete_message", lambda chat, mid: deletes.append(int(mid)) or True)
         ev2 = dict(ev, state="REJECTION_FADE", fade=fade)
         assert M.send_technoclassic_preview(ev2) is True
-        assert len(photos) == 2                                   # nothing added
-        assert len(edits) == 1 and edits[0][0] == pro_mid        # same slot
-        assert "🔁" in edits[0][1] and code in edits[0][1]       # same unique id
-        assert edits[0][2] and str(edu_mid) in edits[0][2]["inline_keyboard"][0][0]["url"]
-        upd_mid = pro_mid
+        assert len(edits) == 0 and len(photos) == 3              # never edited, always appended
+        upd1 = photos[2]
+        assert upd1[2] == pro_mid                                # replies to the ANCHOR post
+        assert "\U0001f501" in upd1[1] and "\u0622\u067e\u062f\u06cc\u062a \u06f1" in upd1[1]   # «• آپدیت ۱»
+        assert code in upd1[1]                                    # same unique id
+        assert upd1[4] and str(edu_mid) in upd1[4]["inline_keyboard"][0][0]["url"]
+        assert pro_mid not in deletes                             # anchor is PERMANENT
+        chain = KV.get_json("tc_chain|GTTSTUSDT|4h", {})
+        assert chain.get("update") == upd1[0] and chain.get("upd_n") == 1
         # alerts channel also received the compact copy replying to the detail
         compacts = [t for t in texts if "📚 <b>تحلیل آموزشی" in t[1]]
         assert compacts and code in compacts[0][1] and compacts[0][2] == edu_mid
 
-        # further advance → still ONE slot, edited again
+        # further advance → update ۲ lands as the newest message, update ۱ is DELETED
         ev3 = dict(ev, state="BREAK_READY")
         assert M.send_technoclassic_preview(ev3) is True
-        assert len(photos) == 2 and len(edits) == 2 and edits[1][0] == upd_mid
-        assert edits[1][2] and str(edu_mid) in edits[1][2]["inline_keyboard"][0][0]["url"]
+        assert len(photos) == 4 and len(edits) == 0
+        upd2 = photos[3]
+        assert upd2[2] == pro_mid and "آپدیت ۲" in upd2[1]
+        assert deletes == [upd1[0]]                               # only the superseded one, never the anchor
+        assert upd2[4] and str(edu_mid) in upd2[4]["inline_keyboard"][0][0]["url"]
         chain = KV.get_json("tc_chain|GTTSTUSDT|4h", {})
-        assert chain.get("anchor") == pro_mid and chain.get("update") == upd_mid
-        assert chain.get("edu") == edu_mid
+        assert chain.get("anchor") == pro_mid and chain.get("update") == upd2[0]
+        assert chain.get("edu") == edu_mid and chain.get("upd_n") == 2
         # the confirmation link still points at the PRO anchor, never at an update
         link = KV.get_json("tc_link|GTTSTUSDT|4h", {})
         assert link.get("mid") == pro_mid
@@ -254,26 +264,36 @@ def test_setup_chain_final_doctrine(monkeypatch):
         # deterministic: the update's self-fetch must not hit the network
         import data.fetcher as F
         monkeypatch.setattr(F, "get_klines", lambda *a, **k: None)
-        # one update slot in the alerts channel, linked to the detail, AI inside
+        # Viva 2026-09-12 latest-update law for EVERY setup: the update is a
+        # NEW numbered post linked to the detail; the previous update gets
+        # deleted. In-place editing of the alerts channel is dead.
+        deletes_u = []
+        monkeypatch.setattr(M, "delete_message", lambda chat, mid: deletes_u.append(int(mid)) or True)
         assert M.send_setup_update(cand, None, note_fa="ناحیه جابه‌جا شد") is True
         upd = [t for t in texts if "به‌روزرسانی رصد" in t[1]][0]
         assert upd[2] == M.CHAT_ID_EDUCATION and upd[3] == edu_mid
+        assert "🔁 <b>آخرین آپدیت • آپدیت ۱</b>" in upd[1]
         assert "🧩 <b>تأییدهای کمکی</b>" in upd[1] and "🤖" in upd[1]
         assert "ناحیه جابه‌جا شد" in upd[1]
         chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
-        assert chain.get("upd") == upd[0]
+        assert chain.get("upd") == upd[0] and chain.get("upd_n") == 1
+        assert not edits_t and not deletes_u                       # first update: nothing to delete
         assert M.send_setup_update(cand, None, note_fa="ادامه") is True
-        assert len([t for t in texts if "به‌روزرسانی رصد" in t[1]]) == 1      # no pile-up
-        assert edits_t and edits_t[-1][0] == upd[0] and "ادامه" in edits_t[-1][1]   # replaced in place
+        ups = [t for t in texts if "به‌روزرسانی رصد" in t[1]]
+        assert len(ups) == 2 and "آپدیت ۲" in ups[1][1]        # numbered, appended
+        assert deletes_u == [upd[0]] and ups[1][3] == edu_mid       # old one deleted, new replies to detail
+        assert not edits_t                                           # NEVER edited in place
 
-        # with a live frame available the SAME slot is edited WITH a fresh chart
+        # with a live frame available the new post carries a fresh chart too
         import pandas as _pd
         frame_ok = _pd.DataFrame({"open": [99.0]*40, "high": [99.5]*40, "low": [98.5]*40,
                                   "close": [99.1]*40, "volume": [10.0]*40},
                                  index=_pd.date_range("2026-09-11", periods=40, freq="15min"))
         monkeypatch.setattr(F, "get_klines", lambda *a, **k: frame_ok)
         assert M.send_setup_update(cand, None, note_fa="چارت زنده") is True
-        assert edits_c and edits_c[-1][0] == upd[0] and edits_c[-1][1] and "چارت زنده" in edits_c[-1][1]
+        last_up = [t for t in texts if "چارت زنده" in t[1]][-1]
+        assert "آپدیت ۳" in last_up[1] and not edits_c
+        assert deletes_u == [upd[0], ups[1][0]]
 
         # final alert → new PRO post (no education slot exists)
         assert M.send_approaching(cand, 99.7, 0.31) is True

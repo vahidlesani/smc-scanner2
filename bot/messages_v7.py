@@ -673,7 +673,7 @@ def _setup_badge(candidate: SignalCandidate) -> tuple[str, str]:
         "PINVAL": "VIVA ✦ PINWALL LEGACY",
         "PINWALLQ": "VIVA ✦ PINWALL QUALITY",
         "TLBREAK": "VIVA ✦ TLBREAK",
-        "TECHCLASSIC": "VIVA ✦ TECHNOCLASSIC",
+        "TECHCLASSIC": "VIVA ✦ TECHCLASSIC",
         "P1234": "VIVA ✦ 1-2-3-4",
         "ALBROX": "VIVA ✦ ALBROX",
         "LSR": "VIVA ✦ LIQUIDITY",
@@ -1608,7 +1608,7 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
         "👀 فقط برای رصد بازار و اهداف آموزشی",
         VIVA_SEP,
         f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}  •  {_e(tf_tag)}",
-        f"🌐 {_e(str(candidate.market or 'OURBIT').upper())} • کریپتو",
+        f"🌐 {_e(_market_label(candidate))}",
         dir_fa,
         f"🎯 ستاپ: <b>VIVA-{_e(candidate.setup_code)}</b> | {_e(setup_line)}",
         f"⭐ امتیاز فعلی: {int(candidate.score if score is None else score)}/10",
@@ -1716,10 +1716,20 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
     return bool(mid)
 
 
+_FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
+def _fa_num(value) -> str:
+    return str(value).translate(_FA_DIGITS)
+
+
 def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
-                          state_fa: str = "🔄 <b>به‌روزرسانی رصد</b>") -> str:
-    """One-line-family live status of a chain. Always edited IN PLACE into the
-    single update slot of the alerts channel — updates replace updates."""
+                          state_fa: str = "🔄 <b>به‌روزرسانی رصد</b>",
+                          upd_n: int = 0) -> str:
+    """One-line-family live status of a chain. Viva 2026-09-12 (latest-update
+    law): every state change is a NEW numbered post — header «🔄 آخرین آپدیت • آپدیت N»
+    — so the newest message in the channel is always the newest update; the
+    superseded one is deleted. In-place editing of old messages is dead."""
     code = _public_code(candidate)
     badge, _ = _setup_badge(candidate)
     dir_fa = "🧭 سناریوی خرید" if candidate.direction == "LONG" else "🧭 سناریوی فروش"
@@ -1727,10 +1737,13 @@ def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
                 or str(getattr(candidate, "ai_reason", "") or "").strip()
                 or _ai_watch_hint(candidate))
     confirm_tf = str((candidate.metadata or {}).get("confirm_tf") or "").upper()
-    rows = [
+    rows = []
+    if upd_n:
+        rows.append(f"🔁 <b>آخرین آپدیت • آپدیت {_fa_num(upd_n)}</b>")
+    rows += [
         f"🏷 <b>{_e(badge)}</b>",
         VIVA_SEP,
-        state_fa + " • <b>این پیام همیشه جایگزین آخرین آپدیت می‌شود</b>",
+        state_fa,
         "⛔ تأیید ورود نیست",
         VIVA_SEP,
         f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}  •  {_e(str(candidate.trigger_timeframe or '').upper())}",
@@ -1777,18 +1790,16 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
                 chart = generate_chart(frame, candidate, confirmed=False)
         except Exception:
             chart = None
+    upd_n = int(chain.get("upd_n") or 0) + 1
     caption = _setup_update_caption(
-        candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>")
-    slot = int(chain.get("upd") or 0)
-    if slot:
-        if chart:
-            if edit_chart_message(slot, str(target), chart, caption):
-                return True
-        elif edit_text_message(slot, str(target), caption):
-            return True
+        candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>", upd_n)
     link = _telegram_message_link(target, detail_mid) if detail_mid and target else ""
     markup = ({"inline_keyboard": [[{"text": "📚 توضیحات کامل هشدار", "url": link}]]}
               if link else None)
+    # Viva 2026-09-12 (latest-update law, EVERY setup): the update POSTS as the
+    # newest message of the channel — reply-linked to the permanent detailed
+    # alert wherever it lives (even 300 posts back) — numbered «آپدیت N», and the
+    # message it supersedes is DELETED once the new one lands.
     if chart:
         mid = send_photo(chart, caption, target,
                          reply_to_message_id=detail_mid if detail_mid else None,
@@ -1798,11 +1809,16 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
                            reply_to_message_id=detail_mid if detail_mid else None,
                            reply_markup=markup)
     if mid:
+        old = int(chain.get("upd") or 0)
+        if old:
+            try:
+                delete_message(str(target), old)
+            except Exception as exc:
+                print(f"update supersede delete warning {candidate.signal_id}: {exc}")
         chain["upd"] = int(mid)
+        chain["upd_n"] = upd_n
         _setup_chain_set(candidate, chain)
     return bool(mid)
-
-
 def _approaching_ai_hint(candidate: SignalCandidate) -> str:
     md = candidate.metadata or {}
     if candidate.setup_code in ("TLBREAK", "TECHCLASSIC"):
@@ -2657,7 +2673,7 @@ def send_technoclassic_preview(ev: dict) -> bool:
         if mid:
             # PRO anchor slot == update slot: the first state change edits
             # THIS message instead of stacking another one in PRO.
-            _sk(ck, {"anchor": int(mid), "edu": int(edu_mid or 0), "update": int(mid),
+            _sk(ck, {"anchor": int(mid), "edu": int(edu_mid or 0), "update": int(mid), "upd_n": 0,
                      "ts": now, "code": code, "pattern": str(ev.get("pattern")),
                      "state": state, "fade": bool(is_fade)})
             # confirmation messages quote the PRO anchor — updates never move that link
@@ -2669,6 +2685,7 @@ def send_technoclassic_preview(ev: dict) -> bool:
     code = str(chain.get("code") or cand.metadata.get("public_code") or "")
     cand.metadata["public_code"] = code
     chart = _chart_for(code)
+    upd_n = int(chain.get("upd_n") or 0) + 1
     state_fa = {"REJECTION_FADE": "↩️ کندلِ دفع در کانال — پلنِ بازگشت روی تابلو (تأییدِ تایم‌پایین لازم)",
                 "BREAK_READY": "⏱ آماده‌باشِ شکست — خط تست شد؛ تأییدِ کلوز لازم است",
                 "EDGE_NEAR": "👀 هنوز فقط نزدیکِ ضلع؛ ربات منتظرِ نشانه است"}.get(state, state)
@@ -2677,7 +2694,7 @@ def send_technoclassic_preview(ev: dict) -> bool:
         plan = (f"↩️ پلن: ورود {_price(fade.get('entry'))} • استاپ {_price(fade.get('stop'))} • "
                 f"TP میانه {_price(fade.get('tp_mid'))} • TP مقابل {_price(fade.get('target'))}\n")
     caption = (
-        f"🔁 <b>به‌روزرسانیِ هشدار (همان شناسه)</b>\n{VIVA_SEP}\n"
+        f"🔁 <b>آخرین آپدیت • آپدیت {_fa_num(upd_n)} (همان شناسه)</b>\n{VIVA_SEP}\n"
         f"🪙 <b>{_e(sym)}</b> • {tf} • {_e(str(ev.get('pattern_fa') or ev.get('pattern')))} — ضلع {side_fa}\n"
         f"{VIVA_SEP}\n"
         f"📍 <b>خط:</b> {_price(ev.get('line_price'))} • <b>قیمت:</b> {_price(ev.get('live'))}\n"
@@ -2696,28 +2713,26 @@ def send_technoclassic_preview(ev: dict) -> bool:
         if link:
             markup = {"inline_keyboard": [[{"text": "📚 چارت و توضیحات هشدار اولیه",
                                             "url": link}]]}
-    done = False
-    if upd and chart:
-        done = edit_chart_message(upd, str(target), chart, caption, reply_markup=markup)
-    elif upd and not chart:
-        done = edit_text_message(upd, str(target), caption)
-    if not done:
-        if upd:  # edit failed (message gone?) → one replacement post, old one removed
+    # Viva 2026-09-12 (latest-update law, TC channel too): every state change
+    # POSTS a new numbered update replying to the anchor; the message it
+    # supersedes is deleted. The anchor itself is permanent — never deleted.
+    if chart:
+        new_mid = send_photo(chart, caption, str(target),
+                             reply_to_message_id=anchor_mid or None, reply_markup=markup)
+    else:
+        new_mid = send_message(caption, str(target),
+                               reply_to_message_id=anchor_mid or None, reply_markup=markup)
+    done = bool(new_mid)
+    if done:
+        if upd and upd != anchor_mid:
             try:
                 delete_message(str(target), upd)
             except Exception:
                 pass
-        new_mid = (send_photo(chart, caption, target, reply_to_message_id=anchor_mid,
-                               reply_markup=markup) if chart
-                   else send_message(caption, target, reply_to_message_id=anchor_mid,
-                                     reply_markup=markup))
-        if new_mid:
-            upd = int(new_mid)
-        done = bool(new_mid)
-    if done:
+        upd = int(new_mid)
         _sk(ck, {"anchor": anchor_mid, "update": upd, "edu": edu_mid, "ts": now,
-                 "code": code, "pattern": str(ev.get("pattern")), "state": state,
-                 "fade": bool(is_fade)})
+                 "upd_n": upd_n, "code": code, "pattern": str(ev.get("pattern")),
+                 "state": state, "fade": bool(is_fade)})
         try:  # keep the anchor→confirmation link state fresh without moving it
             _link = _gk(f"tc_link|{sym}|{tf}", {}) or {}
             if _link.get("mid"):
