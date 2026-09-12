@@ -294,6 +294,8 @@ class V7PersistenceTests(unittest.TestCase):
     def test_public_code_registry_retries_collision_and_never_reassigns(self):
         from database.repository_v7 import reserve_public_code
         first, second = make_candidate("EDUCATIONAL", 7), make_candidate("EDUCATIONAL", 7)
+        # preferred codes are honoured ONLY within the candidate's own family
+        first.setup_code = second.setup_code = "PINBAR"
         first.metadata["public_code"] = "VIVA-PINBAR-K100000"
         second.metadata["public_code"] = "VIVA-PINBAR-K100000"
         first_code = reserve_public_code(first)
@@ -302,6 +304,23 @@ class V7PersistenceTests(unittest.TestCase):
         self.assertNotEqual(second_code, first_code)
         self.assertRegex(second_code, r"^VIVA-[A-Z0-9]+-K\d{6}$")
         self.assertEqual(reserve_public_code(first), first_code)
+
+    def test_reserve_rejects_foreign_family_carryover(self):
+        """Zone-absorb may hand a candidate a code minted for ANOTHER setup
+        family; the registry must refuse the lie and mint the matching one,
+        while SAME-family carry-over stays honoured (codes are permanent)."""
+        from database.repository_v7 import reserve_public_code
+        cand = make_candidate()
+        cand.setup_code = "TECHCLASSIC"
+        cand.signal_id = "viva-familyguard-cross-0001"
+        cand.metadata["public_code"] = "VIVA-TLBREAK-K999999"
+        code = reserve_public_code(cand)
+        self.assertRegex(code, r"^VIVA-TECLASSIC-T\d{6}$")
+        same = make_candidate()
+        same.setup_code = "TECHCLASSIC"
+        same.signal_id = "viva-familyguard-same-0002"
+        same.metadata["public_code"] = "VIVA-TECLASSIC-T222222"
+        self.assertEqual(reserve_public_code(same), "VIVA-TECLASSIC-T222222")
 
     def test_unconfirmed_cannot_enter_signal_history(self):
         from database.repository_v7 import save_confirmed_signal

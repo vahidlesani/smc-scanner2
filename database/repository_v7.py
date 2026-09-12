@@ -787,6 +787,14 @@ def reserve_public_code(candidate: SignalCandidate) -> str:
             return code
 
         preferred = str((candidate.metadata or {}).get("public_code") or "")
+        # Viva 2026-09-12: an inherited code may belong to ANOTHER family (zone
+        # absorbed from a TLBREAK chain, re-published by the TECHCLASSIC
+        # engine). The alert id must state the family that is on the badge —
+        # a mismatched carry-over is dropped and a fresh code is minted.
+        if preferred:
+            _fam = generate_viva_public_code(candidate.setup_code, candidate.style)[:-6]
+            if not preferred.startswith(_fam):
+                preferred = ""
         for attempt in range(64):
             code = preferred if attempt == 0 and preferred else generate_viva_public_code(candidate.setup_code, candidate.style)
             # Never reuse a historical code even if it predates the registry.
