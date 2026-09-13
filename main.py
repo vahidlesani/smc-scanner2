@@ -369,8 +369,8 @@ def run_discovery_scan() -> Dict[str, int]:
             print(f"Discovery error {symbol}: {exc}")
     cleanup_candidates()
     try:  # Viva 2026-09-13: the funnel must be READABLE from the DB
-        from database.bot_kv import set_json as _skv
-        _skv("scan_summary", {
+        from database.bot_kv import get_json as _gkv, set_json as _skv
+        _summary = {
             "when": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "detected": stats.get("detected", 0), "new": stats.get("new", 0),
             "errors": stats.get("errors", 0),
@@ -382,7 +382,13 @@ def run_discovery_scan() -> Dict[str, int]:
             "pre_tp1": stats.get("suppressed_pre_tp1", 0),
             "deferred": stats.get("edu_cycle_deferred", 0),
             "tally": tally,
-        })
+        }
+        _skv("scan_summary", _summary)
+        # keep the last 24 cycles so «چرا این سیکل پیام نداد» is always
+        # answerable from the DB after the fact, not just for the newest one
+        _hist = _gkv("scan_history", []) or []
+        _hist.append(_summary)
+        _skv("scan_history", _hist[-24:])
     except Exception:
         pass
     duration = time.monotonic() - started
@@ -912,7 +918,7 @@ def main() -> None:
         from database.bot_kv import set_json as _boot_set
         _boot_set("boot_version", {
             "sha": os.getenv("COMMIT_SHA", "local")[:12],
-            "build": "2026.09.13-7 (capacity mirrors licence key: 3 pre-TP1 per symbol+trigger+setup)",
+            "build": "2026.09.13-8 (scan_history: last 24 funnels in DB)",
             "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     except Exception as _boot_exc:
