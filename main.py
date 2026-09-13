@@ -68,6 +68,7 @@ from database.repository_v7 import (
     cancel_staged_confirmation,
     has_unresolved_symbol,
     has_open_pre_tp1_signal,
+    last_confirmed_entry,
     init_v7_schema,
     is_confirmation_published,
     mark_confirmation_published,
@@ -221,13 +222,13 @@ def run_discovery_scan() -> Dict[str, int]:
                     stats["errors"] += 1
                     print(f"Public-code reservation failed {candidate.signal_id}: {exc}")
                     continue  # fail closed; never publish an unreserved code
-                # ── Viva 2026-09-11 · rotating licences («نقش نوبتی») ──────────────
-                # Per (symbol, setup): at most `chains_per_symbol_setup_24h`
-                # chains in 24h, and NEVER two unresolved at once — while one
-                # chain of the same symbol+setup is still being watched, a new
-                # detection is absorbed into it (its live chain is refreshed
-                # and the alerts-channel UPDATE slot is edited in place).
-                # Different setups on the same symbol stay independent.
+                # ── Viva licence law (restated 2026-09-13, verbatim) ──────────
+                # 3 rotating licences per (symbol, trigger timeframe, setup).
+                # The next licence frees when the previous signal CONFIRMS;
+                # while one chain is unresolved, a new detection on the same
+                # tuple is absorbed into it. Different setup or different
+                # trigger timeframe = fully independent. A new licence also
+                # needs >=2% price distance from the last CONFIRMED price.
                 if SETTINGS.chain_slot_gate_enabled:
                     try:
                         _trig = str(candidate.trigger_timeframe or "").lower()
@@ -259,25 +260,42 @@ def run_discovery_scan() -> Dict[str, int]:
                     if used >= max(1, int(getattr(SETTINGS, "chains_per_symbol_setup_24h", 3) or 3)):
                         stats["chain_license_cap"] = stats.get("chain_license_cap", 0) + 1
                         continue
-                    # a zone this pair already watched in 24h never re-alerts,
-                    # however the previous chain ended — only NEW zones open
-                    # the next licence.
-                    # next licence only opens where price differs from every zone
-                    # this (symbol, trigger, setup) already watched: >= sep ATR of
-                    # the trigger timeframe OR >= sep % of zone price (Viva 2026-09-13)
+                    # same-zone repeat dedupe: a zone already watched in 24h
+                    # never re-alerts — that is noise control, not the licence
+                    # distance rule (which is the fixed 2% below, Viva 2026-09-13).
                     _atr = max(float((candidate.metadata or {}).get("atr", 0) or 0), 1e-9)
                     try:
                         _quiet = recent_lineage_zone(
                             candidate.symbol, candidate.setup_code,
                             float(candidate.zone_mid),
-                            max(_atr * float(getattr(SETTINGS, "license_zone_sep_atr", 0.55) or 0.0),
-                                abs(float(candidate.zone_mid)) * float(getattr(SETTINGS, "license_zone_sep_pct", 0.008) or 0.0)),
+                            max(_atr * 0.20, abs(float(candidate.zone_mid)) * 1e-4),
                             trigger_tf=str(candidate.trigger_timeframe or "").lower())
                     except Exception:
                         _quiet = None
                     if _quiet is not None and str(_quiet.signal_id) != str(candidate.signal_id):
                         stats["same_zone_quiet"] = stats.get("same_zone_quiet", 0) + 1
                         continue
+                    # THE 2% LAW: the new licence may open only >=2% (fixed,
+                    # identical for every setup) away from the price at which
+                    # the last signal of this tuple was CONFIRMED.
+                    try:
+                        _sep = float(getattr(SETTINGS, "license_min_sep_pct", 0.02) or 0.0)
+                        _last_px = last_confirmed_entry(candidate.symbol, candidate.trigger_timeframe,
+                                                        candidate.setup_code)
+                        _px = float(candidate.planned_entry or candidate.entry_zone_bottom or 0.0)
+                        if (_sep > 0.0 and _last_px and _px
+                                and abs(_px - float(_last_px)) < _sep * abs(float(_last_px))):
+                            stats["license_sep_block"] = stats.get("license_sep_block", 0) + 1
+                            t = _t(candidate); t["sep2pct"] = t.get("sep2pct", 0) + 1
+                            print(
+                                f"licence refused {candidate.symbol}/{candidate.setup_code}/"
+                                f"{candidate.trigger_timeframe}: {_px:g} is only "
+                                f"{abs(_px - float(_last_px)) / abs(float(_last_px)) * 100:.2f}% "
+                                f"from last confirmed {_last_px:g} (<{_sep:.0%})"
+                            )
+                            continue
+                    except Exception as exc:
+                        print(f"licence distance gate skipped {candidate.signal_id}: {exc}")
                 if SETTINGS.skip_dead_gate_candidates and not candidate.execution_ready:
                     # A failing mandatory gate can never be repaired later, so
                     # this candidate can never confirm. Keep it educational,
@@ -359,6 +377,7 @@ def run_discovery_scan() -> Dict[str, int]:
             "absorbed": stats.get("chain_absorbed", 0),
             "quiet": stats.get("same_zone_quiet", 0),
             "liccap": stats.get("chain_license_cap", 0),
+            "sep2pct": stats.get("license_sep_block", 0),
             "deadgate": stats.get("dead_gate", 0),
             "pre_tp1": stats.get("suppressed_pre_tp1", 0),
             "deferred": stats.get("edu_cycle_deferred", 0),
@@ -372,7 +391,8 @@ def run_discovery_scan() -> Dict[str, int]:
         f"detected={stats['detected']} new={stats['new']} errors={stats['errors']} • "
         f"deadgate={stats.get('dead_gate', 0)} "
         f"absorbed={stats.get('chain_absorbed', 0)} quiet={stats.get('same_zone_quiet', 0)} "
-        f"liccap={stats.get('chain_license_cap', 0)} deferred={stats.get('edu_cycle_deferred', 0)}"
+        f"liccap={stats.get('chain_license_cap', 0)} sep2pct={stats.get('license_sep_block', 0)} "
+        f"deferred={stats.get('edu_cycle_deferred', 0)}"
     )
     # Per-setup funnel (observability only): seen -> execution-ready/blocked.
     for sc in sorted(tally):
@@ -892,7 +912,7 @@ def main() -> None:
         from database.bot_kv import set_json as _boot_set
         _boot_set("boot_version", {
             "sha": os.getenv("COMMIT_SHA", "local")[:12],
-            "build": "2026.09.13-5 (licences per symbol+trigger+setup; sep-zone rule; send audit)",
+            "build": "2026.09.13-6 (licence law verbatim: 3 per tuple, free on confirm, 2% from confirmed price)",
             "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     except Exception as _boot_exc:

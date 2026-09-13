@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -475,6 +475,33 @@ def has_open_pre_tp1_signal(symbol: str, trigger_timeframe: str,
             )
         count = int((cursor.fetchone() or [0])[0] or 0)
     return count >= max(1, int(getattr(SETTINGS, "max_signals_per_symbol_trigger", 3)))
+
+
+def last_confirmed_entry(symbol: str, trigger_timeframe: str, setup_code: str,
+                         within_hours: int = 24) -> Optional[float]:
+    """Price of the latest CONFIRMED signal of this (symbol, trigger, setup)
+    inside the rolling licence window. Viva 2026-09-13: the reference point
+    for the «≥۲٪ فاصله از آخرین قیمتِ تأییدشده» law. None = never confirmed."""
+    p_ = legacy_db._ph()
+    truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(hours=max(1, int(within_hours)))).strftime("%Y-%m-%d %H:%M:%S")
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"SELECT entry FROM signals WHERE symbol={p_} AND trigger_timeframe={p_} "
+            f"AND upper(coalesce(setup_code,''))={p_} AND confirmed={truth} "
+            f"AND status='CONFIRMED' AND confirmed_at IS NOT NULL AND confirmed_at>={p_} "
+            f"ORDER BY confirmed_at DESC LIMIT 1",
+            (str(symbol).upper(), str(trigger_timeframe).lower(),
+             str(setup_code or "").upper(), cutoff),
+        )
+        row = cursor.fetchone()
+    if not row or row[0] is None:
+        return None
+    try:
+        return float(row[0])
+    except (TypeError, ValueError):
+        return None
 
 
 def recent_geometry_duplicate(symbol: str, direction: str, entry, sl, tp1,

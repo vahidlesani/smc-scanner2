@@ -791,7 +791,36 @@ def test_licences_are_per_trigger_tf_and_setup():
             pass
 
 
-def test_licence_separation_knobs_exist():
+def test_two_percent_licence_distance_law():
+    """Viva 2026-09-13 verbatim: 3 rotating licences per (symbol, trigger-tf,
+    setup), next frees on CONFIRMATION, and the next signal must open >=2%
+    from the last CONFIRMED price — fixed percent, identical for ALL setups,
+    no ATR anywhere in the rule."""
+    import io as _io
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    src = _io.open(root / "main.py", encoding="utf-8").read()
+    assert "last_confirmed_entry(candidate.symbol" in src
+    assert "license_min_sep_pct" in src
+    assert "license_zone_sep_atr" not in src and "license_zone_sep_pct" not in src
+    repo = _io.open(root / "database" / "repository_v7.py", encoding="utf-8").read()
+    assert "def last_confirmed_entry(" in repo
     st = __import__("config").get_settings()
-    assert float(getattr(st, "license_zone_sep_atr", 0) or 0) > 0.0
-    assert float(getattr(st, "license_zone_sep_pct", -1)) >= 0.0
+    assert abs(float(st.license_min_sep_pct) - 0.02) < 1e-12
+    # reference query must run clean on the live schema (both backends)
+    import os as _os, tempfile as _tf
+    from database import db as _ldb
+    from database.repository_v7 import init_v7_schema, last_confirmed_entry
+    _saved = getattr(_ldb, "DB_PATH", "")
+    _tmp = _tf.mktemp(suffix=".db")
+    if not _ldb.USE_POSTGRES:
+        _ldb.DB_PATH = _tmp
+    try:
+        _ldb.init_db(); init_v7_schema()
+        assert last_confirmed_entry("NOSUCHSYMUSDT", "4h", "PINVAL") is None
+    finally:
+        _ldb.DB_PATH = _saved
+        try:
+            _os.unlink(_tmp)
+        except OSError:
+            pass
