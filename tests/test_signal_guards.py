@@ -120,24 +120,26 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
                 "target": 94.6, "rr": 25.0, "reject_rate": 1.0}
 
         assert M.send_technoclassic_preview(dict(ev)) is True
-        # family chain: detailed anchor in the ALERTS channel, PRO post linked to it
-        assert len(photos) == 2
-        edu_mid, pro_mid = photos[0][0], photos[1][0]
-        assert photos[0][3] == "-1004000000001" and photos[1][3] == "-100TEST"
-        assert photos[1][4] and "📚" in photos[1][4]["inline_keyboard"][0][0]["text"]
-        assert str(edu_mid) in photos[1][4]["inline_keyboard"][0][0]["url"]
-        assert photos[1][2] is None                                # PRO anchor: no reply
+        # Viva 2026-09-13 «اگر قوانینش با تکنوکلاسیک یکی هست، باید پاک بشه»:
+        # the preview's duplicate alerts-channel pair is GONE — it lives only
+        # as the main-channel live slot (compact layout, registry-unique id).
+        assert len(photos) == 1
+        assert not [t for t in texts if "تحلیل آموزشی" in t[1]]   # (PRO day-separator is fine)
+        pro_mid = photos[0][0]
+        edu_mid = 0
+        assert photos[0][3] == "-100TEST" and photos[0][2] is None   # PRO slot, no reply
+        assert not photos[0][4]                                       # nothing to link to
         link = KV.get_json("tc_link|GTTSTUSDT|4h", {})
-        assert link.get("mid") == pro_mid                          # confirmations → PRO anchor
+        assert link.get("mid") == pro_mid                             # confirmations → PRO anchor
         code = photos[0][1].split("<code>")[1].split("</code>")[0]
-        assert code in photos[1][1]                                 # same unique id, both channels
+        assert code
         # Viva 2026-09-12 format law, now enforced on the TECHCLASSIC preview
         # channel too: registry-unique T-code + the exact detailed skeleton.
         import re as _re
         assert _re.fullmatch(r"VIVA-TECLASSIC-T\d{6}", code), code
         _hdr = photos[0][1].split("\n")
-        assert _hdr[0] == "🏷 <b>VIVA-TECLASSIC</b>"
-        assert _hdr[1].startswith("🆔 <code>") and _hdr[2] == M.VIVA_SEP
+        assert _hdr[0] == "🏷 <b>VIVA ✦ TECHCLASSIC</b>"             # frozen compact family
+        assert _hdr[1] == M.VIVA_SEP and "<code>" in photos[0][1]
         for _need in ("📚 <b>تحلیل آموزشی | ستاپ در حال بررسی</b>",
                       "⛔ <b>این پیام تأیید ورود نیست</b>",
                       "👀 فقط برای رصد بازار و اهداف آموزشی",
@@ -149,7 +151,7 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
 
         # same state again → silence (no channel spam)
         assert M.send_technoclassic_preview(dict(ev)) is False
-        assert len(photos) == 2
+        assert len(photos) == 1
 
         # state advances → a NEW numbered update post, replying to the anchor;
         # the superseded message is deleted (Viva 2026-09-12 latest-update law)
@@ -157,28 +159,27 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         monkeypatch.setattr(M, "delete_message", lambda chat, mid: deletes.append(int(mid)) or True)
         ev2 = dict(ev, state="REJECTION_FADE", fade=fade)
         assert M.send_technoclassic_preview(ev2) is True
-        assert len(edits) == 0 and len(photos) == 3              # never edited, always appended
-        upd1 = photos[2]
-        assert upd1[3] == "-1004000000001" and upd1[2] == edu_mid   # updates post in the ALERTS channel, under the detail — never main
+        assert len(edits) == 0 and len(photos) == 2              # never edited, always appended
+        upd1 = photos[1]
+        assert upd1[3] == "-100TEST" and upd1[2] == pro_mid         # updates stay in the MAIN channel under the preview anchor
         assert "\U0001f501" in upd1[1] and "\u0622\u067e\u062f\u06cc\u062a \u06f1" in upd1[1]   # «آخرین آپدیت • آپدیت ۱»
         assert "\U0001fa99" in upd1[1] and "\u2696\ufe0f" in upd1[1]                # shared update layout with every other setup
         assert code in upd1[1]                                    # same unique id
-        assert upd1[4] and str(edu_mid) in upd1[4]["inline_keyboard"][0][0]["url"]
+        assert not upd1[4]                                         # preview has no alerts-channel detail
         assert pro_mid not in deletes                             # anchor is PERMANENT
         chain = KV.get_json("tc_chain|GTTSTUSDT|4h", {})
         assert chain.get("update") == upd1[0] and chain.get("upd_n") == 1
-        # alerts channel also received the compact copy replying to the detail
-        compacts = [t for t in texts if "📚 <b>تحلیل آموزشی" in t[1]]
-        assert compacts and code in compacts[0][1] and compacts[0][2] == edu_mid
+        # …and now NOTHING at all is posted into the alerts channel
+        assert not [t for t in texts if "📚 <b>تحلیل آموزشی" in t[1]]
 
         # further advance → update ۲ lands as the newest message, update ۱ is DELETED
         ev3 = dict(ev, state="BREAK_READY")
         assert M.send_technoclassic_preview(ev3) is True
-        assert len(photos) == 4 and len(edits) == 0
-        upd2 = photos[3]
-        assert upd2[2] == edu_mid and upd2[3] == "-1004000000001" and "آپدیت ۲" in upd2[1]
+        assert len(photos) == 3 and len(edits) == 0
+        upd2 = photos[2]
+        assert upd2[2] == pro_mid and upd2[3] == "-100TEST" and "آپدیت ۲" in upd2[1]
         assert deletes == [upd1[0]]                               # only the superseded one, never the anchor
-        assert upd2[4] and str(edu_mid) in upd2[4]["inline_keyboard"][0][0]["url"]
+        assert not upd2[4]
         chain = KV.get_json("tc_chain|GTTSTUSDT|4h", {})
         assert chain.get("anchor") == pro_mid and chain.get("update") == upd2[0]
         assert chain.get("edu") == edu_mid and chain.get("upd_n") == 2
@@ -254,13 +255,17 @@ def test_setup_chain_final_doctrine(monkeypatch):
 
         assert M.send_educational_setup(cand, None) is True
         edu_mid = [t for t in texts if t[1] == "DETAILED-MSG"][0][0]
+        # Viva 2026-09-13, his own correction: the compact initial alert lives
+        # in the MAIN channel as the chain's live slot (chart + 📚 button that
+        # points at the permanent detailed alert located by the unique code).
         compacts = [t for t in texts if "📚 <b>تحلیل آموزشی" in t[1]]
-        assert len(compacts) == 1 and compacts[0][2] == M.CHAT_ID_EDUCATION
-        assert compacts[0][3] == edu_mid                       # compact replies to the detail
-        assert "🏷 <b>VIVA ✦" in compacts[0][1]                  # main-channel labels restored
-        assert not any(t[2] == M.CHAT_ID_EXECUTION for t in texts)   # no PRO watch post at all
+        assert len(compacts) == 1 and compacts[0][2] == M.CHAT_ID_EXECUTION
+        assert compacts[0][3] is None                          # slot post: no reply threading
+        assert "🏷 <b>VIVA ✦" in compacts[0][1]
+        assert compacts[0][4] and str(edu_mid) in compacts[0][4]["inline_keyboard"][0][0]["url"]
+        assert not [t for t in texts if t[2] == M.CHAT_ID_EDUCATION and t[1] != "DETAILED-MSG"]
         chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
-        assert chain.get("edu") == edu_mid and not chain.get("pro")
+        assert chain.get("edu") == edu_mid and chain.get("pro") == compacts[0][0]
 
         # deterministic: the update's self-fetch must not hit the network
         import data.fetcher as F
@@ -272,17 +277,18 @@ def test_setup_chain_final_doctrine(monkeypatch):
         monkeypatch.setattr(M, "delete_message", lambda chat, mid: deletes_u.append(int(mid)) or True)
         assert M.send_setup_update(cand, None, note_fa="ناحیه جابه‌جا شد") is True
         upd = [t for t in texts if "به‌روزرسانی رصد" in t[1]][0]
-        assert upd[2] == M.CHAT_ID_EDUCATION and upd[3] == edu_mid
+        assert upd[2] == M.CHAT_ID_EXECUTION and upd[3] is None    # MAIN channel live slot
+        assert upd[4] and str(edu_mid) in upd[4]["inline_keyboard"][0][0]["url"]
         assert "🔁 <b>آخرین آپدیت • آپدیت ۱</b>" in upd[1]
         assert "🧩 <b>تأییدهای کمکی</b>" in upd[1] and "🤖" in upd[1]
         assert "ناحیه جابه‌جا شد" in upd[1]
         chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
         assert chain.get("upd") == upd[0] and chain.get("upd_n") == 1
-        assert not edits_t and not deletes_u                       # first update: nothing to delete
+        assert not edits_t and deletes_u == [compacts[0][0]]       # compact yields the slot
         assert M.send_setup_update(cand, None, note_fa="ادامه") is True
         ups = [t for t in texts if "به‌روزرسانی رصد" in t[1]]
         assert len(ups) == 2 and "آپدیت ۲" in ups[1][1]        # numbered, appended
-        assert deletes_u == [upd[0]] and ups[1][3] == edu_mid       # old one deleted, new replies to detail
+        assert deletes_u == [compacts[0][0], upd[0]] and ups[1][3] is None   # slot replaced, never threaded
         assert not edits_t                                           # NEVER edited in place
 
         # with a live frame available the new post carries a fresh chart too
@@ -294,13 +300,19 @@ def test_setup_chain_final_doctrine(monkeypatch):
         assert M.send_setup_update(cand, None, note_fa="چارت زنده") is True
         last_up = [t for t in texts if "چارت زنده" in t[1]][-1]
         assert "آپدیت ۳" in last_up[1] and not edits_c
-        assert deletes_u == [upd[0], ups[1][0]]
+        assert deletes_u == [compacts[0][0], upd[0], ups[1][0]]
 
-        # final alert → new PRO post (no education slot exists)
+        # final alert takes over the same live slot in PRO (in-place law intact)
         assert M.send_approaching(cand, 99.7, 0.31) is True
-        final = [t for t in texts if t[2] == M.CHAT_ID_EXECUTION and "⚡ <b>هشدار نهایی" in t[1]][0]
+        # the live slot in PRO is replaced in place — with a fresh chart, so the
+        # op lands on edit_chart_message (edits_c) or the text fallback (edits_t)
+        _ops = edits_c if edits_c else edits_t
+        assert _ops, "the final alert must replace the live slot in PRO"
+        final_mid = _ops[-1][0]
+        assert "⚡ <b>هشدار نهایی" in _ops[-1][1]
         chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
-        assert chain.get("pro") == final[0]
+        assert chain.get("pro") == final_mid
+        final = (final_mid,)
 
         # confirmed REPLACES the final-alert slot in place, linked to the detail
         frame = pd.DataFrame({"open": [99.0], "high": [100.0], "low": [98.8],
@@ -423,7 +435,7 @@ def test_viva_exact_format_detailed_and_compact():
     assert cap.split("\n")[0].startswith("🏷 <b>VIVA ✦ TLBREAK</b>")
     assert "🪙 <b>BTCUSDT</b>  •  SWING  •  15M" in cap
     assert "⭐ امتیاز فعلی: 6/10\n🆔 <code>" in cap or "🆔" in cap.split("⭐ امتیاز فعلی")[1][:60]
-    assert "کلوز معتبر ۱۵ دقیقه" in cap                        # Persian TF name, no gap
+    assert "اولین کلوزِ معتبر" in cap and "۱۵ دقیقه" in cap  # 09-13 confirmation law, Persian TF
     assert "⛔ Entry،" not in cap and "⛔ ورود، اهرم" in cap
     assert "📢 VivaMon Labs Pro" in cap
 
@@ -881,3 +893,99 @@ def test_no_same_minute_updates_and_alerts_need_db_rows():
     assert '"⬛⬛⬛"' in mv and '"GRAND": "SWING"' in mv
     from config import get_settings
     assert int(get_settings().update_min_gap_seconds) >= 240
+
+def test_break_close_scans_all_bars_not_only_latest():
+    """Viva 2026-09-13 «شکست میاد ولی تأیید نمیده و موقعیت نابود میشه»: the
+    confirming close may have settled TWO bars ago — the edge scan must walk
+    EVERY closed bar since the alert, in the confirm TF or the pattern TF."""
+    import pandas as pd
+    from datetime import datetime, timedelta, timezone
+    from test_v7 import make_candidate
+    from analysis.quality_engine import evaluate_confirmation
+    t0 = datetime(2026, 9, 13, 0, 0, tzinfo=timezone.utc)
+    rows = []
+    for i in range(30):
+        if i == 21:
+            o, h, l, c = 102.3, 103.6, 102.1, 103.4      # the break bar
+        elif i >= 22:
+            o, h, l, c = 101.5, 101.7, 100.9, 101.2      # pulled back inside
+        else:
+            o, h, l, c = 99.98, 100.05, 99.9, 100.0
+        rows.append({"timestamp": t0 + timedelta(hours=i), "open": o, "high": h,
+                     "low": l, "close": c, "volume": 1000.0})
+    df = pd.DataFrame(rows).set_index("timestamp")
+    df.index.name = "timestamp"
+    df["timestamp"] = df.index
+    cand = make_candidate()
+    cand.setup_code = "TECHCLASSIC"
+    cand.status = "NEAR_CONFIRM"
+    cand.entry_zone_bottom, cand.entry_zone_top = 100.5, 101.5
+    cand.planned_entry, cand.sl = 101.0, 98.0
+    cand.tp1, cand.tp2 = 112.0, 118.0
+    cand.created_at = (t0 + timedelta(hours=10)).isoformat()
+    cand.metadata.update({"atr": 1.0, "confirm_tf": "1h", "touched": False})
+    ok, cand2, reason = evaluate_confirmation(cand, df)
+    assert ok is True, f"a settled break bar must still confirm: {reason}"
+    lane = str(cand2.metadata.get("tl_fast_break") or "")
+    assert "اولین کلوزِ معتبر" in lane and "تایم تأیید" in lane
+    assert str(cand2.metadata.get("fast_break_bar") or "")[:13] == "2026-09-13 21"
+    # a pattern-timeframe close beyond the line confirms as well
+    flat = df.copy()
+    for i in range(11, 30):
+        flat.iloc[i, flat.columns.get_indexer(["open", "high", "low", "close"])] = [100.0, 100.1, 99.9, 100.0]
+    htf = df[df["timestamp"] >= t0 + timedelta(hours=11)]
+    cand_b = make_candidate()
+    cand_b.setup_code = "TECHCLASSIC"
+    cand_b.status = "NEAR_CONFIRM"
+    cand_b.entry_zone_bottom, cand_b.entry_zone_top = 100.5, 101.5
+    cand_b.planned_entry, cand_b.sl = 101.0, 98.0
+    cand_b.tp1, cand_b.tp2 = 112.0, 118.0
+    cand_b.created_at = (t0 + timedelta(hours=10)).isoformat()
+    cand_b.metadata.update({"atr": 1.0, "confirm_tf": "1h", "touched": False})
+    ok2, cand3, reason2 = evaluate_confirmation(cand_b, flat, htf_closed_df=htf)
+    assert cand3.metadata.get("tl_fast_break"), reason2
+    assert "تایم الگو" in str(cand3.metadata.get("tl_fast_break"))
+
+
+def test_main_channel_live_slot_and_preview_dedup():
+    """Viva 2026-09-13 law reversal (apologised for the 09-12 order): the MAIN
+    channel hosts the compact initial alert as ONE live slot; every update is a
+    NEW numbered post that DELETES the previous slot message and links to the
+    permanent alerts-channel detail. The TECHCLASSIC preview's duplicated
+    alerts-channel pair is gone, and the chart carries the brand once."""
+    import io
+    src = io.open("bot/messages_v7.py", encoding="utf-8").read()
+    assert "def _pro_slot_post" in src
+    ed = src.split("def send_educational_setup", 1)[1].split("def _fa_num", 1)[0]
+    assert "_pro_slot_post(candidate, _compact_alert_caption(candidate)" in ed
+    assert "reply_to_message_id=detail_mid if detail_mid else None" not in ed
+    up = src.split("def send_setup_update", 1)[1].split("def _approaching_ai_hint", 1)[0]
+    assert "target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN" in up
+    assert "mid = _pro_slot_post(candidate, caption" in up
+    assert "reply_to_message_id=detail_mid if detail_mid else None" not in up
+    assert "_telegram_message_link(edu_chat, detail_mid)" in up
+    tc = src.split("def send_technoclassic_preview", 1)[1]
+    tc = tc.split("\ndef ", 1)[0]
+    assert "edu_mid = 0" in tc
+    assert "send_message(short, edu_chat, reply_to_message_id" not in tc
+    assert "send_photo(chart, caption, edu_chat)" not in tc
+    assert '"TECHCLASSIC" in pattern_en' in src
+    assert "اولین کلوزِ معتبرِ بسته‌شده فراتر از خط یا ضلعِ الگو" in src
+    assert "یک کلوز معتبر {ctf_fa}" not in src
+    sv = io.open("analysis/setups_v7.py", encoding="utf-8").read()
+    assert "این تحلیل تا قبل از Retest و بسته‌شدن کندل تأییدی" not in sv
+    assert "tech_aids" in sv and "EMA" in sv
+    qe = io.open("analysis/quality_engine.py", encoding="utf-8").read()
+    assert "for _frame, _tag in ((closed_df, \"تایم تأیید\"), (htf_closed_df, \"تایم الگو\")):" in qe
+    # helpers render into compact and update captions
+    import bot.messages_v7 as mv7
+    from test_v7 import make_candidate
+    cand = make_candidate()
+    cand.metadata.update({"session": "LONDON_NY_OVERLAP",
+                          "tech_aids": ["📊 EMA تایم الگو → بالای 21 • بالای 51 • زیرِ 100 • زیرِ 200",
+                                        "🌀 فیبوی موج ۴۸کندلی: نزدیک‌ترین سطحِ قیمت 61.8٪",
+                                        "📈 واگرایی صعودی RSI"]})
+    cap = mv7._compact_alert_caption(cand)
+    assert "تأییدهای کمکی" in cap and "LONDON_NY_OVERLAP" in cap and "61.8" in cap
+    upd = mv7._setup_update_caption(cand, note_fa="x", upd_n=4)
+    assert "LONDON_NY_OVERLAP" in upd and "نظر AI" in upd and "آپدیت" in upd

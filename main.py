@@ -669,7 +669,18 @@ def monitor_candidates() -> Dict[str, int]:
                 candidate.status = "CONFIRMED"
                 confirmed, reason = True, "تلاش مجدد برای تکمیل انتشار"
             else:
-                confirmed, candidate, reason = evaluate_confirmation(candidate, closed)
+                _pat_frame = None
+                try:
+                    _cf = str(candidate.metadata.get("confirm_tf") or "")
+                    _trg = str(candidate.trigger_timeframe or "")
+                    if _cf and _cf != _trg:
+                        # Viva 2026-09-13: a pattern-timeframe close breaking the
+                        # line/wedge/triangle side confirms too — hand that frame
+                        # to the evaluator instead of watching only the confirm TF.
+                        _pat_frame = (frames.get((candidate.symbol, _trg)) or (None, None, None))[1]
+                except Exception:
+                    _pat_frame = None
+                confirmed, candidate, reason = evaluate_confirmation(candidate, closed, htf_closed_df=_pat_frame)
 
             if not confirmed:
                 code = str(candidate.metadata.get("last_reject_code") or "UNKNOWN")
@@ -962,7 +973,7 @@ def main() -> None:
         from database.bot_kv import set_json as _boot_set
         _boot_set("boot_version", {
             "sha": os.getenv("COMMIT_SHA", "local")[:12],
-            "build": "2026.09.13-9b (streams proven in scan_summary)",
+            "build": "2026.09.13-10 (main-slot updates, break-confirms, helpers everywhere)",
             "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     except Exception as _boot_exc:

@@ -239,7 +239,7 @@ def _confirm_rule_fa(candidate: SignalCandidate) -> str:
             ctf = ""
     ctf_fa = _TF_FA.get(ctf.lower(), ctf) or "تایم تأیید"
     return (
-        f"⚖️ <b>شرط تأیید:</b> یک کلوز معتبر {ctf_fa} فراتر از لبهٔ ناحیه در جهت سناریو (پولبک شرط نیست)"
+        f"⚖️ <b>شرط تأیید:</b> اولین کلوزِ معتبرِ بسته‌شده فراتر از خط یا ضلعِ الگو، در {ctf_fa} یا تایم الگو، به جهت سناریو (پولبک شرط نیست)؛ برای سناریوهای داخلی: اولین نشانهٔ معتبر روی ناحیه (پین‌بار/کی‌بار/انگالف/BOS/کمپرشن)"
         f" • <b>ابطال:</b> عبور معتبر از {_price(candidate.sl)}"
     )
 
@@ -981,6 +981,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             solid_capstyle="round", antialiased=True)
                     stage = md.get("tl_stage", "")
                     pattern_en = (md.get("tl_pattern") or "CHANNEL").upper()
+                    if "TECHCLASSIC" in pattern_en:
+                        # Viva 2026-09-13 «چرا دوتا تکنوکلاسیک داریم؟» — the badge
+                        # chip brands the chart; the corner note must not repeat it.
+                        pattern_en = str(md.get("tc_pattern") or "EDGE").upper()
                     lbl = {"JUST_BROKE": f"{pattern_en} BREAK • {md.get('tl_context_tf','').upper()}",
                            "PRE_BREAK": f"{pattern_en} WATCH • {md.get('tl_context_tf','').upper()}"}.get(stage, pattern_en)
                     notes.append((lbl, CHART_THEME["trend"]))
@@ -1674,6 +1678,9 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
     ]
     for line in (extra_lines or []):
         rows.append(line)
+    _aids = _tech_aids_lines(candidate)
+    if _aids:
+        rows += ["🧩 <b>تأییدهای کمکی</b>"] + _aids
     rows += [
         VIVA_SEP,
         "⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود",
@@ -1698,6 +1705,50 @@ def _setup_chain_set(candidate: SignalCandidate, value: dict) -> None:
         set_json(f"setup_chain|{_public_code(candidate)}", dict(value))
     except Exception as exc:  # pragma: no cover - defensive
         print(f"setup chain persist warning {candidate.signal_id}: {exc}")
+
+
+def _tech_aids_lines(candidate) -> list:
+    """Viva 2026-09-13: session + EMA ladder + Fibo level + divergence in
+    EVERY lifecycle message — detailed, compact, updates, final."""
+    md = candidate.metadata or {}
+    rows = []
+    sess = str(md.get("session") or "").strip()
+    if sess:
+        rows.append(f"• 🕐 سشن آخرین کندل: {_e(sess)}")
+    for line in (md.get("tech_aids") or []):
+        rows.append(f"• {_e(line)}")
+    return rows
+
+
+def _pro_slot_post(candidate, caption: str, chart=None, markup=None,
+                   kind: str = "update") -> int:
+    """Viva 2026-09-13 main-channel law: the PRO channel carries ONE live-slot
+    message per chain — the compact initial alert first, then every numbered
+    update REPLACES it (previous one deleted once the new one lands). The
+    permanent detailed alert in the alerts channel is never touched here; the
+    chain's unique code links the two."""
+    target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    if chart:
+        mid = send_photo(chart, caption, target, reply_markup=markup)
+    else:
+        mid = send_message(caption, target, reply_markup=markup)
+    if not mid:
+        return 0
+    try:
+        chain = _setup_chain_get(candidate)
+        old_slot = int(chain.get("slot") or 0)
+        if old_slot and old_slot != int(mid):
+            try:
+                delete_message(str(target), old_slot)
+            except Exception:
+                pass
+        chain["slot"] = int(mid)
+        chain["slot_kind"] = str(kind)
+        chain["pro"] = int(mid)
+        _setup_chain_set(candidate, chain)
+    except Exception as exc:
+        print(f"pro slot chain warning {getattr(candidate, 'signal_id', '?')}: {exc}")
+    return int(mid)
 
 
 def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame]) -> bool:
@@ -1742,22 +1793,27 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
     # permanent detailed alert plus ONE compact reply carrying the same live
     # chart — every message outside the win-rate channel ships with a chart.
     try:
-        detail_mid = int(mid or candidate.metadata.get("education_chart_message_id") or 0)
-        if chart:
-            short_mid = send_photo(chart, _compact_alert_caption(candidate), target,
-                                   reply_to_message_id=detail_mid if detail_mid else None)
-        else:
-            short_mid = send_message(_compact_alert_caption(candidate), target,
-                                     reply_to_message_id=detail_mid if detail_mid else None)
-        if short_mid:
-            candidate.metadata["alerts_short_message_id"] = int(short_mid)
+        # Viva 2026-09-13 (his own correction of the 09-12 law): the COMPACT
+        # initial alert belongs to the MAIN channel and is the live slot that
+        # every future update replaces; it carries the live chart and a button
+        # linking to this permanent detailed alert (located through the chain's
+        # unique code, so a link can never cross into another chain).
+        markup = None
+        if mid:
+            link = _telegram_message_link(target, int(mid))
+            if link:
+                markup = {"inline_keyboard": [[{"text": "📚 توضیحات کامل هشدار",
+                                                "url": link}]]}
+        slot_mid = _pro_slot_post(candidate, _compact_alert_caption(candidate),
+                                  chart=chart, markup=markup, kind="compact")
+        if slot_mid:
+            candidate.metadata["alerts_short_message_id"] = int(slot_mid)
         chain = _setup_chain_get(candidate)
         if mid:
             chain["edu"] = int(mid)
-        if short_mid:
-            chain["edu_short"] = int(short_mid)
-        if mid or short_mid:
-            _setup_chain_set(candidate, chain)
+        if slot_mid:
+            chain["edu_short"] = int(slot_mid)
+        _setup_chain_set(candidate, chain)
     except Exception as exc:  # pragma: no cover - chain must never kill education
         print(f"setup chain education warning {candidate.signal_id}: {exc}")
     return bool(mid)
@@ -1804,6 +1860,9 @@ def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
         "🧩 <b>تأییدهای کمکی</b>",
         f"• 🤖 <b>نظر AI:</b> {_e(advisory)}",
         _confirm_rule_fa(candidate).replace("⚖️ ", "• ⚖️ "),
+    ]
+    rows += _tech_aids_lines(candidate)
+    rows += [
         VIVA_SEP,
         f"🆔 <code>{_e(code)}</code>",
     ]
@@ -1816,7 +1875,8 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     permanent detailed alert). Every newer update EDITS the same message; a
     chain never accumulates more than one — Viva's «آپدیت جدید با آپدیت قبلی
     جایگزین میشه» rule. Carries the live chart like every other message."""
-    target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
+    target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    edu_chat = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
     chain = _setup_chain_get(candidate)
     detail_mid = int(chain.get("edu") or candidate.metadata.get("education_message_id") or 0)
     chart = None
@@ -1853,28 +1913,20 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     upd_n = int(chain.get("upd_n") or 0) + 1
     caption = _setup_update_caption(
         candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>", upd_n)
-    link = _telegram_message_link(target, detail_mid) if detail_mid and target else ""
+    link = _telegram_message_link(edu_chat, detail_mid) if detail_mid and edu_chat else ""
     markup = ({"inline_keyboard": [[{"text": "📚 توضیحات کامل هشدار", "url": link}]]}
               if link else None)
     # Viva 2026-09-12 (latest-update law, EVERY setup): the update POSTS as the
     # newest message of the channel — reply-linked to the permanent detailed
     # alert wherever it lives (even 300 posts back) — numbered «آپدیت N», and the
     # message it supersedes is DELETED once the new one lands.
-    if chart:
-        mid = send_photo(chart, caption, target,
-                         reply_to_message_id=detail_mid if detail_mid else None,
-                         reply_markup=markup)
-    else:
-        mid = send_message(caption, target,
-                           reply_to_message_id=detail_mid if detail_mid else None,
-                           reply_markup=markup)
+    # Viva 2026-09-13: numbered updates land in the MAIN channel as the
+    # chain's live slot — post the new one first, delete the superseded
+    # compact/update after; the 📚 button points at the permanent detailed
+    # alert in the alerts channel. A fresh live chart rides along.
+    mid = _pro_slot_post(candidate, caption, chart=chart, markup=markup, kind="update")
     if mid:
-        old = int(chain.get("upd") or 0)
-        if old:
-            try:
-                delete_message(str(target), old)
-            except Exception as exc:
-                print(f"update supersede delete warning {candidate.signal_id}: {exc}")
+        chain = _setup_chain_get(candidate)
         chain["upd"] = int(mid)
         chain["upd_n"] = upd_n
         chain["upd_sig"] = sig
@@ -2709,9 +2761,11 @@ def send_technoclassic_preview(ev: dict) -> bool:
         # compact copy replying to it; PRO carries the COMPACT alert as the
         # single live slot — every later update/final state replaces THIS post
         # in place and the 📚 button points at the detailed alert.
-        edu_chat = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
-        edu_mid = (send_photo(chart, caption, edu_chat) if chart
-                   else send_message(caption, edu_chat)) if edu_chat else None
+        # Viva 2026-09-13 «اگر قوانینش با تکنوکلاسیک یکی هست، این باید پاک
+        # بشه»: the preview no longer mirrors a SECOND detailed alert into the
+        # alerts channel. It lives only as the main/PRO live slot; a real TC
+        # alert (DB-backed chain) keeps the permanent detailed post there.
+        edu_mid = 0
         short = _compact_alert_caption(
             cand, score=int(ev.get("structure_score") or 0),
             extra_lines=[
@@ -2719,12 +2773,8 @@ def send_technoclassic_preview(ev: dict) -> bool:
                 f"<b>قیمت:</b> {_price(ev.get('live'))}",
                 f"🚩 <b>فاصله:</b> {float(ev.get('distance_atr') or 0):.2f} ATR • "
                 f"<b>برخوردهای معتبر:</b> {ev.get('touches')}",
-            ])
-        if edu_mid:
-            try:
-                send_message(short, edu_chat, reply_to_message_id=int(edu_mid))
-            except Exception:
-                pass
+            ] + _tech_aids_lines(cand))
+        # (the retired preview pair no longer posts into the alerts channel)
         markup = None
         if edu_mid:
             link = _telegram_message_link(edu_chat, int(edu_mid))

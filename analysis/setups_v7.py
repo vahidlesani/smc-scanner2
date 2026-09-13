@@ -261,6 +261,37 @@ def enrich_candidate_context(bundle: MarketBundle, candidate: SignalCandidate) -
         md["mtf_fa"] = mtf_lines
     if mtf_struct:
         md["mtf_struct"] = mtf_struct
+        # Viva 2026-09-13 «تأییدهای کمکی در همه پیام‌ها»: EMA-21/51/100/200
+        # position, Fibo level of the current swing and RSI divergence —
+        # computed once on the pattern (trigger) frame, rendered by every
+        # lifecycle message (detailed, compact, update, final alert).
+        try:
+            _aids: List[str] = []
+            _pdf = bundle.get(candidate.trigger_timeframe)
+            if _pdf is not None and len(_pdf) >= 40:
+                import pandas as _pd
+                _cl = _pd.to_numeric(_pdf["close"])
+                _live = float(_cl.iloc[-1])
+                _ema = {n: float(_cl.ewm(span=n, adjust=False).mean().iloc[-1]) for n in (21, 51, 100, 200)}
+                _side = lambda v: "بالای" if _live >= v else "زیرِ"
+                _aids.append("📊 EMA تایم الگو → " + " • ".join(
+                    f"{_side(_ema[n])} {n}" for n in (21, 51, 100, 200)))
+                _win = _pdf.tail(48)
+                _wh = float(_pd.to_numeric(_win["high"]).max())
+                _wl = float(_pd.to_numeric(_win["low"]).min())
+                if _wh > _wl > 0:
+                    _rng = _wh - _wl
+                    _rat = (_wh - _live) / _rng if str(candidate.direction).upper() == "LONG" \
+                        else (_live - _wl) / _rng
+                    _lv = min((0, 23.6, 38.2, 50.0, 61.8, 78.6, 88.6),
+                             key=lambda k: abs(k - _rat * 100.0))
+                    _aids.append(f"🌀 فیبوی موج ۴۸کندلی: نزدیک‌ترین سطحِ قیمت {_lv:g}٪")
+                if md.get("div_fa"):
+                    _aids.append(f"📈 {md['div_fa']}")
+            if _aids:
+                md["tech_aids"] = _aids
+        except Exception:
+            pass
     if zone_lines:
         md["zones_fa"] = zone_lines[:8]
     if nearest_zones:
@@ -727,7 +758,7 @@ def _base_candidate(
         evidence=evidence,
         confirmations=confirmations,
         warnings=[
-            "این تحلیل تا قبل از Retest و بسته‌شدن کندل تأییدی، دستور ورود نیست.",
+            "این تحلیل تا بسته‌شدن کندلِ تأییدیِ معتبر، دستور ورود نیست.",
             f"لمس/عبور معتبر قیمت از {_fmt(sl)} سناریوی تحلیلی را باطل می‌کند.",
             (
                 "در Swing این قیمت مرز ابطال تحلیل است؛ محل سفارش Stop و مدیریت خروج باید توسط خود معامله‌گر تعیین شود."

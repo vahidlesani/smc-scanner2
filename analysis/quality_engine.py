@@ -137,7 +137,8 @@ def _bars_since_candidate(candidate: SignalCandidate, closed_df: pd.DataFrame) -
 
 
 def evaluate_confirmation(
-    candidate: SignalCandidate, closed_df: pd.DataFrame
+    candidate: SignalCandidate, closed_df: pd.DataFrame,
+    htf_closed_df: Optional[pd.DataFrame] = None,
 ) -> Tuple[bool, SignalCandidate, str]:
     """Require a zone touch plus a closed LTF trigger candle.
 
@@ -172,26 +173,57 @@ def evaluate_confirmation(
         if _v > 0:
             _edge = _v
             break
-    if _edge <= 0:
-        _edge = float(candidate.entry_zone_top if candidate.direction == "LONG"
-                      else candidate.entry_zone_bottom)
+    _zone_edge = float(candidate.entry_zone_top if candidate.direction == "LONG"
+                       else candidate.entry_zone_bottom)
     _atr = float(candidate.metadata.get("atr", 0) or 0) or float(
         (closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
     touched = bool(candidate.metadata.get("touched", False))
-    if _atr > 0 and len(after) >= 1 and _edge > 0:
+    # Viva 2026-09-13 «اولین کلوز بالا/پایین هر ترند یا ضلعِ وج/مثلث/کانال
+    # تأیید است»: EVERY closed bar since the alert can fire the confirmation
+    # (not just the newest one — fast runaways used to settle two bars ago and
+    # expire unconfirmed), the fitted line is evaluated AT THE BAR'S OWN TIME
+    # (sloped trend/channel sides move under price), and a pattern-timeframe
+    # close counts as much as the confirm-timeframe one.
+    if _atr > 0:
+        _md = candidate.metadata or {}
+        _la = _lb = None
+        try:
+            _la = (pd.Timestamp(str(_md["tl_a_ts"])), float(_md["tl_a_price"]))
+            _lb = (pd.Timestamp(str(_md["tl_b_ts"])), float(_md["tl_b_price"]))
+        except Exception:
+            _la = _lb = None
+        def _edge_at(ts, static_edge: float) -> float:
+            if _la is not None and _lb is not None and _lb[0] != _la[0]:
+                _dt = (_lb[0] - _la[0]).total_seconds()
+                if _dt:
+                    _frac = (pd.Timestamp(ts) - _la[0]).total_seconds() / _dt
+                    return float(_la[1] + (_lb[1] - _la[1]) * _frac)
+            return static_edge
         _is_long = candidate.direction == "LONG"
         _buf = 0.10 * _atr
-        _r = after.iloc[-1]
-        _out = bool(float(_r["close"]) >= _edge + _buf) if _is_long \
-            else bool(float(_r["close"]) <= _edge - _buf)
-        _body = abs(float(_r["close"]) - float(_r["open"])) / _atr
-        _dir_ok = (float(_r["close"]) > float(_r["open"])) if _is_long \
-            else (float(_r["close"]) < float(_r["open"]))
-        if _out and _body >= 0.25 and _dir_ok:
-            _ctf = str(candidate.metadata.get("confirm_tf") or "").strip()
-            fast_lane = (f"یک کلوزِ معتبرِ فراتر از لبه در تأیید {_ctf} "
-                         f"(≥{_buf / _atr:.2f} ATR پشت لبه، Body {_body:.2f} ATR) — پولبک شرط نیست")
-            candidate.metadata["tl_fast_break"] = fast_lane
+        for _frame, _tag in ((closed_df, "تایم تأیید"), (htf_closed_df, "تایم الگو")):
+            if _frame is None or len(_frame) < 2:
+                continue
+            _scan = _bars_since_candidate(candidate, _frame)
+            if _scan is None or _scan.empty:
+                continue
+            for _ts, _r in _scan.iterrows():
+                _edge_t = _edge_at(_ts, _edge if _edge > 0 else _zone_edge)
+                _out = bool(float(_r["close"]) >= _edge_t + _buf) if _is_long \
+                    else bool(float(_r["close"]) <= _edge_t - _buf)
+                if not _out:
+                    continue
+                _body = abs(float(_r["close"]) - float(_r["open"])) / _atr
+                _dir_ok = (float(_r["close"]) > float(_r["open"])) if _is_long \
+                    else (float(_r["close"]) < float(_r["open"]))
+                if _body >= 0.25 and _dir_ok:
+                    fast_lane = (f"اولین کلوزِ معتبر فراتر از خط/لبه ({_tag}، "
+                                 f"≥۰.۱۰ ATR پشت لبه، Body {_body:.2f} ATR) — پولبک شرط نیست")
+                    candidate.metadata["fast_break_bar"] = str(_ts)[:16]
+                    candidate.metadata["tl_fast_break"] = fast_lane
+                    break
+            if fast_lane:
+                break
     if not touched:
         touched = bool(fast_lane) or bool(
             (
@@ -309,7 +341,7 @@ def evaluate_confirmation(
         trigger_valid = True  # the valid close that set S6 was the trigger
     if not trigger_valid and candidate.metadata.get("tl_fast_break"):
         trigger_valid = True
-        candidate.metadata["trigger_note"] = "شکستِ معتبر + دو کلوز پشت خط (بدون پولبک)"
+        candidate.metadata["trigger_note"] = "اولین کلوزِ معتبر پشت خط/لبه (بدون پولبک)"
     if not trigger_valid and alt is not None:
         trigger_valid = True
         alt_only = True
