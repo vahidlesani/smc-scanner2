@@ -112,6 +112,8 @@ class Settings:
     # Confirmation engine knobs (defaults reproduce the original strict v7).
     confirm_rr1_floor: float = 1.30
     confirm_rr2_floor: float = 2.0
+    license_zone_sep_atr: float = 0.55   # next licence: zone must differ ≥ this many ATR
+    license_zone_sep_pct: float = 0.008  # ... or this fraction of zone price (0.8%)
     confirm_body_min_atr: float = 0.35
     confirm_require_zone_mid: bool = True
     # Alternative (multi-candle / higher-TF) trigger engine. The pin bar is a
@@ -274,6 +276,8 @@ class Settings:
             confirm_rr1_floor=_float("CONFIRM_RR1_FLOOR", cls.confirm_rr1_floor),
             confirm_rr2_floor=_float("CONFIRM_RR2_FLOOR", cls.confirm_rr2_floor),
             confirm_body_min_atr=_float("CONFIRM_BODY_MIN_ATR", cls.confirm_body_min_atr),
+            license_zone_sep_atr=_float("LICENSE_ZONE_SEP_ATR", cls.license_zone_sep_atr),
+            license_zone_sep_pct=_float("LICENSE_ZONE_SEP_PCT", cls.license_zone_sep_pct),
             confirm_require_zone_mid=_bool("CONFIRM_REQUIRE_ZONE_MID", cls.confirm_require_zone_mid),
             alt_triggers_enabled=_bool("ALT_TRIGGERS_ENABLED", cls.alt_triggers_enabled),
             alt_cluster_max_base=_int("ALT_CLUSTER_MAX_BASE", cls.alt_cluster_max_base),

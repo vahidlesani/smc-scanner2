@@ -375,6 +375,21 @@ def _chunks(text: str, limit: int = 3900) -> List[str]:
     return chunks
 
 
+def _audit_send(kind: str, chat_id, mid) -> None:
+    """Viva 2026-09-13: every accepted Telegram post is journaled (last 10) in
+    bot_kv — delivery claims must be checkable from the DB, not argued."""
+    if not mid:
+        return
+    try:
+        import time as _t
+        from database.bot_kv import get_json as _gk, set_json as _sk
+        log = _gk("send_audit", []) or []
+        log.append({"t": int(_t.time()), "k": str(kind), "c": str(chat_id or ""), "m": int(mid)})
+        _sk("send_audit", log[-10:])
+    except Exception:
+        pass
+
+
 def send_message(
     text: str,
     chat_id: Optional[str] = None,
@@ -404,6 +419,7 @@ def send_message(
         result = _tg_post(url, data=payload, timeout=15)
         if result and first_id is None:
             first_id = int(result.get("result", {}).get("message_id") or 0) or None
+    _audit_send("text", target, first_id)
     return first_id
 
 
@@ -527,7 +543,9 @@ def send_photo(
     )
     if not result:
         return None
-    return int(result.get("result", {}).get("message_id") or 0) or None
+    mid = int(result.get("result", {}).get("message_id") or 0) or None
+    _audit_send("photo", target, mid)
+    return mid
 
 
 def _level_tag(ax, x: float, y: float, label: str, color: str) -> None:

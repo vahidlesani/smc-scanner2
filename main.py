@@ -230,8 +230,9 @@ def run_discovery_scan() -> Dict[str, int]:
                 # Different setups on the same symbol stay independent.
                 if SETTINGS.chain_slot_gate_enabled:
                     try:
+                        _trig = str(candidate.trigger_timeframe or "").lower()
                         live_chains = [
-                            c for c in open_chains_for(candidate.symbol, candidate.setup_code)
+                            c for c in open_chains_for(candidate.symbol, candidate.setup_code, _trig)
                             if c.signal_id != candidate.signal_id
                             and str(c.direction).upper() == str(candidate.direction).upper()
                         ]
@@ -251,7 +252,8 @@ def run_discovery_scan() -> Dict[str, int]:
                             print(f"chain absorb warning {candidate.symbol}/{candidate.setup_code}: {exc}")
                         continue
                     try:
-                        used = chains_last_24h(candidate.symbol, candidate.setup_code)
+                        used = chains_last_24h(candidate.symbol, candidate.setup_code,
+                                         str(candidate.trigger_timeframe or "").lower())
                     except Exception:
                         used = 0
                     if used >= max(1, int(getattr(SETTINGS, "chains_per_symbol_setup_24h", 3) or 3)):
@@ -260,11 +262,17 @@ def run_discovery_scan() -> Dict[str, int]:
                     # a zone this pair already watched in 24h never re-alerts,
                     # however the previous chain ended — only NEW zones open
                     # the next licence.
+                    # next licence only opens where price differs from every zone
+                    # this (symbol, trigger, setup) already watched: >= sep ATR of
+                    # the trigger timeframe OR >= sep % of zone price (Viva 2026-09-13)
                     _atr = max(float((candidate.metadata or {}).get("atr", 0) or 0), 1e-9)
                     try:
                         _quiet = recent_lineage_zone(
                             candidate.symbol, candidate.setup_code,
-                            float(candidate.zone_mid), max(_atr * 0.20, abs(float(candidate.zone_mid)) * 1e-4))
+                            float(candidate.zone_mid),
+                            max(_atr * float(getattr(SETTINGS, "license_zone_sep_atr", 0.55) or 0.0),
+                                abs(float(candidate.zone_mid)) * float(getattr(SETTINGS, "license_zone_sep_pct", 0.008) or 0.0)),
+                            trigger_tf=str(candidate.trigger_timeframe or "").lower())
                     except Exception:
                         _quiet = None
                     if _quiet is not None and str(_quiet.signal_id) != str(candidate.signal_id):
@@ -288,7 +296,8 @@ def run_discovery_scan() -> Dict[str, int]:
                 # Paper research permits several independent positions on a
                 # symbol/trigger. Capacity is counted in confirmed positions;
                 # it must never cause symbol-wide deletion of alerts.
-                if has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe):
+                if has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe,
+                                                  candidate.setup_code):
                     stats["suppressed_pre_tp1"] = stats.get("suppressed_pre_tp1", 0) + 1
                     _t(candidate)["suppressed_pre_tp1"] += 1
                     if not _suppressed_edu_throttled(candidate):
@@ -341,6 +350,22 @@ def run_discovery_scan() -> Dict[str, int]:
             stats["errors"] += 1
             print(f"Discovery error {symbol}: {exc}")
     cleanup_candidates()
+    try:  # Viva 2026-09-13: the funnel must be READABLE from the DB
+        from database.bot_kv import set_json as _skv
+        _skv("scan_summary", {
+            "when": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "detected": stats.get("detected", 0), "new": stats.get("new", 0),
+            "errors": stats.get("errors", 0),
+            "absorbed": stats.get("chain_absorbed", 0),
+            "quiet": stats.get("same_zone_quiet", 0),
+            "liccap": stats.get("chain_license_cap", 0),
+            "deadgate": stats.get("dead_gate", 0),
+            "pre_tp1": stats.get("suppressed_pre_tp1", 0),
+            "deferred": stats.get("edu_cycle_deferred", 0),
+            "tally": tally,
+        })
+    except Exception:
+        pass
     duration = time.monotonic() - started
     print(
         f"Discovery scan finished in {duration:.1f}s • "
@@ -867,7 +892,7 @@ def main() -> None:
         from database.bot_kv import set_json as _boot_set
         _boot_set("boot_version", {
             "sha": os.getenv("COMMIT_SHA", "local")[:12],
-            "build": "2026.09.12-4 (ONE-CLOSE law everywhere, links+gaps fixed)",
+            "build": "2026.09.13-5 (licences per symbol+trigger+setup; sep-zone rule; send audit)",
             "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     except Exception as _boot_exc:

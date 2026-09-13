@@ -138,9 +138,11 @@ def _trigger_tf(candidate: SignalCandidate) -> str:
 
 
 def _dedupe_key(candidate: SignalCandidate) -> str:
-    # One unresolved lifecycle per (symbol, trigger timeframe). A pending 1h
-    # swing no longer blocks scalp setups on the same symbol's 5m trigger.
-    return f"{candidate.symbol.upper()}:{_trigger_tf(candidate)}"
+    # Viva 2026-09-13 (license doctrine, verbatim law): capacity is counted
+    # per (symbol, trigger timeframe, SETUP). A pending TLBREAK chain may
+    # NEVER lock PINVAL/ALBROX/TECHCLASSIC on the same symbol+trigger, and a
+    # live 15m license never locks the same setup's 1h/4h/1d licenses.
+    return f"{candidate.symbol.upper()}:{_trigger_tf(candidate)}:{str(candidate.setup_code or '').upper()}"
 
 
 def _zone_kind(candidate: SignalCandidate) -> str:
@@ -304,7 +306,7 @@ def absorb_update_into_chain(holder: SignalCandidate, fresh: SignalCandidate) ->
 
 
 def recent_lineage_zone(symbol: str, setup_code: str, zone_mid: float, tol: float,
-                        hours: int = 24) -> Optional[SignalCandidate]:
+                        hours: int = 24, trigger_tf: str | None = None) -> Optional[SignalCandidate]:
     """Viva 2026-09-11: «واسه یک ارز در یک ناحیه مشخص هی پیام مفصل و مختصر
     نیاد هر روز مگر ناحیه یا ستاپ متفاوت باشه» — if a chain for this
     (symbol, setup) already watched a zone within `tol` in the last 24h,
@@ -318,9 +320,10 @@ def recent_lineage_zone(symbol: str, setup_code: str, zone_mid: float, tol: floa
     with _connection() as conn:
         rows = conn.execute(
             """SELECT payload FROM signal_candidates
-               WHERE symbol=? AND setup_code=? AND created_at>=?
+               WHERE symbol=? AND setup_code=? AND (? = '' OR trigger_tf=?) AND created_at>=?
                ORDER BY created_at DESC""",
-            (symbol.upper(), setup_code.upper(), since),
+            (symbol.upper(), setup_code.upper(), (trigger_tf or "").lower(),
+             (trigger_tf or "").lower(), since),
         ).fetchall()
     for row in rows:
         try:
@@ -411,7 +414,7 @@ def get_active_candidates() -> List[SignalCandidate]:
     return [SignalCandidate.from_json(row["payload"]) for row in rows]
 
 
-def open_chains_for(symbol: str, setup_code: str) -> List[SignalCandidate]:
+def open_chains_for(symbol: str, setup_code: str, trigger_tf: str | None = None) -> List[SignalCandidate]:
     """Live, unresolved alert-chains for one symbol+setup (Viva's slot gate).
 
     A chain counts as unresolved while its candidate row still lives in
@@ -424,22 +427,27 @@ def open_chains_for(symbol: str, setup_code: str) -> List[SignalCandidate]:
             """
             SELECT payload FROM signal_candidates
             WHERE symbol=? AND setup_code=?
+              AND (? = '' OR trigger_tf=?)
               AND status IN ('EDUCATIONAL', 'APPROACHING') AND expires_at>?
             ORDER BY created_at DESC
             """,
-            (symbol.upper(), setup_code.upper(), now),
+            (symbol.upper(), setup_code.upper(), (trigger_tf or "").lower(),
+             (trigger_tf or "").lower(), now),
         ).fetchall()
     return [SignalCandidate.from_json(row["payload"]) for row in rows]
 
 
-def chains_last_24h(symbol: str, setup_code: str) -> int:
-    """How many alert-chains this symbol+setup started in the last 24 hours."""
+def chains_last_24h(symbol: str, setup_code: str, trigger_tf: str | None = None) -> int:
+    """How many alert-chains this symbol+setup (+trigger, when given) started
+    in the last 24 hours — Viva's rotating-licence capacity is per timeframe."""
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
     since = (_dt.now(_tz.utc) - _td(hours=24)).isoformat()
     with _connection() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS n FROM signal_candidates WHERE symbol=? AND setup_code=? AND created_at>=?",
-            (symbol.upper(), setup_code.upper(), since),
+            "SELECT COUNT(*) AS n FROM signal_candidates WHERE symbol=? AND setup_code=? "
+            "AND (? = '' OR trigger_tf=?) AND created_at>=?",
+            (symbol.upper(), setup_code.upper(), (trigger_tf or "").lower(),
+             (trigger_tf or "").lower(), since),
         ).fetchone()
     try:
         return int(row["n"])

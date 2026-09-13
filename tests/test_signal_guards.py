@@ -737,3 +737,61 @@ def test_confirm_rule_law_text_and_no_gaps():
     assert "\u2501"*20 + "\n\n\n\n" not in msg
     assert "</b>\n\n━━━━━━━━━━━━━━━━━━━━\n🔎" in msg   # ONE separator, then 🔎 — no empty block
     assert "فقط رصد بازار است" in msg                       # default warnings carry meaning
+
+
+def test_licences_are_per_trigger_tf_and_setup():
+    """Viva 2026-09-13 (the strangulation fix): a live chain may only lock its
+    OWN (symbol, trigger timeframe, setup) tuple. TLBREAK 15m open must not
+    absorb or cap TLBREAK 4h on the same symbol, and must never touch PINVAL
+    or any other setup on the same symbol+trigger."""
+    import os, tempfile
+    from datetime import datetime, timedelta, timezone
+    fd, path = tempfile.mkstemp(suffix=".db"); os.close(fd)
+    os.environ["CANDIDATE_DB_BACKEND"] = "sqlite"
+    os.environ["CANDIDATE_DB_PATH"] = path
+    import database.bot_kv as KV
+    KV._TABLE_READY["done"] = False
+    try:
+        import database.candidate_store as CS
+        from test_v7 import make_candidate
+        CS.init_candidate_store()
+        c1 = make_candidate()
+        c1.symbol = "XXTEST1USDT"; c1.setup_code = "TLBREAK"
+        c1.trigger_timeframe = "15m"; c1.status = "EDUCATIONAL"
+        c1.expires_at = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat(timespec="seconds")
+        c1.signal_id = "viva-xxtest1-tlbreak-15m-0001"
+        assert CS.add_candidate(c1)
+        # same symbol+setup DIFFERENT trigger → free (not absorbed, not counted)
+        assert CS.open_chains_for("XXTEST1USDT", "TLBREAK", "15m")
+        assert not CS.open_chains_for("XXTEST1USDT", "TLBREAK", "4h")
+        assert CS.chains_last_24h("XXTEST1USDT", "TLBREAK", "15m") == 1
+        assert CS.chains_last_24h("XXTEST1USDT", "TLBREAK", "4h") == 0
+        # different SETUP on the same trigger → fully independent
+        assert not CS.open_chains_for("XXTEST1USDT", "PINVAL", "15m")
+        assert CS.chains_last_24h("XXTEST1USDT", "PINVAL", "15m") == 0
+        # dedupe key now carries the setup — setups never share a slot
+        c2 = make_candidate()
+        c2.symbol = "XXTEST1USDT"; c2.setup_code = "PINVAL"; c2.trigger_timeframe = "15m"
+        assert CS._dedupe_key(c1) != CS._dedupe_key(c2)
+        # same-zone quiet is per-trigger too: a 4h lineage is unaffected by the
+        # 15m alert at the same price
+        c1.metadata["atr"] = 1.0
+        CS.update_candidate(c1)
+        assert CS.recent_lineage_zone("XXTEST1USDT", "TLBREAK", c1.zone_mid, 5.0,
+                                      trigger_tf="15m") is not None
+        assert CS.recent_lineage_zone("XXTEST1USDT", "TLBREAK", c1.zone_mid, 5.0,
+                                      trigger_tf="4h") is None
+    finally:
+        for k in ("CANDIDATE_DB_BACKEND", "CANDIDATE_DB_PATH"):
+            os.environ.pop(k, None)
+        KV._TABLE_READY["done"] = False
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def test_licence_separation_knobs_exist():
+    st = __import__("config").get_settings()
+    assert float(getattr(st, "license_zone_sep_atr", 0) or 0) > 0.0
+    assert float(getattr(st, "license_zone_sep_pct", -1)) >= 0.0

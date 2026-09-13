@@ -448,18 +448,31 @@ def portfolio_guard(candidate: SignalCandidate) -> Tuple[bool, str]:
     return True, "Portfolio guard passed"
 
 
-def has_open_pre_tp1_signal(symbol: str, trigger_timeframe: str) -> bool:
-    """Paper-test capacity: allow up to N concurrent signals on the same
-    high-quality symbol/trigger. No weaker replacement universe is needed."""
+def has_open_pre_tp1_signal(symbol: str, trigger_timeframe: str,
+                            setup_code: str | None = None) -> bool:
+    """Paper-test capacity: allow up to N concurrent signals per
+    (symbol, trigger, SETUP) — Viva 2026-09-13: an open ALBROX position may
+    never freeze PINVAL's licences on the same symbol/trigger. Without an
+    explicit setup the old symbol+trigger counting stays available."""
     p = legacy_db._ph()
     truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
+    _setup = str(setup_code or "").upper()
     with legacy_db.db_cursor() as cursor:
-        cursor.execute(
-            f"SELECT COUNT(*) FROM signals WHERE symbol={p} AND trigger_timeframe={p} "
-            f"AND confirmed={truth} AND confirmation_sent={truth} "
-            f"AND status='CONFIRMED' AND result='PENDING' AND strategy_version={p}",
-            (str(symbol).upper(), str(trigger_timeframe).lower(), SETTINGS.strategy_version),
-        )
+        if _setup:
+            cursor.execute(
+                f"SELECT COUNT(*) FROM signals WHERE symbol={p} AND trigger_timeframe={p} "
+                f"AND upper(coalesce(setup_code,''))={p} "
+                f"AND confirmed={truth} AND confirmation_sent={truth} "
+                f"AND status='CONFIRMED' AND result='PENDING' AND strategy_version={p}",
+                (str(symbol).upper(), str(trigger_timeframe).lower(), _setup, SETTINGS.strategy_version),
+            )
+        else:
+            cursor.execute(
+                f"SELECT COUNT(*) FROM signals WHERE symbol={p} AND trigger_timeframe={p} "
+                f"AND confirmed={truth} AND confirmation_sent={truth} "
+                f"AND status='CONFIRMED' AND result='PENDING' AND strategy_version={p}",
+                (str(symbol).upper(), str(trigger_timeframe).lower(), SETTINGS.strategy_version),
+            )
         count = int((cursor.fetchone() or [0])[0] or 0)
     return count >= max(1, int(getattr(SETTINGS, "max_signals_per_symbol_trigger", 3)))
 
