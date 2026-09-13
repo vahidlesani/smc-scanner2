@@ -824,3 +824,18 @@ def test_two_percent_licence_distance_law():
             _os.unlink(_tmp)
         except OSError:
             pass
+
+
+def test_paper_capacity_mirrors_the_licence_key():
+    """Viva 2026-09-13 «باید امکان‌اش وجود داشته باشد»: the persistence
+    boundary may not be stricter than the licence law — 3 open pre-TP1 per
+    (symbol, trigger, SETUP), never 3 across all setups of one trigger."""
+    import io as _io
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    src = _io.open(root / "database" / "repository_v7.py", encoding="utf-8").read()
+    i = src.index("def save_confirmed_signal(")
+    seg = src[i:i + 2600]
+    assert "has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe,\n" in seg or \
+           "candidate.setup_code)" in seg.split("has_open_pre_tp1_signal")[1][:200]
+    assert src.count("has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe):") == 0

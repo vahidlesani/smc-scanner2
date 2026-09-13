@@ -566,11 +566,15 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
     if confirmed_exists(candidate.signal_id):
         return False
     # The discovery check is not sufficient under retries/races. Enforce the
-    # three-position paper capacity again at the persistence boundary.
-    if has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe):
+    # three-position paper capacity again at the persistence boundary — but on
+    # the SAME key as the licence law: (symbol, trigger, setup). Viva
+    # 2026-09-13: five setups × three licences must remain POSSIBLE to hold
+    # confirmed concurrently; a setup-blind cap here made it impossible.
+    if has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe,
+                               candidate.setup_code):
         raise RuntimeError(
-            f"Paper capacity reached for {candidate.symbol}/{candidate.trigger_timeframe}: "
-            f"max={SETTINGS.max_signals_per_symbol_trigger}"
+            f"Paper capacity reached for {candidate.symbol}/{candidate.trigger_timeframe}/"
+            f"{candidate.setup_code}: max={SETTINGS.max_signals_per_symbol_trigger}"
         )
     # Second line of defense (discovery already filters this): identical
     # points re-confirmed via a manual/alternate path are refused here too.
