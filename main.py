@@ -406,8 +406,14 @@ def run_discovery_scan() -> Dict[str, int]:
     cleanup_candidates()
     try:  # Viva 2026-09-13: the funnel must be READABLE from the DB
         from database.bot_kv import get_json as _gkv, set_json as _skv
+        try:
+            from analysis.quality_engine import _live_styles as _ls
+            _streams = ",".join(_ls())
+        except Exception:
+            _streams = "?"
         _summary = {
             "when": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "streams": _streams,
             "detected": stats.get("detected", 0), "new": stats.get("new", 0),
             "errors": stats.get("errors", 0),
             "absorbed": stats.get("chain_absorbed", 0),
@@ -956,7 +962,7 @@ def main() -> None:
         from database.bot_kv import set_json as _boot_set
         _boot_set("boot_version", {
             "sha": os.getenv("COMMIT_SHA", "local")[:12],
-            "build": "2026.09.13-9 (four-stream ladder 15m/1h/4h/1d; no same-minute updates; alerts require DB rows)",
+            "build": "2026.09.13-9b (streams proven in scan_summary)",
             "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     except Exception as _boot_exc:
