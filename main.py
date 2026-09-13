@@ -110,16 +110,35 @@ def _chart_frame(candidate: SignalCandidate, bundle) -> pd.DataFrame:
 _DEAD_GATE_ALERTED: Dict[str, float] = {}
 
 
+def _iso_ts(value: str) -> float:
+    try:
+        d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d.timestamp()
+    except Exception:
+        return 0.0
+
+
+def _update_too_fresh(holder: SignalCandidate) -> bool:
+    """Viva 2026-09-13: «آپدیت الکی چه دردی داره» — an update may only report
+    a price event that happened AFTER the alert (or after the previous
+    update). Same-minute echoes are swallowed; the chain stays refreshed."""
+    meta = getattr(holder, "metadata", None) or {}
+    gap = max(120, int(getattr(SETTINGS, "update_min_gap_seconds", 300) or 300))
+    anchor_t = _iso_ts(str(getattr(holder, "created_at", "") or ""))
+    last_t = float(meta.get("last_update_ts") or 0.0)
+    import time as _tt
+    return (_tt.time() - max(anchor_t, last_t)) < gap
+
+
 def _dead_gate_recently_alerted(candidate: SignalCandidate) -> bool:
     key = (
         f"{candidate.symbol}:{candidate.style}:{candidate.setup_code}:{candidate.direction}:"
         f"{round(float(candidate.metadata.get('structure_level', 0) or 0), 6)}"
     )
-    expiry_hours = (
-        SETTINGS.candidate_expiry_hours_swing
-        if candidate.style == "SWING"
-        else SETTINGS.candidate_expiry_hours_scalp
-    )
+    from analysis.setups_v7 import expiry_hours_for
+    expiry_hours = expiry_hours_for(candidate.style)
     now = time.monotonic()
     last = _DEAD_GATE_ALERTED.get(key)
     if last is not None and (now - last) < expiry_hours * 3600:
@@ -137,11 +156,8 @@ def _suppressed_edu_throttled(candidate) -> bool:
     throttled per setup identity so 5-min rescans cannot spam it."""
     key = (f"{candidate.symbol}:{candidate.style}:{candidate.setup_code}:{candidate.direction}:"
            f"{round(float(candidate.entry_zone_bottom), 6)}")
-    expiry_hours = (
-        SETTINGS.candidate_expiry_hours_swing
-        if candidate.style == "SWING"
-        else SETTINGS.candidate_expiry_hours_scalp
-    )
+    from analysis.setups_v7 import expiry_hours_for
+    expiry_hours = expiry_hours_for(candidate.style)
     now = time.monotonic()
     last = _SUPPRESSED_EDU_ALERTED.get(key)
     if last is not None and (now - last) < expiry_hours * 3600:
@@ -247,8 +263,18 @@ def run_discovery_scan() -> Dict[str, int]:
                         try:
                             if is_material_update(holder, candidate):
                                 absorb_note = absorb_update_into_chain(holder, candidate)
-                                send_setup_update(holder, _chart_frame(holder, bundle),
-                                                  note_fa=absorb_note or "")
+                                if _update_too_fresh(holder):
+                                    stats["update_throttled"] = stats.get("update_throttled", 0) + 1
+                                elif send_setup_update(holder, _chart_frame(holder, bundle),
+                                                        note_fa=absorb_note or ""):
+                                    hm = holder.metadata if isinstance(holder.metadata, dict) else {}
+                                    import time as _tt
+                                    hm["last_update_ts"] = _tt.time()
+                                    holder.metadata = hm
+                                    try:
+                                        update_candidate(holder)
+                                    except Exception:
+                                        pass
                         except Exception as exc:
                             print(f"chain absorb warning {candidate.symbol}/{candidate.setup_code}: {exc}")
                         continue
@@ -308,7 +334,17 @@ def run_discovery_scan() -> Dict[str, int]:
                     t = _t(candidate); t["dead_gate"] += 1
                     for g in blocked:
                         t["blocked"][g] = t["blocked"].get(g, 0) + 1
-                    if not _dead_gate_recently_alerted(candidate):
+                    # Viva 2026-09-13 «فقط سیگنال‌های به‌دیتابیس‌رسیده هشدار
+                    # و آپدیت می‌گیرند»: a dead-on-arrival alert is recorded as
+                    # a DEAD_GATE row (tracks the lineage, consumes NO licence,
+                    # is never monitored) and only then may it post. An alert
+                    # without a row is a ghost — no updates could ever attach.
+                    candidate.status = "DEAD_GATE"
+                    try:
+                        _dead_saved = add_candidate(candidate)
+                    except Exception:
+                        _dead_saved = False
+                    if _dead_saved and not _dead_gate_recently_alerted(candidate):
                         _educate(candidate, _chart_frame(candidate, bundle))
                     continue
                 # Paper research permits several independent positions on a
@@ -378,6 +414,7 @@ def run_discovery_scan() -> Dict[str, int]:
             "quiet": stats.get("same_zone_quiet", 0),
             "liccap": stats.get("chain_license_cap", 0),
             "sep2pct": stats.get("license_sep_block", 0),
+            "updthrottle": stats.get("update_throttled", 0),
             "deadgate": stats.get("dead_gate", 0),
             "pre_tp1": stats.get("suppressed_pre_tp1", 0),
             "deferred": stats.get("edu_cycle_deferred", 0),
@@ -398,6 +435,7 @@ def run_discovery_scan() -> Dict[str, int]:
         f"deadgate={stats.get('dead_gate', 0)} "
         f"absorbed={stats.get('chain_absorbed', 0)} quiet={stats.get('same_zone_quiet', 0)} "
         f"liccap={stats.get('chain_license_cap', 0)} sep2pct={stats.get('license_sep_block', 0)} "
+        f"updthrottle={stats.get('update_throttled', 0)} "
         f"deferred={stats.get('edu_cycle_deferred', 0)}"
     )
     # Per-setup funnel (observability only): seen -> execution-ready/blocked.
@@ -918,7 +956,7 @@ def main() -> None:
         from database.bot_kv import set_json as _boot_set
         _boot_set("boot_version", {
             "sha": os.getenv("COMMIT_SHA", "local")[:12],
-            "build": "2026.09.13-8 (scan_history: last 24 funnels in DB)",
+            "build": "2026.09.13-9 (four-stream ladder 15m/1h/4h/1d; no same-minute updates; alerts require DB rows)",
             "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     except Exception as _boot_exc:

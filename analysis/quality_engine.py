@@ -44,13 +44,24 @@ class ScalpEngine:
         return scan_setups(bundle, self.name)
 
 
-ENGINES = {"SWING": SwingEngine(), "DAYTRADE": DayTradeEngine(), "SCALP": ScalpEngine()}
+class GrandEngine:
+    """Viva 2026-09-13: 1D long-term swing stream — pattern on the daily
+    chart, context 4H, one closed 4H candle confirms."""
+    name = "GRAND"
+    required_frames = ("1d", "4h", "1h")
+
+    def scan(self, bundle: MarketBundle) -> List[SignalCandidate]:
+        return scan_setups(bundle, self.name)
+
+
+ENGINES = {"GRAND": GrandEngine(), "SWING": SwingEngine(),
+           "DAYTRADE": DayTradeEngine(), "SCALP": ScalpEngine()}
 
 
 def _live_styles() -> List[str]:
     raw = str(getattr(SETTINGS, "live_styles", "DAYTRADE,SWING") or "")
     styles = [x.strip().upper() for x in raw.split(",") if x.strip() in ENGINES]
-    return styles or ["DAYTRADE", "SWING"]
+    return styles or ["DAYTRADE", "SWING", "GRAND", "SCALP"]
 
 
 def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:

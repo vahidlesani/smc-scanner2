@@ -95,10 +95,31 @@ def confirm_timeframe(style: str, fallback: str) -> str:
 # DAYTRADE: 4h context → 1h structure  → 15m zone → 5m confirmation
 # SWING:    1d context → 4h structure  → 1h zone  → 5m confirmation
 TIMEFRAME_PROFILES = {
-    "SCALP": ("1h", "15m", "5m"),
-    "DAYTRADE": ("4h", "1h", "15m"),
-    "SWING": ("1d", "4h", "1h"),
+    # Viva 2026-09-13 ladder (his words, all four streams live):
+    #   1D = سویینگ بلندمدت (structure 1D, confirmed by a closed 4H),
+    #   4H = سویینگ میان‌مدت (higher structure 1D, confirmed by a closed 1H),
+    #   1H = سویینگ میان‌مدت (context 4H, confirmed by a closed 15m),
+    #   15m = کوتاه‌مدت (context 1H, confirmed by a closed 5m).
+    # The alert/licence timeframe is the TRIGGER entry = the pattern TF the
+    # alert names, so «۳ مجوز روی هر تایم تریگر» counts exactly what a human
+    # reads on the message.
+    "GRAND": ("1d", "4h", "1d"),
+    "SWING": ("4h", "1d", "4h"),
+    "DAYTRADE": ("1h", "4h", "1h"),
+    "SCALP": ("15m", "1h", "15m"),
 }
+
+
+def expiry_hours_for(style: str) -> int:
+    """Watch window of an unconfirmed scenario, per stream of the ladder."""
+    st = str(style or "").upper()
+    if st == "GRAND":
+        return int(getattr(SETTINGS, "candidate_expiry_hours_grand", 96) or 96)
+    if st == "SWING":
+        return int(SETTINGS.candidate_expiry_hours_swing)
+    if st == "DAYTRADE":
+        return int(getattr(SETTINGS, "candidate_expiry_hours_daytrade", 24) or 24)
+    return int(SETTINGS.candidate_expiry_hours_scalp)
 
 
 def timeframe_profile(style: str):
@@ -679,7 +700,7 @@ def _base_candidate(
         "rr": rr_ok,
         "market_liquidity": market_ok,
     }
-    expiry_hours = SETTINGS.candidate_expiry_hours_swing if style == "SWING" else SETTINGS.candidate_expiry_hours_scalp
+    expiry_hours = expiry_hours_for(style)
     expires = utc_now() + timedelta(hours=expiry_hours)
     signal_id = generate_viva_signal_id(bundle.symbol, style, setup_code)
     public_code = generate_viva_public_code(setup_code, style)

@@ -320,7 +320,8 @@ def recent_lineage_zone(symbol: str, setup_code: str, zone_mid: float, tol: floa
     with _connection() as conn:
         rows = conn.execute(
             """SELECT payload FROM signal_candidates
-               WHERE symbol=? AND setup_code=? AND (? = '' OR trigger_tf=?) AND created_at>=?
+               WHERE symbol=? AND setup_code=? AND (? = '' OR trigger_tf=?)
+                 AND status<>'DEAD_GATE' AND created_at>=?
                ORDER BY created_at DESC""",
             (symbol.upper(), setup_code.upper(), (trigger_tf or "").lower(),
              (trigger_tf or "").lower(), since),
@@ -445,7 +446,7 @@ def chains_last_24h(symbol: str, setup_code: str, trigger_tf: str | None = None)
     with _connection() as conn:
         row = conn.execute(
             "SELECT COUNT(*) AS n FROM signal_candidates WHERE symbol=? AND setup_code=? "
-            "AND (? = '' OR trigger_tf=?) AND created_at>=?",
+            "AND (? = '' OR trigger_tf=?) AND status<>'DEAD_GATE' AND created_at>=?",
             (symbol.upper(), setup_code.upper(), (trigger_tf or "").lower(),
              (trigger_tf or "").lower(), since),
         ).fetchone()

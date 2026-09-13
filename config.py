@@ -47,10 +47,11 @@ class Settings:
     # …and never two at once: while one chain of the same symbol+setup is
     # still unresolved, new detections feed its UPDATE slot instead.
     chain_slot_gate_enabled: bool = True
-    # Live research focus. SCALP is intentionally off by default: lower TF stays
-    # available as the confirmation layer for DAYTRADE/SWING, not as a noisy
-    # standalone signal stream.
-    live_styles: str = "DAYTRADE,SWING"
+    # Viva 2026-09-13 four-stream ladder: 1D grand swing, 4H mid swing, 1H
+    # mid swing and 15m short all run as full alert streams (SCALP re-enabled
+    # by his explicit order); each pattern is confirmed by ONE closed candle
+    # of the timeframe one step below it (4h/1h/15m/5m respectively).
+    live_styles: str = "DAYTRADE,SWING,GRAND,SCALP"
     # Minute offset inside each monitor interval — aligns cycles to just
     # after candle closes (e.g. 1 => 5m cycles run at :01/:06/:11 UTC).
     monitor_offset_minute: int = 1
@@ -108,6 +109,11 @@ class Settings:
     execution_min_score: int = 7
     candidate_expiry_hours_swing: int = 36
     candidate_expiry_hours_scalp: int = 6
+    candidate_expiry_hours_grand: int = 96     # 1D stream (Viva ladder 2026-09-13)
+    candidate_expiry_hours_daytrade: int = 24  # 1H stream
+    # An alert update must report a price event that happened AFTER the alert
+    # (or after the previous update) — never a same-minute echo: Viva 2026-09-13.
+    update_min_gap_seconds: int = 300
 
     # Confirmation engine knobs (defaults reproduce the original strict v7).
     confirm_rr1_floor: float = 1.30
@@ -274,6 +280,9 @@ class Settings:
             educational_min_score=_int("EDUCATIONAL_MIN_SCORE", cls.educational_min_score),
             execution_min_score=_int("EXECUTION_MIN_SCORE", cls.execution_min_score),
             candidate_expiry_hours_swing=_int("CANDIDATE_EXPIRY_HOURS_SWING", cls.candidate_expiry_hours_swing),
+            candidate_expiry_hours_grand=_int("CANDIDATE_EXPIRY_HOURS_GRAND", cls.candidate_expiry_hours_grand),
+            candidate_expiry_hours_daytrade=_int("CANDIDATE_EXPIRY_HOURS_DAYTRADE", cls.candidate_expiry_hours_daytrade),
+            update_min_gap_seconds=_int("UPDATE_MIN_GAP_SECONDS", cls.update_min_gap_seconds),
             candidate_expiry_hours_scalp=_int("CANDIDATE_EXPIRY_HOURS_SCALP", cls.candidate_expiry_hours_scalp),
             confirm_rr1_floor=_float("CONFIRM_RR1_FLOOR", cls.confirm_rr1_floor),
             confirm_rr2_floor=_float("CONFIRM_RR2_FLOOR", cls.confirm_rr2_floor),

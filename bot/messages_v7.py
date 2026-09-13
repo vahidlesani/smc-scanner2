@@ -100,7 +100,7 @@ CHART_LOGO_PATH = os.getenv(
 SETUP_STICKER_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "stickers")
 SIGNAL_SEPARATOR = os.getenv(
     "SIGNAL_SEPARATOR_TEXT",
-    "━━━━━━━━━━ 💹 VIVASIGNALS PRO ━━━━━━━━━━",
+    "⬛⬛⬛",
 )
         # v7.6 chart overlays (Viva's chart-design references)
 _CHART_SCENARIO_ZIGZAG = os.getenv("CHART_SCENARIO_ZIGZAG", "off").strip().lower() in {"1", "on", "true", "yes"}
@@ -483,6 +483,12 @@ def purge_resolved_alert_posts(limit: int = 400) -> int:
             continue
         deleted += purge_candidate_alert_posts(candidate)
     return deleted
+
+
+def _style_disp(candidate) -> str:
+    """GRAND is the 1D tier of Viva's ladder — channels read it as SWING."""
+    st = str(getattr(candidate, "style", "") or "").upper()
+    return "SWING" if st == "GRAND" else st
 
 
 def send_signal_separator(chat_id: Optional[str] = None) -> bool:
@@ -1116,7 +1122,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # direction, drawn at true price levels, not guessed angles.
 
             info = (
-                f"{candidate.direction}  •  {candidate.style}\n"
+                f"{candidate.direction}  •  {_style_disp(candidate)}\n"
                 f"SETUP  {candidate.setup_code}\n"
                 f"SCORE  {candidate.score}/10\n"
                 f"R:R  {candidate.rr_tp1:.2f} / {candidate.rr_tp2:.2f}"
@@ -1406,7 +1412,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         fig.text(
             0.055,
             0.952,
-            f"{candidate.symbol}  •  {str(_tf_disp).upper()}  •  {candidate.style}  •  {candidate.direction}",
+            f"{candidate.symbol}  •  {str(_tf_disp).upper()}  •  {_style_disp(candidate)}  •  {candidate.direction}",
             color=CHART_THEME["text"],
             fontsize=14,
             fontweight="bold",
@@ -1571,12 +1577,12 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
     mm_warning = "\n⚠️ حجم به سقف Margin مجاز محدود شده است." if mm.get("margin_capped") else ""
     invalidation_label = (
         "قیمت ابطال تحلیل (مرجع محاسبه، نه دستور اجباری Stop)"
-        if candidate.style.upper() == "SWING"
+        if candidate.style.upper() in {"SWING", "GRAND"}
         else "قیمت ابطال تحلیل / Stop پیشنهادی"
     )
     management_note = (
         "در Swing این سطح مرز ابطال تحلیل است؛ محل سفارش Stop و نحوه خروج باید با مدیریت شخصی معامله‌گر تنظیم شود."
-        if candidate.style.upper() == "SWING"
+        if candidate.style.upper() in {"SWING", "GRAND"}
         else "Stop و اندازه پوزیشن صرفاً پیشنهاد سیستم‌اند و باید با مدیریت شخصی معامله‌گر تطبیق داده شوند."
     )
     return (
@@ -1997,7 +2003,8 @@ def _telegram_message_link(chat_id: str, message_id: int) -> str:
 
 def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
     mm = build_money_management(candidate)
-    style_fa = {"DAYTRADE": "DAYTRADE", "SWING": "SWING", "SCALP": "SCALP"}.get(candidate.style.upper(), candidate.style)
+    style_fa = {"DAYTRADE": "DAYTRADE", "SWING": "SWING", "SCALP": "SCALP",
+                "GRAND": "SWING"}.get(candidate.style.upper(), candidate.style)
     badge, _ = _setup_badge(candidate)
     advisory = str((candidate.metadata or {}).get("gemini_advisory") or "").strip()
     rows = [

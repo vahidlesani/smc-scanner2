@@ -839,3 +839,45 @@ def test_paper_capacity_mirrors_the_licence_key():
     assert "has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe,\n" in seg or \
            "candidate.setup_code)" in seg.split("has_open_pre_tp1_signal")[1][:200]
     assert src.count("has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe):") == 0
+
+
+def test_four_stream_ladder():
+    """Viva 2026-09-13 «۴ تایم تریگر»: 1D grand swing, 4H mid, 1H mid, 15m
+    short — every stream is a full alert/license tier, confirmed by ONE closed
+    candle of the timeframe one step below its pattern TF."""
+    from analysis.setups_v7 import TIMEFRAME_PROFILES, expiry_hours_for
+    from analysis.setups_v7 import confirm_timeframe_for_pattern as cf
+    assert TIMEFRAME_PROFILES["GRAND"] == ("1d", "4h", "1d")
+    assert TIMEFRAME_PROFILES["SWING"] == ("4h", "1d", "4h")
+    assert TIMEFRAME_PROFILES["DAYTRADE"] == ("1h", "4h", "1h")
+    assert TIMEFRAME_PROFILES["SCALP"] == ("15m", "1h", "15m")
+    assert cf("1d", "GRAND", "1d") == "4h"
+    assert cf("4h", "SWING", "4h") == "1h"
+    assert cf("1h", "DAYTRADE", "1h") == "15m"
+    assert cf("15m", "SCALP", "15m") == "5m"
+    from analysis.quality_engine import ENGINES, _live_styles
+    assert {"GRAND", "SWING", "DAYTRADE", "SCALP"} <= set(ENGINES)
+    assert set(_live_styles()) == {"DAYTRADE", "SWING", "GRAND", "SCALP"}
+    assert expiry_hours_for("GRAND") >= 48
+    assert expiry_hours_for("DAYTRADE") >= 12
+
+
+def test_no_same_minute_updates_and_alerts_need_db_rows():
+    """Viva 2026-09-13: «آپدیت باید با اتفاقِ قیمت بعد از هشدار بیاید، نه
+    چسبیده به خودش» and «فقط سیگنال‌های به‌دیتابیس‌رسیده هشدار/آپدیت دارند»."""
+    import io as _io
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    main = _io.open(root / "main.py", encoding="utf-8").read()
+    assert "_update_too_fresh" in main and '"update_throttled"' in main
+    i = main.index("if SETTINGS.skip_dead_gate_candidates and not candidate.execution_ready:\n"
+                   "                    # A failing")
+    seg = main[i:i + 2400]
+    assert 'candidate.status = "DEAD_GATE"' in seg
+    assert seg.index("add_candidate(candidate)") < seg.index("_educate(candidate, _chart_frame")
+    cs = _io.open(root / "database" / "candidate_store.py", encoding="utf-8").read()
+    assert cs.count("status<>'DEAD_GATE'") >= 2
+    mv = _io.open(root / "bot" / "messages_v7.py", encoding="utf-8").read()
+    assert '"⬛⬛⬛"' in mv and '"GRAND": "SWING"' in mv
+    from config import get_settings
+    assert int(get_settings().update_min_gap_seconds) >= 240
