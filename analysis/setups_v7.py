@@ -744,6 +744,10 @@ def _base_candidate(
     # vetoes a break that must confirm. Zone-entry setups keep the gate.
     if str(setup_code) in ("TLBREAK", "TECHCLASSIC"):
         gates.pop("fresh_poi", None)
+        # …and the RR floor never vetoes a LINE ALERT either — ATOM's 4H
+        # TechnoClassic (score 8) died there five cycles running. Ratios are
+        # printed for the reader; the alert and its monitor life are unconditional.
+        gates.pop("rr", None)
     expiry_hours = expiry_hours_for(style)
     expires = utc_now() + timedelta(hours=expiry_hours)
     signal_id = generate_viva_signal_id(bundle.symbol, style, setup_code)

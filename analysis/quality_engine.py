@@ -385,9 +385,16 @@ def evaluate_confirmation(
         else (executable_entry - candidate.tp2) / risk
     )
     if rr1 < SETTINGS.confirm_rr1_floor or rr2 < SETTINGS.confirm_rr2_floor:
-        return reject("RR_DEGRADED", (
-            f"تأیید دیر صادر شده و R/R واقعی به {rr1:.2f}R و {rr2:.2f}R کاهش یافته است."
-        ))
+        # Viva 2026-09-14: «اولین کلوز معتبر پشت خط = تأیید؛ مدیریت با خودم»
+        # — an RR floor may never veto a first valid close beyond the line.
+        # The degraded ratio is REPORTED (it rides the confirmed message) and
+        # the chain confirms; retest-lane entries keep the old floor as is.
+        if not candidate.metadata.get("tl_fast_break"):
+            return reject("RR_DEGRADED", (
+                f"تأیید دیر صادر شده و R/R واقعی به {rr1:.2f}R و {rr2:.2f}R کاهش یافته است."
+            ))
+        candidate.metadata["rr_degraded_note"] = (
+            f"R/R پس از کلوزِ تأیید: {rr1:.2f}R و {rr2:.2f}R (تأیید با قانون یک‌کلوز صادر شد؛ مدیریت پوزیشن با معامله‌گر)")
     candidate.planned_entry = executable_entry
     candidate.rr_tp1 = rr1
     candidate.rr_tp2 = rr2
