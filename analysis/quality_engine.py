@@ -207,18 +207,25 @@ def evaluate_confirmation(
             _scan = _bars_since_candidate(candidate, _frame)
             if _scan is None or _scan.empty:
                 continue
+            # Viva 2026-09-14: thresholds speak the language of the frame they
+            # judge. A 1D pattern's ATR applied to a 15m confirm candle is an
+            # almost-impossible bar nobody stated — «اولین کلوز معتبر» means
+            # valid FOR THAT CANDLE, so the buffer/body are scaled to the
+            # scanned frame's own average range (14 bars, high-low).
+            _f_atr = float((_frame["high"] - _frame["low"]).tail(14).mean() or 0.0) or _atr
+            _f_buf = 0.10 * _f_atr
             for _ts, _r in _scan.iterrows():
                 _edge_t = _edge_at(_ts, _edge if _edge > 0 else _zone_edge)
-                _out = bool(float(_r["close"]) >= _edge_t + _buf) if _is_long \
-                    else bool(float(_r["close"]) <= _edge_t - _buf)
+                _out = bool(float(_r["close"]) >= _edge_t + _f_buf) if _is_long \
+                    else bool(float(_r["close"]) <= _edge_t - _f_buf)
                 if not _out:
                     continue
-                _body = abs(float(_r["close"]) - float(_r["open"])) / _atr
+                _body = abs(float(_r["close"]) - float(_r["open"])) / _f_atr
                 _dir_ok = (float(_r["close"]) > float(_r["open"])) if _is_long \
                     else (float(_r["close"]) < float(_r["open"]))
                 if _body >= 0.25 and _dir_ok:
                     fast_lane = (f"اولین کلوزِ معتبر فراتر از خط/لبه ({_tag}، "
-                                 f"≥۰.۱۰ ATR پشت لبه، Body {_body:.2f} ATR) — پولبک شرط نیست")
+                                 f"≥۰.۱۰ ATRِ همان تایم پشت لبه، Body {_body:.2f} ATR) — پولبک شرط نیست")
                     candidate.metadata["fast_break_bar"] = str(_ts)[:16]
                     candidate.metadata["tl_fast_break"] = fast_lane
                     break

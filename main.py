@@ -472,7 +472,10 @@ def _pinv_window_expired(candidate: SignalCandidate, closed: Optional[pd.DataFra
         return is_expired(candidate)
     md = candidate.metadata or {}
     tf = str(md.get("pin_tf") or candidate.trigger_timeframe)
-    seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}.get(tf, 300)
+    # Viva 2026-09-14: «روزانه است، ۱۵ دقیقه که نیست» — verdict windows count
+    # candles of the pin's OWN timeframe; 4h/1d fell back to 5m before this.
+    seconds = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600,
+               "4h": 14400, "1d": 86400}.get(tf, 300)
     try:
         created = pd.Timestamp(str(candidate.created_at)).tz_localize(None)
         bars = closed[pd.to_datetime(closed["timestamp"]) >= created - pd.Timedelta(seconds=seconds)]
@@ -550,6 +553,89 @@ def _pinv_done(candidate: SignalCandidate, ok: bool, why: str) -> None:
     print(f"PINVAL verdict {candidate.signal_id}: {candidate.status}")
     send_verdict_reply(candidate, ok, why)
     update_candidate(candidate)
+
+
+_TF_SECONDS_LIVE = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
+_TF_FA_LIVE = {"5m": "۵دقیقه‌ای", "15m": "۱۵دقیقه‌ای", "30m": "۳۰دقیقه‌ای",
+               "1h": "یک‌ساعته", "4h": "۴ساعته", "1d": "روزانه"}
+
+
+def _watch_edge_at(candidate, ts) -> float:
+    """Value of the candidate's reference line AT TIME ts: the fitted
+    trend/channel line when the detector stored its two defining points, the
+    static breakout edge otherwise, the zone edge as a last resort."""
+    md = candidate.metadata or {}
+    try:
+        _la = pd.Timestamp(str(md["tl_a_ts"])).tz_localize(None)
+        _lb = pd.Timestamp(str(md["tl_b_ts"])).tz_localize(None)
+        _pa, _pb = float(md["tl_a_price"]), float(md["tl_b_price"])
+        _dt = (_lb - _la).total_seconds()
+        if _dt:
+            _frac = (pd.Timestamp(ts).tz_localize(None) - _la).total_seconds() / _dt
+            return float(_pa + (_pb - _pa) * _frac)
+    except Exception:
+        pass
+    for _k in ("viva_breakout_line", "viva_break_line", "viva_watch_line"):
+        try:
+            _v = float(md.get(_k) or 0.0)
+        except Exception:
+            _v = 0.0
+        if _v > 0:
+            return _v
+    return float(candidate.entry_zone_top if candidate.direction == "LONG"
+                 else candidate.entry_zone_bottom)
+
+
+def _live_break_watch(candidate, live_frame) -> str:
+    """Viva 2026-09-14: an open pattern candle that has already thrust beyond
+    the daily/wedge/triangle/channel side is REPORTED NOW, with the live chart
+    and the countdown to its close («نباید بگوید فردا در کلوز خبر می‌دهم»).
+    One alert per candle; if price falls back inside the flag resets so a
+    fresh thrust can speak again. The close still owns confirmation."""
+    md = candidate.metadata or {}
+    tf = str(candidate.trigger_timeframe or "")
+    secs = _TF_SECONDS_LIVE.get(tf, 3600)
+    if live_frame is None or getattr(live_frame, "empty", True) or len(live_frame) < 3:
+        return ""
+    _row = live_frame.iloc[-1]
+    try:
+        _ts = pd.Timestamp(_row["timestamp"] if "timestamp" in live_frame.columns
+                           else live_frame.index[-1])
+    except Exception:
+        return ""
+    now = pd.Timestamp.utcnow().tz_localize(None)
+    if (now - _ts).total_seconds() > secs:
+        return ""            # newest row is already a closed candle; close owns it
+    atr = float(md.get("atr") or 0.0) or float(
+        (live_frame["high"] - live_frame["low"]).tail(14).mean() or 0.0)
+    if atr <= 0:
+        return ""
+    edge = _watch_edge_at(candidate, _ts)
+    px = float(_row["close"])
+    beyond = px >= edge + 0.05 * atr if candidate.direction == "LONG"         else px <= edge - 0.05 * atr
+    _key = _ts.isoformat()
+    if not beyond:
+        if md.get("live_break_bar"):
+            md.pop("live_break_bar", None)
+            candidate.metadata = md
+            try:
+                update_candidate(candidate)
+            except Exception:
+                pass
+        return ""
+    if str(md.get("live_break_bar") or "") == _key:
+        return ""
+    md["live_break_bar"] = _key
+    candidate.metadata = md
+    try:
+        update_candidate(candidate)
+    except Exception:
+        pass
+    rem_min = max(1, int((_ts.timestamp() + secs - now.timestamp()) // 60))
+    side = "بالای" if candidate.direction == "LONG" else "زیرِ"
+    return (f"⚡ عبورِ {side}ِ خط/لبه در لحظه — کندلِ {_TF_FA_LIVE.get(tf, tf)} هنوز باز است "
+            f"و حدود {rem_min} دقیقه تا کلوزِ آن باقی مانده (قیمت {px:g} در برابر مرجع {edge:.6g}). "
+            "با کلوزِ معتبر، قانونِ یک‌کلوز تأیید می‌کند؛ بازگشت تا پیش از کلوز نقض است.")
 
 
 def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataFrame, pd.DataFrame, float]]:
@@ -652,6 +738,18 @@ def monitor_candidates() -> Dict[str, int]:
                 # cannot ever confirm; expiry/invalidation above will close it.
                 continue
 
+            # ── live-break watch (Viva 2026-09-14) — report the crossing the
+            # moment the OPEN pattern candle thrusts beyond the line/edge.
+            if not candidate.metadata.get("technical_confirmation_complete"):
+                try:
+                    _pat_frames = frames.get((candidate.symbol, str(candidate.trigger_timeframe or "")))
+                    _live_note = _live_break_watch(candidate, (_pat_frames or (None, None, None))[0])
+                    if _live_note and send_setup_update(
+                            candidate, (_pat_frames or (None, None, None))[0], note_fa=_live_note):
+                        stats["live_break"] = stats.get("live_break", 0) + 1
+                except Exception as _lb_exc:
+                    print(f"live-break watch {candidate.symbol}: {_lb_exc}")
+
             if not candidate.metadata.get("technical_confirmation_complete"):
                 is_near, distance_atr = approaching_entry(candidate, current_price)
                 if is_near and not candidate.approaching_sent:
@@ -686,6 +784,36 @@ def monitor_candidates() -> Dict[str, int]:
                 code = str(candidate.metadata.get("last_reject_code") or "UNKNOWN")
                 stats["rejects"] = stats.get("rejects", {})
                 stats["rejects"][code] = int(stats["rejects"].get(code, 0)) + 1
+                # ── per-pattern-candle heartbeat (Viva 2026-09-14): «۱ ساعته هر یک ساعت،
+                # ۴ ساعته هر ۴ ساعت، روزانه هر روز — تا پایانِ تأیید یا عدم‌تأیید».
+                # Every closed candle of the pattern timeframe produces exactly ONE
+                # status update on the chain's live slot while unresolved.
+                try:
+                    _trg = str(candidate.trigger_timeframe or "")
+                    if _trg in ("1h", "4h", "1d") and not publication_in_progress:
+                        _pat = frames.get((candidate.symbol, _trg)) or (None, None, None)
+                        _pfr = _pat[1]
+                        if _pfr is not None and not _pfr.empty:
+                            _last = pd.Timestamp(_pfr["timestamp"].iloc[-1]
+                                                 if "timestamp" in _pfr.columns
+                                                 else _pfr.index[-1])
+                            _bts = _last.isoformat()[:16]
+                            if str(candidate.metadata.get("hb_bar") or "") != _bts:
+                                candidate.metadata["hb_bar"] = _bts
+                                _dur = _TF_SECONDS_LIVE.get(_trg, 3600)
+                                _rem = max(1, int((_last.timestamp() + 2 * _dur
+                                                    - pd.Timestamp.utcnow().tz_localize(None).timestamp()) // 60))
+                                _hb_note = (f"🕐 گزارشِ پایانِ کندلِ {_TF_FA_LIVE.get(_trg, _trg)} — این کندل بسته شد "
+                                            f"و کلوزِ معتبرِ فراتر از لبه هنوز در کارنامه نیست؛ "
+                                            f"کندلِ بعدی حدود {_rem} دقیقهٔ دیگر کلوز می‌دهد. زنجیره زنده و زیر نظر است.")
+                                if send_setup_update(candidate, _pat[0], note_fa=_hb_note):
+                                    stats["heartbeat"] = stats.get("heartbeat", 0) + 1
+                                try:
+                                    update_candidate(candidate)
+                                except Exception:
+                                    pass
+                except Exception as _hb_exc:
+                    print(f"heartbeat watch {candidate.symbol}: {_hb_exc}")
             if confirmed:
                 # Viva 2026-09-11: five identical SOL confirmations on the same
                 # trigger were USELESS. A new confirmed signal must bring NEW
@@ -879,6 +1007,20 @@ def run_monitor_cycle() -> None:
                 f"confirmed={stats['confirmed']} cancelled={stats['cancelled']} trade_events={trade_events} "
                 f"rejects={stats.get('rejects', {})}"
             )
+        try:  # Viva 2026-09-14: live proof of the watch/heartbeat machine
+            from datetime import timezone as _tz
+            from database.bot_kv import set_json as _skv
+            _skv("monitor_summary", {
+                "when": datetime.now(_tz.utc).isoformat(timespec="seconds"),
+                "active": int(stats.get("active", 0)),
+                "live_break": int(stats.get("live_break", 0)),
+                "heartbeat": int(stats.get("heartbeat", 0)),
+                "confirmed": int(stats.get("confirmed", 0)),
+                "cancelled": int(stats.get("cancelled", 0)),
+                "rejects": stats.get("rejects", {}),
+            })
+        except Exception:
+            pass
     except Exception as exc:
         print(f"Candidate monitor cycle error: {exc}")
 
@@ -973,7 +1115,7 @@ def main() -> None:
         from database.bot_kv import set_json as _boot_set
         _boot_set("boot_version", {
             "sha": os.getenv("COMMIT_SHA", "local")[:12],
-            "build": "2026.09.13-10 (main-slot updates, break-confirms, helpers everywhere)",
+            "build": "2026.09.14-11 (unchoke: gates, persistence, live-break, heartbeats)",
             "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     except Exception as _boot_exc:

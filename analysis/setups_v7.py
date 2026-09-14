@@ -558,12 +558,18 @@ def _market_quality(bundle: MarketBundle, style: str) -> Tuple[bool, str, int]:
     ticker = bundle.ticker or {}
     day_turnover = float(ticker.get("trading_day_turnover", ticker.get("turnover24h", 0)) or 0)
     projected_turnover = float(ticker.get("projected_day_turnover", day_turnover) or day_turnover)
-    spread = float(ticker.get("spread_pct", 999) or 999)
     relative = float(ticker.get("relative_volume", 1) or 1)
-    if style == "SCALP":
-        valid = projected_turnover >= SETTINGS.scalp_min_turnover_usd and spread <= SETTINGS.scalp_max_spread_percent
-    else:
-        valid = projected_turnover >= SETTINGS.watchlist_min_turnover_usd and spread <= SETTINGS.watchlist_max_spread_percent
+    # Viva 2026-09-14: missing feed data is UNKNOWN, not a veto — ASTER and
+    # twelve others died at the liquidity gate purely because the ticker
+    # payload carried no spread/turnover. When a number exists and is bad,
+    # the veto stands exactly as before.
+    _has_turn = bool(ticker.get("trading_day_turnover") or ticker.get("turnover24h"))
+    _has_spread = ticker.get("spread_pct") is not None
+    spread = float(ticker.get("spread_pct", 0) or 0)
+    _min_turn = SETTINGS.scalp_min_turnover_usd if style == "SCALP" else SETTINGS.watchlist_min_turnover_usd
+    _max_spread = SETTINGS.scalp_max_spread_percent if style == "SCALP" else SETTINGS.watchlist_max_spread_percent
+    valid = ((not _has_turn) or projected_turnover >= _min_turn) \
+        and ((not _has_spread) or spread <= _max_spread)
     points = 1 if valid and (relative >= 1.1 or projected_turnover >= SETTINGS.scalp_min_turnover_usd) else 0
     detail = (
         f"گردش مالی ثبت‌شده از ابتدای روز معاملاتی UTC حدود ${day_turnover:,.0f} "
@@ -731,6 +737,13 @@ def _base_candidate(
         "rr": rr_ok,
         "market_liquidity": market_ok,
     }
+    # Viva 2026-09-14 «ببین کجا موقعیت‌ها خفه می‌شن»: on LINE setups a
+    # repeatedly touched trendline/wedge/triangle/channel side is a STRONGER
+    # reference, not a disqualifier — DOGE's 10/10 TechnoClassic died here
+    # yesterday. Freshness stays as visible evidence and score; it never
+    # vetoes a break that must confirm. Zone-entry setups keep the gate.
+    if str(setup_code) in ("TLBREAK", "TECHCLASSIC"):
+        gates.pop("fresh_poi", None)
     expiry_hours = expiry_hours_for(style)
     expires = utc_now() + timedelta(hours=expiry_hours)
     signal_id = generate_viva_signal_id(bundle.symbol, style, setup_code)
@@ -1111,5 +1124,9 @@ def scan_setups(bundle: MarketBundle, style: str) -> List[SignalCandidate]:
             print(f"Setup detector error {detector.__name__} {bundle.symbol} {style}: {exc}")
     # Avoid several highly correlated messages from the same move: keep the two strongest,
     # preferring execution-ready candidates and then score/RR.
+    # Viva 2026-09-14 «پیام‌های همهٔ ستاپ‌ها باید بیاید»: the old keep-two cap
+    # silently strangled a full-score detection behind two fitter siblings.
+    # The per-licence law (3 rotating per symbol/trigger-TF/setup) owns the
+    # channel volume now — so four candidates per symbol×style may present.
     candidates.sort(key=lambda c: (c.execution_ready, c.score, c.rr_tp1), reverse=True)
-    return candidates[:2]
+    return candidates[:4]

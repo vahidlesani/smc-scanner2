@@ -41,7 +41,7 @@ class Settings:
     monitor_minutes: int = 5
     # Viva 2026-09-11 (final chain doctrine): per scan cycle only this many
     # NEW detailed alerts may be published — the rest defer to the next scan.
-    education_max_per_scan: int = 8
+    education_max_per_scan: int = 16
     # One setup may open at most this many alert-chains per symbol per 24h…
     chains_per_symbol_setup_24h: int = 3
     # …and never two at once: while one chain of the same symbol+setup is
@@ -67,7 +67,7 @@ class Settings:
     core_v7_setups_enabled: bool = False
     # Pinbar-in-zone alerts (5m/15m/1h) — bullish 🔴/🟢 alert + verdict reply
     pinv_enabled: bool = True
-    albrox_enabled: bool = False
+    albrox_enabled: bool = True
     albrox_symbols: str = ""
     # ALBROX spike/reclaim detection thresholds (env-tunable). The original
     # 5x-ATR spike bar almost never occurs on liquid crypto, so no candidate
@@ -75,7 +75,7 @@ class Settings:
     albrox_min_spike_atr: float = 3.0
     albrox_min_reclaim_frac: float = 0.45
     albrox_base_max_atr: float = 2.5
-    pinwall_quality_enabled: bool = False
+    pinwall_quality_enabled: bool = True
     pinwall_quality_min_score: float = 78.0
     pinv_min_wick_body: float = 2.0      # dominant wick / body
     pinv_max_body_frac: float = 0.35     # body / range
@@ -107,10 +107,10 @@ class Settings:
     chart_log_htf: bool = False
     educational_min_score: int = 6
     execution_min_score: int = 7
-    candidate_expiry_hours_swing: int = 36
-    candidate_expiry_hours_scalp: int = 6
-    candidate_expiry_hours_grand: int = 96     # 1D stream (Viva ladder 2026-09-13)
-    candidate_expiry_hours_daytrade: int = 24  # 1H stream
+    candidate_expiry_hours_swing: int = 168    # 4H stream: live until resolved (Viva 2026-09-14)
+    candidate_expiry_hours_scalp: int = 12
+    candidate_expiry_hours_grand: int = 336    # 1D stream: every day until break/invalidation
+    candidate_expiry_hours_daytrade: int = 120  # 1H stream: every hour until resolved
     # An alert update must report a price event that happened AFTER the alert
     # (or after the previous update) — never a same-minute echo: Viva 2026-09-13.
     update_min_gap_seconds: int = 300
@@ -166,7 +166,7 @@ class Settings:
     # TechnoClassic (stage 5): 4H/1D classical-pattern lifecycle. NEAR/READY
     # pre-break previews + real TECHCLASSIC candidates on confirmed breaks
     # (retest + lower-TF BOS via the shared VIVA_TLBREAK state machine).
-    technoclassic_enabled: bool = False
+    technoclassic_enabled: bool = True
     technoclassic_preview_alerts: bool = True
     technoclassic_cooldown_hours: float = 8.0
     technoclassic_symbols: str = ""

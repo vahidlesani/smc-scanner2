@@ -488,7 +488,7 @@ def cleanup_candidates(retention_days: int = 7) -> int:
             DELETE FROM signal_candidates
             WHERE (status NOT IN ('CONFIRMED','EDUCATIONAL','APPROACHING') AND updated_at<?)
                OR (status='CONFIRMED' AND updated_at<?)
-               OR (updated_at<?)
+               OR (status NOT IN ('EDUCATIONAL','APPROACHING','CONFIRMED') AND updated_at<?)
             """,
             (resolved_cutoff, confirmed_cutoff, legacy_cutoff),
         )

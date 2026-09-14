@@ -989,3 +989,86 @@ def test_main_channel_live_slot_and_preview_dedup():
     assert "تأییدهای کمکی" in cap and "LONDON_NY_OVERLAP" in cap and "61.8" in cap
     upd = mv7._setup_update_caption(cand, note_fa="x", upd_n=4)
     assert "LONDON_NY_OVERLAP" in upd and "نظر AI" in upd and "آپدیت" in upd
+
+def test_gate_demotion_and_tolerant_liquidity():
+    """Viva 2026-09-14 «ببین کجا موقعیت‌ها خفه می‌شن»: last cycle 25 of 32
+    candidate rows died as DEAD_GATE — 13 at fresh_poi (a 10/10 DOGE
+    TechnoClassic among them) and 12 at market_liquidity purely because the
+    ticker feed carries no spread/turnover. Repeated touches STRENGTHEN a line
+    (his own preview law) and missing data is unknown, not a veto."""
+    import io as _io
+    sv = _io.open("analysis/setups_v7.py", encoding="utf-8").read()
+    assert 'if str(setup_code) in ("TLBREAK", "TECHCLASSIC"):' in sv
+    assert 'gates.pop("fresh_poi", None)' in sv
+    assert "_has_turn" in sv and "_has_spread" in sv
+    from analysis.setups_v7 import _market_quality
+    class _B:  # ticker-less bundle: unknown != veto
+        ticker = {}
+    valid, _detail, _pts = _market_quality(_B(), "SCALP")
+    assert valid is True, "no data must never block an alert"
+    class _B2:
+        ticker = {"spread_pct": 0.9, "trading_day_turnover": 50.0}
+    v2, _d2, _p2 = _market_quality(_B2(), "SCALP")
+    assert v2 is False, "present-and-bad data still vetoes"
+    from analysis.setups_v7 import expiry_hours_for
+    assert expiry_hours_for("DAYTRADE") >= 96
+    assert expiry_hours_for("SWING") >= 144
+    assert expiry_hours_for("GRAND") >= 300
+    assert expiry_hours_for("SCALP") >= 12
+    cs = _io.open("database/candidate_store.py", encoding="utf-8").read()
+    assert "OR (status NOT IN ('EDUCATIONAL','APPROACHING','CONFIRMED') AND updated_at<?)" in cs
+    cfg = _io.open("config.py", encoding="utf-8").read()
+    for flag in ("albrox_enabled: bool = True", "technoclassic_enabled: bool = True",
+                 "pinwall_quality_enabled: bool = True"):
+        assert flag in cfg, flag
+    assert "education_max_per_scan: int = 16" in cfg
+    assert "return candidates[:4]" in sv
+    qe = _io.open("analysis/quality_engine.py", encoding="utf-8").read()
+    assert '_f_atr = float((_frame["high"] - _frame["low"]).tail(14).mean()' in qe
+    mn = _io.open("main.py", encoding="utf-8").read()
+    assert "def _live_break_watch" in mn and "def _watch_edge_at" in mn
+    assert "_live_break_watch(candidate" in mn
+    assert 'if _trg in ("1h", "4h", "1d")' in mn and "hb_bar" in mn
+    assert '"4h": 14400, "1d": 86400}.get(tf, 300)' in mn
+    assert "monitor_summary" in mn
+
+
+def test_live_break_watch_behavior():
+    """The moment a forming pattern candle crosses the reference line the
+    watch note must speak (once per candle, with the close countdown); a pull
+    back inside resets the flag; closed bars stay with the close law."""
+    import pandas as pd
+    from datetime import timedelta
+    import main as MAIN
+    from test_v7 import make_candidate
+
+    now = pd.Timestamp.utcnow().tz_localize(None).floor("15min")
+    rows = []
+    for i in range(30):
+        ts = now - timedelta(minutes=15 * (29 - i))
+        base = 100.0 if i < 28 else (101.2 if i == 28 else 102.6)
+        rows.append({"timestamp": ts, "open": base - 0.1, "high": base + 0.2,
+                     "low": base - 0.2, "close": base, "volume": 100.0})
+    frame = pd.DataFrame(rows)
+    cand = make_candidate()
+    cand.setup_code = "TECHCLASSIC"
+    cand.trigger_timeframe = "15m"
+    cand.direction = "LONG"
+    cand.entry_zone_bottom, cand.entry_zone_top = 99.6, 100.4
+    cand.sl, cand.tp1, cand.tp2 = 98.0, 112.0, 120.0
+    cand.metadata.update({"atr": 1.0, "viva_breakout_line": 101.5})
+    orig_upd = MAIN.update_candidate
+    MAIN.update_candidate = lambda *a, **k: None
+    try:
+        note = MAIN._live_break_watch(cand, frame)
+        assert note.startswith("⚡") and "دقیقه" in note
+        assert cand.metadata.get("live_break_bar"), "flag must persist for the candle"
+        assert MAIN._live_break_watch(cand, frame) == ""      # same candle, silence
+        frame2 = frame.copy()
+        frame2.loc[frame2.index[-1], ["open", "close", "high", "low"]] = [101.0, 101.0, 101.3, 100.8]
+        assert MAIN._live_break_watch(cand, frame2) == ""
+        assert not cand.metadata.get("live_break_bar")        # pullback clears the flag
+        assert MAIN._live_break_watch(cand, frame).startswith("⚡")  # fresh thrust speaks again
+        assert MAIN._live_break_watch(cand, None) == ""
+    finally:
+        MAIN.update_candidate = orig_upd
