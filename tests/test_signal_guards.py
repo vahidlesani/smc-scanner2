@@ -111,7 +111,7 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         ev = {"symbol": "GTTSTUSDT", "pattern_tf": "4h", "state": "EDGE_NEAR",
               "pattern": "CHANNEL_DESCENDING", "pattern_fa": "کانال نزولی",
               "side": "lower", "direction": "SHORT", "line_price": 65.0, "live": 65.1,
-              "distance_atr": 0.15, "touches": 3, "structure_score": 5,
+              "distance_atr": 0.15, "touches": 3, "structure_score": 7,
               "reactions": {"touches": 3, "rejects": 3, "breaks": 0, "reject_rate": 1.0},
               "scenarios": {"hold": "پایداریِ کانال", "break": "شکست معتبر",
                             "prob": "هیچ‌کدام ۱۰٪ نیست"},
@@ -119,6 +119,10 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         fade = {"direction": "LONG", "entry": 65.1, "stop": 64.3, "tp_mid": 79.9,
                 "target": 94.6, "rr": 25.0, "reject_rate": 1.0}
 
+        # Viva 2026-09-14 «مگه امتیاز ۲ هم داریم؟ زیر ۶ رو بستیم» — a preview
+        # below the education floor never speaks in ANY channel:
+        assert M.send_technoclassic_preview({**ev, "structure_score": 4}) is False
+        assert len(photos) == 0
         assert M.send_technoclassic_preview(dict(ev)) is True
         # Viva 2026-09-13 «اگر قوانینش با تکنوکلاسیک یکی هست، باید پاک بشه»:
         # the preview's duplicate alerts-channel pair is GONE — it lives only
@@ -173,7 +177,7 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         assert not [t for t in texts if "📚 <b>تحلیل آموزشی" in t[1]]
 
         # further advance → update ۲ lands as the newest message, update ۱ is DELETED
-        ev3 = dict(ev, state="BREAK_READY")
+        ev3 = dict(ev, state="BREAK_READY", ref_ts="2026-01-24T21:00:00")  # new pattern bar
         assert M.send_technoclassic_preview(ev3) is True
         assert len(photos) == 3 and len(edits) == 0
         upd2 = photos[2]
@@ -208,16 +212,15 @@ def test_family_block_template_everywhere():
 
 
 def test_setup_chain_final_doctrine(monkeypatch):
-    """Viva 2026-09-11 FINAL doctrine, verbatim-implemented:
-    • education = detailed (permanent, charted) + ONE compact reply — BOTH in
-      the alerts channel; the main channel receives NOTHING at this stage
-      («عالمه پیام هشدار بدون چارت اومده به کانال اصلی» must be impossible).
-    • updates = ONE self-editing message in the alerts channel, reply-linked to
-      the detailed, AI opinion inside «تأییدهای کمکی».
-    • PRO receives only the final alert (⚡ label) — the Confirmed REPLACES that
-      same message in place and keeps the 📚 link to the detailed alert."""
+    """Viva 2026-09-14 link-chain law (verbatim, EVERY setup): «پیام تفصیلی…
+    در کانال هشدارها؛ همزمان پیام هشدار مختصر تحت عنوان هشدار ابتدایی به کانال
+    اصلی و لینک به تفصیلی؛ آپدیت‌ها ریپلای به پیام مختصر و هر آپدیت قبلی را
+    پاک؛ هشدار نهایی ریپلای به آخرین آپدیت؛ تأیید هم پیام خودش را دارد.» The
+    compact is a PERMANENT anchor; updates replace only each other; final and
+    Confirmed are new thread messages — nothing of the chain is overwritten."""
     os.environ["CANDIDATE_DB_BACKEND"] = "sqlite"
     import tempfile as _tf
+    import time as _t
     import pandas as pd
     with _tf.TemporaryDirectory() as tmp:
         os.environ["CANDIDATE_DB_PATH"] = os.path.join(tmp, "cand.db")
@@ -229,17 +232,17 @@ def test_setup_chain_final_doctrine(monkeypatch):
         cand.metadata["public_code"] = "VIVA-TLBREAK-K000001"
         M.CHAT_ID_EDUCATION = "-1004000000001"
         M.CHAT_ID_EXECUTION = "-100TEST"
-        texts, edits_t, edits_c = [], [], []
+        posts, edits_t, edits_c = [], [], []
         counter = {"mid": 900}
 
         def _send_message(text, chat_id=None, reply_to_message_id=None, reply_markup=None):
             counter["mid"] += 1
-            texts.append((counter["mid"], text, chat_id, reply_to_message_id, reply_markup))
+            posts.append((counter["mid"], text, chat_id, reply_to_message_id, reply_markup))
             return counter["mid"]
 
         def _send_photo(image, caption, chat_id=None, reply_to_message_id=None, reply_markup=None):
             counter["mid"] += 1
-            texts.append((counter["mid"], caption, chat_id, reply_to_message_id, reply_markup))
+            posts.append((counter["mid"], caption, chat_id, reply_to_message_id, reply_markup))
             return counter["mid"]
 
         monkeypatch.setattr(M, "send_message", _send_message)
@@ -249,72 +252,57 @@ def test_setup_chain_final_doctrine(monkeypatch):
                             lambda mid, chat_id, image, caption, reply_markup=None: edits_c.append((mid, caption, reply_markup)) or True)
         monkeypatch.setattr(M, "build_educational_message", lambda c: "DETAILED-MSG")
         monkeypatch.setattr(M, "generate_chart", lambda *a, **k: b"IMG")
-        monkeypatch.setattr(M, "send_signal_separator", lambda *a, **k: None)
-        import database.candidate_store as CS
-        monkeypatch.setattr(CS, "update_candidate", lambda *a, **k: None)
-
-        assert M.send_educational_setup(cand, None) is True
-        edu_mid = [t for t in texts if t[1] == "DETAILED-MSG"][0][0]
-        # Viva 2026-09-13, his own correction: the compact initial alert lives
-        # in the MAIN channel as the chain's live slot (chart + 📚 button that
-        # points at the permanent detailed alert located by the unique code).
-        compacts = [t for t in texts if "📚 <b>تحلیل آموزشی" in t[1]]
-        assert len(compacts) == 1 and compacts[0][2] == M.CHAT_ID_EXECUTION
-        assert compacts[0][3] is None                          # slot post: no reply threading
-        assert "🏷 <b>VIVA ✦" in compacts[0][1]
-        assert compacts[0][4] and str(edu_mid) in compacts[0][4]["inline_keyboard"][0][0]["url"]
-        assert not [t for t in texts if t[2] == M.CHAT_ID_EDUCATION and t[1] != "DETAILED-MSG"]
-        chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
-        assert chain.get("edu") == edu_mid and chain.get("pro") == compacts[0][0]
-
-        # deterministic: the update's self-fetch must not hit the network
-        import data.fetcher as F
-        monkeypatch.setattr(F, "get_klines", lambda *a, **k: None)
-        # Viva 2026-09-12 latest-update law for EVERY setup: the update is a
-        # NEW numbered post linked to the detail; the previous update gets
-        # deleted. In-place editing of the alerts channel is dead.
+        sep_calls = []
+        monkeypatch.setattr(M, "send_signal_separator", lambda *a, **k: sep_calls.append(a) or None)
         deletes_u = []
         monkeypatch.setattr(M, "delete_message", lambda chat, mid: deletes_u.append(int(mid)) or True)
+        import database.candidate_store as CS
+        monkeypatch.setattr(CS, "update_candidate", lambda *a, **k: None)
+        import data.fetcher as F
+        monkeypatch.setattr(F, "get_klines", lambda *a, **k: None)
+
+        def _aged():
+            ch = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {}) or {}
+            ch["upd_ts"] = _t.time() - 400
+            KV.set_json("setup_chain|VIVA-TLBREAK-K000001", ch)
+
+        assert M.send_educational_setup(cand, None) is True
+        detail = [x for x in posts if x[1] == "DETAILED-MSG"][0]
+        edu_mid = detail[0]
+        compacts = [x for x in posts if "📚 <b>تحلیل آموزشی" in x[1]]
+        assert len(compacts) == 1 and compacts[0][2] == M.CHAT_ID_EXECUTION
+        compact_mid = compacts[0][0]
+        assert compacts[0][3] is None                     # the compact IS the anchor
+        assert sep_calls                                   # «بین پیام‌های کانال اصلی هم جداکننده»
+        assert compacts[0][4] and str(edu_mid) in compacts[0][4]["inline_keyboard"][0][0]["url"]
+        chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
+        assert chain.get("edu") == edu_mid and chain.get("anchor_pro") == compact_mid
+
+        _aged()
         assert M.send_setup_update(cand, None, note_fa="ناحیه جابه‌جا شد") is True
-        upd = [t for t in texts if "به‌روزرسانی رصد" in t[1]][0]
-        assert upd[2] == M.CHAT_ID_EXECUTION and upd[3] is None    # MAIN channel live slot
-        assert upd[4] and str(edu_mid) in upd[4]["inline_keyboard"][0][0]["url"]
-        assert "🔁 <b>آخرین آپدیت • آپدیت ۱</b>" in upd[1]
-        assert "🧩 <b>تأییدهای کمکی</b>" in upd[1] and "🤖" in upd[1]
-        assert "ناحیه جابه‌جا شد" in upd[1]
-        chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
-        assert chain.get("upd") == upd[0] and chain.get("upd_n") == 1
-        assert not edits_t and deletes_u == [compacts[0][0]]       # compact yields the slot
+        up1 = [x for x in posts if "به‌روزرسانی رصد" in x[1]][-1]
+        assert up1[2] == M.CHAT_ID_EXECUTION
+        assert up1[3] == compact_mid                      # «ریپلای بشه به پیام مختصر همون کد»
+        assert not deletes_u                              # the compact is NEVER deleted anymore
+        assert "🔁 <b>آخرین آپدیت • آپدیت ۱</b>" in up1[1]
+
+        _aged()
         assert M.send_setup_update(cand, None, note_fa="ادامه") is True
-        ups = [t for t in texts if "به‌روزرسانی رصد" in t[1]]
-        assert len(ups) == 2 and "آپدیت ۲" in ups[1][1]        # numbered, appended
-        assert deletes_u == [compacts[0][0], upd[0]] and ups[1][3] is None   # slot replaced, never threaded
-        assert not edits_t                                           # NEVER edited in place
+        up2 = [x for x in posts if "به‌روزرسانی رصد" in x[1]][-1]
+        assert "آپدیت ۲" in up2[1] and up2[3] == compact_mid
+        assert deletes_u == [up1[0]]                      # only the superseded UPDATE dies
+        # same-minute twins are now structurally impossible:
+        assert M.send_setup_update(cand, None, note_fa="توهمی") is False
 
-        # with a live frame available the new post carries a fresh chart too
-        import pandas as _pd
-        frame_ok = _pd.DataFrame({"open": [99.0]*40, "high": [99.5]*40, "low": [98.5]*40,
-                                  "close": [99.1]*40, "volume": [10.0]*40},
-                                 index=_pd.date_range("2026-09-11", periods=40, freq="15min"))
-        monkeypatch.setattr(F, "get_klines", lambda *a, **k: frame_ok)
-        assert M.send_setup_update(cand, None, note_fa="چارت زنده") is True
-        last_up = [t for t in texts if "چارت زنده" in t[1]][-1]
-        assert "آپدیت ۳" in last_up[1] and not edits_c
-        assert deletes_u == [compacts[0][0], upd[0], ups[1][0]]
-
-        # final alert takes over the same live slot in PRO (in-place law intact)
+        # final alert: a NEW message replying to the LAST update (any number)
         assert M.send_approaching(cand, 99.7, 0.31) is True
-        # the live slot in PRO is replaced in place — with a fresh chart, so the
-        # op lands on edit_chart_message (edits_c) or the text fallback (edits_t)
-        _ops = edits_c if edits_c else edits_t
-        assert _ops, "the final alert must replace the live slot in PRO"
-        final_mid = _ops[-1][0]
-        assert "⚡ <b>هشدار نهایی" in _ops[-1][1]
+        fin = [x for x in posts if "⚡ <b>هشدار نهایی" in x[1]][0]
+        assert fin[3] == up2[0]                           # «ریپلای به آخرین آپدیت با هر شماره‌ای»
+        assert not edits_t and not edits_c                # nothing was overwritten
         chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
-        assert chain.get("pro") == final_mid
-        final = (final_mid,)
+        assert chain.get("approach") == fin[0]
 
-        # confirmed REPLACES the final-alert slot in place, linked to the detail
+        # confirmed: a NEW message replying to the final alert
         frame = pd.DataFrame({"open": [99.0], "high": [100.0], "low": [98.8],
                               "close": [99.6], "volume": [10.0]},
                              index=pd.date_range("2026-09-11", periods=1, freq="15min"))
@@ -322,15 +310,13 @@ def test_setup_chain_final_doctrine(monkeypatch):
         cand.metadata.pop("confirmation_chart_message_id", None)
         cand.metadata["target_ladder"] = {"targets": [102.0, 105.0], "weights": [35, 35]}
         assert M.send_confirmed(cand, frame) is True
-        assert edits_c and edits_c[-1][0] == final[0]
-        assert "✅ <b>سیگنال تأییدشده</b>" in edits_c[-1][1]
-        assert edits_c[-1][2] and "📚" in str(edits_c[-1][2])
-        assert cand.metadata["confirmation_chart_message_id"] == final[0]
+        conf = [x for x in posts if "✅ <b>سیگنال تأییدشده</b>" in x[1]][0]
+        assert conf[2] == M.CHAT_ID_EXECUTION and conf[3] == fin[0]
+        assert cand.metadata["confirmation_chart_message_id"] == conf[0]
+        chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
+        assert chain.get("confirmed") == conf[0]
     os.environ.pop("CANDIDATE_DB_BACKEND", None)
     os.environ.pop("CANDIDATE_DB_PATH", None)
-    KV._TABLE_READY["done"] = False
-
-
 def test_rotating_licences_one_chain_per_setup(monkeypatch):
     """Viva 2026-09-11 («نقش نوبتی»): while one chain of a (symbol, setup) pair
     is unresolved, a newer detection must NOT open a second alert — it refreshes
@@ -714,8 +700,20 @@ def test_identical_updates_are_swallowed():
             n1 = sent["n"]
             assert M.send_setup_update(c, None, note_fa="تازه") is False   # identical → swallowed
             assert sent["n"] == n1                                          # nothing new posted
+            # Viva 2026-09-14 single-writer law: even DIFFERENT content waits
+            # the chain update gap — the «۶ پیام در ۲۶ ثانیه» era is over.
+            assert M.send_setup_update(c, None, note_fa="ناحیه جابه‌جا شد") is False
+            assert sent["n"] == n1
+            # after the gap it speaks again…
+            ch = KV.get_json("setup_chain|VIVA-TLBREAK-K333333", {}) or {}
+            ch["upd_ts"] = __import__("time").time() - 400
+            KV.set_json("setup_chain|VIVA-TLBREAK-K333333", ch)
             assert M.send_setup_update(c, None, note_fa="ناحیه جابه‌جا شد") is True
             assert sent["n"] == n1 + 1
+            # …and a verdict (⛔/❌/⚡) never waits — invalidation is instant.
+            assert M.send_setup_update(c, None, note_fa="باطل شد",
+                                       state_fa="⛔ <b>ستاپ بسته شد</b>") is True
+            assert sent["n"] == n1 + 2
         finally:
             F.get_klines = old_kl
     finally:
@@ -1075,3 +1073,105 @@ def test_live_break_watch_behavior():
         assert MAIN._live_break_watch(cand, None) == ""
     finally:
         MAIN.update_candidate = orig_upd
+
+
+def test_link_chain_laws_2026_09_14():
+    """Viva 2026-09-14 (the 23:5x message, verbatim laws) — every rule below
+    was HIS written spec; this test is the contract that keeps the whole
+    lifecycle honest: link-chain replies, permanent compact, never-truncated
+    captions, one writer with the update gap, trigger-TF charts, Persian AI."""
+    import io as _io
+    src = _io.open("bot/messages_v7.py", encoding="utf-8").read()
+    # 1) «نصفه» ban: no raw caption slicing anywhere; _fit_caption owns trims.
+    assert 'caption[:1000]' not in src
+    assert "def _fit_caption" in src
+    # 2) Compact is the permanent anchor; updates quote it and replace each other.
+    assert 'chain["anchor_pro"] = int(mid)' in src
+    assert 'reply_to=int(chain.get("anchor_pro") or chain.get("edu_short") or 0)' in src
+    # 3) The update gap is enforced IN the single writer (not only callers).
+    up = src.split("def send_setup_update", 1)[1].split("def _approaching_ai_hint", 1)[0]
+    assert "update_min_gap_seconds" in up
+    # 4) Final alert replies to the LAST update; Confirmed is a new message.
+    ap = src.split("def send_approaching", 1)[1].split("def _exact_event_message_id", 1)[0]
+    assert 'chain.get("slot")' in ap and "reply_to_message_id=parent" in ap
+    cf = src.split("def send_confirmed", 1)[1].split("def send_candidate_cancelled", 1)[0]
+    assert "edit_chart_message" not in cf                 # Confirmed never overwrites
+    assert 'chain.get("approach")' in cf                  # it quotes the final alert
+    # 5) main ↔ win-rate two-way links + stop receipts mirrored.
+    assert "def attach_results_link" in src and "def send_stop_event_to_results" in src
+    mn = _io.open("main.py", encoding="utf-8").read()
+    assert mn.count("attach_results_link(") >= 3
+    # 6) The chart title is the TRIGGER TF — pattern TF is only a PAT note.
+    assert "_tf_disp = (md.get(\"tl_context_tf\")" not in src
+    assert "_tf_disp = str(candidate.trigger_timeframe" in src
+    # 7) Unconfirmed charts carry NO target/TP chips (zone+invalidation+trend).
+    assert "EXPECTED MOVE" not in src
+    # 8) Settlement: fee-only round trip (no invented slippage cut).
+    assert "2*(SETTINGS.fee_rate_percent+SETTINGS.slippage_percent)" not in \
+        _io.open("database/realtime_monitor.py", encoding="utf-8").read()
+    assert "2 * SETTINGS.fee_rate_percent" in _io.open("database/repository_v7.py", encoding="utf-8").read()
+    # 9) Preview can never post below the education floor («امتیاز ۲ از کجا؟»).
+    tc = src.split("def send_technoclassic_preview", 1)[1]
+    assert "educational_min_score" in tc.split("\ndef ", 1)[0]
+    # 10) _chart_frame: trigger TF for every setup (no context-TF preference).
+    assert 'if candidate.setup_code in ("TLBREAK", "TECHCLASSIC"):\n        context_tf' not in mn
+    # 11) Alert memory survives redeploys (boot-window re-alert storm fix).
+    assert "alert_dedup" in mn
+
+
+def test_compact_captions_fit_under_media_cap_for_every_setup():
+    from bot.messages_v7 import _compact_alert_caption, _setup_update_caption
+    from test_v7 import make_candidate
+    for setup, code in (("TLBREAK", "K1"), ("TECHCLASSIC", "T1"), ("ALBROX", "A1"),
+                        ("PINVAL", "P1"), ("PINWALLQ", "Q1")):
+        c = make_candidate()
+        c.setup_code = setup
+        c.strategy_fa = f"{setup} | پیش‌نمایش (نه سیگنال)" if setup == "TECHCLASSIC" else f"{setup} | رویداد تست"
+        c.metadata["public_code"] = f"VIVA-{setup}-{code}"
+        c.metadata["session"] = "LONDON"
+        c.metadata["tech_aids"] = ["📊 EMA51 به سمت بالا شکسته شد", "🌀 روی لول ۶۱٫۸ پولبک زده شد"] * 3
+        cap = _compact_alert_caption(c)
+        assert len(cap) <= 1000, (setup, len(cap))
+        upd = _setup_update_caption(c, note_fa="تست", upd_n=3)
+        assert "نظر AI" in upd and "آپدیت ۳" in upd
+
+
+def test_zec_protected_exit_settlement_is_win():
+    """The K120563 case: SHORT banked 35% at TP1 then the BE+5-tick trail
+    executed. That is NOT 'INITIAL STOP LOSS' and NOT a loss."""
+    from analysis.trade_management import build_ladder, advance_ladder
+    lad = build_ladder(1136.41, 1147.4419, "SHORT", {"tick_size": 0.01}, 1112.07)
+    assert abs(lad["targets"][0] - 1131.542) < 0.01          # TP1 BELOW entry on a short
+    step = advance_ladder(lad, 1131.0, 1130.5)               # TP1 printed
+    assert step["state"]["hit_index"] == 1
+    assert abs(step["state"]["current_sl"] - 1136.36) < 1e-6  # entry −5 ticks (short)
+    step2 = advance_ladder(step["state"], 1136.40, 1136.30)  # trail executes
+    kinds = [e["event"] for e in step2["events"]]
+    assert "TRAIL_STOP" in kinds                              # protected exit, never STOP-with-INITIAL
+    # settlement math exactly as realtime monitor now does it:
+    risk_pct = abs(1136.41 - 1147.4419) / 1136.41 * 100
+    gross = step2["state"]["realized_r"] * risk_pct
+    net = gross - 2 * 0.06                                    # fee-only, 0.06%/leg
+    assert net > 0, (gross, net)                              # WIN, as Viva lived it
+    profit = 600 * net / 100
+    assert profit > 0
+
+
+def test_aids_banks_state_aware_persian():
+    from analysis import aids_bank as ab
+    assert ab.bank_sizes() == {"fibo": 17, "ema": 15, "rsi": 15, "session": 8}
+    mid = ab.rsi_note(58, 54, "NEUTRAL", "X", "1h", "b")
+    assert "بیش‌خرید" not in mid and "اشباع" not in mid       # 58 is NOT overbought talk
+    ob = ab.rsi_note(77, 74, "OB", "X", "1h", "b")
+    assert "بیش‌خرید" in ob or "۷۰" in ob
+    cx = ab.ema_note(51, 0.2, "CROSS_DOWN", "X", "1h", "b")
+    assert "شکسته" in cx
+    for name, note in [(s, ab.session_note(s)) for s in
+                       ("SYDNEY", "ASIA", "TOKYO", "LONDON", "NY",
+                        "LONDON_NY_OVERLAP", "LATE_NY", "OFF_HOURS")]:
+        assert note, name
+        assert not any(ch.isascii() and ch.isalpha() for ch in note), name
+    # bank lines must be Persian prose, not bare tokens
+    for fam in ab.FIBO_BANK.values():
+        for line in fam:
+            assert len(line) > 40

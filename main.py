@@ -43,6 +43,8 @@ from bot.messages_v7 import (
     send_ladder_event,
     send_trade_result,
     send_trade_close_event,
+    send_stop_event_to_results,
+    attach_results_link,
     send_no_fill_event,
 )
 from config import get_settings
@@ -97,17 +99,33 @@ def _request_shutdown(signum, _frame) -> None:
 def _chart_frame(candidate: SignalCandidate, bundle) -> pd.DataFrame:
     # TLBREAK alerts show the channel break itself: chart the CONTEXT timeframe
     # (4h/1h/1d) where the trendline lives, not the fine-grained trigger chart.
-    if candidate.setup_code in ("TLBREAK", "TECHCLASSIC"):
-        context_tf = candidate.metadata.get("tl_context_tf")
-        if context_tf and bundle.get(context_tf) is not None:
-            return bundle.get(context_tf)
-    timeframe = candidate.trigger_timeframe
-    return bundle.get(timeframe)
+    # Viva 2026-09-14 «چارت ۱ ساعته میذاری پوزیشن رو ۱۵ دقیقه؟!» — the CHART
+    # is the position: trigger timeframe, on EVERY setup, with no context-TF
+    # preference. (Confirmation evaluation still receives the pattern-TF frame
+    # through its own argument; only the picture had been wrong.)
+    return bundle.get(candidate.trigger_timeframe)
 
 
-# Dead-gate candidates are no longer stored, so suppress repeat educational
-# messages for the same setup idempotently in memory (survives one process).
+# Viva 2026-09-14: an in-process dict dies with every deploy — that is what
+# re-alerted the already-announced ATOM structure 80 seconds after the -11b
+# boot. The alert memory now lives in bot_kv and survives redeploys.
 _DEAD_GATE_ALERTED: Dict[str, float] = {}
+
+
+def _kv_alerted(key: str, ttl_hours: float) -> bool:
+    """Persistent first-alert dedup marker across restarts (KV, pruned to TTL)."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        now = time.time()
+        data = {k: float(v) for k, v in (_g("alert_dedup", {}) or {}).items()
+                if now - float(v) < max(0.25, float(ttl_hours)) * 3600}
+        if key in data:
+            return True
+        data[key] = now
+        _s("alert_dedup", data)
+        return False
+    except Exception:
+        return False
 
 
 def _iso_ts(value: str) -> float:
@@ -139,12 +157,7 @@ def _dead_gate_recently_alerted(candidate: SignalCandidate) -> bool:
     )
     from analysis.setups_v7 import expiry_hours_for
     expiry_hours = expiry_hours_for(candidate.style)
-    now = time.monotonic()
-    last = _DEAD_GATE_ALERTED.get(key)
-    if last is not None and (now - last) < expiry_hours * 3600:
-        return True
-    _DEAD_GATE_ALERTED[key] = now
-    return False
+    return _kv_alerted(key, expiry_hours)
 
 
 _SUPPRESSED_EDU_ALERTED: Dict[str, float] = {}
@@ -158,12 +171,7 @@ def _suppressed_edu_throttled(candidate) -> bool:
            f"{round(float(candidate.entry_zone_bottom), 6)}")
     from analysis.setups_v7 import expiry_hours_for
     expiry_hours = expiry_hours_for(candidate.style)
-    now = time.monotonic()
-    last = _SUPPRESSED_EDU_ALERTED.get(key)
-    if last is not None and (now - last) < expiry_hours * 3600:
-        return True
-    _SUPPRESSED_EDU_ALERTED[key] = now
-    return False
+    return _kv_alerted("sup:" + key, expiry_hours)
 
 
 def run_discovery_scan() -> Dict[str, int]:
@@ -928,7 +936,8 @@ _CANDIDATE_MONITOR_LOCK = threading.Lock()
 def _publish_trade_events(events) -> int:
     """Serialize lifecycle publication so ticker and candle monitors cannot race."""
     for event in events:
-        if str(event.get("event", "")).startswith("TP"):
+        kind = str(event.get("event") or "")
+        if kind.startswith("TP"):
             pro_tp_mid = send_ladder_event(event)
             if pro_tp_mid:
                 canonical_mid = record_telegram_event(
@@ -941,22 +950,33 @@ def _publish_trade_events(events) -> int:
                 if event.get("event") == "TP1":
                     set_first_tp_message_id(event["signal_id"], event["pro_event_message_id"])
                     event["first_tp_message_id"] = event["pro_event_message_id"]
-            send_tp1_event(event)  # immutable Win Rate link to this exact TP receipt
-        elif event.get("event") in {"TRAIL_STOP", "STOP"}:
+            res_mid = send_tp1_event(event)  # Win Rate mirror, links to this TP receipt
+            if res_mid and pro_tp_mid:
+                # Viva 2026-09-14: main ↔ win-rate link is TWO-WAY via the
+                # unique code so the chain walks from either channel.
+                attach_results_link(int(pro_tp_mid), int(res_mid))
+        elif kind in {"TRAIL_STOP", "STOP"}:
             lifecycle_mid = send_ladder_event(event)
             if lifecycle_mid:
                 # Keep the protected-exit/stop receipt attached to this exact
-                # position too. Final WIN links still deliberately anchor to
-                # the last TP reached; final LOSS anchors to Confirmed.
+                # position too. Final WIN anchors to the last TP reached; the
+                # final result now anchors to the STOP-HIT message itself and
+                # the stop receipt is mirrored into the win-rate channel,
+                # two-way linked (link-chain law).
                 record_telegram_event(
-                    event["signal_id"], str(event.get("event") or "STOP"),
+                    event["signal_id"], kind,
                     str(CHAT_ID_EXECUTION or ""), int(lifecycle_mid),
                 )
-        elif event.get("event") == "NO_FILL":
+                res_mid = send_stop_event_to_results(event, int(lifecycle_mid))
+                if res_mid:
+                    attach_results_link(int(lifecycle_mid), int(res_mid))
+        elif kind == "NO_FILL":
             send_no_fill_event(event)
-        elif event.get("event") == "CLOSED":
-            send_trade_close_event(event)
-            send_trade_result(event)
+        elif kind == "CLOSED":
+            close_mid = send_trade_close_event(event)
+            res_mid = send_trade_result(event)
+            if close_mid and res_mid:
+                attach_results_link(int(close_mid), int(res_mid))
     return len(events)
 
 

@@ -266,16 +266,44 @@ def enrich_candidate_context(bundle: MarketBundle, candidate: SignalCandidate) -
         # computed once on the pattern (trigger) frame, rendered by every
         # lifecycle message (detailed, compact, update, final alert).
         try:
+            # Viva 2026-09-14 «باید توضیح بده، نه لیستِ کلمه‌ای» — every aid is
+            # a full sentence from the curated banks (15 Fibo / 15 EMA / 15 RSI
+            # + a per-session note), state-aware: cross vs hold vs near pick
+            # different families; the seed keeps phrasing stable WITHIN a candle
+            # so updates never look like re-rolls.
             _aids: List[str] = []
             _pdf = bundle.get(candidate.trigger_timeframe)
             if _pdf is not None and len(_pdf) >= 40:
                 import pandas as _pd
+                from analysis.aids_bank import ema_note, fibo_note, rsi_note, session_note
                 _cl = _pd.to_numeric(_pdf["close"])
                 _live = float(_cl.iloc[-1])
-                _ema = {n: float(_cl.ewm(span=n, adjust=False).mean().iloc[-1]) for n in (21, 51, 100, 200)}
-                _side = lambda v: "بالای" if _live >= v else "زیرِ"
+                try:
+                    _bts = str(_pdf["timestamp"].iloc[-1])[:16]
+                except Exception:
+                    _bts = str(len(_pdf))
+                _tfname = str(candidate.trigger_timeframe or "")
+                _sess = session_note(str(md.get("session") or ""))
+                if _sess:
+                    _aids.append(f"🕐 {_sess}")
+                _ema = {n: _cl.ewm(span=n, adjust=False).mean() for n in (21, 51, 100, 200)}
+                for n in (21, 51, 200):
+                    _v = float(_ema[n].iloc[-1])
+                    _pv = float(_cl.iloc[-4]) if len(_cl) >= 4 else _live
+                    _ev = float(_ema[n].iloc[-4]) if len(_ema[n]) >= 4 else _v
+                    _d = (_live - _v) / max(_v, 1e-12) * 100
+                    if _live >= _v and _pv < _ev:
+                        _m = "CROSS_UP"
+                    elif _live <= _v and _pv > _ev:
+                        _m = "CROSS_DOWN"
+                    elif abs(_d) < 0.35:
+                        _m = "NEAR"
+                    else:
+                        _m = "ABOVE" if _live >= _v else "BELOW"
+                    _aids.append("📊 " + ema_note(n, _d, _m, candidate.symbol, _tfname, _bts))
                 _aids.append("📊 EMA تایم الگو → " + " • ".join(
-                    f"{_side(_ema[n])} {n}" for n in (21, 51, 100, 200)))
+                    ("بالای" if _live >= float(_ema[n].iloc[-1]) else "زیرِ") + f" {n}"
+                    for n in (21, 51, 100, 200)))
                 _win = _pdf.tail(48)
                 _wh = float(_pd.to_numeric(_win["high"]).max())
                 _wl = float(_pd.to_numeric(_win["low"]).min())
@@ -283,13 +311,32 @@ def enrich_candidate_context(bundle: MarketBundle, candidate: SignalCandidate) -
                     _rng = _wh - _wl
                     _rat = (_wh - _live) / _rng if str(candidate.direction).upper() == "LONG" \
                         else (_live - _wl) / _rng
-                    _lv = min((0, 23.6, 38.2, 50.0, 61.8, 78.6, 88.6),
-                             key=lambda k: abs(k - _rat * 100.0))
-                    _aids.append(f"🌀 فیبوی موج ۴۸کندلی: نزدیک‌ترین سطحِ قیمت {_lv:g}٪")
+                    _lvls = (0, 23.6, 38.2, 50.0, 61.8, 78.6, 88.6)
+                    _lv = min(_lvls, key=lambda k: abs(k - _rat * 100.0))
+                    _nx = _lvls[min(len(_lvls) - 1, _lvls.index(_lv) + 1)]
+                    _dist = abs(_rat * 100.0 - _lv) / 100.0 * _rng / max(_live, 1e-12) * 100
+                    _fm = "EXT" if _lv >= 88.6 else ("ON" if _dist < 0.35 else "RETEST")
+                    _aids.append("🌀 " + fibo_note(_lv, _dist, _fm,
+                                                   "بالا" if str(candidate.direction).upper() == "LONG" else "پایین",
+                                                   _nx, candidate.symbol, _tfname, _bts))
+                try:
+                    _d1 = _cl.diff()
+                    _up = _d1.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+                    _dn = (-_d1.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
+                    _rsi = 100 - 100 / (1 + _up / _dn.replace(0, 1e-12))
+                    _rv = float(_rsi.iloc[-1])
+                    _rp = float(_rsi.iloc[-2]) if len(_rsi) > 1 else _rv
+                    _avg = float(_rsi.tail(10).mean())
+                    _rm = ("OB" if _rv >= 70 else "OS" if _rv <= 30
+                           else "CROSS_UP" if _rp < 50 <= _rv
+                           else "CROSS_DOWN" if _rp > 50 >= _rv else "NEUTRAL")
+                    _aids.append("📈 " + rsi_note(_rv, _avg, _rm, candidate.symbol, _tfname, _bts))
+                except Exception:
+                    pass
                 if md.get("div_fa"):
                     _aids.append(f"📈 {md['div_fa']}")
             if _aids:
-                md["tech_aids"] = _aids
+                md["tech_aids"] = _aids[:6]
         except Exception:
             pass
     if zone_lines:

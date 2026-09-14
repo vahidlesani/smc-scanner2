@@ -84,10 +84,14 @@ class V7ModelTests(unittest.TestCase):
         candidate.trigger_timeframe = "15m"
         narrow = pd.DataFrame({"timestamp": pd.date_range("2026-01-01", periods=3, freq="15min"), "open":[100]*3,"high":[102]*3,"low":[99]*3,"close":[100]*3,"volume":[1]*3})
         wide = pd.DataFrame({"timestamp": pd.date_range("2026-01-01", periods=3, freq="30min"), "open":[100]*3,"high":[112]*3,"low":[97]*3,"close":[100]*3,"volume":[1]*3})
+        # Viva 2026-09-14 law (supersedes escalation): «چارت ۱ ساعته میذاری
+        # پوزیشن رو ۱۵ دقیقه؟!» is banned on every setup — the lifecycle tape
+        # is the position's OWN trigger TF even when the ladder runs off-frame;
+        # off-screen prices are tagged at the edge, never by zooming out.
         with patch("data.fetcher.get_klines", side_effect=lambda _s, tf, *_a, **_k: narrow if tf == "15m" else wide):
             frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, candidate.tp1, candidate.tp2])
-        self.assertIs(frame, wide)
-        self.assertEqual(candidate.metadata["chart_view_tf"], "30m")
+        self.assertIs(frame, narrow)
+        self.assertEqual(candidate.metadata["chart_view_tf"], "15m")
 
     def test_branded_confirmed_chart_is_exact_1440_by_900_png(self):
         from bot.messages_v7 import generate_chart

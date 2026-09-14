@@ -95,13 +95,21 @@ def monitor_realtime_prices(prices: Dict[str, float]) -> List[Dict]:
                 cursor.execute(f"UPDATE active_signals SET target_state_json={p}, sl={p}, last_checked_at={p} WHERE signal_id={p}", (json.dumps(ladder),float(ladder["current_sl"]),now,signal_id))
             if ladder.get("closed"):
                 gross = float(ladder.get("realized_r",0))*risk_pct
-                net = gross-2*(SETTINGS.fee_rate_percent+SETTINGS.slippage_percent)
+                # Viva 2026-09-14 (ZEC PINWALLQ K120563): a position that
+                # BANKED TP1 then exited at the BE-locked trail was booked as
+                # a LOSS — settlement charged fee AND invented slippage on the
+                # full notional in one round trip. Settlement is gross minus
+                # the exchange's own round-trip fee; slippage stays a display
+                # note, never a hidden second cut.
+                net = gross-2*SETTINGS.fee_rate_percent
                 profit = notional*net/100
                 result = "WIN" if net>0 else "LOSS"
                 cursor.execute(f"UPDATE signals SET result={p},pnl_pct={p},pnl_usd={p},closed_at={p} WHERE signal_id={p}", (result,net,profit,now,signal_id))
                 cursor.execute(f"UPDATE active_signals SET status='CLOSED',is_cancelled={truth} WHERE signal_id={p}",(signal_id,))
                 cursor.execute(f"DELETE FROM signal_symbol_locks WHERE signal_id={p} AND strategy_version={p}",(signal_id,SETTINGS.strategy_version))
                 emitted.append({**common,"event":"CLOSED","result":result,"pnl":net,"gross_pnl":gross,"profit_usd":profit,
-                                "margin_roi_pct":profit/max(float(margin or 0),1e-12)*100,"live_price":price})
+                                "margin_roi_pct":profit/max(float(margin or 0),1e-12)*100,"live_price":price,
+                                "trailing_used": bool(int(ladder.get("hit_index") or 0)>0
+                                                       and abs(float(ladder.get("current_sl") or 0)-float(original_sl))>1e-9)})
         events.extend(emitted)
     return events

@@ -4,11 +4,19 @@ from unittest.mock import patch
 from bot.messages_v7 import _final_lifecycle_anchor
 
 
-def test_initial_stop_loss_links_only_to_its_confirmed_message():
+def test_initial_stop_loss_result_links_to_its_stop_hit_message():
+    """Viva 2026-09-14 link-chain law (supersedes the 09-12 anchor rule):
+    «نتیجه نهایی پیامی که ریپلای میشه به پیام هیت شدن استاپ لاس با همون کد
+    شناسه یکتا» — the final result QUOTES the position's own stop-hit receipt;
+    Confirmed remains only the fallback when no stop message was ever stored."""
     event = {"signal_id": "position-old", "result": "LOSS", "hit_index": 0, "pro_message_id": 901}
-    with patch("bot.messages_v7._exact_event_message_id", side_effect=lambda sid, key, fallback=0: 901 if key == "CONFIRMED" else 0) as lookup:
+    with patch("bot.messages_v7._exact_event_message_id",
+               side_effect=lambda sid, key, fallback=0: 777 if key == "STOP" else 0) as lookup:
+        assert _final_lifecycle_anchor(event) == 777
+    lookup.assert_any_call("position-old", "STOP")
+    with patch("bot.messages_v7._exact_event_message_id",
+               side_effect=lambda sid, key, fallback=0: 901 if key == "CONFIRMED" else 0) as lookup:
         assert _final_lifecycle_anchor(event) == 901
-    lookup.assert_called_once_with("position-old", "CONFIRMED", 901)
 
 
 def test_protected_exit_after_tp2_links_to_that_positions_tp2_not_same_symbol_new_trade():

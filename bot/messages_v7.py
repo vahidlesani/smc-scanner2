@@ -524,6 +524,89 @@ def send_verdict_reply(candidate: SignalCandidate, ok: Optional[bool], note_fa: 
     return bool(send_message(text, target, reply_to_message_id=mid))
 
 
+def _fit_caption(caption: str, limit: int = 1000) -> str:
+    """Viva 2026-09-14 «پیام نصفه ول کردی»: a photo caption must NEVER be cut
+    mid-sentence. Builders are expected to fit; this is the safety net that
+    trims on a line boundary and closes/ drops any HTML tag the cut orphans."""
+    import re as _re
+    footer = "\n📎 ادامه در پیام لینک‌شدهٔ همین کد"
+    text = (caption or "").strip()
+    if len(text) <= limit:
+        return text
+    limit = max(120, limit - len(footer))
+    cut = text.rfind("\n", 0, limit)
+    if cut < limit // 2:
+        cut = text.rfind(" ", 0, limit)
+    if cut < limit // 2:
+        cut = limit
+    text = text[:cut].rstrip()
+    for tag in ("b", "i", "code", "a"):
+        opens = len(_re.findall(rf"<{tag}[ >]", text))
+        closes = len(_re.findall(rf"</{tag}>", text))
+        while opens > closes:
+            at = text.rfind(f"<{tag}")
+            if at < 0:
+                break
+            end = text.find(">", at)
+            if end < 0:
+                text = text[:at]
+                break
+            text = text[:at] + text[end + 1:]
+            opens -= 1
+        while closes > opens:
+            at = text.rfind(f"</{tag}>")
+            if at < 0:
+                break
+            text = text[:at] + text[at + len(f"</{tag}>"):]
+            closes -= 1
+    return text.rstrip() + footer
+
+
+def edit_photo_caption(message_id: int, chat_id: str, caption: str,
+                       reply_markup: Optional[dict] = None) -> bool:
+    """Caption-only edit of a photo message (no image re-upload)."""
+    if not TOKEN or not chat_id or not message_id:
+        return False
+    payload = {"chat_id": str(chat_id), "message_id": int(message_id),
+               "caption": _fit_caption(caption), "parse_mode": "HTML"}
+    if reply_markup:
+        import json as _j
+        payload["reply_markup"] = _j.dumps(reply_markup)
+    res = _tg_post(
+        f"https://api.telegram.org/bot{TOKEN}/editMessageCaption",
+        data=payload, timeout=15)
+    return bool(res and res.get("ok"))
+
+
+def _edit_reply_markup(chat_id: str, message_id: int, reply_markup: dict) -> bool:
+    """Swap the button row under an existing message (no content edit) — the
+    mechanism that wires main↔win-rate links once BOTH posts exist, per Viva's
+    «لینک بشن به هم دیگه» law."""
+    if not TOKEN or not chat_id or not message_id:
+        return False
+    try:
+        import json as _j
+        r = requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/editMessageReplyMarkup",
+            json={"chat_id": str(chat_id), "message_id": int(message_id),
+                  "reply_markup": _j.dumps(reply_markup)}, timeout=12)
+        return bool(r.ok and (r.json() or {}).get("ok"))
+    except Exception:
+        return False
+
+
+def attach_results_link(message_id: int, results_mid: int) -> bool:
+    """Point the main-channel event message AT its win-rate mirror copy."""
+    if not message_id or not results_mid:
+        return False
+    link = _telegram_message_link(CHAT_ID_RESULTS or CHAT_ID_ADMIN, int(results_mid))
+    if not link:
+        return False
+    return _edit_reply_markup(str(CHAT_ID_EXECUTION or CHAT_ID_ADMIN), int(message_id),
+                              {"inline_keyboard": [[{"text": "🔗 ثبت در کانال نتایج",
+                                                      "url": link}]]})
+
+
 def send_photo(
     image: bytes,
     caption: str,
@@ -534,7 +617,7 @@ def send_photo(
     target = chat_id or CHAT_ID_ADMIN
     if not TOKEN or not target or not image:
         return None
-    payload = {"chat_id": target, "caption": caption[:1000], "parse_mode": "HTML"}
+    payload = {"chat_id": target, "caption": _fit_caption(caption), "parse_mode": "HTML"}
     if reply_to_message_id:
         payload["reply_to_message_id"] = int(reply_to_message_id)
         payload["allow_sending_without_reply"] = True
@@ -1006,8 +1089,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         live_price = float(frame["close"].iloc[-1])
         # Viva 2026-09-11: the live-price DASHED line was removed — only the
         # LIVE price pill remains (the line duplicated the pill and cluttered
-        # the future margin around it).
-        _level_tag(ax, count + 1.0, live_price, f"LIVE  {_price(live_price)}", CHART_THEME["muted"])
+        # the future margin around it). On CONFIRMED charts the LIVE pill joins
+        # the merged right-hand tag column below instead.
+        if not confirmed:
+            _level_tag(ax, count + 1.0, live_price, f"LIVE  {_price(live_price)}", CHART_THEME["muted"])
 
         sweep_level = candidate.metadata.get("sweep_level")
         if sweep_level:
@@ -1034,19 +1119,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             )
             notes.append((f"MSS / BOS  {_price(float(structure_level))}", CHART_THEME["structure"]))
 
-        # Viva 2026-09-11: the slanted green/red scenario ARROWS were removed
-        # («نه جهت رو نشون میده نه شکلش درسته») — the probable direction is now
-        # a clean horizontal TP1 level with a tag, never a fake-angle sketch.
-        if not confirmed and float(candidate.tp1 or 0) > 0:
-            try:
-                _tp_col = CHART_THEME["tp1"] if candidate.direction == "LONG" else CHART_THEME["invalidation"]
-                ax.hlines(float(candidate.tp1), max(0, count - 24), count + future - 0.5,
-                          color=_tp_col, linewidth=0.95, linestyles=(0, (7, 4)), alpha=0.8, zorder=6)
-                _level_tag(ax, count + future - 0.9, float(candidate.tp1),
-                           f"TP1  {_price(candidate.tp1)}", _tp_col)
-                notes.append((f"EXPECTED MOVE → TP1  {_price(candidate.tp1)}", _tp_col))
-            except Exception:
-                pass
+        # Viva 2026-09-14 «این چه استاپ‌هایی هست گذاشتی روی ستاپ‌ها؟!» — an
+        # UNCONFIRMED chart shows zone + trendline + invalidation ONLY.
+        # Targets/trailing belong to the Confirmed chart; before confirmation
+        # a TP line is a rumor painted over someone's plan. (This also removes
+        # the TP1-vs-entry-label collision he flagged on ATOM/XLM/BCH.)
 
         if confirmed:
             tool_start = max(0, count - 20)
@@ -1101,25 +1178,37 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             for i, level in enumerate(ladder_targets):
                 label = f"TP{i+1} {float(ladder_weights[i]) if i < len(ladder_weights) else 0:.0f}%"
                 levels.append((float(level), label, CHART_THEME["tp1"] if i < 3 else CHART_THEME["tp2"]))
-            for level, label, color in levels:
-                ax.hlines(
-                    level,
-                    tool_start,
-                    tool_end,
-                    color=color,
-                    linewidth=1.15,
-                    linestyles="-" if label == "ENTRY" else (0, (5, 3)),
-                    zorder=8,
-                )
-                _level_tag(ax, tool_end + 0.35, level, f"{label}  {_price(level)}", color)
-
+            # Viva 2026-09-14 «شکل ابزار LONG/SHORT خراب شده»: the art itself is
+            # FROZEN — same pills, same colors, same dashes. What is fixed here
+            # is purely COLLISION: tags closer than 3% of the visible range
+            # (ENTRY≈LIVE≈TP1 when entry prints on top of a target) merge into
+            # ONE stacked pill instead of drawing «LIVI…DE» over each other.
+            _yr0 = max(float(frame["high"].max()) - float(frame["low"].min()), 1e-9)
+            _tol = 0.030 * _yr0
+            _tags = list(levels) + [(float(frame["close"].iloc[-1]), "LIVE", CHART_THEME["muted"])]
             hit_index = int(ladder.get("hit_index") or (candidate.metadata or {}).get("hit_index") or 0)
             trailing_sl = float((candidate.metadata or {}).get("current_trailing_sl") or 0)
             if hit_index > 0 and trailing_sl > 0:
-                ax.hlines(trailing_sl, tool_start, tool_end, color=CHART_THEME["liquidity"],
-                          linewidth=1.25, linestyles=(0, (2, 2)), zorder=9)
-                _level_tag(ax, tool_end + 0.35, trailing_sl,
-                           f"TRAILING SL • TP{hit_index}  {_price(trailing_sl)}", CHART_THEME["liquidity"])
+                _tags.append((trailing_sl, f"TRAILING SL • TP{hit_index}", CHART_THEME["liquidity"]))
+            _groups: list = []
+            for level, label, color in _tags:
+                for grp in _groups:
+                    if abs(grp[0] - float(level)) <= _tol:
+                        grp[1].append((label, float(level), color))
+                        break
+                else:
+                    _groups.append([float(level), [(label, float(level), color)]])
+            for y_mid, items in _groups:
+                for label, level, color in items:
+                    _dash = ((0, (2, 2)) if label.startswith("TRAILING")
+                             else "-" if label == "ENTRY" else (0, (5, 3)))
+                    ax.hlines(level, tool_start, tool_end, color=color,
+                              linewidth=1.25 if label.startswith("TRAILING") else 1.15,
+                              linestyles=_dash,
+                              zorder=9 if label.startswith("TRAILING") else 8)
+                _level_tag(ax, tool_end + 0.35, y_mid,
+                           "  ·  ".join(f"{lb}  {_price(pc)}" for lb, pc, _c in items),
+                           items[-1][2])
 
             # (Viva 2026-09-11) slanted PROJECTED-SCENARIO arrows removed from
             # confirmed charts too — the tagged TP ladder lines above are the
@@ -1411,8 +1500,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
 
         _render_corner_notes(ax, notes, frame, confirmed=confirmed)
 
-        _tf_disp = (md.get("tl_context_tf") if candidate.setup_code in ("TLBREAK", "TECHCLASSIC") else None) \
-            or md.get("pin_tf") or candidate.trigger_timeframe or ""
+        # Viva 2026-09-14 «تایم‌فریم پوزیشن یک‌ساعته‌ست، چارت ۴ ساعته میدی؟!» —
+        # the title is ALWAYS the position's own trigger timeframe, on every
+        # setup. The pattern timeframe is a PAT reference in the subline and
+        # can never override the title or the tape underneath it.
+        _tf_disp = str(candidate.trigger_timeframe or md.get("pin_tf") or "").upper()
         fig.text(
             0.055,
             0.952,
@@ -1426,7 +1518,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             0.055,
             0.922,
             f"{candidate.setup_code}  ·  {_chart_market_label(candidate)}  ·  TRIG {candidate.trigger_timeframe.upper()}"
-            f"{' • VIEW ' + str(md.get('chart_view_tf')).upper() if md.get('chart_view_tf') else ''}  ·  {'VIVA SETUP ✦ CONFIRMED' if confirmed else 'VIVA SETUP ✦ ANALYSIS'}",
+            f"{' · PAT ' + str(md.get('tl_context_tf')).upper() if md.get('tl_context_tf') else ''}"
+            f"  ·  {'VIVA SETUP ✦ CONFIRMED' if confirmed else 'VIVA SETUP ✦ ANALYSIS'}",
             color=CHART_THEME["muted"],
             fontsize=8,
             va="center",
@@ -1512,13 +1605,44 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         f"{_htf_context_fa(candidate)}\n"
         f"{VIVA_SEP}\n"
         f"🧩 <b>تأییدهای کمکی</b>\n{confirmations}\n"
-        f"{VIVA_SEP}\n"
+        + "\n".join(f"• {x}" for x in _tech_aids_lines(candidate)) + ("\n" if _tech_aids_lines(candidate) else "")
+        + f"{VIVA_SEP}\n"
         f"⚠️ <b>شرایط و هشدارها</b>\n{warnings}\n"
-        f"⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود\n"
+        + f"{VIVA_SEP}\n"
+        + _ai_detail_block(candidate)
+        + f"⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود\n"
         f"✅ در صورت تکمیل شرایط، ابتدا Approaching و سپس Confirmed ارسال می‌شود.\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📢 <b>{_e(SETTINGS.channel_name)}</b>"
     )
+
+
+def _ai_detail_block(candidate: SignalCandidate) -> str:
+    """Viva 2026-09-14 «این فرمت و قوانین بصری برای همهٔ ستاپ‌ها یکسان است»:
+    the detailed alert ALWAYS carries the AI read + the management preview —
+    the sections VIVA-TLBREAK used to own. PINWALLQ, PINWALL, ALBROX and
+    PINVAL now speak with the same voice; only the content differs per setup."""
+    out: List[str] = []
+    try:
+        variant = str((candidate.metadata or {}).get("strategy_variant") or "")
+        if variant == "VIVA_TLBREAK":
+            out.append(_viva_tlbreak_sections(candidate) + "\n")
+        else:
+            out.append(_ai_note(candidate) + "\n")
+            try:
+                from bot.messages_viva_tlbreak import management_fa
+                final = float((candidate.metadata or {}).get("viva_final_target")
+                              or candidate.tp2 or 0)
+                if final:
+                    out.append(management_fa(candidate.planned_entry, candidate.sl, final,
+                                             candidate.direction,
+                                             title=f"VIVA-{candidate.setup_code}") + "\n")
+            except Exception:
+                pass
+    except Exception:
+        return ""
+    out.append(f"{VIVA_SEP}\n")
+    return "\n".join(x for x in out if x.strip())
 
 
 def _ai_note(candidate: SignalCandidate) -> str:
@@ -1648,6 +1772,10 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
     code = _public_code(candidate)
     head = str(candidate.strategy_fa)
     setup_line = head.split("|", 1)[-1].strip() if "|" in head else head
+    # «🎯 ستاپ: VIVA-TLBREAK | VIVA-TLBREAK» — a brand echoed twice is noise.
+    if setup_line.upper().replace(" ", "") in {f"VIVA-{str(candidate.setup_code).upper()}",
+                                               str(candidate.setup_code).upper()}:
+        setup_line = ""
     dir_fa = "🧭 سناریوی احتمالی خرید" if candidate.direction == "LONG" else "🧭 سناریوی احتمالی فروش"
     badge, _ = _setup_badge(candidate)
     tf_tag = str(candidate.trigger_timeframe or "").upper()
@@ -1661,7 +1789,8 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
         f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}  •  {_e(tf_tag)}",
         f"🌐 {_e(_market_label(candidate))}",
         dir_fa,
-        f"🎯 ستاپ: <b>VIVA-{_e(candidate.setup_code)}</b> | {_e(setup_line)}",
+        (f"🎯 ستاپ: <b>VIVA-{_e(candidate.setup_code)}</b> | {_e(setup_line)}"
+         if setup_line else f"🎯 ستاپ: <b>VIVA-{_e(candidate.setup_code)}</b>"),
         f"⭐ امتیاز فعلی: {int(candidate.score if score is None else score)}/10",
         f"🆔 <code>{_e(code)}</code>",
         VIVA_SEP,
@@ -1670,7 +1799,15 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
         f"سطح ابطال سناریو: {_price(candidate.sl)}",
         "",
     ]
-    rows.append(_confirm_rule_fa(candidate))          # carries the Persian TF name
+    # The long rule paragraph lives in the DETAILED alert; the compact keeps
+    # its essence so the caption never overruns Telegram's 1024 media cap and
+    # gets cut «نصفه».
+    _rule = _confirm_rule_fa(candidate).replace(" (پولبک شرط نیست)", "")
+    _rule = _rule.split("؛ برای سناریوهای داخلی", 1)[0]
+    if len(_rule) > 210:
+        cut = _rule.rfind(" ", 0, 210)
+        _rule = (_rule[:cut] if cut > 120 else _rule[:210]) + "…"
+    rows.append(_rule)
     rows.append("")
     rows += [
         "🧭 <b>کانتکست تایم بالاتر</b>",
@@ -1688,7 +1825,8 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
         VIVA_SEP,
         "📢 VivaMon Labs Pro",
     ]
-    return "\n".join(rows)
+    out = "\n".join(rows)
+    return _fit_caption(out, 995) if len(out) > 1000 else out
 
 
 def _setup_chain_get(candidate: SignalCandidate) -> dict:
@@ -1721,28 +1859,50 @@ def _tech_aids_lines(candidate) -> list:
 
 
 def _pro_slot_post(candidate, caption: str, chart=None, markup=None,
-                   kind: str = "update") -> int:
-    """Viva 2026-09-13 main-channel law: the PRO channel carries ONE live-slot
-    message per chain — the compact initial alert first, then every numbered
-    update REPLACES it (previous one deleted once the new one lands). The
-    permanent detailed alert in the alerts channel is never touched here; the
-    chain's unique code links the two."""
+                   kind: str = "update", reply_to: Optional[int] = None) -> int:
+    """The ONE main-channel writer for every setup (Viva 2026-09-14 link-chain
+    law, verbatim): «پیام مختصر همون کد» is the PERMANENT compact anchor —
+    updates never delete or edit it; each numbered update REPLACES only the
+    previous update and QUOTES the compact (reply_to); thread events (final
+    alert / Confirmed) are new messages replying to their predecessor.
+    The permanent detailed alert in the alerts channel is untouched here and
+    the chain's unique code links the two. Every PRO write in the whole bot
+    must route through this function — side-writers are what produced
+    «۶ پیام در ۲۶ ثانیه» on ATOM and are illegal now."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
     if chart:
-        mid = send_photo(chart, caption, target, reply_markup=markup)
+        mid = send_photo(chart, caption, target,
+                         reply_to_message_id=int(reply_to or 0) or None,
+                         reply_markup=markup)
     else:
-        mid = send_message(caption, target, reply_markup=markup)
+        mid = send_message(caption, target,
+                           reply_to_message_id=int(reply_to or 0) or None,
+                           reply_markup=markup)
     if not mid:
         return 0
     try:
         chain = _setup_chain_get(candidate)
-        old_slot = int(chain.get("slot") or 0)
-        if old_slot and old_slot != int(mid):
-            try:
-                delete_message(str(target), old_slot)
-            except Exception:
-                pass
-        chain["slot"] = int(mid)
+        if kind == "compact":
+            # permanent anchor: never a delete, never a second live compact
+            old_anchor = int(chain.get("anchor_pro") or 0)
+            if old_anchor and old_anchor != int(mid):
+                # a re-firing compact (chain recreated) REPLACES its own kind
+                try:
+                    delete_message(str(target), old_anchor)
+                except Exception:
+                    pass
+            chain["anchor_pro"] = int(mid)
+            chain["edu_short"] = int(mid)
+        elif kind == "update":
+            old_slot = int(chain.get("slot") or 0)
+            if old_slot and old_slot != int(mid) and old_slot != int(chain.get("anchor_pro") or 0):
+                try:
+                    delete_message(str(target), old_slot)
+                except Exception:
+                    pass
+            chain["slot"] = int(mid)
+        else:
+            chain[str(kind)] = int(mid)
         chain["slot_kind"] = str(kind)
         chain["pro"] = int(mid)
         _setup_chain_set(candidate, chain)
@@ -1804,6 +1964,14 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
             if link:
                 markup = {"inline_keyboard": [[{"text": "📚 توضیحات کامل هشدار",
                                                 "url": link}]]}
+        try:  # «بین پیام‌های کانال اصلی هم جداکننده نمیاد که قاطی بشن»
+            _c0 = _setup_chain_get(candidate)
+            if not _c0.get("pro_sep"):
+                if send_signal_separator(CHAT_ID_EXECUTION or CHAT_ID_ADMIN):
+                    _c0["pro_sep"] = 1
+                    _setup_chain_set(candidate, _c0)
+        except Exception:
+            pass
         slot_mid = _pro_slot_post(candidate, _compact_alert_caption(candidate),
                                   chart=chart, markup=markup, kind="compact")
         if slot_mid:
@@ -1836,9 +2004,9 @@ def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
     code = _public_code(candidate)
     badge, _ = _setup_badge(candidate)
     dir_fa = "🧭 سناریوی خرید" if candidate.direction == "LONG" else "🧭 سناریوی فروش"
-    advisory = (str((candidate.metadata or {}).get("gemini_advisory") or "").strip()
-                or str(getattr(candidate, "ai_reason", "") or "").strip()
-                or _ai_watch_hint(candidate))
+    advisory = _fa_advisory(str((candidate.metadata or {}).get("gemini_advisory") or "").strip()
+                            or str(getattr(candidate, "ai_reason", "") or "").strip()) \
+        or _ai_rich_note(candidate)
     confirm_tf = str((candidate.metadata or {}).get("confirm_tf") or "").upper()
     rows = []
     if upd_n:
@@ -1899,6 +2067,14 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
             chart = None
     import time as _time
     import hashlib as _hash
+    # Viva 2026-09-14 «هر روز یه روز بدتر — سی تا پیام مختصر همون دقیقه!»:
+    # even a REAL change waits update_min_gap_seconds on this chain's slot.
+    # Verdicts / cancellations / confirmations / ⚡live-break (❌⚪⛔✅⚡) are
+    # single events and never wait.
+    _critical = str(state_fa or "")[:2].lstrip("<b ").strip()[:1] in {"❌", "⚪", "⛔", "✅", "⚡"}
+    if not _critical and _time.time() - float(chain.get("upd_ts") or 0) < max(
+            120, int(getattr(SETTINGS, "update_min_gap_seconds", 300) or 300)):
+        return False
     # Viva 2026-09-12: «توی ثانیه چه تغییری شده که آپدیت میده؟!» — an update
     # must carry NEWS; identical content repeats are swallowed before Telegram
     # ever sees them. Real changes (absorb note, verdict, closure) differ in
@@ -1924,7 +2100,8 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     # chain's live slot — post the new one first, delete the superseded
     # compact/update after; the 📚 button points at the permanent detailed
     # alert in the alerts channel. A fresh live chart rides along.
-    mid = _pro_slot_post(candidate, caption, chart=chart, markup=markup, kind="update")
+    mid = _pro_slot_post(candidate, caption, chart=chart, markup=markup, kind="update",
+                         reply_to=int(chain.get("anchor_pro") or chain.get("edu_short") or 0) or None)
     if mid:
         chain = _setup_chain_get(candidate)
         chain["upd"] = int(mid)
@@ -1956,14 +2133,57 @@ def _ai_watch_hint(candidate: SignalCandidate) -> str:
     return "سناریو زیر نظر است؛ تا کلوز تأییدی هیچ ورود اجرایی نداریم."
 
 
+def _fa_advisory(text: str) -> str:
+    """Viva 2026-09-14 «نظر AI چرا انگلیسی است»: the AI row is Persian prose.
+    A raw Latin token (RR_DEGRADED and friends) or a <24-char stub is not an
+    opinion — return empty so callers fall back to the composed note."""
+    t = str(text or "").strip()
+    if not t:
+        return ""
+    latin = sum(1 for ch in t if "a" <= ch.lower() <= "z")
+    if len(t) < 24 or latin / max(len(t), 1) > 0.60:
+        return ""
+    return t
+
+
+def _ai_rich_note(candidate: SignalCandidate) -> str:
+    """2-4 sentence Persian read assembled from live state — the engine's own
+    «analysis», never a boilerplate token. Deterministic per candle."""
+    md = candidate.metadata or {}
+    bits: List[str] = []
+    try:
+        from analysis.aids_bank import session_note
+        sess = session_note(str(md.get("session") or ""))
+        if sess:
+            bits.append(sess)
+    except Exception:
+        pass
+    bias = str(candidate.bias or "").upper()
+    if bias in {"BULLISH", "BEARISH"}:
+        agree = (bias == "BULLISH") == (str(candidate.direction).upper() == "LONG")
+        bits.append(f"بایاس ساختاریِ تایم بالا {('صعودی 🟢' if bias == 'BULLISH' else 'نزولی 🔴')} است و سناریوی فعلی "
+                    + ("در هم‌جهتِ آن نوشته شده — قانون جریان؛ فقط صبر برای تأیید."
+                       if agree else "خلافِ آن است؛ بدون نشانهٔ قویِ بازگشت (MSS+کندلِ بازیگر) ورود ندارد."))
+    else:
+        bits.append("بایاس تایم بالا خنثی است؛ یعنی حقِ تعجیل به هیچ سمتی نداریم و ناحیه حرف اول را می‌زند.")
+    try:
+        rr = float(candidate.rr_tp1 or 0)
+        if 0 < rr < 1.3:
+            bits.append(f"نسبت ریسک‌به‌ریواردِ این نسخه ({rr:.2f}R) از کفِ ایده‌آل پایین‌تر است؛ هر تأخیرِ دیگر ورود را بی‌منطقه می‌کند.")
+    except Exception:
+        pass
+    bits.append(_ai_watch_hint(candidate))
+    return " ".join(bits)
+
+
 def _approaching_caption(candidate: SignalCandidate, current_price: float, distance_atr: float) -> str:
     why = candidate.strategy_fa
     badge, _ = _setup_badge(candidate)
-    advisory = (str((candidate.metadata or {}).get("gemini_advisory") or "").strip()
-                or str(getattr(candidate, "ai_reason", "") or "").strip())
-    # Viva 2026-09-11: the block template is STRUCTURAL — the AI row never disappears.
-    ai_line = (f"🤖 <b>نظر AI:</b> {_e(advisory)}\n" if advisory
-               else "🤖 <b>نظر AI:</b> هنوز خروجیِ قطعی صادر نشده — در حال ارزیابی\n")
+    advisory = _fa_advisory(str((candidate.metadata or {}).get("gemini_advisory") or "").strip()
+                           or str(getattr(candidate, "ai_reason", "") or "").strip())
+    # Viva 2026-09-14 «نظر AI چرا اینقدر کوتاه و انگلیسی هست؟» — the AI row is
+    # a full Persian read on every message; a Latin token never stands alone.
+    ai_line = f"🤖 <b>نظر AI:</b> {_e(advisory or _ai_rich_note(candidate))}\n"
     # Viva 2026-09-11 (UNIUSDT نمونه): 🎯 = VIVA-CODE | setup , 🚨 = رویدادها + امتیاز
     name, _, event = str(why).partition("|")
     head = f"VIVA-{_e(candidate.setup_code)}"
@@ -1986,7 +2206,9 @@ def _approaching_caption(candidate: SignalCandidate, current_price: float, dista
         f"💲 <b>قیمت:</b> {_price(current_price)}\n"
         f"{VIVA_SEP}\n"
         f"⚖️ <b>در انتظار کلوز تأییدی تایم پایین / MSS</b>\n"
-        f"🚩 <b>فاصله:</b> {distance_atr:.2f} ATR\n"
+        f"🚩 <b>فاصله:</b> "
+        + ("داخل ناحیه — در حالِ ارزیابیِ کلوز" if abs(float(distance_atr or 0)) < 0.01
+           else f"{distance_atr:.2f} ATR") + "\n"
         f"🛑 <b>ابطال:</b> {_price(candidate.sl)}\n"
         f"{VIVA_SEP}\n\n"
         f"🆔 <code>{_e(_public_code(candidate))}</code>"
@@ -2003,31 +2225,33 @@ def send_approaching(candidate: SignalCandidate, current_price: float, distance_
         chart = generate_chart(frame, candidate, confirmed=False) if frame is not None else None
     except Exception:
         chart = None
-    if not candidate.metadata.get("pro_separator_message_id"):
-        candidate.metadata["pro_separator_message_id"] = send_message("<b>━━━━━━━━ VIVA-MON-LABS ━━━━━━━━</b>", target)
     caption = _approaching_caption(candidate, current_price, distance_atr)
     source_mid = (candidate.metadata.get("education_chart_message_id")
                   or candidate.metadata.get("education_message_id")
                   or _setup_chain_get(candidate).get("edu") or 0)
     source_link = _telegram_message_link(CHAT_ID_EDUCATION or CHAT_ID_ADMIN, int(source_mid)) if source_mid else ""
     markup = {"inline_keyboard": [[{"text": "📚 تحلیل و چارت هشدار اولیه", "url": source_link}]]} if source_link else None
-    # The final alert REPLACES the compact watch post in the same PRO slot
-    # (Viva 2026-09-11); only if no slot survives does a fresh post appear.
+    # Viva 2026-09-14 link-chain law (verbatim): «پیام هشدار نهایی و
+    # آماده‌سازی که اومد ریپلای بشه به آخرین آپدیت با هر شماره‌ای». The final
+    # alert is its OWN message quoting the chain's last update (or the compact
+    # when no update ran) — it never overwrites or deletes them. A re-fire of
+    # the same stage edits THIS message in place instead of stacking a twin.
     chain = _setup_chain_get(candidate)
-    slot = int(chain.get("pro") or 0) or int(candidate.metadata.get("approaching_message_id") or 0)
+    own = int(chain.get("approach") or 0)
+    parent = (int(chain.get("slot") or 0)
+              or int(chain.get("anchor_pro") or chain.get("edu_short") or 0)) or None
     done = False
-    if slot:
-        done = (edit_chart_message(slot, str(target), chart, caption, reply_markup=markup)
-                if chart else edit_text_message(slot, str(target), caption))
+    if own:
+        done = (edit_chart_message(own, str(target), chart, caption, reply_markup=markup)
+                if chart else edit_text_message(own, str(target), caption))
     if done:
-        mid = slot
+        mid = own
     else:
-        mid = send_photo(chart, caption, target, reply_markup=markup) if chart else send_message(caption, target, reply_markup=markup)
+        mid = (send_photo(chart, caption, target, reply_to_message_id=parent, reply_markup=markup)
+               if chart else
+               send_message(caption, target, reply_to_message_id=parent, reply_markup=markup))
         if mid:
-            slot = int(mid)
-    if mid:
-        if int(chain.get("pro") or 0) != slot:
-            chain["pro"] = slot
+            chain["approach"] = int(mid)
             _setup_chain_set(candidate, chain)
     _store_alert_message_id(candidate, "approaching_message_id", mid)
     return bool(mid)
@@ -2058,7 +2282,7 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
     style_fa = {"DAYTRADE": "DAYTRADE", "SWING": "SWING", "SCALP": "SCALP",
                 "GRAND": "SWING"}.get(candidate.style.upper(), candidate.style)
     badge, _ = _setup_badge(candidate)
-    advisory = str((candidate.metadata or {}).get("gemini_advisory") or "").strip()
+    advisory = _fa_advisory(str((candidate.metadata or {}).get("gemini_advisory") or "").strip())
     rows = [
         f"🏷 <b>{_e(badge)}</b>",
         f"✅ <b>سیگنال تأییدشده</b> • {_e(candidate.setup_code)}",
@@ -2073,8 +2297,7 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         *[f"🏁 TP{i+1}: {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [35, 35])))],
         f"⚖️ R:R {candidate.rr_tp1:.2f} / {candidate.rr_tp2:.2f} • ⭐ {candidate.score}/10",
     ]
-    if advisory:
-        rows.append(f"🤖 <b>نظر AI:</b> {_e(advisory)}")
+    rows.append(f"🤖 <b>نظر AI:</b> {_e(advisory or _ai_rich_note(candidate))}")
     if mm:
         rows.extend([
             VIVA_SEP,
@@ -2103,30 +2326,20 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
         source_mid = candidate.metadata.get("education_chart_message_id") or candidate.metadata.get("education_message_id")
         link = _telegram_message_link(source_chat, int(source_mid)) if source_mid else ""
         keyboard = {"inline_keyboard": [[{"text": "📚 چارت و توضیحات هشدار اولیه", "url": link}]]} if link else None
-        # Viva 2026-09-11 (final spec): the Confirmed message REPLACES the
-        # final-alert slot in the main channel — one message per lifecycle
-        # stage, never two side by side. Falls back to a fresh post when the
-        # slot is gone (no final alert was ever sent) or the edit fails.
+        # Viva 2026-09-14 link-chain law: Confirmed is its OWN new message
+        # replying to the final alert (or the last update / the compact when no
+        # final alert ran). It never overwrites them — TP and stop receipts
+        # will quote THIS message id.
         chain = _setup_chain_get(candidate)
-        slot = int(chain.get("pro") or 0) or int(candidate.metadata.get("approaching_message_id") or 0)
-        done = False
-        if slot:
-            done = edit_chart_message(slot, str(target), chart,
-                                      _confirmed_chart_caption(candidate), reply_markup=keyboard)
-        if done:
-            mid = slot
-        else:
-            watch_mid = candidate.metadata.get("approaching_message_id")
-            mid = send_photo(chart, _confirmed_chart_caption(candidate), target,
-                             reply_to_message_id=int(watch_mid) if (watch_mid and not slot) else None,
-                             reply_markup=keyboard)
-            if mid:
-                slot = int(mid)
+        parent = (int(chain.get("approach") or candidate.metadata.get("approaching_message_id") or 0)
+                  or int(chain.get("slot") or 0)
+                  or int(chain.get("anchor_pro") or chain.get("edu_short") or 0)) or None
+        mid = send_photo(chart, _confirmed_chart_caption(candidate), target,
+                         reply_to_message_id=parent, reply_markup=keyboard)
         if not mid:
             return False
-        if slot and int(chain.get("pro") or 0) != int(slot):
-            chain["pro"] = int(slot)
-            _setup_chain_set(candidate, chain)
+        chain["confirmed"] = int(mid)
+        _setup_chain_set(candidate, chain)
         candidate.metadata["confirmation_chart_message_id"] = int(mid)
         candidate.metadata["confirmation_chart_sent"] = True
     # Deliberately no second verbose message in VivaMon Labs Pro.
@@ -2148,7 +2361,8 @@ def send_candidate_cancelled(candidate: SignalCandidate, reason: str) -> bool:
     except Exception as exc:
         print(f"cancel update-slot warning {candidate.signal_id}: {exc}")
     if candidate.metadata.get("approaching_sent"):
-        slot = int(_setup_chain_get(candidate).get("pro") or 0) or int(
+        _ch = _setup_chain_get(candidate)
+        slot = int(_ch.get("approach") or _ch.get("pro") or 0) or int(
             candidate.metadata.get("approaching_message_id") or 0)
         if slot:
             try:
@@ -2273,7 +2487,7 @@ def send_tp1_event(signal: dict) -> bool:
     code = _e(signal.get("public_code") or signal.get("signal_id"))
     code_line = f'<a href="{link}">🆔 <code>{code}</code></a>' if link else f"🆔 <code>{code}</code>"
     setup = _setup_display(signal.get("source") or signal.get("strategy_fa"))
-    return send_message(
+    return int(send_message(
         f"🎯 <b>{_e(signal.get('event') or 'TP')} HIT</b>   {code_line}\n\n"
         f"🏷 <b>{_e(setup)}</b>\n\n"
         f"🏦 <b>{_e(signal['symbol'])}</b> • {_e(signal.get('trigger_timeframe') or signal.get('style', ''))} • {_e(signal.get('style',''))} • {_e(signal.get('direction',''))}\n\n"
@@ -2291,7 +2505,41 @@ def send_tp1_event(signal: dict) -> bool:
         f"━━━━━━━━━━━━━━━━━━\n🔒 Trailing SL جدید: <b>{_price(float(signal.get('new_sl') or signal.get('sl') or 0))}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>",
         target,
-    )
+    ) or 0)
+
+
+def send_stop_event_to_results(event: dict, pro_mid: int) -> int:
+    """Viva 2026-09-14 (verbatim): «اول پیام هیت شدن استاپ میاد که ریپلای میشه
+    به پیام تایید... بعد این پیام میره به کانال وین ریت و لینک بشه به هم دیگه»
+    — the stop receipt belongs to the win-rate ledger with a two-way code link."""
+    kind = str(event.get("event") or "")
+    if kind not in {"TRAIL_STOP", "STOP"}:
+        return 0
+    target = CHAT_ID_RESULTS or CHAT_ID_ADMIN
+    code = _e(event.get("public_code") or event.get("signal_id"))
+    main_link = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, int(pro_mid or 0))
+    code_line = f'<a href="{main_link}">🆔 <code>{code}</code></a>' if main_link else f"🆔 <code>{code}</code>"
+    setup = _setup_display(event.get("source") or event.get("strategy_fa"))
+    hit = int(event.get("hit_index") or 0)
+    trailed = bool(event.get("trailing_used")) or (
+        hit > 0 and abs(float(event.get("sl") or 0) - float(event.get("original_sl") or 0)) > 1e-9)
+    title = (f"🔐 TP{hit} HIT • خروجِ محافظت‌شده باقی‌مانده" if trailed else "⛔ STOP LOSS HIT")
+    send_signal_separator(target)
+    return int(send_message(
+        f"{title}   {code_line}\n\n"
+        f"🏷 <b>{_e(setup)}</b>\n\n"
+        f"🏦 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style'))} • "
+        f"{_e(event.get('style'))} • {_e(event.get('direction'))}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n{_event_timing_lines(event)}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🔰 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
+        f"⭕️ First Stop: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
+        f"📍 استاپِ اجراشده: <b>{_price(float(event.get('stop') or event.get('sl') or 0))}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"• سود/ضرر تجمعی: <b>${float(event.get('realized_profit_usd', 0)):+.2f}</b>\n\n"
+        f"• اثر نهایی بر کل مارجین: <b>{float(event.get('realized_margin_roi_pct', 0)):+.2f}%</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>",
+        target) or 0)
 
 
 def _final_lifecycle_anchor(event: dict) -> int:
@@ -2306,6 +2554,13 @@ def _final_lifecycle_anchor(event: dict) -> int:
     hit_index = max(0, min(5, int(event.get("hit_index") or 0)))
     if result == "WIN" and hit_index:
         return _exact_event_message_id(signal_id, f"TP{hit_index}")
+    # Viva 2026-09-14 (verbatim): «نتیجه نهایی هم ریپلای میشه به پیام هیت
+    # شدن استاپ لاس با همون کد» — quote the position's own stop-hit receipt;
+    # only a position that never printed a stop falls back to Confirmed.
+    for _stop_key in ("TRAIL_STOP", "STOP"):
+        _mid = _exact_event_message_id(signal_id, _stop_key)
+        if _mid:
+            return _mid
     return _exact_event_message_id(signal_id, "CONFIRMED", int(event.get("pro_message_id") or 0))
 
 
@@ -2330,34 +2585,21 @@ def send_no_fill_event(event: dict) -> bool:
 
 
 def _lifecycle_chart_frame(candidate: SignalCandidate, levels: list[float]) -> Optional[pd.DataFrame]:
-    """Keep the full fixed trade tool visible without stretching the chart.
-
-    Render the trigger TF first. Escalate only when Entry/First Stop/TP ladder
-    would leave the visible price range: 15m→30m→1h and 1h→2h→4h.
-    """
+    """Viva 2026-09-14 chart law: the trade tape is ALWAYS the position's own
+    trigger timeframe. An off-screen target stays off-screen and is tagged at
+    the edge; the chart NEVER escalates 15m→1h→4h to make numbers fit —
+    «چارت ۱ ساعته میذاری پوزیشن رو ۱۵ دقیقه؟!» on any setup is illegal,
+    and a 4h picture under a 1h trade was exactly what he forbade."""
     from data.fetcher import get_klines
-    trigger = str(candidate.trigger_timeframe or "15m").lower()
-    chains = {
-        "5m": ["5m", "15m", "30m", "1h"],
-        "15m": ["15m", "30m", "1h"],
-        "1h": ["1h", "2h", "4h"],
-    }
-    choices = chains.get(trigger, [trigger])
-    usable = [float(v) for v in levels if float(v or 0) > 0]
-    fallback = None
-    for tf in choices:
-        frame = get_klines(candidate.symbol, tf, 180, closed_only=False, use_cache=False)
-        if frame is None or frame.empty:
-            continue
-        fallback = frame
-        low, high = float(frame["low"].min()), float(frame["high"].max())
-        pad = max(high - low, 1e-12) * 0.04
-        if not usable or (min(usable) >= low - pad and max(usable) <= high + pad):
-            candidate.metadata["chart_view_tf"] = tf
-            return frame
-    if fallback is not None:
-        candidate.metadata["chart_view_tf"] = choices[-1]
-    return fallback
+    tf = str(candidate.trigger_timeframe or "15m").lower()
+    try:
+        frame = get_klines(candidate.symbol, tf, 180, closed_only=False, use_cache=True)
+    except Exception:
+        return None
+    if frame is None or getattr(frame, "empty", True):
+        return None
+    candidate.metadata["chart_view_tf"] = tf
+    return frame
 
 
 def send_trade_close_event(event: dict) -> bool:
@@ -2369,7 +2611,14 @@ def send_trade_close_event(event: dict) -> bool:
     code = _e(event.get("public_code") or event.get("signal_id"))
     setup = _setup_display(event.get("source") or event.get("strategy_fa"))
     hit = int(event.get("hit_index") or 0)
-    exit_kind = "FULL TP5" if hit >= 5 else (f"TP{hit} + PROTECTED EXIT" if result == "WIN" and hit else "INITIAL STOP LOSS")
+    # Viva 2026-09-14 ZEC K120563: banking TP1 then exiting at the BE-locked
+    # trail was mislabelled «INITIAL STOP LOSS». Name what actually executed.
+    trailed = bool(event.get("trailing_used")) or (
+        hit > 0 and abs(float(event.get("sl") or 0) - float(event.get("original_sl") or 0)) > 1e-9)
+    exit_kind = ("FULL TP5" if hit >= 5 else
+                 (f"TP{hit} + خروجِ محافظت‌شده با SL تریل‌شده" if trailed
+                  else (f"TP{hit} + خروجِ محافظت‌شده" if hit and result == "WIN"
+                        else "INITIAL STOP LOSS")))
     text = (
         f"{emoji} <b>نتیجه نهایی پوزیشن</b>   🆔 <code>{code}</code>\n\n"
         f"🏷 <b>{_e(setup)}</b>\n\n"
@@ -2394,8 +2643,8 @@ def send_trade_close_event(event: dict) -> bool:
     except Exception:
         chart = None
     if chart:
-        return bool(send_photo(chart, text, target, reply_to_message_id=reply_id))
-    return bool(send_message(text, target, reply_to_message_id=reply_id))
+        return int(send_photo(chart, text, target, reply_to_message_id=reply_id) or 0)
+    return int(send_message(text, target, reply_to_message_id=reply_id) or 0)
 
 
 def send_trade_result(event: dict) -> bool:
@@ -2414,7 +2663,7 @@ def send_trade_result(event: dict) -> bool:
     code = _e(event.get("public_code") or event.get("signal_id"))
     link_line = f'<a href="{link}">🆔 <code>{code}</code></a>\n' if link else f"🆔 <code>{code}</code>\n"
     setup = _setup_display(event.get("source") or event.get("strategy_fa"))
-    return send_message(
+    return int(send_message(
         f"{emoji} <b>نتیجه نهایی پوزیشن</b>   {link_line}\n"
         f"🏷 <b>{_e(setup)}</b>\n\n"
         f"🏦 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style', ''))} • {_e(event.get('style', ''))} • {_e(event.get('direction',''))}\n\n"
@@ -2430,7 +2679,7 @@ def send_trade_result(event: dict) -> bool:
         f"📍 نتیجه: <b>{_e(result)}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>",
         target,
-    )
+    ) or 0)
 
 
 def send_startup_message(symbol_count: int) -> bool:
@@ -2459,28 +2708,50 @@ def _event_chart_candidate(event: dict) -> SignalCandidate:
     direction = str(event.get("direction") or "LONG").upper()
     risk = max(abs(entry - sl), 1e-12)
     rr1, rr2 = abs(tp1-entry)/risk, abs(tp2-entry)/risk
-    return SignalCandidate(
-        signal_id=str(event.get("signal_id") or ""), symbol=str(event.get("symbol") or ""),
-        style=str(event.get("style") or "DAYTRADE"), setup_code=str(event.get("source") or "SETUP"),
-        setup_name=str(event.get("source") or "SETUP"), strategy_fa=str(event.get("strategy_fa") or event.get("source") or "SETUP"),
-        direction=direction, score=0, status="CONFIRMED", entry_zone_bottom=entry,
-        entry_zone_top=entry, planned_entry=entry, sl=sl, tp1=tp1, tp2=tp2,
-        rr_tp1=rr1, rr_tp2=rr2, bias="BULLISH" if direction == "LONG" else "BEARISH",
-        # Final live chart must stay on the position's own trigger timeframe.
-        trigger_timeframe=str(event.get("trigger_timeframe") or ("5m" if str(event.get("style")) == "SCALP" else "15m")),
-        metadata={
-            "target_event": str(event.get("event") or ""),
-            "public_code": event.get("public_code") or event.get("signal_id"),
-            # Static Entry / First Stop / five TP geometry is carried into
-            # every lifecycle chart. Only live price and the trailing line move.
-            "target_ladder": {
-                "targets": targets or build_ladder(entry, sl, direction, {}, tp2).get("targets", []),
-                "weights": [35, 35, 20, 5, 5],
-                "hit_index": int(event.get("hit_index") or 0),
-            },
-            "current_trailing_sl": float(event.get("sl") or event.get("new_sl") or 0),
+    # Viva 2026-09-14 «ترندها را چرا برداشتی؟!» + SCORE 0/10 on confirmed
+    # boxes: lifecycle charts must NOT render from a stripped synthetic
+    # candidate. Load the chain's REAL row first — trendline points, zone,
+    # score, RR and the market label all live in its metadata — and only fall
+    # back to event-only geometry when the store no longer has the candidate.
+    cand = None
+    try:
+        from database.candidate_store import get_active_candidates, get_resolved_candidates
+        _sid = str(event.get("signal_id") or "")
+        for row in list(get_active_candidates()) + list(get_resolved_candidates(limit=400)):
+            if str(getattr(row, "signal_id", "")) == _sid:
+                cand = row
+                break
+    except Exception:
+        cand = None
+    if cand is None:
+        cand = SignalCandidate(
+            signal_id=str(event.get("signal_id") or ""), symbol=str(event.get("symbol") or ""),
+            style=str(event.get("style") or "DAYTRADE"), setup_code=str(event.get("source") or "SETUP"),
+            setup_name=str(event.get("source") or "SETUP"), strategy_fa=str(event.get("strategy_fa") or event.get("source") or "SETUP"),
+            direction=direction, score=int(event.get("score") or 0), status="CONFIRMED", entry_zone_bottom=entry,
+            entry_zone_top=entry, planned_entry=entry, sl=sl, tp1=tp1, tp2=tp2,
+            rr_tp1=rr1, rr_tp2=rr2, bias="BULLISH" if direction == "LONG" else "BEARISH",
+            trigger_timeframe=str(event.get("trigger_timeframe") or ("5m" if str(event.get("style")) == "SCALP" else "15m")),
+            metadata={},
+        )
+    cand.metadata = dict(cand.metadata or {})
+    cand.metadata.update({
+        "target_event": str(event.get("event") or ""),
+        "public_code": event.get("public_code") or cand.metadata.get("public_code") or cand.signal_id,
+        # Static Entry / First Stop / five TP geometry is carried into
+        # every lifecycle chart. Only live price and the trailing line move.
+        "target_ladder": {
+            "targets": targets or build_ladder(entry, sl, direction, {}, tp2).get("targets", []),
+            "weights": [35, 35, 20, 5, 5],
+            "hit_index": int(event.get("hit_index") or 0),
         },
-    )
+        "current_trailing_sl": float(event.get("sl") or event.get("new_sl") or 0),
+        "hit_index": int(event.get("hit_index") or 0),
+    })
+    # The lifecycle chart stays on the position's own trigger timeframe.
+    if str(event.get("trigger_timeframe") or ""):
+        cand.trigger_timeframe = str(event["trigger_timeframe"])
+    return cand
 
 
 def send_ladder_event(event: dict) -> bool:
@@ -2509,6 +2780,9 @@ def send_ladder_event(event: dict) -> bool:
             f"• حجم بسته‌شده: <b>{float(event.get('weight', 0)):.0f}%</b>\n\n"
             f"• حرکت قیمت: <b>{float(event.get('leg_price_move_pct', 0)):+.2f}%</b>\n\n"
             f"• سود پله: <b>${float(event.get('leg_profit_usd', 0)):+.2f}</b>\n\n"
+            f"• شیوۀ محاسبه: <code>{float(event.get('weight', 0)):.0f}%</code> × "
+            f"<code>${float(event.get('margin') or 0) * int(event.get('leverage') or 1):,.0f}</code> × "
+            f"<code>{float(event.get('leg_price_move_pct', 0)):+.2f}%</code> — ناخالص؛ کارمزد در پیام نتیجه کسر می‌شود\n\n"
             f"• بازده پله با اهرم: <b>{float(event.get('leg_full_roi_pct', 0)):+.2f}%</b>\n\n"
             f"• اثر بر کل مارجین: <b>{float(event.get('leg_margin_roi_pct', 0)):+.2f}%</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n💼 مارجین: <b>${float(event.get('margin') or 0):.2f}</b>    ⚙️ اهرم: <b>{int(event.get('leverage') or 1)}x</b>\n"
@@ -2631,7 +2905,7 @@ def edit_chart_message(message_id: int, chat_id: str, image: bytes, caption: str
         return False
     import json as _j
     media = {"type": "photo", "media": "attach://photo",
-             "caption": caption[:1000], "parse_mode": "HTML"}
+             "caption": _fit_caption(caption), "parse_mode": "HTML"}
     if reply_markup:
         media["reply_markup"] = reply_markup
     payload = {"chat_id": str(chat_id), "message_id": str(int(message_id)),
@@ -2659,6 +2933,10 @@ def send_technoclassic_preview(ev: dict) -> bool:
     fade = ev.get("fade") or {}
     scen = ev.get("scenarios") or {}
     is_fade = state == "REJECTION_FADE"
+    # Viva 2026-09-14 «مگه امتیاز ۲ هم داریم؟ پایین‌تر از ۶ رو بستیم!» — a
+    # preview below the education floor must never speak in any channel.
+    if int(ev.get("structure_score") or 0) < int(getattr(SETTINGS, "educational_min_score", 6) or 6):
+        return False
     cand = None
     frame = None
     try:
@@ -2766,34 +3044,42 @@ def send_technoclassic_preview(ev: dict) -> bool:
         # alerts channel. It lives only as the main/PRO live slot; a real TC
         # alert (DB-backed chain) keeps the permanent detailed post there.
         edu_mid = 0
+        _dist = float(ev.get("distance_atr") or 0)
         short = _compact_alert_caption(
             cand, score=int(ev.get("structure_score") or 0),
             extra_lines=[
                 f"📍 <b>خط {side_fa}:</b> {_price(ev.get('line_price'))} • "
                 f"<b>قیمت:</b> {_price(ev.get('live'))}",
-                f"🚩 <b>فاصله:</b> {float(ev.get('distance_atr') or 0):.2f} ATR • "
-                f"<b>برخوردهای معتبر:</b> {ev.get('touches')}",
+                (f"🚩 <b>فاصله:</b> {_dist:.2f} ATR • <b>برخوردهای معتبر:</b> {ev.get('touches')}"
+                 if _dist >= 0.01 else
+                 f"🚩 <b>قیمت رویِ خطِ مرجع</b> • برخوردهای معتبر: {ev.get('touches')}"),
             ] + _tech_aids_lines(cand))
         # (the retired preview pair no longer posts into the alerts channel)
         markup = None
         if edu_mid:
-            link = _telegram_message_link(edu_chat, int(edu_mid))
+            link = _telegram_message_link(CHAT_ID_EDUCATION or CHAT_ID_ADMIN, int(edu_mid))
             if link:
                 markup = {"inline_keyboard": [[{"text": "📚 چارت و توضیحات هشدار اولیه",
                                                 "url": link}]]}
         mid = (send_photo(chart, short, target, reply_markup=markup) if chart
                else send_message(short, target, reply_markup=markup))
         if mid:
-            # PRO anchor slot == update slot: the first state change edits
-            # THIS message instead of stacking another one in PRO.
-            _sk(ck, {"anchor": int(mid), "edu": int(edu_mid or 0), "update": int(mid), "upd_n": 0,
-                     "ts": now, "code": code, "pattern": str(ev.get("pattern")),
+            # PRO anchor == the permanent compact; the first state change
+            # posts a REPLACEMENT update above it and replies to this anchor.
+            _sk(ck, {"anchor": int(mid), "edu": int(edu_mid or 0), "update": 0, "upd_n": 0,
+                     "ts": now, "last_upd_ts": now, "code": code, "pattern": str(ev.get("pattern")),
                      "state": state, "fade": bool(is_fade)})
             # confirmation messages quote the PRO anchor — updates never move that link
             _sk(f"tc_link|{sym}|{tf}", {"mid": int(mid), "ts": now, "state": state})
         return bool(mid)
     # ── existing anchor: state must have MOVED, else stay silent ────────────
     if chain.get("state") == state and bool(chain.get("fade")) == bool(is_fade):
+        return False
+    # Viva 2026-09-14 «۵ هشدار روی یک ناحیه و قیمت یکسان» — the FIRST state
+    # change after the anchor speaks; every further preview update waits for a
+    # NEW pattern bar. Intra-candle flips must not ping-pong the channel.
+    _bar = str(ev.get("ref_ts") or "")[:16] or f"bar{int(now // 3600)}"
+    if chain.get("upd_bar") == _bar:
         return False
     code = str(chain.get("code") or cand.metadata.get("public_code") or "")
     cand.metadata["public_code"] = code
@@ -2845,6 +3131,7 @@ def send_technoclassic_preview(ev: dict) -> bool:
         upd = int(new_mid)
         _sk(ck, {"anchor": anchor_mid, "update": upd, "edu": edu_mid, "ts": now,
                  "upd_n": upd_n, "upd_chat": upd_chat, "code": code,
+                 "upd_bar": _bar, "last_upd_ts": now,
                  "pattern": str(ev.get("pattern")),
                  "state": state, "fade": bool(is_fade)})
         try:  # keep the anchor→confirmation link state fresh without moving it

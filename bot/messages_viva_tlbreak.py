@@ -50,9 +50,10 @@ def ai_advisory_fa(metadata: dict, direction: str) -> str:
     )
 
 
-def management_fa(entry: float, first_stop: float, final_target: float, direction: str) -> str:
+def management_fa(entry: float, first_stop: float, final_target: float, direction: str,
+                  title: str = "VIVA-TLBREAK") -> str:
     return (
-        "💼 <b>مدیریت معامله VIVA-TLBREAK</b>\n"
+        f"💼 <b>مدیریت معامله {title}</b>\n"
         f"• Entry مرجع: <code>{_f(entry, 6)}</code>\n"
         f"• First Stop ساختاری: <code>{_f(first_stop, 6)}</code>\n"
         f"• Target نهایی الگو: <code>{_f(final_target, 6)}</code>\n"

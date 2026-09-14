@@ -1201,7 +1201,10 @@ def monitor_confirmed_trades() -> List[Dict]:
                 if ladder.get("closed"):
                     notional = float(margin or 0) * int(leverage or 1)
                     gross_pnl = float(ladder.get("realized_r", 0)) * abs(float(entry) - float(original_sl)) / float(entry) * 100
-                    net_pnl = gross_pnl - 2 * (SETTINGS.fee_rate_percent + SETTINGS.slippage_percent)
+                    # Viva 2026-09-14: settlement = gross minus the exchange
+                    # round-trip FEE only; slippage is a display note. (ZEC
+                    # K120563 proved the old double cut flips protected wins.)
+                    net_pnl = gross_pnl - 2 * SETTINGS.fee_rate_percent
                     profit_usd = notional * net_pnl / 100
                     result = "WIN" if net_pnl > 0 else "LOSS"
                     cursor.execute(f"UPDATE signals SET result={p}, pnl_pct={p}, pnl_usd={p}, closed_at={p} WHERE signal_id={p}",
@@ -1220,6 +1223,8 @@ def monitor_confirmed_trades() -> List[Dict]:
                         "targets":list(ladder["targets"]),"hit_index":int(ladder["hit_index"]),
                         "event_at":str(latest_checked or confirmed_at),"trigger_timeframe":str(trigger_timeframe or ""),
                         "live_price":float(candle["close"]),
+                        "trailing_used": bool(int(ladder.get("hit_index") or 0) > 0
+                                              and abs(float(ladder.get("current_sl") or 0) - float(original_sl)) > 1e-9),
                     })
             events.extend(ladder_events)
             continue
@@ -1285,7 +1290,7 @@ def monitor_confirmed_trades() -> List[Dict]:
             if closed_event:
                 notional = float(margin or 0) * int(leverage or 1)
                 gross_pnl = float(closed_event["pnl"])
-                roundtrip_cost = 2 * (SETTINGS.fee_rate_percent + SETTINGS.slippage_percent)
+                roundtrip_cost = 2 * SETTINGS.fee_rate_percent
                 net_pnl = gross_pnl - roundtrip_cost
                 closed_event["gross_pnl"] = gross_pnl
                 closed_event["pnl"] = net_pnl
