@@ -85,14 +85,16 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         photos, texts, edits, edits_t = [], [], [], []
         counter = {"mid": 5000}
 
-        def _send_photo(image, caption, chat_id=None, reply_to_message_id=None, reply_markup=None):
+        def _send_photo(image, caption, chat_id=None, reply_to_message_id=None,
+                        reply_markup=None, **kwargs):
             counter["mid"] += 1
             photos.append((counter["mid"], caption, reply_to_message_id, chat_id, reply_markup))
             return counter["mid"]
 
         def _send_message(text, chat_id=None, reply_to_message_id=None, reply_markup=None):
             counter["mid"] += 1
-            texts.append((counter["mid"], text, reply_to_message_id))
+            texts.append((counter["mid"], text, reply_to_message_id, chat_id,
+                          reply_markup))
             return counter["mid"]
 
         def _edit_photo(mid, chat_id, image, caption, reply_markup=None):
@@ -127,31 +129,38 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         # Viva 2026-09-13 «اگر قوانینش با تکنوکلاسیک یکی هست، باید پاک بشه»:
         # the preview's duplicate alerts-channel pair is GONE — it lives only
         # as the main-channel live slot (compact layout, registry-unique id).
-        assert len(photos) == 1
-        assert not [t for t in texts if "تحلیل آموزشی" in t[1]]   # (PRO day-separator is fine)
-        pro_mid = photos[0][0]
+        # 09-16 night transport: the chart bubble carries ONLY a one-line
+        # Persian label; the readable compact text is the plain message
+        # right behind it — never a caption, never a split.
+        assert len(photos) == 1 and len(texts) == 2  # separator + compact text
+        # no SECOND detailed alert mirrors into PRO (the compact header line
+        # legitimately mentions it; a real detailed post would be 2500+ chars)
+        assert not [t for t in texts if len(t[1]) > 2500]
+        pro_mid = texts[1][0]
         edu_mid = 0
+        assert "📊 چارت" in photos[0][1]                          # label-only bubble
         assert photos[0][3] == "-100TEST" and photos[0][2] is None   # PRO slot, no reply
-        assert not photos[0][4]                                       # nothing to link to
+        assert texts[1][2] is None and not texts[1][4]              # nothing to link to
         link = KV.get_json("tc_link|GTTSTUSDT|4h", {})
         assert link.get("mid") == pro_mid                             # confirmations → PRO anchor
-        code = photos[0][1].split("<code>")[1].split("</code>")[0]
+        cap = texts[1][1]
+        code = cap.split("<code>")[1].split("</code>")[0]
         assert code
         # Viva 2026-09-12 format law, now enforced on the TECHCLASSIC preview
         # channel too: registry-unique T-code + the exact detailed skeleton.
         import re as _re
         assert _re.fullmatch(r"VIVA-TECLASSIC-T\d{6}", code), code
-        _hdr = photos[0][1].split("\n")
+        _hdr = cap.split("\n")
         assert _hdr[0] == "🏷 <b>VIVA ✦ TECHCLASSIC</b>"             # frozen compact family
-        assert _hdr[1] == M.VIVA_SEP and "<code>" in photos[0][1]
+        assert _hdr[1] == M.VIVA_SEP and "<code>" in cap
         for _need in ("📚 <b>تحلیل آموزشی | ستاپ در حال بررسی</b>",
                       "⛔ <b>این پیام تأیید ورود نیست</b>",
                       "👀 فقط برای رصد بازار و اهداف آموزشی",
                       "🪙 <b>GTTSTUSDT</b>  •  SWING  •  4H",
-                      "🔎 <b>ناحیه،ای که زیر نظر داریم</b>" if False else "🔎 <b>ناحیه‌ای که زیر نظر داریم</b>",
+                      "🔎 <b>ناحیه‌ای که زیر نظر داریم</b>",
                       "⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود"):
-            assert _need in photos[0][1], _need
-        assert "🧠" not in photos[0][1] and "⚡ <b>هشدار الگو" not in photos[0][1]
+            assert _need in cap, _need
+        assert "🧠" not in cap and "⚡ <b>هشدار الگو" not in cap
 
         # same state again → silence (no channel spam)
         assert M.send_technoclassic_preview(dict(ev)) is False
@@ -163,8 +172,8 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         monkeypatch.setattr(M, "delete_message", lambda chat, mid: deletes.append(int(mid)) or True)
         ev2 = dict(ev, state="REJECTION_FADE", fade=fade)
         assert M.send_technoclassic_preview(ev2) is True
-        assert len(edits) == 0 and len(photos) == 2              # never edited, always appended
-        upd1 = photos[1]
+        assert len(edits) == 0 and len(photos) == 2 and len(texts) == 3  # appended pair
+        upd1 = texts[2]
         assert upd1[3] == "-100TEST" and upd1[2] == pro_mid         # updates stay in the MAIN channel under the preview anchor
         assert "\U0001f501" in upd1[1] and "\u0622\u067e\u062f\u06cc\u062a \u06f1" in upd1[1]   # «آخرین آپدیت • آپدیت ۱»
         assert "\U0001fa99" in upd1[1] and "\u2696\ufe0f" in upd1[1]                # shared update layout with every other setup
@@ -174,15 +183,16 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         chain = KV.get_json("tc_chain|GTTSTUSDT|4h", {})
         assert chain.get("update") == upd1[0] and chain.get("upd_n") == 1
         # …and now NOTHING at all is posted into the alerts channel
-        assert not [t for t in texts if "📚 <b>تحلیل آموزشی" in t[1]]
+        assert not [t for t in texts if len(t[1]) > 2500]
 
         # further advance → update ۲ lands as the newest message, update ۱ is DELETED
         ev3 = dict(ev, state="BREAK_READY", ref_ts="2026-01-24T21:00:00")  # new pattern bar
         assert M.send_technoclassic_preview(ev3) is True
-        assert len(photos) == 3 and len(edits) == 0
-        upd2 = photos[2]
+        assert len(photos) == 3 and len(edits) == 0 and len(texts) == 4
+        upd2 = texts[3]
         assert upd2[2] == pro_mid and upd2[3] == "-100TEST" and "آپدیت ۲" in upd2[1]
-        assert deletes == [upd1[0]]                               # only the superseded one, never the anchor
+        # the superseded update's text AND its chart bubble go; anchor stays
+        assert deletes == [upd1[0], photos[1][0]]
         assert not upd2[4]
         chain = KV.get_json("tc_chain|GTTSTUSDT|4h", {})
         assert chain.get("anchor") == pro_mid and chain.get("update") == upd2[0]
@@ -240,7 +250,8 @@ def test_setup_chain_final_doctrine(monkeypatch):
             posts.append((counter["mid"], text, chat_id, reply_to_message_id, reply_markup))
             return counter["mid"]
 
-        def _send_photo(image, caption, chat_id=None, reply_to_message_id=None, reply_markup=None):
+        def _send_photo(image, caption, chat_id=None, reply_to_message_id=None,
+                        reply_markup=None, **kwargs):
             counter["mid"] += 1
             posts.append((counter["mid"], caption, chat_id, reply_to_message_id, reply_markup))
             return counter["mid"]
@@ -1099,7 +1110,7 @@ def test_link_chain_laws_2026_09_14():
     assert "update_min_gap_seconds" in up
     # 4) Final alert replies to the LAST update; Confirmed is a new message.
     ap = src.split("def send_approaching", 1)[1].split("def _exact_event_message_id", 1)[0]
-    assert 'chain.get("slot")' in ap and "reply_to_message_id=parent" in ap
+    assert 'chain.get("slot")' in ap and "reply_to=parent" in ap
     cf = src.split("def send_confirmed", 1)[1].split("def send_candidate_cancelled", 1)[0]
     assert "edit_chart_message" not in cf                 # Confirmed never overwrites
     assert 'chain.get("approach")' in cf                  # it quotes the final alert
@@ -1137,7 +1148,7 @@ def test_compact_captions_fit_under_media_cap_for_every_setup():
         c.metadata["session"] = "LONDON"
         c.metadata["tech_aids"] = ["📊 EMA51 به سمت بالا شکسته شد", "🌀 روی لول ۶۱٫۸ پولبک زده شد"] * 3
         cap = _compact_alert_caption(c)
-        assert len(cap) <= 1020, (setup, len(cap))  # Telegram media cap 1024
+        assert len(cap) <= 4096, (setup, len(cap))  # text message cap
         upd = _setup_update_caption(c, note_fa="تست", upd_n=3)
         assert "نظر AI" in upd and "آپدیت ۳" in upd
 
@@ -1234,28 +1245,31 @@ def test_compact_caption_single_message_2026_09_15():
     })
     extra = ["• خط اضافی " + "e" * 150, "• خط اضافی " + "f" * 150]
     out = _compact_alert_caption(cand, extra_lines=extra)
-    assert len(out) <= 1024, f"compact anchor overflowed: {len(out)} chars"
-    assert "🆔" in out and "🔎" in out, "core sections must survive degradation"
+    # 09-16 night: the compact is a PLAIN TEXT message behind its chart
+    # bubble — the 4096 text cap holds everything, four full aids included.
+    assert len(out) <= 4096, f"compact overflowed the text cap: {len(out)}"
+    assert "🆔" in out and "🔎" in out, "core sections must survive"
     assert "ادامه" not in out, "compact must never carry a continuation footer"
+    assert all(k in out for k in ("🕐 سشن", "📊", "🌀", "📈")), "full aids stay"
 
 
 def test_slot_never_emits_detached_continuation_2026_09_16():
-    """Viva 2026-09-16 (verbatim): «پیام مختصر باید در یک پیام بیاد نه دو یا
-    چند پیام یا ریپلای یا بدون ریپلای» — the main slot writer posts photos
-    with caption_limit=1024 (Telegram's hard photo-caption cap) so the stray
-    «ادامه» message that detached from the anchor can never reappear; and an
-    over-long numbered update swaps its full aid sentences for the digest
-    before it is allowed to overflow."""
+    """Viva 2026-09-16 night (verbatim): «پیام مختصر رو بصورت کپشن نذار؛ اول
+    عکس چارت، بلافاصله پیام مختصر، تا پیام چندپاره و نصفه نشه» — the slot
+    writer posts the chart bubble with a one-line label and the readable
+    text as a plain message right behind: no caption, no split, any length
+    fits ONE message under the 4096 text cap."""
     import inspect
     import bot.messages_v7 as mv7
-    assert "caption_limit=1024" in inspect.getsource(mv7._pro_slot_post)
+    src = inspect.getsource(mv7._pro_slot_post)
+    assert "_post_chart_then_text" in src
+    assert "send_photo(chart, caption" not in src
     from test_v7 import make_candidate
     cand = make_candidate()
     cand.metadata.update({"session": "NEW_YORK",
-                          "tech_aids": ["📊 " + "x" * 120, "🌀 " + "y" * 120,
-                                        "📈 " + "z" * 120]})
-    full = mv7._setup_update_caption(cand, note_fa="ن" * 700, upd_n=2)
-    dig = mv7._setup_update_caption(cand, note_fa="ن" * 700, upd_n=2,
-                                    aids_digest=True)
-    assert len(dig) < len(full)
-    assert mv7._split_caption(mv7._compact_alert_caption(cand), 1024)[1] == []
+                          "tech_aids": ["📊 " + "x" * 300, "🌀 " + "y" * 300,
+                                        "📈 " + "z" * 300]})
+    out = mv7._compact_alert_caption(cand)
+    assert len(out) <= 4096
+    assert all(k in out for k in ("🕐 سشن", "📊", "🌀", "📈"))
+    assert "ادامه" not in out

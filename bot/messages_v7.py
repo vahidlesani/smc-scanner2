@@ -1898,45 +1898,6 @@ def _store_alert_message_id(candidate: SignalCandidate, key: str, mid: Optional[
 _BIAS_FA = {"BULLISH": "صعودی 🟢", "BEARISH": "نزولی 🔴", "NEUTRAL": "خنثی ⚪"}
 
 
-def _aid_digest_rows(candidate) -> list:
-    """FORMAT-3 digest of the four aid families in at most TWO short Persian
-    bullet rows (session + EMA ladder / fibo + RSI). Viva 2026-09-16: the
-    compact must stay ONE message inside Telegram's 1024 photo-caption cap,
-    so full sentences live in the detailed alert and the compact carries the
-    digest; the same digest rescues over-long numbered updates."""
-    def _short(t: str) -> str:
-        for _d in ("؛", " — ", "، بعد", ". "):
-            t = t.split(_d, 1)[0]
-        return t[:46].rstrip() + ("…" if len(t) > 46 else "")
-
-    md = candidate.metadata or {}
-    dig1, dig2 = [], []
-    ladder, ema_sent = "", []
-    sess = str(md.get("session") or "").strip()
-    if sess:
-        dig1.append("🕐 سشن: " + _SESS_FA.get(sess.upper(), sess))
-    for ln in (md.get("tech_aids") or []):
-        core = ln[2:].strip() if ln.startswith("• ") else ln.strip()
-        if core.startswith("📊 EMA تایم"):
-            ladder = core[2:].strip()
-        elif core.startswith("📊"):
-            ema_sent.append("📊 " + _short(core[2:].strip()))
-        elif core.startswith("🌀"):
-            dig2.append("🌀 " + _short(core[2:].strip()))
-        elif core.startswith("📈"):
-            dig2.append("📈 " + _short(core[2:].strip()))
-    if ladder:
-        dig1.append(ladder)
-    elif ema_sent:
-        dig1.append(ema_sent[0])
-    rows = []
-    if dig1:
-        rows.append("• " + " | ".join(dig1))
-    if dig2:
-        rows.append("• " + " | ".join(dig2))
-    return rows
-
-
 def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[list] = None,
                            score: Optional[int] = None) -> str:
     """Viva 2026-09-11: the ONE-LINE-FAMILY compact alert (نمونه AAVE) — the
@@ -1988,18 +1949,18 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
     ]
     for line in (extra_lines or []):
         rows.append(line)
-    # FORMAT-3 (09-16): the compact carries a DIGEST of the four aid families
-    # (session / EMA / fibo / RSI — one clause each, Persian, no line-start
-    # Latin); the FULL analyses with item separators live in the detailed
-    # alert. A 1024-char caption physically cannot hold four full sentences
-    # plus the core, and the compact must stay ONE message.
-    _dig = _aid_digest_rows(candidate)
-    if _dig:
+    # FORMAT-3 + 09-16 NIGHT RULING (verbatim): «پیام مختصر رو بصورت کپشن
+    # نذار؛ اول عکس چارت، بلافاصله پیام مختصر» — the compact travels as a
+    # PLAIN TEXT message right behind its chart bubble, so the 4096 text cap
+    # holds the FOUR FULL aid analyses with item separators, exactly like the
+    # detailed alert. No digest, no caption, no split, no continuation.
+    _aids = _tech_aids_lines(candidate)
+    if _aids:
         rows += [VIVA_SEP_ITEM, "🧩 <b>تأییدهای کمکی</b>"]
-        for _i, _r in enumerate(_dig):
+        for _i, _a in enumerate(_aids):
             if _i:
                 rows.append(VIVA_SEP_ITEM)
-            rows.append(_r)
+            rows.append(_a)
     rows += [
         VIVA_SEP,
         "⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود",
@@ -2008,45 +1969,24 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
         "📢 VivaMon Labs Pro",
     ]
     out = "\n".join(rows)
-    # Viva 2026-09-15 (verbatim): «پیام مختصر ... باید در یک پیام باشه» — the
-    # compact anchor is NEVER split into a continuation and NEVER tail-cut.
-    # When it overflows the 1024 media cap, optional parts degrade GRADUALLY
-    # (their full versions all live in the detailed alert): the rule paragraph
-    # shortens first, extra lines drop, then aids drop one-by-one from the
-    # bottom, and only then the context detail drops. The core (badge, symbol,
-    # setup, score, code, zone, invalidation, closing laws) never drops.
-    _CAP = 1020  # Telegram media-caption cap is 1024; keep a 4-char margin
-    if len(out) > _CAP and len(_rule) > 125:
-        rows = [(_rule[:120].rstrip() + "…") if r == _rule else r for r in rows]
-        out = "\n".join(rows)
-    if len(out) > _CAP and extra_lines:
-        rows = [r for r in rows if r not in set(extra_lines)]
-        out = "\n".join(rows)
-    if len(out) > _CAP:
-        _aid_marks = ("🕐 سشن", "📊", "🌀", "📈")
+    # one-message law under the 4096 TEXT cap: degrade only in the impossible
+    # case (aids one-by-one from the bottom; core never drops).
+    if len(out) > 4090:
+        _aid_marks = ("🕐 سشن", "📊", "", "")
 
         def _is_aid(r: str) -> bool:
             return r.startswith("• ") and any(m in r for m in _aid_marks)
 
-        while len(out) > _CAP:
+        while len(out) > 4090:
             _idxs = [i for i, r in enumerate(rows) if _is_aid(r)]
             if not _idxs:
                 break
             _drop = _idxs[-1]
             rows.pop(_drop)
             if _drop > 0 and rows[_drop - 1] == VIVA_SEP_ITEM:
-                rows.pop(_drop - 1)   # the item rule that introduced it
-            if not any(_is_aid(r) for r in rows):
-                rows = [r for r in rows if not r.startswith("🧩")]
-                for _j, _r in enumerate(rows):
-                    if _r == VIVA_SEP_ITEM and _j + 1 < len(rows) and rows[_j + 1].startswith("🧩"):
-                        rows.pop(_j)
-                        break
+                rows.pop(_drop - 1)
             out = "\n".join(rows)
-    if len(out) > _CAP:
-        rows = [r for r in rows if not r.startswith("• بایاس ساختاری")]
-        out = "\n".join(rows)
-    return _fit_caption(out, 1015) if len(out) > _CAP else out
+    return out
 
 
 def _setup_chain_get(candidate: SignalCandidate) -> dict:
@@ -2082,6 +2022,34 @@ def _chain_by_code_get(code: str) -> dict:
         return {}
 
 
+def _chart_label(symbol: str = "", code: str = "", title_fa: str = "") -> str:
+    """ONE-line Persian label for a chart photo bubble (Viva 2026-09-16: the
+    readable text must NEVER ride as a photo caption again)."""
+    parts = [p for p in (f"📊 چارت {_e(symbol)}" if symbol else "📊 چارت",
+                         f"<code>{_e(code)}</code>" if code else "",
+                         title_fa)]
+    return " • ".join(p for p in parts if p)
+
+
+def _post_chart_then_text(chart, text: str, target, reply_to=None,
+                          reply_markup=None, label: str = "") -> tuple:
+    """Viva 2026-09-16 (verbatim ruling): «پیام مختصر رو بصورت کپشن نذار؛ اول
+    عکس چارت، بلافاصله پیام مختصر، تا پیام چندپاره و نصفه نشه» — the chart goes
+    up as its own photo bubble carrying ONLY a one-line Persian label, then
+    the whole text follows IMMEDIATELY as a plain message (4096 cap ⇒ never
+    split, never a detached caption tail, any length fits ONE message).
+    The text message carries the chain (reply/markup) and its id is what the
+    chain stores. Returns (photo_mid, text_mid)."""
+    photo_mid = 0
+    if chart:
+        photo_mid = int(send_photo(chart, label or "📊 چارت", target,
+                                   caption_limit=1024) or 0)
+    text_mid = int(send_message(text, target,
+                                reply_to_message_id=int(reply_to or 0) or None,
+                                reply_markup=reply_markup) or 0)
+    return photo_mid, text_mid
+
+
 def _sig_mirror(code: str, kind: str, text: str, chart=None, reply_kind: str = "",
                 link: str = "", link_text: str = "") -> int:
     """PROP-1 (Viva 09-16, approved — channel VIVA-MON-SIGNALS he created and
@@ -2099,11 +2067,13 @@ def _sig_mirror(code: str, kind: str, text: str, chart=None, reply_kind: str = "
         reply = int(chain.get(f"sig_{reply_kind}") or 0) or None
         markup = ({"inline_keyboard": [[{"text": link_text, "url": link}]]}
                   if link else None)
-        mid = (send_photo(chart, text, CHAT_ID_VIVA_SIGNALS, reply_to_message_id=reply,
-                          reply_markup=markup)
-               if chart else
-               send_message(text, CHAT_ID_VIVA_SIGNALS, reply_to_message_id=reply,
-                            reply_markup=markup))
+        _ttl = {"approach": "هشدار آماده‌سازی", "confirmed": "تأیید سیگنال",
+                "stop": "استاپ / تریل", "result": "نتیجه نهایی"}.get(kind, "")
+        if kind.startswith("tp"):
+            _ttl = f"هدف {kind[2:]} زده شد"
+        _ph, mid = _post_chart_then_text(
+            chart, text, CHAT_ID_VIVA_SIGNALS, reply_to=reply,
+            reply_markup=markup, label=_chart_label(code=code, title_fa=_ttl))
         if mid:
             chain[f"sig_{kind}"] = int(mid)
             _setup_chain_set_by_code(code, chain)
@@ -2138,17 +2108,17 @@ def _pro_slot_post(candidate, caption: str, chart=None, markup=None,
     must route through this function — side-writers are what produced
     «۶ پیام در ۲۶ ثانیه» on ATOM and are illegal now."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
-    if chart:
-        # Viva 2026-09-16 (verbatim): «پیام مختصر باید در یک پیام بیاد نه دو
-        # یا چند پیام» — the main-channel slot never emits a detached
-        # continuation; builders degrade inside the 1024 caption cap.
-        mid = send_photo(chart, caption, target,
-                         reply_to_message_id=int(reply_to or 0) or None,
-                         reply_markup=markup, caption_limit=1024)
-    else:
-        mid = send_message(caption, target,
-                           reply_to_message_id=int(reply_to or 0) or None,
-                           reply_markup=markup)
+    # Viva 2026-09-16 (verbatim): «پیام مختصر رو بصورت کپشن نذار؛ اول عکس
+    # چارت، بلافاصله پیام مختصر» — chart bubble first with a one-line label,
+    # the readable text right behind as a plain message: never split, never
+    # a detached continuation, any length fits ONE message.
+    _kind_title = {"compact": "پیام مختصر ستاپ",
+                   "update": "به‌روزرسانی رصد"}.get(kind, "")
+    _photo_mid, mid = _post_chart_then_text(
+        chart, caption, target, reply_to=int(reply_to or 0) or None,
+        reply_markup=markup,
+        label=_chart_label(symbol=getattr(candidate, "symbol", ""),
+                           code=_public_code(candidate), title_fa=_kind_title))
     if not mid:
         return 0
     try:
@@ -2160,18 +2130,26 @@ def _pro_slot_post(candidate, caption: str, chart=None, markup=None,
                 # a re-firing compact (chain recreated) REPLACES its own kind
                 try:
                     delete_message(str(target), old_anchor)
+                    _oph = int(chain.get("anchor_photo") or 0)
+                    if _oph:
+                        delete_message(str(target), _oph)
                 except Exception:
                     pass
             chain["anchor_pro"] = int(mid)
+            chain["anchor_photo"] = int(_photo_mid or 0)
             chain["edu_short"] = int(mid)
         elif kind == "update":
             old_slot = int(chain.get("slot") or 0)
             if old_slot and old_slot != int(mid) and old_slot != int(chain.get("anchor_pro") or 0):
                 try:
                     delete_message(str(target), old_slot)
+                    _oph = int(chain.get("slot_photo") or 0)
+                    if _oph:
+                        delete_message(str(target), _oph)
                 except Exception:
                     pass
             chain["slot"] = int(mid)
+            chain["slot_photo"] = int(_photo_mid or 0)
         else:
             chain[str(kind)] = int(mid)
         chain["slot_kind"] = str(kind)
@@ -2267,7 +2245,7 @@ def _fa_num(value) -> str:
 
 def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
                           state_fa: str = "🔄 <b>به‌روزرسانی رصد</b>",
-                          upd_n: int = 0, aids_digest: bool = False) -> str:
+                          upd_n: int = 0) -> str:
     """One-line-family live status of a chain. Viva 2026-09-12 (latest-update
     law): every state change is a NEW numbered post — header «🔄 آخرین آپدیت • آپدیت N»
     — so the newest message in the channel is always the newest update; the
@@ -2300,8 +2278,7 @@ def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
         f"• 🤖 <b>نظر AI:</b> {_e(advisory)}",
         _confirm_rule_fa(candidate).replace("⚖️ ", "• ⚖️ "),
     ]
-    rows += (_aid_digest_rows(candidate) if aids_digest
-             else _tech_aids_lines(candidate))
+    rows += _tech_aids_lines(candidate)
     rows += [
         VIVA_SEP,
         f"🆔 <code>{_e(code)}</code>",
@@ -2365,11 +2342,6 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     upd_n = int(chain.get("upd_n") or 0) + 1
     caption = _setup_update_caption(
         candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>", upd_n)
-    if len(caption) > 1024:
-        # one-message law beats full aid sentences: swap to the digest.
-        caption = _setup_update_caption(
-            candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>", upd_n,
-            aids_digest=True)
     link = _telegram_message_link(edu_chat, detail_mid) if detail_mid and edu_chat else ""
     markup = ({"inline_keyboard": [[{"text": "📚 توضیحات کامل هشدار", "url": link}]]}
               if link else None)
@@ -2522,17 +2494,25 @@ def send_approaching(candidate: SignalCandidate, current_price: float, distance_
     parent = (int(chain.get("slot") or 0)
               or int(chain.get("anchor_pro") or chain.get("edu_short") or 0)) or None
     done = False
+    _lbl = _chart_label(symbol=candidate.symbol, code=_public_code(candidate),
+                        title_fa="هشدار آماده‌سازی")
     if own:
-        done = (edit_chart_message(own, str(target), chart, caption, reply_markup=markup)
-                if chart else edit_text_message(own, str(target), caption))
+        done = edit_text_message(own, str(target), caption)
+        if done and chart:
+            _ph0 = int(chain.get("approach_photo") or 0)
+            if _ph0:
+                try:
+                    edit_chart_message(_ph0, str(target), chart, _lbl)
+                except Exception:
+                    pass
     if done:
         mid = own
     else:
-        mid = (send_photo(chart, caption, target, reply_to_message_id=parent, reply_markup=markup)
-               if chart else
-               send_message(caption, target, reply_to_message_id=parent, reply_markup=markup))
+        _ph, mid = _post_chart_then_text(chart, caption, target, reply_to=parent,
+                                         reply_markup=markup, label=_lbl)
         if mid:
             chain["approach"] = int(mid)
+            chain["approach_photo"] = int(_ph or 0)
             _setup_chain_set(candidate, chain)
             # PROP-1 mirror: the final alert opens the chain in VIVA-MON-SIGNALS,
             # buttoned back to the main channel's compact anchor (the walk then
@@ -2624,11 +2604,15 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
         parent = (int(chain.get("approach") or candidate.metadata.get("approaching_message_id") or 0)
                   or int(chain.get("slot") or 0)
                   or int(chain.get("anchor_pro") or chain.get("edu_short") or 0)) or None
-        mid = send_photo(chart, _confirmed_chart_caption(candidate), target,
-                         reply_to_message_id=parent, reply_markup=keyboard)
+        _ph, mid = _post_chart_then_text(
+            chart, _confirmed_chart_caption(candidate), target, reply_to=parent,
+            reply_markup=keyboard,
+            label=_chart_label(symbol=candidate.symbol, code=_public_code(candidate),
+                               title_fa="تأیید سیگنال"))
         if not mid:
             return False
         chain["confirmed"] = int(mid)
+        chain["confirmed_photo"] = int(_ph or 0)
         _setup_chain_set(candidate, chain)
         # PROP-1 mirror: Confirmed quotes the final alert inside the journal
         # and buttons back to the main channel's compact anchor.
@@ -2945,8 +2929,12 @@ def send_trade_close_event(event: dict) -> bool:
         chart = generate_chart(frame, candidate, confirmed=True) if frame is not None else None
     except Exception:
         chart = None
-    mid = int((send_photo(chart, text, target, reply_to_message_id=reply_id) if chart
-               else send_message(text, target, reply_to_message_id=reply_id)) or 0)
+    _ph, _tm = _post_chart_then_text(
+        chart, text, target, reply_to=reply_id,
+        label=_chart_label(symbol=str(event.get("symbol") or ""),
+                           code=str(event.get("public_code") or ""),
+                           title_fa="نتیجه نهایی پوزیشن"))
+    mid = int(_tm or 0)
     if mid:
         # PROP-1 mirror: the final result closes the journal chain under the
         # last TP receipt (or the stop receipt when no TP was reached),
@@ -3215,8 +3203,13 @@ def send_ladder_event(event: dict) -> bool:
     except Exception as exc:
         print(f"Live target chart warning {event.get('signal_id')}: {exc}")
         chart = None
-    mid = (send_photo(chart, text, target, reply_to_message_id=reply_id) if chart
-           else send_message(text, target, reply_to_message_id=reply_id))
+    _ttl = f"هدف {kind[2:]} زده شد" if kind.startswith("TP") else "استاپ / تریل"
+    _ph, _tm = _post_chart_then_text(
+        chart, text, target, reply_to=reply_id,
+        label=_chart_label(symbol=str(event.get("symbol") or ""),
+                           code=str(event.get("public_code") or ""),
+                           title_fa=_ttl))
+    mid = _tm
     if mid:
         # PROP-1 mirror: the journal channel gets the same ladder — TP1 under
         # Confirmed, TPn under TP(n-1), stops under Confirmed — buttoned back
@@ -3474,12 +3467,15 @@ def send_technoclassic_preview(ev: dict) -> bool:
             if link:
                 markup = {"inline_keyboard": [[{"text": "📚 چارت و توضیحات هشدار اولیه",
                                                 "url": link}]]}
-        mid = (send_photo(chart, short, target, reply_markup=markup) if chart
-               else send_message(short, target, reply_markup=markup))
+        _ph, mid = _post_chart_then_text(
+            chart, short, target, reply_markup=markup,
+            label=_chart_label(symbol=str(getattr(cand, "symbol", "") or ""),
+                               code=code, title_fa="پیام مختصر ستاپ"))
         if mid:
             # PRO anchor == the permanent compact; the first state change
             # posts a REPLACEMENT update above it and replies to this anchor.
-            _sk(ck, {"anchor": int(mid), "edu": int(edu_mid or 0), "update": 0, "upd_n": 0,
+            _sk(ck, {"anchor": int(mid), "anchor_photo": int(_ph or 0),
+                     "edu": int(edu_mid or 0), "update": 0, "upd_n": 0,
                      "ts": now, "last_upd_ts": now, "code": code, "pattern": str(ev.get("pattern")),
                      "state": state, "fade": bool(is_fade)})
             # confirmation messages quote the PRO anchor — updates never move that link
@@ -3528,23 +3524,25 @@ def send_technoclassic_preview(ev: dict) -> bool:
     _under_detail = bool(edu_mid) and bool(_alerts_chat)
     upd_chat = _alerts_chat if _under_detail else str(target)
     reply_to = (int(edu_mid) if _under_detail else (anchor_mid or None)) or None
-    if chart:
-        new_mid = send_photo(chart, caption, upd_chat,
-                             reply_to_message_id=reply_to, reply_markup=markup)
-    else:
-        new_mid = send_message(caption, upd_chat,
-                               reply_to_message_id=reply_to, reply_markup=markup)
+    _ph, new_mid = _post_chart_then_text(
+        chart, caption, upd_chat, reply_to=reply_to, reply_markup=markup,
+        label=_chart_label(symbol=str(getattr(cand, "symbol", "") or ""),
+                           code=code, title_fa="به‌روزرسانی رصد"))
     done = bool(new_mid)
     if done:
         if upd and upd != anchor_mid:
             try:
                 delete_message(str(chain.get("upd_chat") or target), upd)
+                _oph = int(chain.get("update_photo") or 0)
+                if _oph:
+                    delete_message(str(chain.get("upd_chat") or target), _oph)
             except Exception:
                 pass
         upd = int(new_mid)
         _sk(ck, {"anchor": anchor_mid, "update": upd, "edu": edu_mid, "ts": now,
                  "upd_n": upd_n, "upd_chat": upd_chat, "code": code,
                  "upd_bar": _bar, "last_upd_ts": now,
+                 "update_photo": int(_ph or 0),
                  "pattern": str(ev.get("pattern")),
                  "state": state, "fade": bool(is_fade)})
         try:  # keep the anchor→confirmation link state fresh without moving it

@@ -508,15 +508,15 @@ class V7PersistenceTests(unittest.TestCase):
         with (
             patch.object(messages_v7, "generate_chart", return_value=b"chart") as chart_mock,
             patch.object(messages_v7, "send_photo", return_value=True) as photo_mock,
-            patch.object(messages_v7, "send_message") as message_mock,
+            patch.object(messages_v7, "send_message", return_value=True) as message_mock,
         ):
-            # Pro channel is deliberately chart-only: no separator or duplicate
-            # long text message after its executable chart.
+            # 09-16 night transport: chart bubble first, readable text right
+            # behind as its own plain message (never a caption, never split).
             self.assertTrue(messages_v7.send_confirmed(candidate, pd.DataFrame({"x": [1]})))
             self.assertTrue(messages_v7.send_confirmed(candidate, pd.DataFrame({"x": [1]})))
             self.assertEqual(chart_mock.call_count, 1)
             self.assertEqual(photo_mock.call_count, 1)
-            self.assertEqual(message_mock.call_count, 0)
+            self.assertEqual(message_mock.call_count, 1)
             self.assertTrue(candidate.metadata["confirmation_chart_sent"])
             self.assertTrue(candidate.metadata["confirmation_message_sent"])
 
