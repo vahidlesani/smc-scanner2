@@ -682,6 +682,7 @@ def send_photo(
     chat_id: Optional[str] = None,
     reply_to_message_id: Optional[int] = None,
     reply_markup: Optional[dict] = None,
+    caption_limit: int = 1000,
 ) -> Optional[int]:
     target = chat_id or CHAT_ID_ADMIN
     if not TOKEN or not target or not image:
@@ -689,7 +690,10 @@ def send_photo(
     # N1 (audit 09-15): the caption is split, not silently truncated — the
     # overflow really is delivered as reply-linked continuation messages
     # below, so «📎 ادامه در پیام لینک‌شده» is finally a true statement.
-    _head, _tails = _split_caption(caption)
+    # Viva 2026-09-16: callers that must stay ONE message (the compact
+    # anchor) pass caption_limit=1024 — Telegram's hard photo-caption cap —
+    # so no stray «ادامه» message can ever detach from the anchor again.
+    _head, _tails = _split_caption(caption, caption_limit)
     payload = {"chat_id": target, "caption": _head, "parse_mode": "HTML"}
     if reply_to_message_id:
         payload["reply_to_message_id"] = int(reply_to_message_id)
@@ -1894,6 +1898,45 @@ def _store_alert_message_id(candidate: SignalCandidate, key: str, mid: Optional[
 _BIAS_FA = {"BULLISH": "صعودی 🟢", "BEARISH": "نزولی 🔴", "NEUTRAL": "خنثی ⚪"}
 
 
+def _aid_digest_rows(candidate) -> list:
+    """FORMAT-3 digest of the four aid families in at most TWO short Persian
+    bullet rows (session + EMA ladder / fibo + RSI). Viva 2026-09-16: the
+    compact must stay ONE message inside Telegram's 1024 photo-caption cap,
+    so full sentences live in the detailed alert and the compact carries the
+    digest; the same digest rescues over-long numbered updates."""
+    def _short(t: str) -> str:
+        for _d in ("؛", " — ", "، بعد", ". "):
+            t = t.split(_d, 1)[0]
+        return t[:46].rstrip() + ("…" if len(t) > 46 else "")
+
+    md = candidate.metadata or {}
+    dig1, dig2 = [], []
+    ladder, ema_sent = "", []
+    sess = str(md.get("session") or "").strip()
+    if sess:
+        dig1.append("🕐 سشن: " + _SESS_FA.get(sess.upper(), sess))
+    for ln in (md.get("tech_aids") or []):
+        core = ln[2:].strip() if ln.startswith("• ") else ln.strip()
+        if core.startswith("📊 EMA تایم"):
+            ladder = core[2:].strip()
+        elif core.startswith("📊"):
+            ema_sent.append("📊 " + _short(core[2:].strip()))
+        elif core.startswith("🌀"):
+            dig2.append("🌀 " + _short(core[2:].strip()))
+        elif core.startswith("📈"):
+            dig2.append("📈 " + _short(core[2:].strip()))
+    if ladder:
+        dig1.append(ladder)
+    elif ema_sent:
+        dig1.append(ema_sent[0])
+    rows = []
+    if dig1:
+        rows.append("• " + " | ".join(dig1))
+    if dig2:
+        rows.append("• " + " | ".join(dig2))
+    return rows
+
+
 def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[list] = None,
                            score: Optional[int] = None) -> str:
     """Viva 2026-09-11: the ONE-LINE-FAMILY compact alert (نمونه AAVE) — the
@@ -1950,41 +1993,13 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
     # Latin); the FULL analyses with item separators live in the detailed
     # alert. A 1024-char caption physically cannot hold four full sentences
     # plus the core, and the compact must stay ONE message.
-    def _aid_short(t: str) -> str:
-        for _d in ("؛", " — ", "، بعد", ". "):
-            t = t.split(_d, 1)[0]
-        return t[:46].rstrip() + ("…" if len(t) > 46 else "")
-
-    _mdx = candidate.metadata or {}
-    _dig1, _dig2 = [], []
-    _ema_ladder, _ema_sent = "", []
-    _sessx = str(_mdx.get("session") or "").strip()
-    if _sessx:
-        _dig1.append("🕐 سشن: " + _SESS_FA.get(_sessx.upper(), _sessx))
-    for _ln in (_mdx.get("tech_aids") or []):
-        _core = _ln[2:].strip() if _ln.startswith("• ") else _ln.strip()
-        if _core.startswith("📊 EMA تایم"):
-            _ema_ladder = _core[2:].strip()
-        elif _core.startswith("📊"):
-            _ema_sent.append("📊 " + _aid_short(_core[2:].strip()))
-        elif _core.startswith("🌀"):
-            _dig2.append("🌀 " + _aid_short(_core[2:].strip()))
-        elif _core.startswith("📈"):
-            _dig2.append("📈 " + _aid_short(_core[2:].strip()))
-    # ONE EMA row in the compact: the ladder (above/below 21/51/100/200) says
-    # everything in 50 chars; full EMA sentences live in the detailed alert.
-    if _ema_ladder:
-        _dig1.append(_ema_ladder)
-    elif _ema_sent:
-        _dig1.append(_ema_sent[0])
-    if _dig1 or _dig2:
+    _dig = _aid_digest_rows(candidate)
+    if _dig:
         rows += [VIVA_SEP_ITEM, "🧩 <b>تأییدهای کمکی</b>"]
-        if _dig1:
-            rows.append("• " + " | ".join(_dig1))
-        if _dig2:
-            rows.append(VIVA_SEP_ITEM if _dig1 else "")
-            rows = [r for r in rows if r != ""]
-            rows.append("• " + " | ".join(_dig2))
+        for _i, _r in enumerate(_dig):
+            if _i:
+                rows.append(VIVA_SEP_ITEM)
+            rows.append(_r)
     rows += [
         VIVA_SEP,
         "⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود",
@@ -2124,9 +2139,12 @@ def _pro_slot_post(candidate, caption: str, chart=None, markup=None,
     «۶ پیام در ۲۶ ثانیه» on ATOM and are illegal now."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
     if chart:
+        # Viva 2026-09-16 (verbatim): «پیام مختصر باید در یک پیام بیاد نه دو
+        # یا چند پیام» — the main-channel slot never emits a detached
+        # continuation; builders degrade inside the 1024 caption cap.
         mid = send_photo(chart, caption, target,
                          reply_to_message_id=int(reply_to or 0) or None,
-                         reply_markup=markup)
+                         reply_markup=markup, caption_limit=1024)
     else:
         mid = send_message(caption, target,
                            reply_to_message_id=int(reply_to or 0) or None,
@@ -2249,7 +2267,7 @@ def _fa_num(value) -> str:
 
 def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
                           state_fa: str = "🔄 <b>به‌روزرسانی رصد</b>",
-                          upd_n: int = 0) -> str:
+                          upd_n: int = 0, aids_digest: bool = False) -> str:
     """One-line-family live status of a chain. Viva 2026-09-12 (latest-update
     law): every state change is a NEW numbered post — header «🔄 آخرین آپدیت • آپدیت N»
     — so the newest message in the channel is always the newest update; the
@@ -2282,7 +2300,8 @@ def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
         f"• 🤖 <b>نظر AI:</b> {_e(advisory)}",
         _confirm_rule_fa(candidate).replace("⚖️ ", "• ⚖️ "),
     ]
-    rows += _tech_aids_lines(candidate)
+    rows += (_aid_digest_rows(candidate) if aids_digest
+             else _tech_aids_lines(candidate))
     rows += [
         VIVA_SEP,
         f"🆔 <code>{_e(code)}</code>",
@@ -2346,6 +2365,11 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     upd_n = int(chain.get("upd_n") or 0) + 1
     caption = _setup_update_caption(
         candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>", upd_n)
+    if len(caption) > 1024:
+        # one-message law beats full aid sentences: swap to the digest.
+        caption = _setup_update_caption(
+            candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>", upd_n,
+            aids_digest=True)
     link = _telegram_message_link(edu_chat, detail_mid) if detail_mid and edu_chat else ""
     markup = ({"inline_keyboard": [[{"text": "📚 توضیحات کامل هشدار", "url": link}]]}
               if link else None)

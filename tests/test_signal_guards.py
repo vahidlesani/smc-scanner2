@@ -1237,3 +1237,25 @@ def test_compact_caption_single_message_2026_09_15():
     assert len(out) <= 1024, f"compact anchor overflowed: {len(out)} chars"
     assert "🆔" in out and "🔎" in out, "core sections must survive degradation"
     assert "ادامه" not in out, "compact must never carry a continuation footer"
+
+
+def test_slot_never_emits_detached_continuation_2026_09_16():
+    """Viva 2026-09-16 (verbatim): «پیام مختصر باید در یک پیام بیاد نه دو یا
+    چند پیام یا ریپلای یا بدون ریپلای» — the main slot writer posts photos
+    with caption_limit=1024 (Telegram's hard photo-caption cap) so the stray
+    «ادامه» message that detached from the anchor can never reappear; and an
+    over-long numbered update swaps its full aid sentences for the digest
+    before it is allowed to overflow."""
+    import inspect
+    import bot.messages_v7 as mv7
+    assert "caption_limit=1024" in inspect.getsource(mv7._pro_slot_post)
+    from test_v7 import make_candidate
+    cand = make_candidate()
+    cand.metadata.update({"session": "NEW_YORK",
+                          "tech_aids": ["📊 " + "x" * 120, "🌀 " + "y" * 120,
+                                        "📈 " + "z" * 120]})
+    full = mv7._setup_update_caption(cand, note_fa="ن" * 700, upd_n=2)
+    dig = mv7._setup_update_caption(cand, note_fa="ن" * 700, upd_n=2,
+                                    aids_digest=True)
+    assert len(dig) < len(full)
+    assert mv7._split_caption(mv7._compact_alert_caption(cand), 1024)[1] == []
