@@ -552,11 +552,12 @@ def _balance_html_tags(text: str) -> str:
 
 def _split_caption(caption: str, limit: int = 1000) -> Tuple[str, List[str]]:
     """N1 (audit 09-15): _fit_caption used to cut on a line boundary and
-    promise «ادامه در پیام لینک‌شدهٔ همین کد» — but the continuation was
-    NEVER actually sent, so the promise itself was a half-message. Returns
-    (head, tails): head carries the footer when tails exist, and send_photo
-    posts each tail as a reply-linked text message right after the photo."""
-    footer = "\n📎 ادامه در پیام لینک‌شدهٔ همین کد"
+    promise a continuation that was NEVER sent, so the promise itself was a
+    half-message. Returns (head, tails): head carries the footer when tails
+    exist, and send_photo posts the tail as the NEXT plain message right
+    behind — NO reply quote (Viva 2026-09-15: «اصلا دوست ندارم یک پیام بشه
+    ۲ پیام و بهم ریپلای بشه … ادامش پشتش میاد بدون ریپلای اوکیه»)."""
+    footer = "\n📎 ادامهٔ پیام دقیقاً زیرِ همین پیام می‌آید"
     text = (caption or "").strip()
     if len(text) <= limit:
         return text, []
@@ -658,8 +659,10 @@ def send_photo(
     mid = int(result.get("result", {}).get("message_id") or 0) or None
     _audit_send("photo", target, mid)
     if mid and _tails:
+        # Viva 2026-09-15: the continuation comes RIGHT BEHIND as a plain
+        # message — never reply-quoted («بهم ریپلای نشه»).
         try:
-            send_message(_tails[0], target, reply_to_message_id=mid)
+            send_message(_tails[0], target)
         except Exception as _tail_exc:
             print(f"caption continuation failed: {_tail_exc}")
     return mid
@@ -1699,6 +1702,32 @@ def _ai_note(candidate: SignalCandidate) -> str:
             lines.append(f"خط فعال {int(md.get('tl_touches', 0))}+ برخورد قبلی دارد؛ اعتبار ساختاری بالاتر است.")
     elif candidate.setup_code == "P1234":
         lines.append("الگوی ۱-۲-۳-۴ فقط زمانی می‌ارزد که بازار پرانرژی باشد؛ در رنجِ خشک بهترین ترید «ننشستن» است.")
+    elif candidate.setup_code in ("PINWALLQ", "PINVAL", "PINWALL"):
+        # Viva 2026-09-15 («نظر هوش مصنوعی و ... هم بهینه کن»): the pin family
+        # gets its OWN doctrine read — what the pin did, what activates the
+        # scenario, and the quality anatomy when the Q score exists.
+        _q = md.get("pinwall_quality") or {}
+        if _q:
+            lines.append(
+                f"اجزای امتیاز کیفیت: آناتومی {float(_q.get('anatomy') or 0):g}/30، "
+                f"موقعیت {float(_q.get('location') or 0):g}/27، "
+                f"کانتکست {float(_q.get('context') or 0):g}/20، "
+                f"بایاس {float(_q.get('bias') or 0):g}/10.")
+        lines.append("پین‌بار نقدشوندگیِ ناحیه را جارو کرده و بسته‌شدنش نشانهٔ ورودِ پولِ مخالف است؛ "
+                     "اما خودِ پین دستور ورود نیست — اعتبار با اولین کلوزِ معتبر به جهت سناریو است.")
+        lines.append("بازگشت قیمت به میانهٔ بدنهٔ پین، نشانهٔ ضعفِ سناریوی بازگشتی است؛ "
+                     "تا آن لحظه ناحیه زیر نظر می‌ماند.")
+        if md.get("pin_zone_fa"):
+            lines.append(f"محل پین: {str(md['pin_zone_fa'])} — هرچه ناحیه تازه‌تر و لمس‌نشده‌تر، واکنش معتبرتر.")
+    elif candidate.setup_code == "ALBROX":
+        lines.append("اسپایک غیرعادی، بازپس‌گیری جزئی و بیسِ فشردهٔ ۶ تا ۱۰ کندلی با کلوز شکسته شده — "
+                     "دکترین: ادامهٔ حرکت به جهتِ بازپس‌گیری.")
+        lines.append("نقضِ سناریو: بازگشت کلوز به داخلِ بیس؛ تا بیرون ماندنِ کلوز، بریک معتبر است.")
+        if md.get("albrox_pinwall_confirm"):
+            lines.append("پین‌بارِ هم‌جهت هم روی ناحیه ثبت شده — تأییدیهٔ کمکیِ پینوال برای همین سناریو.")
+    elif candidate.setup_code == "TECHCLASSIC":
+        lines.append("الگوی کلاسیک روی لبهٔ ناحیه شکل گرفته — ابطالِ الگو همان سطحِ ابطالِ سناریو است؛ "
+                     "منتظر کلوزِ فراتر از ضلعِ الگو بمان، نه شدوی لحظه‌ای.")
     if candidate.rr_tp1 < 1.3:
         lines.append(f"R:R فعلی ({candidate.rr_tp1:.2f}) زیر کف مهندسی است؛ اگر گیر کرد، بهتر است ناحیه تازه‌تر شود.")
     if not candidate.execution_ready:
@@ -1862,6 +1891,36 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
         "📢 VivaMon Labs Pro",
     ]
     out = "\n".join(rows)
+    # Viva 2026-09-15 (verbatim): «پیام مختصر ... باید در یک پیام باشه» — the
+    # compact anchor is NEVER split into a continuation and NEVER tail-cut.
+    # When it overflows the 1024 media cap, optional parts degrade GRADUALLY
+    # (their full versions all live in the detailed alert): the rule paragraph
+    # shortens first, extra lines drop, then aids drop one-by-one from the
+    # bottom, and only then the context detail drops. The core (badge, symbol,
+    # setup, score, code, zone, invalidation, closing laws) never drops.
+    if len(out) > 1000 and len(_rule) > 125:
+        rows = [(_rule[:120].rstrip() + "…") if r == _rule else r for r in rows]
+        out = "\n".join(rows)
+    if len(out) > 1000 and extra_lines:
+        rows = [r for r in rows if r not in set(extra_lines)]
+        out = "\n".join(rows)
+    if len(out) > 1000:
+        _aid_marks = ("🕐 سشن", "📊", "🌀", "📈")
+
+        def _is_aid(r: str) -> bool:
+            return r.startswith("• ") and any(m in r for m in _aid_marks)
+
+        while len(out) > 1000:
+            _idxs = [i for i, r in enumerate(rows) if _is_aid(r)]
+            if not _idxs:
+                break
+            rows.pop(_idxs[-1])
+            if not any(_is_aid(r) for r in rows):
+                rows = [r for r in rows if not r.startswith("🧩")]
+            out = "\n".join(rows)
+    if len(out) > 1000:
+        rows = [r for r in rows if not r.startswith("• بایاس ساختاری")]
+        out = "\n".join(rows)
     return _fit_caption(out, 995) if len(out) > 1000 else out
 
 
@@ -2794,13 +2853,28 @@ def _event_chart_candidate(event: dict) -> SignalCandidate:
     return cand
 
 
+def _ladder_reply_id(event: dict, kind: str) -> Optional[int]:
+    """Viva ladder law (re-confirmed 2026-09-15, verbatim): «تی پی ها هر کدوم
+    به تی پی قبلی لینک بشه، فقط اولین تی پی به پیام تایید سیگنال لینک میشه،
+    تی پی ۲ به ۱، تی پی ۳ به ۲، ۴ به ۳ و ۵ به ۴، و پیام نتیجه به ۵».
+    TP1 quotes the Confirmed receipt (pro_message_id); every later TP quotes
+    the previous TP receipt (last_tp_message_id). Stop/trailing receipts quote
+    Confirmed (09-14 verbatim). The FINAL result anchors through
+    _final_lifecycle_anchor: WIN → the exact last TP receipt (…→TP5), a
+    stop-exit → its own stop receipt, never anything else."""
+    if kind.startswith("TP"):
+        return (int(event.get("last_tp_message_id") or 0)
+                or int(event.get("pro_message_id") or 0) or None)
+    return int(event.get("pro_message_id") or 0) or None
+
+
 def send_ladder_event(event: dict) -> bool:
     """Detailed live TP/trailing reply in VivaMon."""
     kind = str(event.get("event") or "")
     if kind not in {"TP1", "TP2", "TP3", "TP4", "TP5", "TRAIL_STOP", "STOP"}:
         return False
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
-    reply_id = (int(event.get("last_tp_message_id") or 0) or int(event.get("pro_message_id") or 0) or None) if kind.startswith("TP") else (int(event.get("pro_message_id") or 0) or None)
+    reply_id = _ladder_reply_id(event, kind)
     code = _e(event.get("public_code") or event.get("signal_id"))
     setup = _setup_display(event.get("source") or event.get("strategy_fa"))
     common = (

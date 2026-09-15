@@ -1178,3 +1178,59 @@ def test_aids_banks_state_aware_persian():
     for fam in ab.FIBO_BANK.values():
         for line in fam:
             assert len(line) > 40
+
+
+def test_tp_ladder_reply_chain_2026_09_15():
+    """Viva 2026-09-15 (verbatim ladder): «تی پی ها هر کدوم به تی پی قبلی
+    لینک بشه، فقط اولین تی پی به پیام تایید سیگنال، تی پی ۲ به ۱، ۳ به ۲،
+    ۴ به ۳، ۵ به ۴ و پیام نتیجه به ۵». Stop receipts quote Confirmed
+    (09-14 verbatim); the final result anchors to the exact last receipt."""
+    import bot.messages_v7 as M
+    from bot.messages_v7 import _ladder_reply_id, _final_lifecycle_anchor
+    # TP1 quotes the Confirmed receipt (no previous TP exists yet)
+    assert _ladder_reply_id({"pro_message_id": 111}, "TP1") == 111
+    # each later TP quotes the PREVIOUS TP receipt
+    assert _ladder_reply_id({"last_tp_message_id": 222, "pro_message_id": 111}, "TP2") == 222
+    assert _ladder_reply_id({"last_tp_message_id": 333, "pro_message_id": 111}, "TP3") == 333
+    assert _ladder_reply_id({"last_tp_message_id": 444, "pro_message_id": 111}, "TP4") == 444
+    assert _ladder_reply_id({"last_tp_message_id": 555, "pro_message_id": 111}, "TP5") == 555
+    # stop / trailing-stop receipts quote Confirmed
+    assert _ladder_reply_id({"last_tp_message_id": 444, "pro_message_id": 111}, "STOP") == 111
+    assert _ladder_reply_id({"last_tp_message_id": 444, "pro_message_id": 111}, "TRAIL_STOP") == 111
+    # final result: WIN → the exact last TP receipt (…→ TP5); stop-exit → stop receipt
+    _mids = {"TP5": 555, "TP2": 222, "TRAIL_STOP": 999, "STOP": 998, "CONFIRMED": 111}
+    orig = M._exact_event_message_id
+    M._exact_event_message_id = lambda sid, key, fb=0: int(_mids.get(key, fb) or 0)
+    try:
+        assert _final_lifecycle_anchor({"signal_id": "viva-x", "result": "WIN", "hit_index": 5}) == 555
+        assert _final_lifecycle_anchor({"signal_id": "viva-x", "result": "WIN", "hit_index": 2}) == 222
+        assert _final_lifecycle_anchor({"signal_id": "viva-x", "result": "LOSS", "hit_index": 0}) == 999
+    finally:
+        M._exact_event_message_id = orig
+    # a position that never printed a stop falls back to Confirmed
+    M._exact_event_message_id = lambda sid, key, fb=0: int(({"CONFIRMED": 111}).get(key, fb) or 0)
+    try:
+        assert _final_lifecycle_anchor({"signal_id": "viva-x", "result": "LOSS", "hit_index": 0}) == 111
+    finally:
+        M._exact_event_message_id = orig
+
+
+def test_compact_caption_single_message_2026_09_15():
+    """Viva 2026-09-15: «این پیام هشدار اولیه ... باید در یک پیام باشه» —
+    the compact anchor degrades (drops aids/extras, shortens the rule) rather
+    than overflowing the 1024 media cap; it never promises a continuation."""
+    from test_v7 import make_candidate
+    from bot.messages_v7 import _compact_alert_caption
+    cand = make_candidate()
+    cand.setup_code = "PINWALLQ"
+    cand.strategy_fa = "PINWALL Quality | کیفیت، موقعیت و کامپرشن"
+    cand.metadata.update({
+        "session": "LONDON_NY_OVERLAP",
+        "tech_aids": ["📊 " + "x" * 200, "📊 " + "y" * 200, "🌀 " + "z" * 200,
+                      "📈 " + "w" * 200, "🕐 سشن آخرین کندل: " + "s" * 100],
+    })
+    extra = ["• خط اضافی " + "e" * 150, "• خط اضافی " + "f" * 150]
+    out = _compact_alert_caption(cand, extra_lines=extra)
+    assert len(out) <= 1024, f"compact anchor overflowed: {len(out)} chars"
+    assert "🆔" in out and "🔎" in out, "core sections must survive degradation"
+    assert "ادامه" not in out, "compact must never carry a continuation footer"

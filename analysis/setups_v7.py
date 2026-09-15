@@ -300,7 +300,8 @@ def enrich_candidate_context(bundle: MarketBundle, candidate: SignalCandidate) -
                         _m = "NEAR"
                     else:
                         _m = "ABOVE" if _live >= _v else "BELOW"
-                    _aids.append("📊 " + ema_note(n, _d, _m, candidate.symbol, _tfname, _bts))
+                    _aids.append("📊 " + ema_note(n, _d, _m, candidate.symbol, _tfname, _bts,
+                                                  direction=candidate.direction))
                 _aids.append("📊 EMA تایم الگو → " + " • ".join(
                     ("بالای" if _live >= float(_ema[n].iloc[-1]) else "زیرِ") + f" {n}"
                     for n in (21, 51, 100, 200)))
@@ -330,7 +331,8 @@ def enrich_candidate_context(bundle: MarketBundle, candidate: SignalCandidate) -
                     _rm = ("OB" if _rv >= 70 else "OS" if _rv <= 30
                            else "CROSS_UP" if _rp < 50 <= _rv
                            else "CROSS_DOWN" if _rp > 50 >= _rv else "NEUTRAL")
-                    _aids.append("📈 " + rsi_note(_rv, _avg, _rm, candidate.symbol, _tfname, _bts))
+                    _aids.append("📈 " + rsi_note(_rv, _avg, _rm, candidate.symbol, _tfname, _bts,
+                                                  direction=candidate.direction))
                 except Exception:
                     pass
                 if md.get("div_fa"):

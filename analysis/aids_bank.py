@@ -67,9 +67,9 @@ RSI_BANK = [
     "RSI در قلمرو بیش‌خرید ({v}) — ادامه با سوختِ کمتر؛ اصلاح محتمل است.",
     "RSI در قلمرو اشباعِ فروش ({v})؛ این عدد به‌خودی‌خود کف نیست، نشانهٔ بازگشت لازم است.",
     "واگرایی منفی: قیمت سقفِ جدید زد اما RSI نه — نشانهٔ خستگیِ روندِ صعودی.",
-    "واگرایی مثبت: قیمت کفِ جدید ساخت ولی RSI کفِ قبلی را بشکست — خریداران در کمین‌اند.",
-    "RSI سقفِ قبلی‌اش را با مومنتوم قوی‌تر زد؛ تأییدِ هم‌جهتِ روند.",
-    "تقاطعِ RSI با خطِ ۳۰ از پایین = تریگرِ کلاسیکِ بازگشت؛ هنوز وقوع نچیده.",
+        "واگرایی مثبت: قیمت کفِ جدید ساخت ولی RSI کفِ قبلیِ خود را نشکست — خریداران در کمین‌اند.",
+        "RSI سقفِ قبلی‌اش را با مومنتوم قوی‌تر زد؛ تأییدِ هم‌جهتِ روند.",
+        "تقاطعِ RSI با خطِ ۳۰ از پایین به بالا = تریگرِ کلاسیکِ خروج از اشباعِ فروش؛ با کلوزِ دومِ متوالی اعتبار می‌گیرد.",
     "تقاطعِ RSI با خطِ ۷۰ از بالا = تریگرِ اشباع؛ مراقبِ دو کلوزِ متوالی باشید.",
     "RSI روی قفلِ {v} می‌لغزد؛ بازار بینِ دو موج نفس می‌کشد.",
     "میانگینِ RSI ده کندل اخیر {avg} است؛ جهتِ خنثیِ فعلی با شکستِ همین میانگین می‌شکند.",
@@ -96,6 +96,21 @@ def _seed_index(*parts, mod: int) -> int:
     return int(hashlib.md5(raw).hexdigest(), 16) % max(1, mod)
 
 
+def _disambiguate(txt: str, direction: str) -> str:
+    """Viva 2026-09-15 («توضیحاتی که کمک بکنه»): an aid line must speak with
+    the scenario's own voice — slash-pairs like «خریداران/فروشندگان» or
+    «حمایت/مقاومت» resolve to the side the candidate direction cares about,
+    so the helper text reads as an explanation, not a template."""
+    d = str(direction or "").upper()
+    if d in ("LONG", "BULLISH", "BUY", "بالا"):
+        return (txt.replace("خریداران/فروشندگان", "خریداران")
+                   .replace("حمایت/مقاومت", "حمایت"))
+    if d in ("SHORT", "BEARISH", "SELL", "پایین"):
+        return (txt.replace("خریداران/فروشندگان", "فروشندگان")
+                   .replace("حمایت/مقاومت", "مقاومت"))
+    return txt
+
+
 def fibo_note(level_pct: float, distance_pct: float, mode: str,
               direction: str, next_lv: float, symbol: str, tf: str, bar_key: str) -> str:
     key = {"ON": "on_level", "RETEST": "retest", "BREAK": "break", "EXT": "extension"}.get(
@@ -103,7 +118,8 @@ def fibo_note(level_pct: float, distance_pct: float, mode: str,
     bank = FIBO_BANK[key]
     lv = f"{level_pct:g}"
     txt = bank[_seed_index(symbol, tf, bar_key, key, mod=len(bank))]
-    return txt.format(lv=lv, dist=distance_pct, dir=direction, next_lv=f"{next_lv:g}")
+    return _disambiguate(txt.format(lv=lv, dist=distance_pct, dir=direction,
+                                    next_lv=f"{next_lv:g}"), direction)
 
 
 _EMA_MODES = {
@@ -117,7 +133,8 @@ _RSI_MODES = {
 
 
 def ema_note(level: int, dist_pct: float, mode: str, symbol: str, tf: str,
-             bar_key: str, raw_idx: Optional[int] = None) -> str:
+             bar_key: str, raw_idx: Optional[int] = None,
+             direction: str = "") -> str:
     """One self-descriptive EMA sentence.  The mode selects which bank lines
     may speak (state-aware), the seed rotates phrasing inside that subset."""
     if raw_idx is not None:
@@ -126,18 +143,21 @@ def ema_note(level: int, dist_pct: float, mode: str, symbol: str, tf: str,
         subset = _EMA_MODES.get(str(mode).upper(), [4, 5])
         txt = EMA_BANK[subset[_seed_index(symbol, tf, bar_key, level, mode,
                                           mod=len(subset))]]
-    return txt.format(lv=level, dist=f"{abs(dist_pct):.2f}")
+    return _disambiguate(txt.format(lv=level, dist=f"{abs(dist_pct):.2f}"),
+                         direction)
 
 
 def rsi_note(value: float, avg10: float, mode: str, symbol: str, tf: str,
-             bar_key: str, raw_idx: Optional[int] = None) -> str:
+             bar_key: str, raw_idx: Optional[int] = None,
+             direction: str = "") -> str:
     if raw_idx is not None:
         txt = RSI_BANK[int(raw_idx) % len(RSI_BANK)]
     else:
         subset = _RSI_MODES.get(str(mode).upper(), _RSI_MODES["NEUTRAL"])
         txt = RSI_BANK[subset[_seed_index(symbol, tf, bar_key, "rsi", mode,
                                           mod=len(subset))]]
-    return txt.format(v=f"{value:.0f}", avg=f"{avg10:.0f}")
+    return _disambiguate(txt.format(v=f"{value:.0f}", avg=f"{avg10:.0f}"),
+                         direction)
 
 
 def session_note(name: str) -> str:
