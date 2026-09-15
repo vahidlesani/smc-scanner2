@@ -862,6 +862,13 @@ def _base_candidate(
                               float(poi["top"]), atr_value)
     if _zt:
         _cand.metadata["zone_trigger"] = _zt
+    # CHART-8 (Viva 09-16): every setup stores detect→render commands so ALL
+    # setups paint their zones/patterns, plus HTF zones for context awareness.
+    try:
+        from analysis.render_kit import enrich_render
+        enrich_render(_cand, trigger_df, htf_df=context_df)
+    except Exception as exc:
+        print(f"render kit warning {setup_code}: {exc}")
     return _cand
 
 

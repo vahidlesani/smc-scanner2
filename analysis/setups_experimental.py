@@ -984,6 +984,11 @@ def detect_pinwall_quality(bundle: MarketBundle, style: str) -> Optional[SignalC
             f"امتیاز کل کیفیت: {score:g} — آستانهٔ پذیرش: {float(getattr(settings,'pinwall_quality_min_score',78.0)):g}.",
             _v>=0.6*_comp_max[_k],2,timeframe=base.trigger_timeframe))
     candidate.evidence=_q_ev+list(candidate.evidence or [])
+    try:
+        from analysis.render_kit import enrich_render
+        enrich_render(candidate, df, htf_df=bundle.get("4h") or bundle.get("1h"))
+    except Exception:
+        pass
     return candidate
 
 

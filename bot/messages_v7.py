@@ -108,6 +108,46 @@ _CHART_PRESETS = {
 }
 _STYLE_NAME = (os.getenv("CHART_STYLE", "light") or "light").lower()
 _BASE = _CHART_PRESETS["dark" if _STYLE_NAME == "dark" else "light"]
+# CHART-8 (Viva 09-16, verbatim palette): «فلگ لیمیت و فیلیپ زون به ترتیب زرد
+# لیمویی و نارنجی روشن برای نزولی؛ سبز فسفری روشن و آبی روشن برای صعودی؛
+# اوردرابلاک نزولی قرمز کمرنگ مایل به صورتی، صعودی سبز چمنی روشن؛ بقیهٔ
+# نواحی عرضه قرمز کمرنگ و تقاضا سبز کمرنگ» — very faint fills, NO border,
+# Persian names printed in the candle-free margin, never over the candles.
+ZONE_KIND_FA = {
+    "FVG": "FVG", "ORDER_BLOCK": "اوردرابلاک",
+    "OB + FVG CONFLUENCE": "اوردرابلاک + FVG",
+    "INVERSE FVG / BREAKER": "IFVG / بریکر",
+    "SUPPLY/DEMAND FLIP": "فیلیپ‌زون", "P1234 POINT-2 FLIP": "فیلیپ‌زون",
+    "BROKEN TRENDLINE": "BOS / بریک‌رتست",
+    "TRENDLINE BREAK WATCH (LINE ZONE)": "BOS / بریک‌رتست",
+    "INTRA-BREAK BASE": "بیس داخلی شکست",
+    "PINVAL": "ناحیهٔ پین‌بار", "ALBROX SPIKE RECLAIM BASE": "بیس البروکس",
+}
+ZONE_PALETTE = {
+    ("FLAG", "SHORT"): ("#D4E157", "#827717"),   # زرد لیمویی
+    ("FLAG", "LONG"): ("#B9F6CA", "#1B5E20"),    # سبز فسفری روشن
+    ("FLIP", "SHORT"): ("#FFCC80", "#E65100"),   # نارنجی روشن
+    ("FLIP", "LONG"): ("#81D4FA", "#01579B"),    # آبی روشن
+    ("OB", "SHORT"): ("#F3C1C6", "#880E4F"),     # قرمز کمرنگ مایل به صورتی
+    ("OB", "LONG"): ("#AED581", "#33691E"),      # سبز چمنی روشن
+    ("SR", "SUPPLY"): ("#E8A9A9", "#B71C1C"),    # قرمز کمرنگ
+    ("SR", "DEMAND"): ("#A9CDB0", "#1B5E20"),    # سبز کمرنگ
+    ("DEF", "SHORT"): ("#E8A9A9", "#B71C1C"),
+    ("DEF", "LONG"): ("#A9CDB0", "#1B5E20"),
+}
+
+
+def _zone_family(poi: str) -> str:
+    p = str(poi or "").upper()
+    if "FLAG" in p or "LIMIT" in p or "DIAMOND" in p:
+        return "FLAG"
+    if "FLIP" in p:
+        return "FLIP"
+    if "ORDER_BLOCK" in p or p.startswith("OB"):
+        return "OB"
+    return "DEF"
+
+
 CHART_THEME = {
     key: os.getenv(f"CHART_{key.upper()}_COLOR", default)
     for key, default in _BASE.items()
@@ -1100,31 +1140,112 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
 
         zone_start = max(0, count - 55)
         zone_end = count + future - 0.5  # box extends into the candle-free margin
-        zone_color = CHART_THEME["demand"] if candidate.direction == "LONG" else CHART_THEME["supply"]
-        zone_text_color = CHART_THEME["demand_text"] if candidate.direction == "LONG" else CHART_THEME["supply_text"]
-        zone_name = "DEMAND ZONE  ·  POI / ENTRY" if candidate.direction == "LONG" else "SUPPLY ZONE  ·  POI / ENTRY"
+        _dir_key = "LONG" if candidate.direction == "LONG" else "SHORT"
+        _poi = str((candidate.metadata or {}).get("poi_type") or "").upper()
+        _fam = _zone_family(_poi)
+        _fill, _ztxt = ZONE_PALETTE.get((_fam, _dir_key),
+                                        ZONE_PALETTE[("DEF", _dir_key)])
+        zone_color, zone_text_color = _fill, _ztxt
+        _POI_TOKEN = {"ORDER_BLOCK": "OB", "FVG": "FVG",
+                      "OB + FVG CONFLUENCE": "OB + FVG",
+                      "INVERSE FVG / BREAKER": "IFVG",
+                      "SUPPLY/DEMAND FLIP": "FLIP ZONE",
+                      "P1234 POINT-2 FLIP": "FLIP ZONE",
+                      "BROKEN TRENDLINE": "BOS",
+                      "TRENDLINE BREAK WATCH (LINE ZONE)": "BOS",
+                      "PINVAL": "PIN BASE",
+                      "ALBROX SPIKE RECLAIM BASE": "OB"}
+        zone_name = (f"{_POI_TOKEN.get(_poi, 'DEMAND' if _dir_key == 'LONG'
+                                       else 'SUPPLY')}  ·  POI / ENTRY")
         ax.fill_between(
             [zone_start, zone_end],
             candidate.entry_zone_bottom,
             candidate.entry_zone_top,
             color=zone_color,
-            alpha=0.32,
+            alpha=0.26,
             zorder=1,
             linewidth=0,
         )
-        ax.text(
-            count + 2.0,  # in the wide right margin, never over the candles
-            (candidate.entry_zone_bottom + candidate.entry_zone_top) / 2,
-            zone_name,
-            color=zone_text_color,
-            fontsize=7,
-            va="center",
-            ha="left",
-            fontweight="bold",
-            zorder=12,
-            bbox={"boxstyle": "round,pad=0.26", "facecolor": CHART_THEME["panel"],
-                  "edgecolor": "none", "alpha": 0.82},
-        )
+        # CHART-8: every zone name is printed in the candle-free right margin
+        # (stacked, collision-shifted) — never over candles or prices.
+        _zone_labels = [(candidate.entry_zone_top + 0.05 *
+                         (candidate.entry_zone_top - candidate.entry_zone_bottom),
+                         zone_name, zone_text_color)]
+        # CHART-8 unified kit: every setup stores detect→render commands in
+        # metadata; the renderer obeys them (fallback: detect on this frame).
+        _rz = (candidate.metadata or {}).get("render_zones")
+        if _rz is None:
+            try:
+                from analysis.render_kit import detect_zones as _dz8
+                _rz = _dz8(frame.reset_index(drop=True), candidate.direction,
+                           float(candidate.entry_zone_bottom),
+                           float(candidate.entry_zone_top))
+            except Exception:
+                _rz = []
+        for _z in (_rz or [])[:6]:
+            _x0 = max(zone_start, int(_z.get("x0", zone_start)) - 2)
+            _bias8 = _z.get("bias") or ("DEMAND" if _dir_key == "LONG" else "SUPPLY")
+            _f8, _t8 = ZONE_PALETTE[("SR", _bias8 if _bias8 in ("SUPPLY", "DEMAND")
+                                     else ("DEMAND" if _dir_key == "LONG" else "SUPPLY"))]
+            _fam8 = _zone_family(_z.get("kind", ""))
+            if (_fam8, _dir_key) in ZONE_PALETTE and _fam8 != "DEF":
+                _f8, _t8 = ZONE_PALETTE[(_fam8, _dir_key)]
+            ax.fill_between([_x0, zone_end], float(_z["bottom"]),
+                            float(_z["top"]), color=_f8, alpha=0.13,
+                            linewidth=0, zorder=1)
+            _zone_labels.append((float(_z["top"]), str(_z.get("kind") or ""),
+                                 _t8))
+        # collision-shift the name chips so they never pile up
+        _zone_labels.sort(key=lambda _it: -_it[0])
+        _yr9 = max(float(frame["high"].max()) - float(frame["low"].min()), 1e-9)
+        _gap9 = 0.035 * _yr9
+        _prev9 = None
+        _fixed9 = []
+        for _y9, _t9, _c9 in _zone_labels:
+            if _prev9 is not None and _prev9 - _y9 < _gap9:
+                _y9 = _prev9 - _gap9
+            _prev9 = _y9
+            _fixed9.append((_y9, _t9, _c9))
+        for _ytop, _txt, _col in _fixed9:
+            ax.text(zone_start + 1.5, _ytop, _txt, color=_col,
+                    fontsize=7, va="bottom", ha="left", fontweight="bold",
+                    zorder=12,
+                    bbox={"boxstyle": "round,pad=0.26",
+                          "facecolor": CHART_THEME["panel"],
+                          "edgecolor": "none", "alpha": 0.78})
+        # pattern render commands: wedge / triangle / channel / flag / range
+        for _pat in ((candidate.metadata or {}).get("render_patterns") or []):
+            if _pat.get("type") == "RANGE":
+                ax.fill_between([zone_start, zone_end], float(_pat["lo"]),
+                                float(_pat["hi"]), color=CHART_THEME["muted"],
+                                alpha=0.07, linewidth=0, zorder=1)
+                ax.text(zone_start + 1.5, float(_pat["hi"]), "RANGE",
+                        color=CHART_THEME["muted"], fontsize=7, va="bottom",
+                        ha="left", fontweight="bold", zorder=12,
+                        bbox={"boxstyle": "round,pad=0.26",
+                              "facecolor": CHART_THEME["panel"],
+                              "edgecolor": "none", "alpha": 0.78})
+                continue
+            _lns = _pat.get("lines") or []
+            for _ln in _lns:
+                _sl, _ic = float(_ln["slope"]), float(_ln["intercept"])
+                _xa = max(0.0, float(_ln.get("x0", 0)))
+                _xb = min(count + future - 0.5, float(_ln.get("x1", count)) + 6)
+                _col8 = (CHART_THEME["demand"] if _sl > 0
+                         else CHART_THEME["invalidation"])
+                ax.plot([_xa, _xb], [_sl * _xa + _ic, _sl * _xb + _ic],
+                        color=_col8, linewidth=1.5, alpha=0.85, zorder=7,
+                        solid_capstyle="round")
+            if _lns:
+                _l0 = _lns[0]
+                ax.text(count + 1.0,
+                        float(_l0["slope"]) * count + float(_l0["intercept"]),
+                        str(_pat.get("type")), color=CHART_THEME["text"],
+                        fontsize=7, va="center", ha="left", fontweight="bold",
+                        zorder=12,
+                        bbox={"boxstyle": "round,pad=0.26",
+                              "facecolor": CHART_THEME["panel"],
+                              "edgecolor": "none", "alpha": 0.78})
 
         # TLBREAK: draw the dynamic channel/trendline + parallel bound with
         # thin solid lines (Viva's chart style) using pivot timestamps.
@@ -1284,8 +1405,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _groups.append([float(level), [(label, float(level), color)]])
             for y_mid, items in _groups:
                 for label, level, color in items:
-                    _dash = ((0, (2, 2)) if label.startswith("TRAILING")
-                             else "-" if label == "ENTRY" else (0, (5, 3)))
+                    # Viva 09-16: solid guide lines read cleaner than dashes;
+                    # only the trailing stop keeps its own tight dash.
+                    _dash = (0, (2, 2)) if label.startswith("TRAILING") else "-"
                     ax.hlines(level, tool_start, tool_end, color=color,
                               linewidth=1.25 if label.startswith("TRAILING") else 1.15,
                               linestyles=_dash,
