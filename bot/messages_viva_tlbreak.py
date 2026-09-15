@@ -19,6 +19,13 @@ def detailed_warning_fa(metadata: dict, direction: str) -> str:
     touches = metadata.get("tl_touches") or metadata.get("viva_touch_count") or "—"
     fit = _f(metadata.get("tl_fit_error_atr") or metadata.get("viva_fit_error_atr"))
     stage = str(metadata.get("viva_state") or metadata.get("tl_stage") or "WATCH")
+    # Viva 2026-09-16: «هیچ کلمه انگلیسی نیاد» — stage codes speak Persian.
+    stage = {
+        "WATCH": "رصد", "PRE_BREAK": "پیش از شکست",
+        "S1_APPROACH": "نزدیک‌شدن به خط", "S2_BREAKOUT_CLOSED": "شکست با کلوز ثبت شد",
+        "BREAKOUT_CLOSED": "شکست با کلوز ثبت شد", "S3_RETEST": "ری‌تست",
+        "RETEST": "ری‌تست", "BASE": "بیس ساخته شد", "CONFIRMED": "تأیید شد",
+    }.get(stage, stage)
     line = _f(metadata.get("tl_line") or metadata.get("viva_break_line"), 6)
     base = str(metadata.get("tl_base_kind") or metadata.get("viva_base_kind") or "در انتظار بیس/ری‌تست")
     counter = bool(metadata.get("viva_counter_trend") or metadata.get("tl_context_conflict"))
@@ -39,23 +46,25 @@ def ai_advisory_fa(metadata: dict, direction: str) -> str:
     counter = bool(metadata.get("viva_counter_trend") or metadata.get("tl_context_conflict"))
     extension = _f(metadata.get("viva_extension_atr"))
     if counter:
-        action = "چون شکست برگشتی است، بدون Pin/Engulf در ری‌تست و BOS پنج‌دقیقه‌ای هیچ ورود اجرایی نداریم."
+        action = "چون شکست برگشتی است، بدون پین/انگالف در ری‌تست و BOS پنج‌دقیقه‌ای هیچ ورود اجرایی نداریم."
     else:
-        action = "اگر ری‌تست به بیس برگشت و BOS پنج‌دقیقه‌ای بسته شد، chase نکن و فقط همان ساختار را دنبال کن."
+        action = "اگر ری‌تست به بیس برگشت و BOS پنج‌دقیقه‌ای بسته شد، قیمت را تعقیب نکن و فقط همان ساختار را دنبال کن."
     return (
         "🤖 <b>مشاوره AI | فقط مشورتی</b>\n"
-        f"• فاصله فعلی از breakout ≈ {extension} ATR\n"
+        f"• فاصله فعلی از نقطهٔ شکست ≈ {extension} ATR\n"
         f"• {action}\n"
-        "• AI اجازه تغییر Stop، Target یا تأیید مستقل را ندارد."
+        "• هوش مصنوعی اجازه تغییر استاپ، هدف یا تأیید مستقل را ندارد."
     )
 
 
 def management_fa(entry: float, first_stop: float, final_target: float, direction: str,
                   title: str = "VIVA-TLBREAK") -> str:
+    # Viva 2026-09-16 (his corrected paste, verbatim labels): Entry→ورود،
+    # First Stop→استاپ ابتدایی، Target→هدف؛ no Latin words in messages.
     return (
         f"💼 <b>مدیریت معامله {title}</b>\n"
-        f"• Entry مرجع: <code>{_f(entry, 6)}</code>\n"
-        f"• First Stop ساختاری: <code>{_f(first_stop, 6)}</code>\n"
-        f"• Target نهایی الگو: <code>{_f(final_target, 6)}</code>\n"
-        "• خروج‌ها در پنج پله مدیریت می‌شوند؛ بعد هر TP، Stop فقط در جهت سود جابه‌جا می‌شود."
+        f"• ورود مرجع: <code>{_f(entry, 6)}</code>\n"
+        f"• استاپ ابتدایی ساختاری: <code>{_f(first_stop, 6)}</code>\n"
+        f"• هدف نهایی الگو: <code>{_f(final_target, 6)}</code>\n"
+        "• خروج‌ها در پنج پله مدیریت می‌شوند؛ بعد هر تارگت، استاپ‌ها فقط در جهت سود جابه‌جا می‌شود."
     )

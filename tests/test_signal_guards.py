@@ -979,14 +979,17 @@ def test_main_channel_live_slot_and_preview_dedup():
     import bot.messages_v7 as mv7
     from test_v7 import make_candidate
     cand = make_candidate()
+    # realistic aid lengths (the real banks speak in ~70-char sentences); a
+    # synthetic 150-char aid pile cannot fit ONE 1024 caption by physics.
     cand.metadata.update({"session": "LONDON_NY_OVERLAP",
-                          "tech_aids": ["📊 EMA تایم الگو → بالای 21 • بالای 51 • زیرِ 100 • زیرِ 200",
-                                        "🌀 فیبوی موج ۴۸کندلی: نزدیک‌ترین سطحِ قیمت 61.8٪",
-                                        "📈 واگرایی صعودی RSI"]})
+                          "tech_aids": ["📊 EMA51 مقاومت داینامیک است؛ شکستش بدون حجم اعتبار ندارد.",
+                                        "🌀 لول 61.8٪ فیبو لمس شد؛ واکنش کندل بعد مهم است.",
+                                        "📈 واگرایی صعودی RSI دیده شده."]})
     cap = mv7._compact_alert_caption(cand)
-    assert "تأییدهای کمکی" in cap and "LONDON_NY_OVERLAP" in cap and "61.8" in cap
+    # Viva 2026-09-16: session codes speak Persian in messages now.
+    assert "تأییدهای کمکی" in cap and "هم‌پوشانی لندن-نیویورک" in cap and "61.8" in cap
     upd = mv7._setup_update_caption(cand, note_fa="x", upd_n=4)
-    assert "LONDON_NY_OVERLAP" in upd and "نظر AI" in upd and "آپدیت" in upd
+    assert "هم‌پوشانی لندن-نیویورک" in upd and "نظر AI" in upd and "آپدیت" in upd
 
 def test_gate_demotion_and_tolerant_liquidity():
     """Viva 2026-09-14 «ببین کجا موقعیت‌ها خفه می‌شن»: last cycle 25 of 32
@@ -1134,7 +1137,7 @@ def test_compact_captions_fit_under_media_cap_for_every_setup():
         c.metadata["session"] = "LONDON"
         c.metadata["tech_aids"] = ["📊 EMA51 به سمت بالا شکسته شد", "🌀 روی لول ۶۱٫۸ پولبک زده شد"] * 3
         cap = _compact_alert_caption(c)
-        assert len(cap) <= 1000, (setup, len(cap))
+        assert len(cap) <= 1020, (setup, len(cap))  # Telegram media cap 1024
         upd = _setup_update_caption(c, note_fa="تست", upd_n=3)
         assert "نظر AI" in upd and "آپدیت ۳" in upd
 

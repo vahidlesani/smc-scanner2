@@ -22,6 +22,7 @@ import pandas as pd
 
 from analysis.indicators import adx, atr, structure_bias
 from analysis.models import EvidenceItem, SignalCandidate, generate_viva_public_code
+from analysis.pattern_engine import PATTERN_FA as _PATTERN_FA
 from config import get_settings
 from analysis.setups_v7 import (
     SETUP_NAMES,
@@ -406,7 +407,10 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             "viva_stop_anchor": plan.stop_anchor, "viva_measured_target": plan.measured_target,
             "viva_final_target": final_target,
             "viva_structural_target": plan.structural_target, "viva_state": "S2_BREAKOUT_CLOSED",
-            "tl_context_tf": refine_tf, "tl_pattern": pattern, "tl_pattern_fa": pattern,
+            "tl_context_tf": refine_tf, "tl_pattern": pattern,
+            # Viva 2026-09-16: pattern names speak Persian in messages
+            # («HORIZONTAL_SR در تایم ۱ ساعته...» scrambles the RTL line).
+            "tl_pattern_fa": _PATTERN_FA.get(pattern, pattern),
             "tl_line": breakout.line_price, "tl_touches": line.touch_count,
             "viva_upper_points": [dict(p) for p in (upper.points if upper else ())],
             "viva_lower_points": [dict(p) for p in (lower.points if lower else ())],
@@ -888,6 +892,15 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                 "هر دو هدف پیوتِ واقعیِ سمت مقابل در تایم کانتکست هستند، نه ضریب R ثابت.",
                 rr1 >= float(getattr(settings, "pinv_rr1_floor", 1.30)), 1),
         ]
+        # FORMAT-3: the pin IS the active sign on the zone — carry its
+        # two-line analysis like every other setup's zone_trigger.
+        candidate.metadata["zone_trigger"] = {
+            "title_fa": f"پین‌بار {'صعودی' if is_bull else 'نزولی'} روی ناحیه",
+            "lines": [
+                f"شدوی {_wick / max(rng, 1e-12):.0%} دامنه نقدینگیِ ناحیه را جارو کرد و کلوز به سمت مقابل برگشت — امضای کلاسیک بازگشت.",
+                "نشانه تا شکسته‌شدن نوک شدو با کلوز معتبر حفظ می‌شود؛ کلوز در جهت سناریو آن را فعال می‌کند.",
+            ],
+        }
         # Base gates prove the pin sits in a real zone with executable targets.
         candidate.mandatory_gates = {"pin_zone": True, "structural_targets": True, "risk_reward": True}
         if polarity_on and polarity is not None:

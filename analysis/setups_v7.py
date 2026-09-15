@@ -764,7 +764,8 @@ def _base_candidate(
         )
 
     last_session = session_name(trigger_df["timestamp"].iloc[-1])
-    confirmations.append(f"سشن آخرین کندل بسته‌شده: {last_session}")
+    # Viva 2026-09-16: the session line lives in the 🧩 aids (with its 🕐 and
+    # Persian name) — repeating it in confirmations printed it TWICE.
 
     # Score ranks quality; gates decide eligibility. They intentionally are
     # not the same mechanism, otherwise every eligible signal becomes a 10/10.
@@ -801,7 +802,7 @@ def _base_candidate(
     expires = utc_now() + timedelta(hours=expiry_hours)
     signal_id = generate_viva_signal_id(bundle.symbol, style, setup_code)
     public_code = generate_viva_public_code(setup_code, style)
-    return SignalCandidate(
+    _cand = SignalCandidate(
         signal_id=signal_id,
         symbol=bundle.symbol,
         style=style,
@@ -827,9 +828,9 @@ def _base_candidate(
             "این تحلیل تا بسته‌شدن کندلِ تأییدیِ معتبر، دستور ورود نیست.",
             f"لمس/عبور معتبر قیمت از {_fmt(sl)} سناریوی تحلیلی را باطل می‌کند.",
             (
-                "در Swing این قیمت مرز ابطال تحلیل است؛ محل سفارش Stop و مدیریت خروج باید توسط خود معامله‌گر تعیین شود."
+                "در Swing این قیمت مرز ابطال تحلیل است؛ محل سفارش استاپ و مدیریت خروج باید توسط خود معامله‌گر تعیین شود."
                 if style == "SWING"
-                else "Stop و اندازه پوزیشن پیشنهادی‌اند و باید با مدیریت شخصی معامله‌گر تطبیق داده شوند."
+                else "استاپ و اندازه پوزیشن پیشنهادی‌اند و باید با مدیریت شخصی معامله‌گر تطبیق داده شوند."
             ),
         ],
         mandatory_gates=gates,
@@ -853,6 +854,60 @@ def _base_candidate(
         },
         expires_at=expires.isoformat(timespec="seconds"),
     )
+    # FORMAT-3 (Viva 09-16): «مهم‌ترین نشانهٔ داخلی روی ناحیه + تحلیل دوخطی» —
+    # whichever of engulfing/pin/doji/compression actually formed near the
+    # zone travels with the candidate, so every detailed message analyzes it
+    # in the setup's own voice.
+    _zt = detect_zone_trigger(trigger_df, direction, float(poi["bottom"]),
+                              float(poi["top"]), atr_value)
+    if _zt:
+        _cand.metadata["zone_trigger"] = _zt
+    return _cand
+
+
+def detect_zone_trigger(df, direction: str, zone_bottom: float, zone_top: float,
+                        atr_value: float) -> Optional[dict]:
+    """The active internal sign ON the zone, with a two-line Persian analysis
+    (Viva 09-16: «انگالف/پین‌بار/فشردگی/... که اتفاق افتاده را بگو و تحلیل
+    بکن»). Deterministic, closed-candle only, priority: engulfing → pin →
+    doji/key-bar → compression."""
+    if df is None or getattr(df, "empty", True) or len(df) < 8 or atr_value <= 0:
+        return None
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    o, h, l, c = (float(last["open"]), float(last["high"]),
+                  float(last["low"]), float(last["close"]))
+    rng = max(h - l, 1e-12)
+    body = abs(c - o)
+    po, pc = float(prev["open"]), float(prev["close"])
+    pbody = abs(pc - po)
+    long_side = str(direction).upper() == "LONG"
+    if body >= 0.9 * max(pbody, 1e-12) and (
+            (long_side and c > o and pc < po and c >= po and o <= pc)
+            or (not long_side and c < o and pc > po and c <= po and o >= pc)):
+        return {"title_fa": f"انگالفینگ {'صعودی' if long_side else 'نزولی'} روی ناحیه",
+                "lines": [
+                    f"کندل آخر با بدنهٔ {body / atr_value:.2f} برابر ATR، بدنهٔ کندل پیشین را کامل پوشاند — ورود پول به جهت سناریو روی ناحیه.",
+                    "اگر کلوز بعدی بیرون بدنهٔ انگالف بماند ادامهٔ حرکت محتمل است؛ برگشت به میانهٔ بدنه یعنی ضعف نشانه."]}
+    main_wick = (min(o, c) - l) if long_side else (h - max(o, c))
+    if main_wick >= 2.0 * max(body, 1e-12) and body <= 0.35 * rng:
+        return {"title_fa": f"پین‌بار {'صعودی' if long_side else 'نزولی'} روی ناحیه",
+                "lines": [
+                    f"شدوی {main_wick / rng:.0%} دامنه، نقدینگیِ سمت ناحیه را جارو کرد و کلوز برگشت — امضای کلاسیک ریجکت.",
+                    "نشانه تا شکسته‌شدن نوک شدو با کلوز معتبر است؛ کلوز در جهت سناریو آن را فعال می‌کند."]}
+    if body <= 0.10 * rng:
+        return {"title_fa": "دوجی / کی‌بار روی ناحیه",
+                "lines": [
+                    "کندل با بدنهٔ بسیار کوچک و شدوهای دوطرفه بسته شد — تعادل موقت خریدار و فروشنده روی لبهٔ ناحیه.",
+                    "شکست سقف/کف همین کندل به جهت سناریو، اولین نشانهٔ فعال‌شدن است."]}
+    recent = df.iloc[-5:]
+    avg = float((recent["high"] - recent["low"]).mean())
+    if avg < 0.6 * atr_value:
+        return {"title_fa": "فشردگی / کامپرشن روی ناحیه",
+                "lines": [
+                    f"میانگین دامنهٔ ۵ کندل اخیر {avg / atr_value:.2f} برابر ATR است — فشرده‌سازی پیش از انفجار حرکت.",
+                    "کلوز بیرون از سقف/کف این پیله به جهت سناریو، نشانهٔ فعال‌شدن سناریو است."]}
+    return None
 
 
 def detect_liquidity_reversal(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:

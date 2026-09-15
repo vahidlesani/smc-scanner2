@@ -32,10 +32,31 @@ TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID_EDUCATION = os.getenv("CHAT_ID_SIGNALS", "")
 CHAT_ID_EXECUTION = os.getenv("CHAT_ID_APPROACHING", "")
 CHAT_ID_RESULTS = os.getenv("CHAT_ID_RESULTS", "")
+# Viva 2026-09-16 (PROP-1 approved): VIVA-MON-SIGNALS — the clean journal
+# channel: ONLY final alert + Confirmed + TP/stops + final result, mirrored
+# with its own internal reply-ladder. Current channels keep everything.
+CHAT_ID_VIVA_SIGNALS = os.getenv("CHAT_ID_VIVA_SIGNALS", "")
 
 # Viva 2026-09-11: ONE block template for every message in every channel —
 # bold section titles, related emoji, ━ rules between logical blocks.
 VIVA_SEP = "━" * 20
+# FORMAT-3 (09-16): the thinner rule BETWEEN concepts inside one section —
+# «بین مفاهیم خطوط جداکننده بیاد وگرنه نامفهوم است».
+VIVA_SEP_ITEM = "━" * 10
+
+# Viva 2026-09-16: «هیچ کلمه انگلیسی نیاد» — session codes speak Persian.
+_SESS_FA = {"SYDNEY": "سدنی", "ASIA": "آسیا", "TOKYO": "توکیو",
+            "LONDON": "لندن", "NY": "نیویورک", "NEW_YORK": "نیویورک",
+            "LONDON_NY_OVERLAP": "هم‌پوشانی لندن-نیویورک",
+            "LATE_NY": "پایان نیویورک", "OFF_HOURS": "خارج از سشن‌های اصلی",
+            "OFF_SESSION": "خارج از سشن‌های اصلی"}
+
+
+def _sep_bullets(block: str) -> str:
+    """FORMAT-3 (09-16): an item rule between every line of a titled block —
+    exactly the readability surgery Viva applied by hand to his sample."""
+    lines = (block or "").split("\n")
+    return ("\n" + VIVA_SEP_ITEM + "\n").join(lines) if len(lines) > 1 else (block or "")
 CHAT_ID_ADMIN = os.getenv("CHAT_ID", "")
 
 # Chart identity: Viva's own TradingView look (light, monochrome candles,
@@ -140,9 +161,10 @@ def _candidate_send_latency(candidate: SignalCandidate) -> str:
 _TF_FA = {"1d": "روزانه", "4h": "۴ ساعته", "1h": "۱ ساعته", "15m": "۱۵ دقیقه", "5m": "۵ دقیقه", "1m": "۱ دقیقه"}
 
 
-def _htf_context_fa(candidate: SignalCandidate) -> str:
-    """Higher-timeframe context block for every alert message — where we are
-    relative to important zones and what just broke (Viva's context rule)."""
+def _htf_context_bits(candidate: SignalCandidate) -> List[str]:
+    """Higher-timeframe context BITS for every alert message — where we are
+    relative to important zones and what just broke (Viva's context rule).
+    Callers join them with the separator they need (FORMAT-3: item rules)."""
     md = candidate.metadata or {}
     bits: List[str] = []
     ctx_tf = (md.get("tl_context_tf") or md.get("pin_ctx_tf") or md.get("context_tf") or "").strip()
@@ -208,7 +230,11 @@ def _htf_context_fa(candidate: SignalCandidate) -> str:
             if z["dist_atr"] <= 1.5:
                 note += " — ⚠️ در همسایگی حمایت مهم هستیم"
             bits.append(note)
-    return "🧭 <b>کانتکست تایم بالاتر</b>\n" + "\n".join(f"• {_e(b)}" for b in bits)
+    return bits
+
+
+def _htf_context_fa(candidate: SignalCandidate) -> str:
+    return "🧭 <b>کانتکست تایم بالاتر</b>\n" + "\n".join(f"• {_e(b)}" for b in _htf_context_bits(candidate))
 
 
 def _confirm_rule_fa(candidate: SignalCandidate) -> str:
@@ -242,6 +268,29 @@ def _confirm_rule_fa(candidate: SignalCandidate) -> str:
         f"⚖️ <b>شرط تأیید:</b> اولین کلوزِ معتبرِ بسته‌شده فراتر از خط یا ضلعِ الگو، در {ctf_fa} یا تایم الگو، به جهت سناریو (پولبک شرط نیست)؛ برای سناریوهای داخلی: اولین نشانهٔ معتبر روی ناحیه (پین‌بار/کی‌بار/انگالف/BOS/کمپرشن)"
         f" • <b>ابطال:</b> عبور معتبر از {_price(candidate.sl)}"
     )
+
+
+def _confirm_rule_block(candidate: SignalCandidate) -> str:
+    """FORMAT-3 (Viva 09-16, his corrected paste): the ⚖️ section is THREE
+    concepts split by item rules — the confirmation condition, the internal
+    scenario doctrine (each term EXPLAINED, not just listed), and the
+    invalidation. The active internal sign itself is analyzed in the 🔥 block."""
+    full = _confirm_rule_fa(candidate)
+    if " • <b>ابطال:</b> " in full:
+        head, kill = full.split(" • <b>ابطال:</b> ", 1)
+    else:
+        head, kill = full, f"عبور معتبر از {_price(candidate.sl)}"
+    parts = [head]
+    if candidate.setup_code != "PINVAL":
+        parts.append(
+            "برای سناریوهای داخلی: اولین نشانهٔ معتبر روی ناحیه — "
+            "<b>انگالفینگ</b> یعنی کندلی که بدنهٔ کندل پیشین را کامل می‌بلعد؛ "
+            "<b>پین‌بار</b> یعنی شدوی بلند با بدنهٔ کوچک (جاروی نقدینگی)؛ "
+            "<b>فشردگی/کامپرشن</b> یعنی پیلهٔ کندل‌های ریز پیش از انفجار حرکت؛ "
+            "<b>BOS</b> یعنی شکست سطح ساختاری. هرکدام که همین حالا روی ناحیه شکل "
+            "گرفته، در بخش «🔥 نشانهٔ فعال روی ناحیه» با تحلیل دوخطی آمده است.")
+    parts.append(f"<b>ابطال:</b> {kill}")
+    return ("\n" + VIVA_SEP_ITEM + "\n").join(parts)
 
 
 def _why_fa(candidate: SignalCandidate, limit: int = 6) -> str:
@@ -1600,15 +1649,25 @@ def build_educational_message(candidate: SignalCandidate) -> str:
     # fallback «تأیید کمکی اضافه‌ای ثبت نشده است.» used to print even when
     # aids existed right below it — a self-contradicting message. The
     # fallback now only speaks when the merged list is truly empty.
+    # FORMAT-3 (Viva 09-16): part-2 concepts are SEPARATED by item rules and
+    # every title is bold — «بین مفاهیم خطوط جداکننده بیاد، وگرنه نامفهوم است».
     _aid_lines = _tech_aids_lines(candidate)
-    confirmations = "\n".join(
-        [f"• {_e(item)}" for item in candidate.confirmations] + _aid_lines
-    ) or "• تأیید کمکی اضافه‌ای ثبت نشده است."
+    _conf_lines = [f"• {_e(item)}" for item in candidate.confirmations] + _aid_lines
+    if not _conf_lines:
+        _conf_lines = ["• تأیید کمکی اضافه‌ای ثبت نشده است."]
     warn_items = [str(x) for x in (candidate.warnings or []) if str(x).strip()]
     if not warn_items:
-        warn_items = ["این پیام فقط رصد بازار است؛ شرط تبدیل به سیگنال در خط ⚖️ آمده است.",
+        warn_items = ["این پیام فقط رصد بازار است؛ شرط تبدیل به سیگنال در بخش ⚖️ آمده است.",
                       f"عبور معتبر از {_price(candidate.sl)} سناریو را باطل می‌کند."]
-    warnings = "\n".join(f"• {_e(x)}" for x in warn_items)
+    _warn_lines = [f"• {_e(x)}" for x in warn_items]
+    # «مهم‌ترین نشانهٔ داخلی روی ناحیه + تحلیل دوخطی» — whichever of
+    # engulfing/pin/doji/compression actually formed, in the setup's own voice.
+    _zt = (candidate.metadata or {}).get("zone_trigger") or {}
+    _zt_sec = ""
+    if _zt.get("title_fa"):
+        _zt_sec = (f"🔥 <b>نشانهٔ فعال روی ناحیه</b>\n<b>{_e(str(_zt['title_fa']))}</b>\n"
+                   + "\n".join(_e(str(x)) for x in (_zt.get("lines") or [])) + "\n"
+                   + VIVA_SEP + "\n")
     # empty sections never print as a gap between two separators (Viva law
     # 2026-09-12): the block exists only when it carries content
     if evidence_blocks:
@@ -1639,14 +1698,20 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         + evidence_sec
         +        f"🔎 <b>ناحیه‌ای که زیر نظر داریم</b>\n\n"
         f"از <b>{_price(candidate.entry_zone_bottom)}</b> تا <b>{_price(candidate.entry_zone_top)}</b>\n"
-        f"سطح ابطال سناریو: <b>{_price(candidate.sl)}</b>\n\n"
-        f"{_confirm_rule_fa(candidate)}\n"
+        f"سطح ابطال سناریو: <b>{_price(candidate.sl)}</b>\n"
         f"{VIVA_SEP}\n"
-        f"{_htf_context_fa(candidate)}\n"
+        + _confirm_rule_block(candidate) + "\n"
         f"{VIVA_SEP}\n"
-        f"🧩 <b>تأییدهای کمکی</b>\n{confirmations}\n"
+        f"🧭 <b>کانتکست تایم بالاتر</b>\n"
+        + ("\n" + VIVA_SEP_ITEM + "\n").join(
+            f"• {_e(b)}" for b in _htf_context_bits(candidate)) + "\n"
         f"{VIVA_SEP}\n"
-        f"⚠️ <b>شرایط و هشدارها</b>\n{warnings}\n"
+        f"🧩 <b>تأییدهای کمکی</b>\n"
+        + ("\n" + VIVA_SEP_ITEM + "\n").join(_conf_lines) + "\n"
+        f"{VIVA_SEP}\n"
+        + _zt_sec
+        + "⚠️ <b>شرایط و هشدارها</b>\n"
+        + ("\n" + VIVA_SEP_ITEM + "\n").join(_warn_lines) + "\n"
         + f"{VIVA_SEP}\n"
         + _ai_detail_block(candidate)
         + f"⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود\n"
@@ -1665,17 +1730,17 @@ def _ai_detail_block(candidate: SignalCandidate) -> str:
     try:
         variant = str((candidate.metadata or {}).get("strategy_variant") or "")
         if variant == "VIVA_TLBREAK":
-            out.append(_viva_tlbreak_sections(candidate) + "\n")
+            out.append(_sep_bullets(_viva_tlbreak_sections(candidate)) + "\n")
         else:
-            out.append(_ai_note(candidate) + "\n")
+            out.append(_sep_bullets(_ai_note(candidate)) + "\n")
             try:
                 from bot.messages_viva_tlbreak import management_fa
                 final = float((candidate.metadata or {}).get("viva_final_target")
                               or candidate.tp2 or 0)
                 if final:
-                    out.append(management_fa(candidate.planned_entry, candidate.sl, final,
+                    out.append(_sep_bullets(management_fa(candidate.planned_entry, candidate.sl, final,
                                              candidate.direction,
-                                             title=f"VIVA-{candidate.setup_code}") + "\n")
+                                             title=f"VIVA-{candidate.setup_code}")) + "\n")
             except Exception:
                 pass
     except Exception:
@@ -1880,9 +1945,46 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
     ]
     for line in (extra_lines or []):
         rows.append(line)
-    _aids = _tech_aids_lines(candidate)
-    if _aids:
-        rows += ["🧩 <b>تأییدهای کمکی</b>"] + _aids
+    # FORMAT-3 (09-16): the compact carries a DIGEST of the four aid families
+    # (session / EMA / fibo / RSI — one clause each, Persian, no line-start
+    # Latin); the FULL analyses with item separators live in the detailed
+    # alert. A 1024-char caption physically cannot hold four full sentences
+    # plus the core, and the compact must stay ONE message.
+    def _aid_short(t: str) -> str:
+        for _d in ("؛", " — ", "، بعد", ". "):
+            t = t.split(_d, 1)[0]
+        return t[:46].rstrip() + ("…" if len(t) > 46 else "")
+
+    _mdx = candidate.metadata or {}
+    _dig1, _dig2 = [], []
+    _ema_ladder, _ema_sent = "", []
+    _sessx = str(_mdx.get("session") or "").strip()
+    if _sessx:
+        _dig1.append("🕐 سشن: " + _SESS_FA.get(_sessx.upper(), _sessx))
+    for _ln in (_mdx.get("tech_aids") or []):
+        _core = _ln[2:].strip() if _ln.startswith("• ") else _ln.strip()
+        if _core.startswith("📊 EMA تایم"):
+            _ema_ladder = _core[2:].strip()
+        elif _core.startswith("📊"):
+            _ema_sent.append("📊 " + _aid_short(_core[2:].strip()))
+        elif _core.startswith("🌀"):
+            _dig2.append("🌀 " + _aid_short(_core[2:].strip()))
+        elif _core.startswith("📈"):
+            _dig2.append("📈 " + _aid_short(_core[2:].strip()))
+    # ONE EMA row in the compact: the ladder (above/below 21/51/100/200) says
+    # everything in 50 chars; full EMA sentences live in the detailed alert.
+    if _ema_ladder:
+        _dig1.append(_ema_ladder)
+    elif _ema_sent:
+        _dig1.append(_ema_sent[0])
+    if _dig1 or _dig2:
+        rows += [VIVA_SEP_ITEM, "🧩 <b>تأییدهای کمکی</b>"]
+        if _dig1:
+            rows.append("• " + " | ".join(_dig1))
+        if _dig2:
+            rows.append(VIVA_SEP_ITEM if _dig1 else "")
+            rows = [r for r in rows if r != ""]
+            rows.append("• " + " | ".join(_dig2))
     rows += [
         VIVA_SEP,
         "⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود",
@@ -1898,30 +2000,38 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
     # shortens first, extra lines drop, then aids drop one-by-one from the
     # bottom, and only then the context detail drops. The core (badge, symbol,
     # setup, score, code, zone, invalidation, closing laws) never drops.
-    if len(out) > 1000 and len(_rule) > 125:
+    _CAP = 1020  # Telegram media-caption cap is 1024; keep a 4-char margin
+    if len(out) > _CAP and len(_rule) > 125:
         rows = [(_rule[:120].rstrip() + "…") if r == _rule else r for r in rows]
         out = "\n".join(rows)
-    if len(out) > 1000 and extra_lines:
+    if len(out) > _CAP and extra_lines:
         rows = [r for r in rows if r not in set(extra_lines)]
         out = "\n".join(rows)
-    if len(out) > 1000:
+    if len(out) > _CAP:
         _aid_marks = ("🕐 سشن", "📊", "🌀", "📈")
 
         def _is_aid(r: str) -> bool:
             return r.startswith("• ") and any(m in r for m in _aid_marks)
 
-        while len(out) > 1000:
+        while len(out) > _CAP:
             _idxs = [i for i, r in enumerate(rows) if _is_aid(r)]
             if not _idxs:
                 break
-            rows.pop(_idxs[-1])
+            _drop = _idxs[-1]
+            rows.pop(_drop)
+            if _drop > 0 and rows[_drop - 1] == VIVA_SEP_ITEM:
+                rows.pop(_drop - 1)   # the item rule that introduced it
             if not any(_is_aid(r) for r in rows):
                 rows = [r for r in rows if not r.startswith("🧩")]
+                for _j, _r in enumerate(rows):
+                    if _r == VIVA_SEP_ITEM and _j + 1 < len(rows) and rows[_j + 1].startswith("🧩"):
+                        rows.pop(_j)
+                        break
             out = "\n".join(rows)
-    if len(out) > 1000:
+    if len(out) > _CAP:
         rows = [r for r in rows if not r.startswith("• بایاس ساختاری")]
         out = "\n".join(rows)
-    return _fit_caption(out, 995) if len(out) > 1000 else out
+    return _fit_caption(out, 1015) if len(out) > _CAP else out
 
 
 def _setup_chain_get(candidate: SignalCandidate) -> dict:
@@ -1933,11 +2043,46 @@ def _setup_chain_get(candidate: SignalCandidate) -> dict:
 
 
 def _setup_chain_set(candidate: SignalCandidate, value: dict) -> None:
+    _setup_chain_set_by_code(_public_code(candidate), value)
+
+
+def _setup_chain_set_by_code(code: str, value: dict) -> None:
     try:
         from database.bot_kv import set_json
-        set_json(f"setup_chain|{_public_code(candidate)}", dict(value))
+        set_json(f"setup_chain|{code}", dict(value))
     except Exception as exc:  # pragma: no cover - defensive
-        print(f"setup chain persist warning {candidate.signal_id}: {exc}")
+        print(f"setup chain persist warning {code}: {exc}")
+
+
+def _chain_by_code_get(code: str) -> dict:
+    try:
+        from database.bot_kv import get_json
+        return dict(get_json(f"setup_chain|{code}", {}) or {})
+    except Exception:
+        return {}
+
+
+def _sig_mirror(code: str, kind: str, text: str, chart=None, reply_kind: str = "") -> int:
+    """PROP-1 (Viva 09-16, approved — channel VIVA-MON-SIGNALS he created and
+    admined the bot on): the clean journal mirror. ONLY final alert,
+    Confirmed, TP1–5, stop/trail and the final result land there, each quoting
+    its predecessor INSIDE that channel (sig_* chain keys), while the existing
+    channels keep every message exactly as before."""
+    if not CHAT_ID_VIVA_SIGNALS or not code:
+        return 0
+    try:
+        chain = _chain_by_code_get(code)
+        reply = int(chain.get(f"sig_{reply_kind}") or 0) or None
+        mid = (send_photo(chart, text, CHAT_ID_VIVA_SIGNALS, reply_to_message_id=reply)
+               if chart else
+               send_message(text, CHAT_ID_VIVA_SIGNALS, reply_to_message_id=reply))
+        if mid:
+            chain[f"sig_{kind}"] = int(mid)
+            _setup_chain_set_by_code(code, chain)
+        return int(mid or 0)
+    except Exception as exc:
+        print(f"viva-signals mirror warning {code}/{kind}: {exc}")
+        return 0
 
 
 def _tech_aids_lines(candidate) -> list:
@@ -1947,7 +2092,7 @@ def _tech_aids_lines(candidate) -> list:
     rows = []
     sess = str(md.get("session") or "").strip()
     if sess:
-        rows.append(f"• 🕐 سشن آخرین کندل: {_e(sess)}")
+        rows.append(f"• 🕐 سشن آخرین کندل: {_e(_SESS_FA.get(sess.upper(), sess))}")
     for line in (md.get("tech_aids") or []):
         rows.append(f"• {_e(line)}")
     return rows
@@ -2352,6 +2497,8 @@ def send_approaching(candidate: SignalCandidate, current_price: float, distance_
         if mid:
             chain["approach"] = int(mid)
             _setup_chain_set(candidate, chain)
+            # PROP-1 mirror: the final alert opens the chain in VIVA-MON-SIGNALS.
+            _sig_mirror(_public_code(candidate), "approach", caption, chart)
     _store_alert_message_id(candidate, "approaching_message_id", mid)
     return bool(mid)
 
@@ -2439,6 +2586,9 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
             return False
         chain["confirmed"] = int(mid)
         _setup_chain_set(candidate, chain)
+        # PROP-1 mirror: Confirmed quotes the final alert inside the journal.
+        _sig_mirror(_public_code(candidate), "confirmed",
+                    _confirmed_chart_caption(candidate), chart, reply_kind="approach")
         candidate.metadata["confirmation_chart_message_id"] = int(mid)
         candidate.metadata["confirmation_chart_sent"] = True
     # Deliberately no second verbose message in VivaMon Labs Pro.
@@ -2714,24 +2864,27 @@ def send_trade_close_event(event: dict) -> bool:
     # trail was mislabelled «INITIAL STOP LOSS». Name what actually executed.
     trailed = bool(event.get("trailing_used")) or (
         hit > 0 and abs(float(event.get("sl") or 0) - float(event.get("original_sl") or 0)) > 1e-9)
-    exit_kind = ("FULL TP5" if hit >= 5 else
-                 (f"TP{hit} + خروجِ محافظت‌شده با SL تریل‌شده" if trailed
+    # Viva 2026-09-16: «هیچ کلمه انگلیسی نیاد» — exit kinds and the verdict
+    # speak Persian (TP stays as the ladder code members already know).
+    exit_kind = ("هر پنج پله" if hit >= 5 else
+                 (f"TP{hit} + خروجِ محافظت‌شده با استاپ تریل‌شده" if trailed
                   else (f"TP{hit} + خروجِ محافظت‌شده" if hit and result == "WIN"
-                        else "INITIAL STOP LOSS")))
+                        else "استاپ ابتدایی")))
+    result_fa = {"WIN": "برد ✅", "LOSS": "باخت ❌"}.get(result, "بدون معامله ⚪")
     text = (
         f"{emoji} <b>نتیجه نهایی پوزیشن</b>   🆔 <code>{code}</code>\n\n"
         f"🏷 <b>{_e(setup)}</b>\n\n"
         f"🏦 {_e(event.get('symbol'))} • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('style'))} • {_e(event.get('direction'))}\n\n"
         f"━━━━━━━━━━━━━━━━━━\n{_event_timing_lines(event, include_confirmed=True)}\n"
-        f"━━━━━━━━━━━━━━━━━━\n🔰 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
-        f"⭕️ First Stop: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
-        f"📈 Live / Exit Price: <b>{_price(float(event.get('live_price') or 0))}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n🔰 ورود: <b>{_price(float(event.get('entry') or 0))}</b>\n"
+        f"⭕️ استاپ ابتدایی: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
+        f"📈 قیمت زنده/خروج: <b>{_price(float(event.get('live_price') or 0))}</b>\n"
         f"🏁 TPهای زده‌شده: <b>{hit}/5</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n📌 نوع خروج: <b>{exit_kind}</b>\n\n"
         f"• سود/ضرر نهایی: <b>${float(event.get('profit_usd') or 0):+.2f}</b>\n\n"
         f"• بازده قیمت: <b>{float(event.get('pnl') or 0):+.2f}%</b>\n\n"
         f"• اثر نهایی بر کل مارجین: <b>{float(event.get('margin_roi_pct') or 0):+.2f}%</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n📍 نتیجه: <b>{_e(result)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n📍 نتیجه: <b>{result_fa}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>"
     )
     try:
@@ -2741,9 +2894,14 @@ def send_trade_close_event(event: dict) -> bool:
         chart = generate_chart(frame, candidate, confirmed=True) if frame is not None else None
     except Exception:
         chart = None
-    if chart:
-        return int(send_photo(chart, text, target, reply_to_message_id=reply_id) or 0)
-    return int(send_message(text, target, reply_to_message_id=reply_id) or 0)
+    mid = int((send_photo(chart, text, target, reply_to_message_id=reply_id) if chart
+               else send_message(text, target, reply_to_message_id=reply_id)) or 0)
+    if mid:
+        # PROP-1 mirror: the final result closes the journal chain under the
+        # last TP receipt (or the stop receipt when no TP was reached).
+        _sig_mirror(str(event.get("public_code") or ""), "result", text, chart,
+                    reply_kind=(f"tp{hit}" if hit else "stop"))
+    return mid
 
 
 def send_trade_result(event: dict) -> bool:
@@ -2930,9 +3088,19 @@ def send_ladder_event(event: dict) -> bool:
     except Exception as exc:
         print(f"Live target chart warning {event.get('signal_id')}: {exc}")
         chart = None
-    if chart:
-        return send_photo(chart, text, target, reply_to_message_id=reply_id)
-    return send_message(text, target, reply_to_message_id=reply_id)
+    mid = (send_photo(chart, text, target, reply_to_message_id=reply_id) if chart
+           else send_message(text, target, reply_to_message_id=reply_id))
+    if mid:
+        # PROP-1 mirror: the journal channel gets the same ladder — TP1 under
+        # Confirmed, TPn under TP(n-1), stops under Confirmed.
+        _code = str(event.get("public_code") or "")
+        if kind.startswith("TP"):
+            _n = int(kind[2:] or 0)
+            _sig_mirror(_code, f"tp{_n}", text, chart,
+                        reply_kind="confirmed" if _n == 1 else f"tp{_n - 1}")
+        else:
+            _sig_mirror(_code, "stop", text, chart, reply_kind="confirmed")
+    return mid
 
 
 
