@@ -1319,8 +1319,13 @@ def monitor_confirmed_trades() -> List[Dict]:
                     "pro_message_id": int(pro_message_id or 0), "public_code": public_code,
                     "trigger_timeframe": str(trigger_timeframe or ""), "original_sl": float(original_sl),
                     "entry": float(entry), "leverage": int(leverage or 1), "margin": float(margin or 0),
-                    "live_price": float(resolution_candle.close) if "resolution_candle" in locals() else float(entry),
-                    "event_at": str(resolved_at),
+                    "live_price": float(candle.close) if "candle" in locals() else float(entry),
+                    # HOT-1 (Viva audit 09-15): `resolved_at` never existed — the
+                    # NameError here committed the CLOSED row but killed the
+                    # event, so the result message never reached any channel.
+                    # The ladder path uses the same truth: the candle that
+                    # closed the position, else the last checked bar.
+                    "event_at": str(latest_checked or confirmed_at),
                     "first_tp_message_id": int(first_tp_message_id or 0),
                 })
         if tp1_event:

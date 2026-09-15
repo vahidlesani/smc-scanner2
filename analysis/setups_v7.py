@@ -1129,14 +1129,17 @@ def _active_detectors() -> List:
             detectors.extend(exp.EXPERIMENTAL_DETECTORS)
         if getattr(SETTINGS, "experimental_tlbreak_enabled", False) or getattr(SETTINGS, "viva_tlbreak_enabled", False):
             detectors.extend(exp.TLBREAK_DETECTORS)
-        # Viva's four live setups. The pinbar family runs as one: when the
-        # stricter Pinwall-Quality gate is enabled it supersedes the legacy
-        # PINVAL alert for the same bar (PINWALLQ wraps PINVAL and re-scores
-        # it), so we never emit two near-identical pinbar messages.
+        # DROUGHT-3 (audit 09-15, ruling R-5): the pin-drought killer was the
+        # old `elif` here — with Pinwall-Quality ON, a base pin that Q rejects
+        # on score alone (observed: ETH 52, AAVE 47 vs gate 78) was published
+        # by NOBODY; ~100 real reversal swings went unspoken. PINVAL now ALWAYS
+        # registers as the family fallback, and scan_setups dedupes the
+        # same-bar pair so we never emit two near-identical pinbar messages
+        # (the richer Q message wins whenever it survived its own gate).
         pinwall_q = bool(getattr(SETTINGS, "pinwall_quality_enabled", False))
         if pinwall_q:
             detectors.extend(exp.PINWALL_QUALITY_DETECTORS)
-        elif getattr(SETTINGS, "pinv_enabled", True):
+        if getattr(SETTINGS, "pinv_enabled", True):
             detectors.extend(exp.PINVAL_DETECTORS)
         if getattr(SETTINGS, "albrox_enabled", False):
             detectors.extend(exp.ALBROX_DETECTORS)
@@ -1173,6 +1176,15 @@ def scan_setups(bundle: MarketBundle, style: str) -> List[SignalCandidate]:
                 candidates.append(result)
         except Exception as exc:
             print(f"Setup detector error {detector.__name__} {bundle.symbol} {style}: {exc}")
+    # DROUGHT-3 dedup: PINWALLQ wraps PINVAL — when both fired for the same
+    # symbol+direction on this scan, the richer Q message represents the bar
+    # and the legacy PINVAL twin is dropped (never two pinbar messages for
+    # one pin). When Q rejected the bar (score below its gate), PINVAL alone
+    # survives and the pin still speaks — that is the whole point of R-5.
+    _q_dirs = {c.direction for c in candidates if c.setup_code == "PINWALLQ"}
+    if _q_dirs:
+        candidates = [c for c in candidates
+                      if not (c.setup_code == "PINVAL" and c.direction in _q_dirs)]
     # Avoid several highly correlated messages from the same move: keep the two strongest,
     # preferring execution-ready candidates and then score/RR.
     # Viva 2026-09-14 «پیام‌های همهٔ ستاپ‌ها باید بیاید»: the old keep-two cap

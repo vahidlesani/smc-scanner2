@@ -852,6 +852,42 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                 "pin_nearest_supply_atr": float(polarity.nearest_supply.dist_atr if polarity.nearest_supply else -1),
                 "pin_nearest_demand_atr": float(polarity.nearest_demand.dist_atr if polarity.nearest_demand else -1),
             })
+        # FORMAT-2 (audit 09-15): the pin family was the only setup whose
+        # detailed message carried ZERO doctrine prose blocks — Viva's golden
+        # shape (✅/⚠️ titled evidence separated by ━━━, like TECHCLASSIC)
+        # must hold for every setup. These four blocks are the pin's own
+        # doctrine: anatomy → zone/location → polarity/bias → targets & RR.
+        _wick = lower if is_bull else upper
+        _close_pos = ((c - l) / rng) if is_bull else ((h - c) / rng)
+        _pol_fa = str(getattr(polarity, "reason_fa", "") or "").strip() if polarity is not None else ""
+        candidate.evidence = [
+            EvidenceItem(
+                "pin_anatomy", "آناتومی پین‌بار",
+                (f"پین در تایم‌فریم {tf}: شدوی اصلی {_wick / max(rng, 1e-12):.0%} از کل دامنه "
+                 f"(حداقلِ ستاپ {getattr(settings, 'pinv_min_wick_body', 2.0):g} برابر بدنه)، "
+                 f"بدنه {body / max(atr_v, 1e-12):.2f} برابر ATR "
+                 f"(حداکثر مجاز {getattr(settings, 'pinv_max_body_frac', 0.35):.0%} دامنه)، "
+                 f"کلوز در {_close_pos:.0%} دامنه"
+                 + ("؛ کندل فشردهٔ دوجی‌مانند پیش از پین هم دیده شد." if has_doji else ".")),
+                bool(_wick / max(rng, 1e-12) >= 0.60 and _close_pos >= 0.60), 2, timeframe=tf),
+            EvidenceItem(
+                "pin_location", "ناحیه و موقعیت پین",
+                f"پین‌بار روی {zone_fa} (نوع ناحیه: {zone_kind}) در تایم‌فریم کانتکست {ctx_tf} "
+                "تشکیل شده؛ نوک شدوی پین (probe) در فاصلهٔ مجاز ATR از این ناحیه قرار گرفت.",
+                zone_kind.upper() in {"FVG", "FLIP", "SD_FRESH", "DEMAND", "SUPPLY"}, 2),
+            EvidenceItem(
+                "pin_bias", "قطبیت ناحیه و بایاس جهت",
+                (_pol_fa
+                 or (f"داوری گیت قطبیت ناحیه: {polarity.reason}" if polarity is not None else "")
+                 or "گیت قطبیت در این اسکن فعال نبود؛ جهت فقط از آناتومی کندل پین استخراج شده است."),
+                bool(polarity is not None and polarity.allowed), 2),
+            EvidenceItem(
+                "pin_targets", "اهداف ساختاری و نسبت سود به زیان",
+                f"ابطال: {sl:g} (پشت نقدشوندگی واقعی + بافر {float(invalidation.get('buffer', 0) or 0):g})؛ "
+                f"TP1 = {tp1:g} با RR {rr1:.2f} و TP2 = {tp2:g} با RR {rr2:.2f} — "
+                "هر دو هدف پیوتِ واقعیِ سمت مقابل در تایم کانتکست هستند، نه ضریب R ثابت.",
+                rr1 >= float(getattr(settings, "pinv_rr1_floor", 1.30)), 1),
+        ]
         # Base gates prove the pin sits in a real zone with executable targets.
         candidate.mandatory_gates = {"pin_zone": True, "structural_targets": True, "risk_reward": True}
         if polarity_on and polarity is not None:
@@ -916,6 +952,25 @@ def detect_pinwall_quality(bundle: MarketBundle, style: str) -> Optional[SignalC
     candidate.signal_id=f"viva-pinwallq-{bundle.symbol}-{base.trigger_timeframe}-{str(df['timestamp'].iloc[-1])[:16]}"
     candidate.setup_code="PINWALLQ"; candidate.setup_name=SETUP_NAMES["PINWALLQ"]; candidate.strategy_fa=SETUP_NAMES_FA["PINWALLQ"]; candidate.score=min(10,max(6,round(score/10)))
     candidate.metadata.update({"strategy_variant":"PINWALL_QUALITY","pinwall_quality":details,"public_code":generate_viva_public_code("PINWALLQ",style)})
+    # FORMAT-2 (audit 09-15): doctrine prose blocks from the quality score's
+    # own four components — the golden-template shape for PINWALLQ messages.
+    # ✅ = the component earned at least 60% of its maximum.
+    _comp_max={"anatomy":30.0,"location":27.0,"context":20.0,"bias":10.0}
+    _comp_fa={
+        "anatomy":("کیفیت آناتومی پین","نسبت شدو به دامنه، محل کلوز، اندازهٔ بدنه نسبت به ATR و جریمهٔ شدوی مخالف."),
+        "location":("کیفیت ناحیه و مکان","نوع ناحیهٔ پین (FVG/فلیپ/عرضه-تقاضای تازه/ناحیهٔ کلیدی) و تازگی لمسِ اول."),
+        "context":("کامپرشن و کانتکست کندلی","فشردگی ۵ کندل اخیر نسبت به ATR و کندل‌های دوجی‌مانندِ پیش از پین."),
+        "bias":("همسویی بایاس تایم بالاتر","داوری گیت قطبیت ناحیه (AT_DEMAND/AT_SUPPLY = قوی؛ فلیپ پس از شکست = متوسط) — نه جهت خودِ پین."),
+    }
+    _q_ev=[]
+    for _k in ("anatomy","location","context","bias"):
+        _v=float(details.get(_k) or 0.0); _t,_d=_comp_fa[_k]
+        _q_ev.append(EvidenceItem(
+            f"pinq_{_k}",_t,
+            f"{_d} امتیاز جزء: {_v:g} از {_comp_max[_k]:g} ({_v/_comp_max[_k]:.0%}). "
+            f"امتیاز کل کیفیت: {score:g} — آستانهٔ پذیرش: {float(getattr(settings,'pinwall_quality_min_score',78.0)):g}.",
+            _v>=0.6*_comp_max[_k],2,timeframe=base.trigger_timeframe))
+    candidate.evidence=_q_ev+list(candidate.evidence or [])
     return candidate
 
 

@@ -6,7 +6,7 @@ import io
 import os
 import threading
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -524,22 +524,10 @@ def send_verdict_reply(candidate: SignalCandidate, ok: Optional[bool], note_fa: 
     return bool(send_message(text, target, reply_to_message_id=mid))
 
 
-def _fit_caption(caption: str, limit: int = 1000) -> str:
-    """Viva 2026-09-14 «پیام نصفه ول کردی»: a photo caption must NEVER be cut
-    mid-sentence. Builders are expected to fit; this is the safety net that
-    trims on a line boundary and closes/ drops any HTML tag the cut orphans."""
+def _balance_html_tags(text: str) -> str:
+    """Drop/close any HTML tag a boundary cut orphaned, so both the trimmed
+    head AND each continuation chunk stay valid Telegram HTML."""
     import re as _re
-    footer = "\n📎 ادامه در پیام لینک‌شدهٔ همین کد"
-    text = (caption or "").strip()
-    if len(text) <= limit:
-        return text
-    limit = max(120, limit - len(footer))
-    cut = text.rfind("\n", 0, limit)
-    if cut < limit // 2:
-        cut = text.rfind(" ", 0, limit)
-    if cut < limit // 2:
-        cut = limit
-    text = text[:cut].rstrip()
     for tag in ("b", "i", "code", "a"):
         opens = len(_re.findall(rf"<{tag}[ >]", text))
         closes = len(_re.findall(rf"</{tag}>", text))
@@ -559,7 +547,38 @@ def _fit_caption(caption: str, limit: int = 1000) -> str:
                 break
             text = text[:at] + text[at + len(f"</{tag}>"):]
             closes -= 1
-    return text.rstrip() + footer
+    return text.rstrip()
+
+
+def _split_caption(caption: str, limit: int = 1000) -> Tuple[str, List[str]]:
+    """N1 (audit 09-15): _fit_caption used to cut on a line boundary and
+    promise «ادامه در پیام لینک‌شدهٔ همین کد» — but the continuation was
+    NEVER actually sent, so the promise itself was a half-message. Returns
+    (head, tails): head carries the footer when tails exist, and send_photo
+    posts each tail as a reply-linked text message right after the photo."""
+    footer = "\n📎 ادامه در پیام لینک‌شدهٔ همین کد"
+    text = (caption or "").strip()
+    if len(text) <= limit:
+        return text, []
+    head_limit = max(120, limit - len(footer))
+    cut = text.rfind("\n", 0, head_limit)
+    if cut < head_limit // 2:
+        cut = text.rfind(" ", 0, head_limit)
+    if cut < head_limit // 2:
+        cut = head_limit
+    head = _balance_html_tags(text[:cut].rstrip()) + footer
+    tail = text[cut:].strip()
+    return head, ([_balance_html_tags(tail)] if tail else [])
+
+
+def _fit_caption(caption: str, limit: int = 1000) -> str:
+    """Viva 2026-09-14 «پیام نصفه ول کردی»: a photo caption must NEVER be cut
+    mid-sentence. Builders are expected to fit; this is the safety net that
+    trims on a line boundary and closes/ drops any HTML tag the cut orphans.
+    Trim-only (edit paths); send_photo uses _split_caption and DELIVERS the
+    continuation instead of only promising it."""
+    head, _tails = _split_caption(caption, limit)
+    return head
 
 
 def edit_photo_caption(message_id: int, chat_id: str, caption: str,
@@ -617,7 +636,11 @@ def send_photo(
     target = chat_id or CHAT_ID_ADMIN
     if not TOKEN or not target or not image:
         return None
-    payload = {"chat_id": target, "caption": _fit_caption(caption), "parse_mode": "HTML"}
+    # N1 (audit 09-15): the caption is split, not silently truncated — the
+    # overflow really is delivered as reply-linked continuation messages
+    # below, so «📎 ادامه در پیام لینک‌شده» is finally a true statement.
+    _head, _tails = _split_caption(caption)
+    payload = {"chat_id": target, "caption": _head, "parse_mode": "HTML"}
     if reply_to_message_id:
         payload["reply_to_message_id"] = int(reply_to_message_id)
         payload["allow_sending_without_reply"] = True
@@ -634,6 +657,11 @@ def send_photo(
         return None
     mid = int(result.get("result", {}).get("message_id") or 0) or None
     _audit_send("photo", target, mid)
+    if mid and _tails:
+        try:
+            send_message(_tails[0], target, reply_to_message_id=mid)
+        except Exception as _tail_exc:
+            print(f"caption continuation failed: {_tail_exc}")
     return mid
 
 
@@ -1563,7 +1591,16 @@ def build_educational_message(candidate: SignalCandidate) -> str:
     for item in candidate.evidence:
         status = "✅" if item.confirmed else "⚠️"
         evidence_blocks.append(f"{status} <b>{_e(item.title)}</b>\n\n{_e(item.detail)}")
-    confirmations = "\n".join(f"• {_e(item)}" for item in candidate.confirmations) or "• تأیید کمکی اضافه‌ای ثبت نشده است."
+    # FORMAT-2 (audit 09-15): the 🧩 section merges candidate.confirmations
+    # with the technical aids. Two bugs fixed: (1) _tech_aids_lines already
+    # carries its own "• " — re-bulleting produced "• • 📊"; (2) the empty
+    # fallback «تأیید کمکی اضافه‌ای ثبت نشده است.» used to print even when
+    # aids existed right below it — a self-contradicting message. The
+    # fallback now only speaks when the merged list is truly empty.
+    _aid_lines = _tech_aids_lines(candidate)
+    confirmations = "\n".join(
+        [f"• {_e(item)}" for item in candidate.confirmations] + _aid_lines
+    ) or "• تأیید کمکی اضافه‌ای ثبت نشده است."
     warn_items = [str(x) for x in (candidate.warnings or []) if str(x).strip()]
     if not warn_items:
         warn_items = ["این پیام فقط رصد بازار است؛ شرط تبدیل به سیگنال در خط ⚖️ آمده است.",
@@ -1605,8 +1642,7 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         f"{_htf_context_fa(candidate)}\n"
         f"{VIVA_SEP}\n"
         f"🧩 <b>تأییدهای کمکی</b>\n{confirmations}\n"
-        + "\n".join(f"• {x}" for x in _tech_aids_lines(candidate)) + ("\n" if _tech_aids_lines(candidate) else "")
-        + f"{VIVA_SEP}\n"
+        f"{VIVA_SEP}\n"
         f"⚠️ <b>شرایط و هشدارها</b>\n{warnings}\n"
         + f"{VIVA_SEP}\n"
         + _ai_detail_block(candidate)
@@ -2038,7 +2074,8 @@ def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
 
 
 def send_setup_update(candidate: SignalCandidate, chart_df=None,
-                      note_fa: str = "", state_fa: str = "") -> bool:
+                      note_fa: str = "", state_fa: str = "",
+                      critical: bool = False) -> bool:
     """The single UPDATE message of a chain (alerts channel, reply-linked to the
     permanent detailed alert). Every newer update EDITS the same message; a
     chain never accumulates more than one — Viva's «آپدیت جدید با آپدیت قبلی
@@ -2071,7 +2108,10 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     # even a REAL change waits update_min_gap_seconds on this chain's slot.
     # Verdicts / cancellations / confirmations / ⚡live-break (❌⚪⛔✅⚡) are
     # single events and never wait.
-    _critical = str(state_fa or "")[:2].lstrip("<b ").strip()[:1] in {"❌", "⚪", "⛔", "✅", "⚡"}
+    # N2/R-4 (audit 09-15): callers may force the bypass with critical=True —
+    # ⚡live-break and MATERIAL absorb updates are «شکست واقعی ⇒ آپدیت فوری»
+    # events; identical repeats are still swallowed by the content-hash below.
+    _critical = critical or str(state_fa or "")[:2].lstrip("<b ").strip()[:1] in {"❌", "⚪", "⛔", "✅", "⚡"}
     if not _critical and _time.time() - float(chain.get("upd_ts") or 0) < max(
             120, int(getattr(SETTINGS, "update_min_gap_seconds", 300) or 300)):
         return False

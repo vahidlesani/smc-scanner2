@@ -1061,16 +1061,19 @@ def test_live_break_watch_behavior():
     orig_upd = MAIN.update_candidate
     MAIN.update_candidate = lambda *a, **k: None
     try:
-        note = MAIN._live_break_watch(cand, frame)
+        note, lb_key = MAIN._live_break_watch(cand, frame)
         assert note.startswith("⚡") and "دقیقه" in note
-        assert cand.metadata.get("live_break_bar"), "flag must persist for the candle"
-        assert MAIN._live_break_watch(cand, frame) == ""      # same candle, silence
+        assert lb_key and not cand.metadata.get("live_break_bar"), \
+            "HOT-4: the watcher must NOT persist the flag — the caller does, after a successful send"
+        cand.metadata["live_break_bar"] = lb_key              # caller: send succeeded
+        assert MAIN._live_break_watch(cand, frame) == ("", "")  # same candle, silence
         frame2 = frame.copy()
         frame2.loc[frame2.index[-1], ["open", "close", "high", "low"]] = [101.0, 101.0, 101.3, 100.8]
-        assert MAIN._live_break_watch(cand, frame2) == ""
+        assert MAIN._live_break_watch(cand, frame2) == ("", "")
         assert not cand.metadata.get("live_break_bar")        # pullback clears the flag
-        assert MAIN._live_break_watch(cand, frame).startswith("⚡")  # fresh thrust speaks again
-        assert MAIN._live_break_watch(cand, None) == ""
+        note2, _k2 = MAIN._live_break_watch(cand, frame)
+        assert note2.startswith("⚡")                          # fresh thrust speaks again
+        assert MAIN._live_break_watch(cand, None) == ("", "")
     finally:
         MAIN.update_candidate = orig_upd
 

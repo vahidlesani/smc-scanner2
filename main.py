@@ -15,7 +15,7 @@ import signal
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import pandas as pd
 
@@ -272,9 +272,15 @@ def run_discovery_scan() -> Dict[str, int]:
                             if is_material_update(holder, candidate):
                                 absorb_note = absorb_update_into_chain(holder, candidate)
                                 if _update_too_fresh(holder):
+                                    # R-4/N2 (audit 09-15): observability only —
+                                    # a MATERIAL update (zone moved ≥0.2×ATR or
+                                    # structure changed) is never blocked; the
+                                    # content-hash inside send_setup_update still
+                                    # swallows identical repeats.
                                     stats["update_throttled"] = stats.get("update_throttled", 0) + 1
-                                elif send_setup_update(holder, _chart_frame(holder, bundle),
-                                                        note_fa=absorb_note or ""):
+                                if send_setup_update(holder, _chart_frame(holder, bundle),
+                                                        note_fa=absorb_note or "",
+                                                        critical=True):
                                     hm = holder.metadata if isinstance(holder.metadata, dict) else {}
                                     import time as _tt
                                     hm["last_update_ts"] = _tt.time()
@@ -594,30 +600,32 @@ def _watch_edge_at(candidate, ts) -> float:
                  else candidate.entry_zone_bottom)
 
 
-def _live_break_watch(candidate, live_frame) -> str:
+def _live_break_watch(candidate, live_frame) -> Tuple[str, str]:
     """Viva 2026-09-14: an open pattern candle that has already thrust beyond
     the daily/wedge/triangle/channel side is REPORTED NOW, with the live chart
     and the countdown to its close («نباید بگوید فردا در کلوز خبر می‌دهم»).
     One alert per candle; if price falls back inside the flag resets so a
-    fresh thrust can speak again. The close still owns confirmation."""
+    fresh thrust can speak again. The close still owns confirmation.
+    Returns (note, dedup_key); the caller persists dedup_key ONLY after a
+    successful Telegram send (HOT-4)."""
     md = candidate.metadata or {}
     tf = str(candidate.trigger_timeframe or "")
     secs = _TF_SECONDS_LIVE.get(tf, 3600)
     if live_frame is None or getattr(live_frame, "empty", True) or len(live_frame) < 3:
-        return ""
+        return "", ""
     _row = live_frame.iloc[-1]
     try:
         _ts = pd.Timestamp(_row["timestamp"] if "timestamp" in live_frame.columns
                            else live_frame.index[-1])
     except Exception:
-        return ""
+        return "", ""
     now = pd.Timestamp.utcnow().tz_localize(None)
     if (now - _ts).total_seconds() > secs:
-        return ""            # newest row is already a closed candle; close owns it
+        return "", ""        # newest row is already a closed candle; close owns it
     atr = float(md.get("atr") or 0.0) or float(
         (live_frame["high"] - live_frame["low"]).tail(14).mean() or 0.0)
     if atr <= 0:
-        return ""
+        return "", ""
     edge = _watch_edge_at(candidate, _ts)
     px = float(_row["close"])
     beyond = px >= edge + 0.05 * atr if candidate.direction == "LONG"         else px <= edge - 0.05 * atr
@@ -630,20 +638,17 @@ def _live_break_watch(candidate, live_frame) -> str:
                 update_candidate(candidate)
             except Exception:
                 pass
-        return ""
+        return "", ""
     if str(md.get("live_break_bar") or "") == _key:
-        return ""
-    md["live_break_bar"] = _key
-    candidate.metadata = md
-    try:
-        update_candidate(candidate)
-    except Exception:
-        pass
+        return "", ""
+    # HOT-4 (audit 09-15): the dedup marker is persisted by the CALLER only
+    # after the Telegram send succeeded — a failed send must never eat the
+    # one-and-only ⚡ alert of this pattern candle.
     rem_min = max(1, int((_ts.timestamp() + secs - now.timestamp()) // 60))
     side = "بالای" if candidate.direction == "LONG" else "زیرِ"
-    return (f"⚡ عبورِ {side}ِ خط/لبه در لحظه — کندلِ {_TF_FA_LIVE.get(tf, tf)} هنوز باز است "
-            f"و حدود {rem_min} دقیقه تا کلوزِ آن باقی مانده (قیمت {px:g} در برابر مرجع {edge:.6g}). "
-            "با کلوزِ معتبر، قانونِ یک‌کلوز تأیید می‌کند؛ بازگشت تا پیش از کلوز نقض است.")
+    return ((f"⚡ عبورِ {side}ِ خط/لبه در لحظه — کندلِ {_TF_FA_LIVE.get(tf, tf)} هنوز باز است "
+             f"و حدود {rem_min} دقیقه تا کلوزِ آن باقی مانده (قیمت {px:g} در برابر مرجع {edge:.6g}). "
+             "با کلوزِ معتبر، قانونِ یک‌کلوز تأیید می‌کند؛ بازگشت تا پیش از کلوز نقض است."), _key)
 
 
 def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataFrame, pd.DataFrame, float]]:
@@ -751,10 +756,18 @@ def monitor_candidates() -> Dict[str, int]:
             if not candidate.metadata.get("technical_confirmation_complete"):
                 try:
                     _pat_frames = frames.get((candidate.symbol, str(candidate.trigger_timeframe or "")))
-                    _live_note = _live_break_watch(candidate, (_pat_frames or (None, None, None))[0])
+                    _live_note, _lb_key = _live_break_watch(candidate, (_pat_frames or (None, None, None))[0])
                     if _live_note and send_setup_update(
-                            candidate, (_pat_frames or (None, None, None))[0], note_fa=_live_note):
+                            candidate, (_pat_frames or (None, None, None))[0],
+                            note_fa=_live_note, critical=True):
                         stats["live_break"] = stats.get("live_break", 0) + 1
+                        _md = candidate.metadata or {}
+                        _md["live_break_bar"] = _lb_key
+                        candidate.metadata = _md
+                        try:
+                            update_candidate(candidate)
+                        except Exception:
+                            pass
                 except Exception as _lb_exc:
                     print(f"live-break watch {candidate.symbol}: {_lb_exc}")
 
@@ -807,7 +820,6 @@ def monitor_candidates() -> Dict[str, int]:
                                                  else _pfr.index[-1])
                             _bts = _last.isoformat()[:16]
                             if str(candidate.metadata.get("hb_bar") or "") != _bts:
-                                candidate.metadata["hb_bar"] = _bts
                                 _dur = _TF_SECONDS_LIVE.get(_trg, 3600)
                                 _rem = max(1, int((_last.timestamp() + 2 * _dur
                                                     - pd.Timestamp.utcnow().tz_localize(None).timestamp()) // 60))
@@ -816,10 +828,15 @@ def monitor_candidates() -> Dict[str, int]:
                                             f"کندلِ بعدی حدود {_rem} دقیقهٔ دیگر کلوز می‌دهد. زنجیره زنده و زیر نظر است.")
                                 if send_setup_update(candidate, _pat[0], note_fa=_hb_note):
                                     stats["heartbeat"] = stats.get("heartbeat", 0) + 1
-                                try:
-                                    update_candidate(candidate)
-                                except Exception:
-                                    pass
+                                    # HOT-4 (audit 09-15): the once-per-candle
+                                    # marker is set ONLY after a successful send;
+                                    # a failed/throttled send retries next cycle
+                                    # instead of losing this candle's heartbeat.
+                                    candidate.metadata["hb_bar"] = _bts
+                                    try:
+                                        update_candidate(candidate)
+                                    except Exception:
+                                        pass
                 except Exception as _hb_exc:
                     print(f"heartbeat watch {candidate.symbol}: {_hb_exc}")
             if confirmed:
@@ -833,7 +850,9 @@ def monitor_candidates() -> Dict[str, int]:
                             candidate.planned_entry or candidate.entry_zone_bottom,
                             candidate.sl, candidate.tp1):
                         stats["suppressed_geo_dup"] = stats.get("suppressed_geo_dup", 0) + 1
-                        _t(candidate)["dup"] += 1
+                        # HOT-2 (audit 09-15): `_t()` only exists inside
+                        # run_discovery_scan; the NameError here killed the
+                        # gate silently and the duplicate got published anyway.
                         candidate.status = "CANCELLED"
                         candidate.metadata["geo_dup_cancelled"] = True
                         candidate.metadata["cancel_note_fa"] = (
