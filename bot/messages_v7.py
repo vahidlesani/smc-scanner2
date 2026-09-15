@@ -2047,9 +2047,14 @@ def _setup_chain_set(candidate: SignalCandidate, value: dict) -> None:
 
 
 def _setup_chain_set_by_code(code: str, value: dict) -> None:
+    # Viva 2026-09-16: MERGE, never overwrite — concurrent lifecycle writers
+    # used to clobber the journal channel's sig_* reply keys with stale dicts,
+    # which is why the VIVA-MON-SIGNALS ladder arrived un-linked.
     try:
-        from database.bot_kv import set_json
-        set_json(f"setup_chain|{code}", dict(value))
+        from database.bot_kv import get_json, set_json
+        cur = dict(get_json(f"setup_chain|{code}", {}) or {})
+        cur.update(dict(value))
+        set_json(f"setup_chain|{code}", cur)
     except Exception as exc:  # pragma: no cover - defensive
         print(f"setup chain persist warning {code}: {exc}")
 
@@ -2062,20 +2067,28 @@ def _chain_by_code_get(code: str) -> dict:
         return {}
 
 
-def _sig_mirror(code: str, kind: str, text: str, chart=None, reply_kind: str = "") -> int:
+def _sig_mirror(code: str, kind: str, text: str, chart=None, reply_kind: str = "",
+                link: str = "", link_text: str = "") -> int:
     """PROP-1 (Viva 09-16, approved — channel VIVA-MON-SIGNALS he created and
     admined the bot on): the clean journal mirror. ONLY final alert,
     Confirmed, TP1–5, stop/trail and the final result land there, each quoting
     its predecessor INSIDE that channel (sig_* chain keys), while the existing
-    channels keep every message exactly as before."""
+    channels keep every message exactly as before. The agreed link-chain walk
+    continues cross-channel via a URL button back into the main channel
+    («پیام تایید شدن به پیام مختصر کانال اصلی، از اونجا به هشدار ابتدایی و
+    بعد پیام مفصل»)."""
     if not CHAT_ID_VIVA_SIGNALS or not code:
         return 0
     try:
         chain = _chain_by_code_get(code)
         reply = int(chain.get(f"sig_{reply_kind}") or 0) or None
-        mid = (send_photo(chart, text, CHAT_ID_VIVA_SIGNALS, reply_to_message_id=reply)
+        markup = ({"inline_keyboard": [[{"text": link_text, "url": link}]]}
+                  if link else None)
+        mid = (send_photo(chart, text, CHAT_ID_VIVA_SIGNALS, reply_to_message_id=reply,
+                          reply_markup=markup)
                if chart else
-               send_message(text, CHAT_ID_VIVA_SIGNALS, reply_to_message_id=reply))
+               send_message(text, CHAT_ID_VIVA_SIGNALS, reply_to_message_id=reply,
+                            reply_markup=markup))
         if mid:
             chain[f"sig_{kind}"] = int(mid)
             _setup_chain_set_by_code(code, chain)
@@ -2497,8 +2510,15 @@ def send_approaching(candidate: SignalCandidate, current_price: float, distance_
         if mid:
             chain["approach"] = int(mid)
             _setup_chain_set(candidate, chain)
-            # PROP-1 mirror: the final alert opens the chain in VIVA-MON-SIGNALS.
-            _sig_mirror(_public_code(candidate), "approach", caption, chart)
+            # PROP-1 mirror: the final alert opens the chain in VIVA-MON-SIGNALS,
+            # buttoned back to the main channel's compact anchor (the walk then
+            # continues compact → initial alert → detailed, all one-way).
+            _anchor = (int(chain.get("anchor_pro") or 0)
+                       or int(chain.get("slot") or 0)
+                       or int(chain.get("edu_short") or 0))
+            _lnk = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, _anchor) if _anchor else ""
+            _sig_mirror(_public_code(candidate), "approach", caption, chart,
+                        link=_lnk, link_text="🔗 پیام مختصر در کانال اصلی")
     _store_alert_message_id(candidate, "approaching_message_id", mid)
     return bool(mid)
 
@@ -2586,9 +2606,16 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
             return False
         chain["confirmed"] = int(mid)
         _setup_chain_set(candidate, chain)
-        # PROP-1 mirror: Confirmed quotes the final alert inside the journal.
+        # PROP-1 mirror: Confirmed quotes the final alert inside the journal
+        # and buttons back to the main channel's compact anchor.
+        _anchor = (int(chain.get("anchor_pro") or 0)
+                   or int(chain.get("slot") or 0)
+                   or int(chain.get("edu_short") or 0)
+                   or int(chain.get("approach") or 0))
+        _lnk = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, _anchor) if _anchor else ""
         _sig_mirror(_public_code(candidate), "confirmed",
-                    _confirmed_chart_caption(candidate), chart, reply_kind="approach")
+                    _confirmed_chart_caption(candidate), chart, reply_kind="approach",
+                    link=_lnk, link_text="🔗 پیام مختصر در کانال اصلی")
         candidate.metadata["confirmation_chart_message_id"] = int(mid)
         candidate.metadata["confirmation_chart_sent"] = True
     # Deliberately no second verbose message in VivaMon Labs Pro.
@@ -2898,9 +2925,85 @@ def send_trade_close_event(event: dict) -> bool:
                else send_message(text, target, reply_to_message_id=reply_id)) or 0)
     if mid:
         # PROP-1 mirror: the final result closes the journal chain under the
-        # last TP receipt (or the stop receipt when no TP was reached).
+        # last TP receipt (or the stop receipt when no TP was reached),
+        # buttoned back to this exact receipt in the main channel.
+        _lnk = _telegram_message_link(str(target), int(mid)) if mid else ""
         _sig_mirror(str(event.get("public_code") or ""), "result", text, chart,
-                    reply_kind=(f"tp{hit}" if hit else "stop"))
+                    reply_kind=(f"tp{hit}" if hit else "stop"),
+                    link=_lnk, link_text="🔗 همین پیام در کانال اصلی")
+    return mid
+
+
+def build_weekly_results_digest() -> str:
+    """PROP-3 (Viva 09-16 approved, verbatim): «هر جمعه تعداد پوزیشنهای هر
+    ستاپ و وین و لوز و درصد هر کدوم و سود و ضرر دلاری هر کدوم رو در یک پیام
+    بده با خط کشی و ایموجی و شیک و تر و تمیز» — ONE chic message, per-setup
+    rows + an overall total, from the closed-results ledger of the last
+    seven days (Tehran week boundary)."""
+    from datetime import datetime, timezone, timedelta
+    from database.db import get_recent_signals
+    teh = timezone(timedelta(hours=3, minutes=30))
+    now = datetime.now(teh)
+    week_ago = now - timedelta(days=7)
+    groups: dict = {}
+    tot = {"n": 0, "w": 0, "l": 0, "usd": 0.0}
+    for sig in get_recent_signals(600):
+        closed = str(sig.get("closed_at") or "")
+        if not closed:
+            continue
+        try:
+            dt = datetime.fromisoformat(closed.replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if dt < week_ago:
+            continue
+        res = str(sig.get("result") or "").upper()
+        if res not in ("WIN", "LOSS"):
+            continue
+        usd = (float(sig.get("margin_usd") or 0) * float(sig.get("leverage") or 1)
+               * float(sig.get("pnl_pct") or 0) / 100.0)
+        g = groups.setdefault(str(sig.get("source") or "?"),
+                              {"n": 0, "w": 0, "l": 0, "usd": 0.0})
+        for bucket in (g, tot):
+            bucket["n"] += 1
+            bucket["usd"] += usd
+            bucket["w" if res == "WIN" else "l"] += 1
+    lines = ["📊 <b>گزارش هفتگی نتایج ستاپ‌ها</b>",
+             f"🗓 هفتهٔ منتهی به {now.strftime('%Y/%m/%d')} (تهران)",
+             VIVA_SEP]
+    if not groups:
+        lines.append("• این هفته نتیجهٔ بسته‌شده‌ای ثبت نشده است؛ هفتهٔ بعد در خدمتیم.")
+    for code, g in sorted(groups.items(), key=lambda kv: (-kv[1]["n"], kv[0])):
+        wr = (100.0 * g["w"] / g["n"]) if g["n"] else 0.0
+        lines += [f"• <b>{_setup_display(code)}</b>",
+                  f"   🔢 تعداد پوزیشن: {g['n']} | ✅ برد: {g['w']} | ❌ باخت: {g['l']}",
+                  f"   🎯 وین‌ریت: <b>{wr:.0f}٪</b> | 💵 سود/ضرر: <b>{g['usd']:+.2f}$</b>",
+                  VIVA_SEP_ITEM]
+    wr_tot = (100.0 * tot["w"] / tot["n"]) if tot["n"] else 0.0
+    lines += [VIVA_SEP,
+              "🧮 <b>جمع کل هفته</b>",
+              f"• 🔢 {tot['n']} پوزیشن | ✅ {tot['w']} | ❌ {tot['l']} | 🎯 وین‌ریت <b>{wr_tot:.0f}٪</b>",
+              f"• 💵 سود/ضرر دلاری کل: <b>{tot['usd']:+.2f}$</b>",
+              "━━━━━━━━━━━━━━━━━━",
+              "📌 <b>VIVAMON-Labs-Pro</b>"]
+    return "\n".join(lines)
+
+
+def send_weekly_results_digest() -> int:
+    """Friday digest to the results ledger channel AND the clean journal
+    (VIVA-MON-SIGNALS); the main channel stays untouched per «کیفیت کانال
+    اصلی همین بمونه»."""
+    text = build_weekly_results_digest()
+    mid = 0
+    for chat in (CHAT_ID_RESULTS, CHAT_ID_VIVA_SIGNALS):
+        if chat:
+            try:
+                send_signal_separator(chat)
+                mid = int(send_message(text, chat) or 0) or mid
+            except Exception as exc:
+                print(f"weekly digest warning {chat}: {exc}")
     return mid
 
 
@@ -3092,14 +3195,18 @@ def send_ladder_event(event: dict) -> bool:
            else send_message(text, target, reply_to_message_id=reply_id))
     if mid:
         # PROP-1 mirror: the journal channel gets the same ladder — TP1 under
-        # Confirmed, TPn under TP(n-1), stops under Confirmed.
+        # Confirmed, TPn under TP(n-1), stops under Confirmed — buttoned back
+        # to this exact receipt in the main channel.
         _code = str(event.get("public_code") or "")
+        _lnk = _telegram_message_link(str(target), int(mid)) if mid else ""
         if kind.startswith("TP"):
             _n = int(kind[2:] or 0)
             _sig_mirror(_code, f"tp{_n}", text, chart,
-                        reply_kind="confirmed" if _n == 1 else f"tp{_n - 1}")
+                        reply_kind="confirmed" if _n == 1 else f"tp{_n - 1}",
+                        link=_lnk, link_text="🔗 همین پیام در کانال اصلی")
         else:
-            _sig_mirror(_code, "stop", text, chart, reply_kind="confirmed")
+            _sig_mirror(_code, "stop", text, chart, reply_kind="confirmed",
+                        link=_lnk, link_text="🔗 همین پیام در کانال اصلی")
     return mid
 
 

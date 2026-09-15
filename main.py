@@ -1198,6 +1198,7 @@ def main() -> None:
         datetime.now(timezone.utc), SETTINGS.monitor_minutes, SETTINGS.monitor_offset_minute
     )
     last_daily_report = ""
+    last_weekly_digest = ""
     print(
         f"Scheduler active • next discovery {next_scan.isoformat(timespec='minutes')} • "
         f"monitor every {SETTINGS.monitor_minutes} minutes"
@@ -1217,6 +1218,19 @@ def main() -> None:
         if now.hour == 8 and now.minute < 2 and report_key != last_daily_report:
             _daily_report()
             last_daily_report = report_key
+        # PROP-3 (Viva 09-16): Friday 19:00 Tehran — one chic per-setup
+        # results digest into the results + journal channels.
+        teh_now = datetime.now(timezone(timedelta(hours=3, minutes=30)))
+        _iso = teh_now.isocalendar()
+        week_key = f"{_iso[0]}-W{_iso[1]:02d}"
+        if (teh_now.weekday() == 4 and teh_now.hour == 19 and teh_now.minute < 2
+                and week_key != last_weekly_digest):
+            try:
+                from bot.messages_v7 import send_weekly_results_digest
+                send_weekly_results_digest()
+            except Exception as exc:
+                print(f"Weekly digest error: {exc}")
+            last_weekly_digest = week_key
         time.sleep(5)
     print("Viva Signal Bot stopped cleanly")
 
