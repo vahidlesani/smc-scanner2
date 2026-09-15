@@ -1133,9 +1133,18 @@ def main() -> None:
     # never have to guess whether the NEW build is actually running.
     try:
         from database.bot_kv import set_json as _boot_set
+        # Viva 2026-09-14: no more hand-edited build strings — the truth is the
+        # stamped commit (BUILD_INFO, committed one ref behind by design) plus
+        # the Railway APP_VERSION env. If either is stale, it is stale visibly.
+        _bi = "local"
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "BUILD_INFO")) as _bif:
+                _bi = _bif.read().strip()[:40]
+        except Exception:
+            _bi = os.getenv("COMMIT_SHA", "local")[:12]
         _boot_set("boot_version", {
-            "sha": os.getenv("COMMIT_SHA", "local")[:12],
-            "build": "2026.09.14-11b (RR/gates off the break-confirm path)",
+            "sha": _bi,
+            "build": os.getenv("APP_VERSION", "dev"),
             "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     except Exception as _boot_exc:
