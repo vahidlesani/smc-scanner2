@@ -174,6 +174,9 @@ def _suppressed_edu_throttled(candidate) -> bool:
     return _kv_alerted("sup:" + key, expiry_hours)
 
 
+_QUIET_RUN = 0
+
+
 def run_discovery_scan() -> Dict[str, int]:
     """Find educational setups; never writes unconfirmed rows to Supabase."""
     started = time.monotonic()
@@ -448,6 +451,32 @@ def run_discovery_scan() -> Dict[str, int]:
         _skv("scan_history", _hist[-24:])
     except Exception:
         pass
+    # Viva 09-17 silence pulse: four consecutive empty scans (or any error)
+    # prints ONE diagnostic line to the results chat so «چرا پیام نیامد» is
+    # answerable from the channel itself, with the exact gate counters.
+    global _QUIET_RUN
+    if stats.get("detected", 0) == 0 and stats.get("new", 0) == 0:
+        _QUIET_RUN += 1
+    else:
+        _QUIET_RUN = 0
+    if _QUIET_RUN >= 4 or stats.get("errors", 0) > 0:
+        try:
+            from bot.messages_v7 import send_message as _sm9, CHAT_ID_RESULTS, CHAT_ID_ADMIN
+            _t9 = tally or {}
+            _seen9 = sum(t["seen"] for t in _t9.values())
+            _low9 = sum(t["low_score"] for t in _t9.values())
+            _sm9(
+                f"🩺 پالس اسکن • {len(symbols)} نماد • seen={_seen9} • "
+                f"absorbed={stats.get('chain_absorbed', 0)} • "
+                f"liccap={stats.get('chain_license_cap', 0)} • "
+                f"quiet={stats.get('same_zone_quiet', 0)} • "
+                f"low_score={_low9} • errors={stats.get('errors', 0)} • "
+                f"پیام نیامد چون هیچ ستاپی از گیت‌ها عبور نکرد",
+                CHAT_ID_RESULTS or CHAT_ID_ADMIN,
+            )
+            _QUIET_RUN = 0
+        except Exception as _p9:
+            print(f"scan pulse skipped: {_p9}")
     duration = time.monotonic() - started
     print(
         f"Discovery scan finished in {duration:.1f}s • "
@@ -660,7 +689,9 @@ def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataF
     frames: Dict[Tuple[str, str], Tuple[pd.DataFrame, pd.DataFrame, float]] = {}
     for candidate in candidates:
         confirm_tf = candidate.metadata.get("confirm_tf") or candidate.trigger_timeframe
-        for tf in {confirm_tf, candidate.trigger_timeframe}:
+        from analysis.setups_v7 import confirm_late_tf as _late_tf
+        _late = _late_tf(candidate.trigger_timeframe)
+        for tf in {confirm_tf, candidate.trigger_timeframe, _late} - {None}:
             key = (candidate.symbol, tf)
             if key in frames:
                 continue
@@ -800,6 +831,15 @@ def monitor_candidates() -> Dict[str, int]:
                 except Exception:
                     _pat_frame = None
                 confirmed, candidate, reason = evaluate_confirmation(candidate, closed, htf_closed_df=_pat_frame)
+                if not confirmed:
+                    # Viva 09-17 late bound: the scan/structure candle confirms
+                    # when the finer monitor TF never printed the valid close
+                    from analysis.setups_v7 import confirm_late_tf as _ltf
+                    _lt = _ltf(candidate.trigger_timeframe)
+                    _lf = frames.get((candidate.symbol, _lt)) if _lt else None
+                    if _lf and _lt != key[1]:
+                        confirmed, candidate, reason = evaluate_confirmation(
+                            candidate, _lf[1], htf_closed_df=_pat_frame)
 
             if not confirmed:
                 code = str(candidate.metadata.get("last_reject_code") or "UNKNOWN")

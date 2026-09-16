@@ -38,7 +38,7 @@ class Settings:
     channel_name: str = "VivaSignals Pro"
 
     full_scan_minutes: int = 15
-    monitor_minutes: int = 15  # Viva 09-16: کوچک‌ترین تریگر زنده 15m است
+    monitor_minutes: int = 3  # Viva 09-17: مانیتور همیشه پایین‌تر از تریگر
     # Viva 2026-09-11 (final chain doctrine): per scan cycle only this many
     # NEW detailed alerts may be published — the rest defer to the next scan.
     education_max_per_scan: int = 16

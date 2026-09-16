@@ -567,16 +567,22 @@ def test_fast_break_followthrough_confirms_without_retest():
 
 
 def test_confirmation_ladder_one_step_below_pattern():
-    """Viva 2026-09-16 night-2 AMENDMENT: 5m/3m/1m no longer confirm anything —
-    confirmation lives on 15m and 1h ONLY (5m/3m are human-monitor TFs)."""
+    """Viva 2026-09-17 AMENDMENT: confirmation comes from the MONITOR TF one
+    step BELOW the trigger (3m for 15m/1h, 15m for 4h, 1h for 1d); the scan /
+    structure candle is only the LATE bound (confirm_late_tf)."""
     from analysis.setups_v7 import confirm_timeframe_for_pattern as f
+    from analysis.setups_v7 import confirm_late_tf as late
     assert f("1d", "GRAND", "1d") == "1h"
-    assert f("4h", "SWING", "4h") == "1h"
-    assert f("1H", "SWING", "1h") == "1h"
-    assert f("15m", "DAYTRADE", "15m") == "15m"
+    assert f("4h", "SWING", "4h") == "15m"
+    assert f("1H", "SWING", "1h") == "3m"
+    assert f("15m", "DAYTRADE", "15m") == "3m"
+    assert late("15m") == "15m"
+    assert late("1h") == "15m"
+    assert late("4h") == "1h"
+    assert late("1d") == "4h"
     # unknown pattern TF falls back to the trigger grid, never crashes
-    assert f("", "DAYTRADE", "15m") == "15m"
-    assert f("", "SWING", "4h") == "1h"
+    assert f("", "DAYTRADE", "15m") == "3m"
+    assert f("", "SWING", "4h") == "15m"
 
 
 def test_single_close_confirms_fast_lane():
@@ -875,9 +881,9 @@ def test_four_stream_ladder():
     assert TIMEFRAME_PROFILES["SWING"] == ("1d", "4h", "1h")
     assert TIMEFRAME_PROFILES["DAYTRADE"] == ("4h", "1h", "15m")
     assert cf("1d", "GRAND", "1d") == "1h"
-    assert cf("4h", "SWING", "4h") == "1h"
-    assert cf("1h", "SWING", "1h") == "1h"
-    assert cf("15m", "DAYTRADE", "15m") == "15m"
+    assert cf("4h", "SWING", "4h") == "15m"
+    assert cf("1h", "SWING", "1h") == "3m"
+    assert cf("15m", "DAYTRADE", "15m") == "3m"
     from analysis.quality_engine import ENGINES, _live_styles
     assert {"GRAND", "SWING", "DAYTRADE", "SCALP"} <= set(ENGINES)
     # SCALP engine stays built but is NOT live (scalp + 5m retired)

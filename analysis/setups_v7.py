@@ -49,10 +49,10 @@ SETUP_NAMES_FA = {
 # below it so a valid retest is confirmed within ~1-3 minutes, not after a
 # full 5m/15m candle close. SCALP: confirm on 1m; SWING: confirm on 5m.
 CONFIRM_TF = {
-    # Viva 09-16 night-2: تأیید فقط روی ۱۵ دقیقه و ۱ ساعت (۵m/m مانیتور انسانی)
-    "SCALP": "15m",
-    "DAYTRADE": "15m",
-    "SWING": "1h",
+    # Viva 09-17: تأیید از تایم مانیتورِ پایین‌تر گرفته می‌شود، نه از خود تریگر
+    "SCALP": "3m",
+    "DAYTRADE": "3m",
+    "SWING": "3m",
     "GRAND": "1h",
 }
 
@@ -62,11 +62,24 @@ CONFIRM_TF = {
 #   15m trigger -> 5m confirm
 #   1h trigger  -> 5m confirm
 CONFIRM_TF_BY_TRIGGER = {
-    "15m": "15m",
-    "1h": "1h",
-    "4h": "1h",
+    # Viva 09-17: early confirm = monitor TF one step below the trigger
+    "15m": "3m",
+    "1h": "3m",
+    "4h": "15m",
     "1d": "1h",
 }
+
+# late bound: if the monitor TF missed, the scan/structure candle still confirms
+CONFIRM_LATE_BY_TRIGGER = {
+    "15m": "15m",
+    "1h": "15m",
+    "4h": "1h",
+    "1d": "4h",
+}
+
+
+def confirm_late_tf(trigger_tf: str):
+    return CONFIRM_LATE_BY_TRIGGER.get(str(trigger_tf or "").lower())
 
 # Viva 2026-09-11 confirmation ladder (his explicit rule): a scenario is
 # confirmed by ONE closed candle of the timeframe ONE STEP BELOW the PATTERN
@@ -74,7 +87,7 @@ CONFIRM_TF_BY_TRIGGER = {
 #   1D → 4H close   4H → 1H close   1H → 15m close   15m → 5m close
 # If that single close is weak, Viva filters the trade himself — the scanner
 # must not burn the zone waiting for ceremony.
-CONFIRM_TF_BY_PATTERN = {"1d": "1h", "4h": "1h", "1h": "1h", "15m": "15m"}
+CONFIRM_TF_BY_PATTERN = {"1d": "1h", "4h": "15m", "1h": "3m", "15m": "3m"}
 
 
 def confirm_timeframe_for_pattern(pattern_tf: str, style: str, trigger_tf: str) -> str:
