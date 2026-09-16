@@ -913,6 +913,16 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             candidate.expires_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
         if best is None or candidate.score > best.score:
             best = candidate
+    # CHART-8: the pin family paints its zones/patterns like every other setup
+    if best is not None:
+        try:
+            from analysis.render_kit import enrich_render
+            _pdf = bundle.get(str(best.trigger_timeframe or "").lower())
+            if _pdf is not None:
+                enrich_render(best, _pdf,
+                              htf_df=bundle.get("4h") or bundle.get("1h"))
+        except Exception:
+            pass
     return best
 
 
@@ -984,13 +994,8 @@ def detect_pinwall_quality(bundle: MarketBundle, style: str) -> Optional[SignalC
             f"امتیاز کل کیفیت: {score:g} — آستانهٔ پذیرش: {float(getattr(settings,'pinwall_quality_min_score',78.0)):g}.",
             _v>=0.6*_comp_max[_k],2,timeframe=base.trigger_timeframe))
     candidate.evidence=_q_ev+list(candidate.evidence or [])
-    try:
-        from analysis.render_kit import enrich_render
-        enrich_render(candidate, df, htf_df=bundle.get("4h") or bundle.get("1h"))
-    except Exception:
-        pass
-    if str(candidate.metadata.get("base_gate", "ALLOW")).startswith(("REJECT", "WARN")):
-        return None
+    # base md already inherited from detect_pinbar_zone; PINWALLQ keeps its
+    # own quality gate (Viva law: pinwall trigger untouched)
     return candidate
 
 

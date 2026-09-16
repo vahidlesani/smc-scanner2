@@ -894,9 +894,17 @@ def _base_candidate(
         enrich_render(_cand, trigger_df, htf_df=context_df)
     except Exception as exc:
         print(f"render kit warning {setup_code}: {exc}")
-    # continuation doctrine: mid-box / wrong-edge candidates do not trade
-    if str(_cand.metadata.get("base_gate", "ALLOW")).startswith(("REJECT", "WARN")):
-        return None
+    # continuation doctrine: mid-box / wrong-edge candidates do not trade —
+    # EXCEPT the break/watch streams, which ARE the doctrine's own trigger
+    # (break + first close = entry; watch = the warning itself)
+    _code8 = str(_cand.setup_code or "").upper()
+    _var8 = str((_cand.metadata or {}).get("strategy_variant") or "").upper()
+    _watch8 = str((_cand.metadata or {}).get("viva_state") or "").upper()
+    if not (_code8 in ("TLBREAK", "TECHCLASSIC", "ALBROX")
+            or _var8 in ("VIVA_TLBREAK", "TECHNOCLASSIC", "PINWALL_QUALITY")
+            or _watch8.startswith("S0_WATCH")):
+        if str(_cand.metadata.get("base_gate", "ALLOW")).startswith(("REJECT", "WARN")):
+            return None
     return _cand
 
 

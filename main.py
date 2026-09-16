@@ -520,9 +520,10 @@ def _pinv_window_expired(candidate: SignalCandidate, closed: Optional[pd.DataFra
     seconds = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600,
                "4h": 14400, "1d": 86400}.get(tf, 300)
     try:
-        created = pd.Timestamp(str(candidate.created_at)).tz_localize(None)
-        bars = closed[pd.to_datetime(closed["timestamp"]) >= created - pd.Timedelta(seconds=seconds)]
-        return len(bars) >= int(md.get("pin_verdict_candles") or SETTINGS.alert_verdict_candles)
+        # Viva 09-17: NO candle-count limit — the verdict window ends only
+        # with expiry/invalidation, whether the confirming close prints on
+        # the 5th, 20th or 100th monitor candle.
+        return is_expired(candidate)
     except Exception:
         return is_expired(candidate)
 
@@ -566,7 +567,7 @@ def _resolve_pinv_verdict(candidate: SignalCandidate, closed: Optional[pd.DataFr
         except Exception:
             after = closed.tail(n_candles)
     direction = candidate.direction
-    for _, row in after.head(n_candles).iterrows():
+    for _, row in after.iterrows():   # no candle cap (Viva 09-17)
         c = float(row["close"])
         if direction == "LONG":
             if c > pin_high:
@@ -582,7 +583,7 @@ def _resolve_pinv_verdict(candidate: SignalCandidate, closed: Optional[pd.DataFr
             if c > pin_high:
                 _pinv_done(candidate, False, f"کلوز بالای سقف پین‌بار ({pin_high:g}) — سناریو باطل شد.")
                 return
-    if len(after) >= n_candles or is_expired(candidate):
+    if is_expired(candidate):
         candidate.status = "VERDICT_TIMEOUT"
         update_candidate(candidate)
         tf_fa = {"1m": "۱دقیقه‌ای", "5m": "۵دقیقه‌ای", "15m": "۱۵دقیقه‌ای", "1h": "۱ساعته"}.get(pin_tf, pin_tf)
