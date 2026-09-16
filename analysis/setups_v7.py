@@ -49,8 +49,11 @@ SETUP_NAMES_FA = {
 # below it so a valid retest is confirmed within ~1-3 minutes, not after a
 # full 5m/15m candle close. SCALP: confirm on 1m; SWING: confirm on 5m.
 CONFIRM_TF = {
-    "SCALP": "1m",
-    "SWING": "5m",
+    # Viva 09-16 night-2: تأیید فقط روی ۱۵ دقیقه و ۱ ساعت (۵m/m مانیتور انسانی)
+    "SCALP": "15m",
+    "DAYTRADE": "15m",
+    "SWING": "1h",
+    "GRAND": "1h",
 }
 
 # Viva's confirmation grid (2026-08): the finer TF that confirms a scenario
@@ -59,10 +62,10 @@ CONFIRM_TF = {
 #   15m trigger -> 5m confirm
 #   1h trigger  -> 5m confirm
 CONFIRM_TF_BY_TRIGGER = {
-    "5m": "1m",
-    "15m": "5m",
-    "1h": "5m",
-    "4h": "15m",
+    "15m": "15m",
+    "1h": "1h",
+    "4h": "1h",
+    "1d": "1h",
 }
 
 # Viva 2026-09-11 confirmation ladder (his explicit rule): a scenario is
@@ -71,7 +74,7 @@ CONFIRM_TF_BY_TRIGGER = {
 #   1D → 4H close   4H → 1H close   1H → 15m close   15m → 5m close
 # If that single close is weak, Viva filters the trade himself — the scanner
 # must not burn the zone waiting for ceremony.
-CONFIRM_TF_BY_PATTERN = {"1d": "4h", "4h": "1h", "1h": "15m", "15m": "5m", "5m": "1m"}
+CONFIRM_TF_BY_PATTERN = {"1d": "1h", "4h": "1h", "1h": "1h", "15m": "15m"}
 
 
 def confirm_timeframe_for_pattern(pattern_tf: str, style: str, trigger_tf: str) -> str:
@@ -103,11 +106,17 @@ TIMEFRAME_PROFILES = {
     # The alert/licence timeframe is the TRIGGER entry = the pattern TF the
     # alert names, so «۳ مجوز روی هر تایم تریگر» counts exactly what a human
     # reads on the message.
+    # Viva 09-16 night-2 four-TF world: 15m short swing, 1h+4h mid swing,
+    # 1d long swing.  SCALP/5m retired; SWING carries BOTH mid triggers via
+    # PROFILE_OVERRIDE (see timeframe_profile).
     "GRAND": ("1d", "4h", "1d"),
-    "SWING": ("4h", "1d", "4h"),
-    "DAYTRADE": ("1h", "4h", "1h"),
-    "SCALP": ("15m", "1h", "15m"),
+    "SWING": ("1d", "4h", "1h"),
+    "DAYTRADE": ("4h", "1h", "15m"),
+    "SCALP": ("15m", "1h", "15m"),  # dormant stream, not in live_styles
 }
+
+# SwingEngine sets this while scanning its second (4h) trigger stream.
+PROFILE_OVERRIDE: Dict[str, tuple] = {}
 
 
 def expiry_hours_for(style: str) -> int:
@@ -123,7 +132,10 @@ def expiry_hours_for(style: str) -> int:
 
 
 def timeframe_profile(style: str):
-    return TIMEFRAME_PROFILES.get(str(style).upper(), TIMEFRAME_PROFILES["DAYTRADE"])
+    key = str(style).upper()
+    if key in PROFILE_OVERRIDE:
+        return PROFILE_OVERRIDE[key]
+    return TIMEFRAME_PROFILES.get(key, TIMEFRAME_PROFILES["DAYTRADE"])
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -869,6 +881,9 @@ def _base_candidate(
         enrich_render(_cand, trigger_df, htf_df=context_df)
     except Exception as exc:
         print(f"render kit warning {setup_code}: {exc}")
+    # continuation doctrine: mid-box / wrong-edge candidates do not trade
+    if str(_cand.metadata.get("base_gate", "ALLOW")).startswith(("REJECT", "WARN")):
+        return None
     return _cand
 
 

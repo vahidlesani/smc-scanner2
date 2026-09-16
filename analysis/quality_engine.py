@@ -20,13 +20,22 @@ class SwingEngine:
     required_frames = ("1d", "4h", "1h")
 
     def scan(self, bundle: MarketBundle) -> List[SignalCandidate]:
-        return scan_setups(bundle, self.name)
+        # mid-term swing = TWO trigger streams: 1h and 4h (Viva 09-16)
+        from analysis import setups_v7
+        out: List[SignalCandidate] = []
+        for trig in ("1h", "4h"):
+            setups_v7.PROFILE_OVERRIDE["SWING"] = ("1d", "4h", trig)
+            try:
+                out.extend(scan_setups(bundle, self.name))
+            finally:
+                setups_v7.PROFILE_OVERRIDE.pop("SWING", None)
+        return out
 
 
 class DayTradeEngine:
-    """Primary live tier: 4h context, 1h structure, 15m POI, 5m confirmation."""
+    """Viva 09-16: short swing — 4h context, 1h structure, 15m trigger/confirm."""
     name = "DAYTRADE"
-    required_frames = ("4h", "1h", "15m", "5m")
+    required_frames = ("4h", "1h", "15m")
 
     def scan(self, bundle: MarketBundle) -> List[SignalCandidate]:
         return scan_setups(bundle, self.name)

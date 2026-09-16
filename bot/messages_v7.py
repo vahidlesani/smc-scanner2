@@ -1166,11 +1166,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             zorder=1,
             linewidth=0,
         )
-        # CHART-8: every zone name is printed in the candle-free right margin
-        # (stacked, collision-shifted) — never over candles or prices.
-        _zone_labels = [(candidate.entry_zone_top + 0.05 *
-                         (candidate.entry_zone_top - candidate.entry_zone_bottom),
-                         zone_name, zone_text_color)]
+        # CHART-8 (Viva 09-16 night-3): zone NAMES live INSIDE their own box,
+        # in a candle-free spot at the box right end / middle / left end —
+        # never floating in mid-air, never over candles.  Only when every
+        # in-box spot is occupied does the chip anchor to the box top edge.
+        _zone_items = [{"x0": zone_start, "x1": zone_end,
+                        "bottom": float(candidate.entry_zone_bottom),
+                        "top": float(candidate.entry_zone_top),
+                        "text": zone_name, "color": zone_text_color}]
         # CHART-8 unified kit: every setup stores detect→render commands in
         # metadata; the renderer obeys them (fallback: detect on this frame).
         _rz = (candidate.metadata or {}).get("render_zones")
@@ -1193,21 +1196,53 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             ax.fill_between([_x0, zone_end], float(_z["bottom"]),
                             float(_z["top"]), color=_f8, alpha=0.13,
                             linewidth=0, zorder=1)
-            _zone_labels.append((float(_z["top"]), str(_z.get("kind") or ""),
-                                 _t8))
-        # collision-shift the name chips so they never pile up
-        _zone_labels.sort(key=lambda _it: -_it[0])
+            _zone_items.append({"x0": float(_x0), "x1": float(zone_end),
+                                "bottom": float(_z["bottom"]),
+                                "top": float(_z["top"]),
+                                "text": str(_z.get("kind") or ""),
+                                "color": _t8})
         _yr9 = max(float(frame["high"].max()) - float(frame["low"].min()), 1e-9)
-        _gap9 = 0.035 * _yr9
+        _hi9 = frame["high"].to_numpy(float)
+        _lo9 = frame["low"].to_numpy(float)
+        _n9 = int(len(frame))
+
+        def _place_in_box(_it):
+            _wb = 1.4 + 0.52 * len(_it["text"])
+            _mid = 0.5 * (_it["bottom"] + _it["top"])
+            _hh = max(0.35 * (_it["top"] - _it["bottom"]), 0.015 * _yr9)
+            _x0, _x1 = _it["x0"], min(_it["x1"], _n9 - 0.2)
+            for _cx in (_x1 - _wb - 0.6, 0.5 * (_x0 + _x1) - _wb * 0.5,
+                        _x0 + 0.6):
+                _cx = min(max(_cx, 0.0), max(0.0, _n9 - _wb - 0.2))
+                _a, _b = int(_cx), int(min(_n9, _cx + _wb + 1))
+                if _b <= _a:
+                    continue
+                if not np.any((_hi9[_a:_b] >= _mid - _hh) &
+                              (_lo9[_a:_b] <= _mid + _hh)):
+                    return _cx, _mid, "center"
+            return None
+
+        _anchored = []
+        for _it in _zone_items:
+            _spot = _place_in_box(_it)
+            if _spot:
+                ax.text(_spot[0], _spot[1], _it["text"], color=_it["color"],
+                        fontsize=7, va=_spot[2], ha="left", fontweight="bold",
+                        zorder=12,
+                        bbox={"boxstyle": "round,pad=0.26",
+                              "facecolor": CHART_THEME["panel"],
+                              "edgecolor": "none", "alpha": 0.78})
+            else:
+                _anchored.append(_it)
+        # fallback: chip anchored to the box TOP edge at its left end
+        _anchored.sort(key=lambda _it: -_it["top"])
         _prev9 = None
-        _fixed9 = []
-        for _y9, _t9, _c9 in _zone_labels:
-            if _prev9 is not None and _prev9 - _y9 < _gap9:
-                _y9 = _prev9 - _gap9
+        for _it in _anchored:
+            _y9 = float(_it["top"])
+            if _prev9 is not None and _prev9 - _y9 < 0.035 * _yr9:
+                _y9 = _prev9 - 0.035 * _yr9
             _prev9 = _y9
-            _fixed9.append((_y9, _t9, _c9))
-        for _ytop, _txt, _col in _fixed9:
-            ax.text(zone_start + 1.5, _ytop, _txt, color=_col,
+            ax.text(_it["x0"] + 0.6, _y9, _it["text"], color=_it["color"],
                     fontsize=7, va="bottom", ha="left", fontweight="bold",
                     zorder=12,
                     bbox={"boxstyle": "round,pad=0.26",
@@ -1219,12 +1254,26 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 ax.fill_between([zone_start, zone_end], float(_pat["lo"]),
                                 float(_pat["hi"]), color=CHART_THEME["muted"],
                                 alpha=0.07, linewidth=0, zorder=1)
-                ax.text(zone_start + 1.5, float(_pat["hi"]), "RANGE",
-                        color=CHART_THEME["muted"], fontsize=7, va="bottom",
-                        ha="left", fontweight="bold", zorder=12,
-                        bbox={"boxstyle": "round,pad=0.26",
-                              "facecolor": CHART_THEME["panel"],
-                              "edgecolor": "none", "alpha": 0.78})
+                _rg = _place_in_box({"x0": float(zone_start),
+                                     "x1": float(zone_end),
+                                     "bottom": float(_pat["lo"]),
+                                     "top": float(_pat["hi"]),
+                                     "text": "RANGE"})
+                if _rg:
+                    ax.text(_rg[0], _rg[1], "RANGE", color=CHART_THEME["muted"],
+                            fontsize=7, va=_rg[2], ha="left", fontweight="bold",
+                            zorder=12,
+                            bbox={"boxstyle": "round,pad=0.26",
+                                  "facecolor": CHART_THEME["panel"],
+                                  "edgecolor": "none", "alpha": 0.78})
+                else:
+                    ax.text(zone_start + 0.6, float(_pat["hi"]), "RANGE",
+                            color=CHART_THEME["muted"], fontsize=7,
+                            va="bottom", ha="left", fontweight="bold",
+                            zorder=12,
+                            bbox={"boxstyle": "round,pad=0.26",
+                                  "facecolor": CHART_THEME["panel"],
+                                  "edgecolor": "none", "alpha": 0.78})
                 continue
             _lns = _pat.get("lines") or []
             for _ln in _lns:
@@ -1380,8 +1429,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 (candidate.planned_entry, "ENTRY", CHART_THEME["entry"]),
                 (candidate.sl, "FIRST STOP", CHART_THEME["invalidation"]),
             ]
+            _tpg = (candidate.metadata or {}).get("tp_gates") or {}
+            _tp_locked = set(_tpg.get("locked") or [])
             for i, level in enumerate(ladder_targets):
                 label = f"TP{i+1} {float(ladder_weights[i]) if i < len(ladder_weights) else 0:.0f}%"
+                if i in _tp_locked:
+                    label += " • POST-BREAK"   # doctrine: خارج از رنج فقط بعد از بریک
                 levels.append((float(level), label, CHART_THEME["tp1"] if i < 3 else CHART_THEME["tp2"]))
             # Viva 2026-09-14 «شکل ابزار LONG/SHORT خراب شده»: the art itself is
             # FROZEN — same pills, same colors, same dashes. What is fixed here

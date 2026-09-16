@@ -567,15 +567,16 @@ def test_fast_break_followthrough_confirms_without_retest():
 
 
 def test_confirmation_ladder_one_step_below_pattern():
-    """Viva 2026-09-11 ladder: 1D→4H, 4H→1H, 1H→15m, 15m→5m, 5m→1m."""
+    """Viva 2026-09-16 night-2 AMENDMENT: 5m/3m/1m no longer confirm anything —
+    confirmation lives on 15m and 1h ONLY (5m/3m are human-monitor TFs)."""
     from analysis.setups_v7 import confirm_timeframe_for_pattern as f
-    assert f("1d", "SWING", "4h") == "4h"
-    assert f("4h", "SWING", "15m") == "1h"
-    assert f("1H", "DAYTRADE", "15m") == "15m"
-    assert f("15m", "DAYTRADE", "5m") == "5m"
-    assert f("5m", "SCALP", "1m") == "1m"
-    # unknown pattern TF falls back to the legacy trigger grid, never crashes
-    assert f("", "SCALP", "15m") == "5m"
+    assert f("1d", "GRAND", "1d") == "1h"
+    assert f("4h", "SWING", "4h") == "1h"
+    assert f("1H", "SWING", "1h") == "1h"
+    assert f("15m", "DAYTRADE", "15m") == "15m"
+    # unknown pattern TF falls back to the trigger grid, never crashes
+    assert f("", "DAYTRADE", "15m") == "15m"
+    assert f("", "SWING", "4h") == "1h"
 
 
 def test_single_close_confirms_fast_lane():
@@ -868,17 +869,19 @@ def test_four_stream_ladder():
     candle of the timeframe one step below its pattern TF."""
     from analysis.setups_v7 import TIMEFRAME_PROFILES, expiry_hours_for
     from analysis.setups_v7 import confirm_timeframe_for_pattern as cf
+    # Viva 2026-09-16 night-2: four-TF world — 15m short swing (DAYTRADE),
+    # 1h+4h mid swing (SWING, dual trigger), 1d long swing (GRAND).
     assert TIMEFRAME_PROFILES["GRAND"] == ("1d", "4h", "1d")
-    assert TIMEFRAME_PROFILES["SWING"] == ("4h", "1d", "4h")
-    assert TIMEFRAME_PROFILES["DAYTRADE"] == ("1h", "4h", "1h")
-    assert TIMEFRAME_PROFILES["SCALP"] == ("15m", "1h", "15m")
-    assert cf("1d", "GRAND", "1d") == "4h"
+    assert TIMEFRAME_PROFILES["SWING"] == ("1d", "4h", "1h")
+    assert TIMEFRAME_PROFILES["DAYTRADE"] == ("4h", "1h", "15m")
+    assert cf("1d", "GRAND", "1d") == "1h"
     assert cf("4h", "SWING", "4h") == "1h"
-    assert cf("1h", "DAYTRADE", "1h") == "15m"
-    assert cf("15m", "SCALP", "15m") == "5m"
+    assert cf("1h", "SWING", "1h") == "1h"
+    assert cf("15m", "DAYTRADE", "15m") == "15m"
     from analysis.quality_engine import ENGINES, _live_styles
     assert {"GRAND", "SWING", "DAYTRADE", "SCALP"} <= set(ENGINES)
-    assert set(_live_styles()) == {"DAYTRADE", "SWING", "GRAND", "SCALP"}
+    # SCALP engine stays built but is NOT live (scalp + 5m retired)
+    assert set(_live_styles()) == {"DAYTRADE", "SWING", "GRAND"}
     assert expiry_hours_for("GRAND") >= 48
     assert expiry_hours_for("DAYTRADE") >= 12
 

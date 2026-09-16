@@ -91,6 +91,9 @@ def _cache_set(key: Tuple, value, ttl: int) -> None:
     stored = value.copy(deep=True) if isinstance(value, pd.DataFrame) else value
     with _CACHE_LOCK:
         _CACHE[key] = (time.monotonic() + ttl, stored)
+        if len(_CACHE) > 400:   # Railway RAM guard (Viva 09-16): hard cap
+            for _k in sorted(_CACHE, key=lambda k: _CACHE[k][0])[:len(_CACHE) - 400]:
+                _CACHE.pop(_k, None)
 
 
 def clear_market_cache() -> None:
@@ -291,11 +294,11 @@ def get_instruments(use_cache: bool = True) -> List[Dict]:
 
 def get_market_bundle(
     symbol: str,
-    timeframes=("1d", "4h", "1h", "15m", "5m"),
+    timeframes=("1d", "4h", "1h", "15m"),  # Viva 09-16: 5m/3m مانیتور انسانی
     limits: Optional[Dict[str, int]] = None,
     ticker: Optional[Dict] = None,
 ) -> MarketBundle:
-    limits = limits or {"1d": 120, "4h": 240, "1h": 240, "15m": 240, "5m": 240}
+    limits = limits or {"1d": 120, "4h": 200, "1h": 200, "15m": 200}
     frames = {
         tf: get_klines(symbol, tf, limits.get(tf, 200), closed_only=True)
         for tf in timeframes

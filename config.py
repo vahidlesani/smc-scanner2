@@ -38,7 +38,7 @@ class Settings:
     channel_name: str = "VivaSignals Pro"
 
     full_scan_minutes: int = 15
-    monitor_minutes: int = 5
+    monitor_minutes: int = 15  # Viva 09-16: کوچک‌ترین تریگر زنده 15m است
     # Viva 2026-09-11 (final chain doctrine): per scan cycle only this many
     # NEW detailed alerts may be published — the rest defer to the next scan.
     education_max_per_scan: int = 16
@@ -51,7 +51,7 @@ class Settings:
     # mid swing and 15m short all run as full alert streams (SCALP re-enabled
     # by his explicit order); each pattern is confirmed by ONE closed candle
     # of the timeframe one step below it (4h/1h/15m/5m respectively).
-    live_styles: str = "DAYTRADE,SWING,GRAND,SCALP"
+    live_styles: str = "DAYTRADE,SWING,GRAND"  # Viva 09-16: SCALP/5m خاموش
     # Minute offset inside each monitor interval — aligns cycles to just
     # after candle closes (e.g. 1 => 5m cycles run at :01/:06/:11 UTC).
     monitor_offset_minute: int = 1

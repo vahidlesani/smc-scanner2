@@ -989,6 +989,8 @@ def detect_pinwall_quality(bundle: MarketBundle, style: str) -> Optional[SignalC
         enrich_render(candidate, df, htf_df=bundle.get("4h") or bundle.get("1h"))
     except Exception:
         pass
+    if str(candidate.metadata.get("base_gate", "ALLOW")).startswith(("REJECT", "WARN")):
+        return None
     return candidate
 
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 
 ZONE_KINDS = ("FVG", "IFVG", "OB", "FLIP", "BOS", "SUPPLY", "DEMAND",
@@ -196,8 +197,145 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
         trigger_df, getattr(candidate, "direction", ""),
         float(getattr(candidate, "entry_zone_bottom", 0) or 0),
         float(getattr(candidate, "entry_zone_top", 0) or 0))
-    md["render_patterns"] = detect_patterns(trigger_df.tail(170))
+    pats = detect_patterns(trigger_df.tail(170))
+    md["render_patterns"] = pats
+    # FLAG / FLAG-LIMIT: the flag's far edge IS a limit-entry zone
+    for _p in pats:
+        if _p.get("type") in ("FLAG_BULL", "FLAG_BEAR") and _p.get("lines"):
+            _ln = _p["lines"][0]
+            _xe = float(_ln.get("x1", 0))
+            _ye = float(_ln["slope"]) * _xe + float(_ln["intercept"])
+            _atr = _atr(trigger_df)
+            _band = max(0.15 * _atr, 1e-9)
+            md["render_zones"] = [{
+                "kind": "FLAG-LIMIT",
+                "bottom": _ye - _band, "top": _ye + _band,
+                "x0": max(0, int(_xe) - 6),
+                "bias": "DEMAND" if _p["type"] == "FLAG_BULL" else "SUPPLY",
+            }] + list(md["render_zones"])
+    base = detect_base(trigger_df)
+    if base:
+        md["base_watch"] = base
+        md["base_gate"] = base_gate(getattr(candidate, "direction", ""), base)
+        gate_ladder(candidate, base)
     if htf_df is not None and len(htf_df) > 45:
         md["htf_zones"] = detect_zones(htf_df, getattr(candidate, "direction", ""),
                                        cap=3)
     return candidate
+
+# ── base / continuation doctrine (Viva 09-16 night) ──────────────────────
+def detect_base(df, box_n: int = 24, atr_mult: float = 3.5,
+                pre_n: int = 20, drift_mult: float = 1.5,
+                tol_frac: float = 0.12):
+    """Spike/trend into a consolidation base (rectangle / wedge / triangle /
+    plain base / IFVG / supply cluster ...).  Returns None when price is not
+    coiling.  Dict: trend UP|DOWN|None, hi, lo, x0, side UP|DOWN|ABOVE|BELOW|
+    None(mid-box), touch_from ABOVE|BELOW|None."""
+    if df is None or len(df) < box_n + pre_n + 5:
+        return None
+    try:
+        hi_all = df["high"].to_numpy(float)
+        lo_all = df["low"].to_numpy(float)
+        cl = df["close"].to_numpy(float)
+    except Exception:
+        return None
+    n = len(df)
+    # the LAST candle is the actor, not part of the base: a break candle must
+    # be able to close outside the box it breaks
+    b_hi = float(hi_all[n - box_n - 1:n - 1].max())
+    b_lo = float(lo_all[n - box_n - 1:n - 1].min())
+    box_h = b_hi - b_lo
+    if box_h <= 0:
+        return None
+    tr = pd.DataFrame({"high": hi_all, "low": lo_all, "close": cl,
+                       "open": np.r_[cl[0], cl[:-1]]})
+    atr = _atr(tr)
+    if not np.isfinite(atr) or atr <= 0 or box_h > atr_mult * atr:
+        return None                                  # still trending, no base
+    drift = cl[n - box_n] - cl[n - box_n - pre_n]
+    if drift > drift_mult * atr:
+        trend = "UP"
+    elif drift < -drift_mult * atr:
+        trend = "DOWN"
+    else:
+        trend = None                                 # pure trading range
+    c = float(cl[-1])
+    tol = max(tol_frac * box_h, 0.35 * atr)
+    if c > b_hi + tol:
+        side, touch = "ABOVE", None
+    elif c < b_lo - tol:
+        side, touch = "BELOW", None
+    elif c >= b_hi - tol:
+        side, touch = "UP", ("ABOVE" if c >= b_hi else "BELOW")
+    elif c <= b_lo + tol:
+        side, touch = "DOWN", ("BELOW" if c <= b_lo else "ABOVE")
+    else:
+        side, touch = None, None
+    return {"trend": trend, "hi": b_hi, "lo": b_lo,
+            "x0": n - box_n, "side": side, "touch_from": touch}
+
+
+def base_gate(direction: str, base) -> str:
+    """Doctrine gate.  'سقف دنبال نزولی، کف دنبال صعودی' = inside a plain
+    range the CEILING feeds shorts and the FLOOR feeds longs (mean reversion
+    edge-to-edge only).  After a spike/trend the base edges are continuation
+    triggers: touch = warning only, break + first trigger-TF close (or the
+    pullback retest of the broken edge) = entry.  No swing high/low may by
+    itself forbid trend continuation."""
+    if not base:
+        return "ALLOW"
+    s, tr, tf = base.get("side"), base.get("trend"), base.get("touch_from")
+    if s is None:
+        return "REJECT-MID"                          # mid-box: no new entry
+    if tr is None:                                   # pure range / channel
+        if s in ("ABOVE", "BELOW"):
+            return "ALLOW"                           # breakout: setup rules
+        if s == "DOWN" and direction == "LONG":
+            return "ALLOW"                           # floor -> long
+        if s == "UP" and direction == "SHORT":
+            return "ALLOW"                           # ceiling -> short
+        return "REJECT-EDGE"                         # no cross-range trade
+    if tr == "UP":
+        if direction == "LONG":
+            if s == "ABOVE" or (s == "UP" and tf == "ABOVE"):
+                return "ALLOW"                       # break close / pullback
+            if s == "UP":
+                return "WARN-CONT"                   # touch: alert only
+            return "REJECT-SIDE"
+        if s == "BELOW" or (s == "DOWN" and tf == "BELOW"):
+            return "ALLOW"                           # base failed -> short
+        if s == "UP":
+            return "WARN-REV"
+        return "REJECT-SIDE"
+    if direction == "SHORT":
+        if s == "BELOW" or (s == "DOWN" and tf == "BELOW"):
+            return "ALLOW"
+        if s == "DOWN":
+            return "WARN-CONT"
+        return "REJECT-SIDE"
+    if s == "ABOVE" or (s == "UP" and tf == "ABOVE"):
+        return "ALLOW"                               # base failed -> long
+    if s == "DOWN":
+        return "WARN-REV"
+    return "REJECT-SIDE"
+
+
+def gate_ladder(candidate, base) -> None:
+    """TPs outside a live range/channel are POST-BREAK only: long ladders may
+    not reach past the ceiling, short ladders not past the floor, until the
+    opposite edge breaks (lifecycle re-activates them)."""
+    if not base or base.get("side") in ("ABOVE", "BELOW"):
+        return
+    lad = (candidate.metadata or {}).get("target_ladder") or {}
+    targets = lad.get("targets") or []
+    if not targets:
+        return
+    if candidate.direction == "LONG":
+        locked = [i for i, t in enumerate(targets) if t > base["hi"] + 1e-9]
+        level = base["hi"]
+    else:
+        locked = [i for i, t in enumerate(targets) if t < base["lo"] - 1e-9]
+        level = base["lo"]
+    if locked:
+        candidate.metadata["tp_gates"] = {"level": float(level),
+                                          "locked": locked}
