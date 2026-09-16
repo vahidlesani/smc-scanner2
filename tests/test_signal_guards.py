@@ -217,11 +217,11 @@ def test_family_block_template_everywhere():
     from test_v7 import make_candidate
     cap = _approaching_caption(make_candidate(), 99.7, 0.31)
     assert cap.count(VIVA_SEP) >= 4                      # blocks separated
-    for needle in ("🏷 <b>VIVA ✦", "⚡ <b>هشدار نهایی", "🪙 <b>BTCUSDT</b>",
-                   "🕓 <b>زمان رصد — ایران:</b>", "📨 <b>زمان ارسال — ایران:</b>",
-                   "🎯 <b>", "🤖 <b>نظر AI:</b>", "📍 <b>زون:</b>", "💲 <b>قیمت:</b>",
-                   "⚖️ <b>در انتظار کلوز تأییدی", "🚩 <b>فاصله:</b> 0.31 ATR",
-                   "🛑 <b>ابطال:</b>", "🆔 <code>"):
+    for needle in ("🏷 <b>VIVA ✦", "<b>هشدار نهایی | آماده‌سازی ورود</b>",
+                   "🪙 <b>BTCUSDT</b>", "🔎 در آستانه تأیید",
+                   "📍 ناحیه:", "🎯 جهت محتمل پس از تأیید معتبر:",
+                   "📏 فاصله زنده تا ناحیه: 0.310 ATR", "⚖️", "🌀",
+                   "سیگنال واقعی فقط با Close معتبرِ شکست", "🆔 <code>"):
         assert needle in cap, needle
 
 
@@ -311,7 +311,7 @@ def test_setup_chain_final_doctrine(monkeypatch):
 
         # final alert: a NEW message replying to the LAST update (any number)
         assert M.send_approaching(cand, 99.7, 0.31) is True
-        fin = [x for x in posts if "⚡ <b>هشدار نهایی" in x[1]][0]
+        fin = [x for x in posts if "⚡<b>هشدار نهایی" in x[1]][0]
         assert fin[3] == up2[0]                           # «ریپلای به آخرین آپدیت با هر شماره‌ای»
         assert not edits_t and not edits_c                # nothing was overwritten
         chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
@@ -422,7 +422,7 @@ def test_viva_exact_format_detailed_and_compact():
     assert "📚 <b>تحلیل آموزشی | ستاپ در حال بررسی</b>" in msg
     assert "⛔ <b>این پیام تأیید ورود نیست</b>" in msg
     _sym_ln = msg.split("🪙")[1].split("\n")[0]
-    assert "<b>BTCUSDT</b>" in _sym_ln and "SWING" in _sym_ln and "15M" in _sym_ln  # TF beside symbol
+    assert "<b>BTCUSDT</b>" in _sym_ln and "SWING" in _sym_ln  # ref §2: symbol • style • direction
     assert "🧠" not in msg                                      # no invented sections
     assert "⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود" in msg
     assert "⛔ Entry،" not in msg                               # English-first lines banned
@@ -442,7 +442,7 @@ def test_viva_exact_format_detailed_and_compact():
 
     ap = M._approaching_caption(c, 99.6, 0.31)
     _ap_ln = ap.split("🪙")[1].split("\n")[0]
-    assert "BTCUSDT" in _ap_ln and "15M" in _ap_ln       # TF beside the symbol
+    assert "BTCUSDT" in _ap_ln and "LONG" in _ap_ln      # ref §2: symbol • style • direction
 
 
 def test_teclassic_public_code_family():

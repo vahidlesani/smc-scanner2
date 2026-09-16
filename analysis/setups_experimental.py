@@ -335,6 +335,12 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
                 "این تحلیل تا بسته‌شدنِ یک کندلِ تأییدیِ معتبر، دستور ورود نیست.",
                 f"عبور معتبر قیمت از {_sl := candidate.sl:.6g} سناریوی تحلیلی را باطل می‌کند.",
             ]
+            try:  # CHART-8: the WATCH chart paints zones/patterns like every setup
+                from analysis.render_kit import enrich_render
+                enrich_render(candidate, trigger_df,
+                              htf_df=bundle.get("4h") or bundle.get("1h"))
+            except Exception:
+                pass
             candidate.metadata.update({"strategy_variant":"VIVA_TLBREAK","viva_state":"S0_WATCH","viva_pattern":"TWO_PIVOT_WATCH","viva_watch_line":line_price,"viva_touch_count":2,"viva_watch_points":[dict(watch.first),dict(watch.last)],"public_code":generate_viva_public_code("TLBREAK", style),
                                        "confirm_tf": confirm_timeframe_for_pattern(structure_tf, style, trigger_tf),
                                        "touched": False})

@@ -2088,6 +2088,9 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
     dir_fa = "🧭 سناریوی احتمالی خرید" if candidate.direction == "LONG" else "🧭 سناریوی احتمالی فروش"
     badge, _ = _setup_badge(candidate)
     tf_tag = str(candidate.trigger_timeframe or "").upper()
+    if not tf_tag:  # never print an empty TF slot (Viva 09-17)
+        from analysis.setups_v7 import timeframe_profile as _tfp9
+        tf_tag = str(_tfp9(candidate.style)[2]).upper()
     rows = [
         f"🏷 <b>{_e(badge)}</b>",
         VIVA_SEP,
@@ -2378,6 +2381,11 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
         _store_alert_message_id(candidate, "education_chart_message_id",
                                 send_photo(chart, caption, target))
     mid = send_message(build_educational_message(candidate), target)
+    if not mid:  # Viva 09-17: the DETAILED alert must never silent-die
+        print(f"DETAILED alert post failed {candidate.signal_id}; retrying once")
+        mid = send_message(build_educational_message(candidate), target)
+        if not mid:
+            print(f"DETAILED alert post FAILED twice {candidate.signal_id}")
     _store_alert_message_id(candidate, "education_message_id", mid)
     # Viva 2026-09-11 (final doctrine, verbatim): the main channel receives
     # ONLY the final alert (and later the Confirmed which replaces it) — the
@@ -2631,23 +2639,23 @@ def _approaching_caption(candidate: SignalCandidate, current_price: float, dista
         target_line = f"🎯 <b>{head}</b> | {_e(why)} • ⭐ {candidate.score}/10\n"
     return (
         f"🏷 <b>{_e(badge)}</b>\n{VIVA_SEP}\n"
-        f"⚡ <b>هشدار نهایی | آماده‌سازی ورود</b>\n\n"
-        f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(str(candidate.trigger_timeframe or '').upper())} • "
-        f"{_e(candidate.style)} • {_e(candidate.direction)}\n"
+        f"⚡<b>هشدار نهایی | آماده‌سازی ورود</b>\n\n"
+        f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(candidate.style)} • "
+        f"{_e(candidate.direction)}\n{VIVA_SEP}\n"
+        f"🔎 در آستانه تأیید — {_e(name.strip() or head)}\n"
+        f"📍 ناحیه: {_price(candidate.entry_zone_bottom)} تا "
+        f"{_price(candidate.entry_zone_top)} • ابطال: {_price(candidate.sl)}\n"
         f"{VIVA_SEP}\n"
-        f"🕓 <b>زمان رصد — ایران:</b> {_iran_time(candidate)}\n"
-        f"📨 <b>زمان ارسال — ایران:</b> {_iran_now()}\n"
+        f"🎯 جهت محتمل پس از تأیید معتبر: "
+        f"{'نزولی (SHORT)' if candidate.direction == 'SHORT' else 'صعودی (LONG)'}\n"
+        f"📏 فاصله زنده تا ناحیه: {distance_atr:.3f} ATR\n"
         f"{VIVA_SEP}\n"
-        + target_line + ai_line +
-        f"📍 <b>زون:</b> {_price(candidate.entry_zone_bottom)} – {_price(candidate.entry_zone_top)}\n"
-        f"💲 <b>قیمت:</b> {_price(current_price)}\n"
+        f"⚖️ {event.strip() or 'شرایط در آستانهٔ کامل‌شدن'}\n"
+        f"🌀 {_e(advisory or 'شرط خاص اضافه‌ای ثبت نشده.')}\n"
         f"{VIVA_SEP}\n"
-        f"⚖️ <b>در انتظار کلوز تأییدی تایم پایین / MSS</b>\n"
-        f"🚩 <b>فاصله:</b> "
-        + ("داخل ناحیه — در حالِ ارزیابیِ کلوز" if abs(float(distance_atr or 0)) < 0.01
-           else f"{distance_atr:.2f} ATR") + "\n"
-        f"🛑 <b>ابطال:</b> {_price(candidate.sl)}\n"
-        f"{VIVA_SEP}\n\n"
+        f"سیگنال واقعی فقط با Close معتبرِ شکست + پولبک اول + BOS تایم پایین "
+        f"صادر می‌شود.\n"
+        f"{VIVA_SEP}\n"
         f"🆔 <code>{_e(_public_code(candidate))}</code>"
     )
 
