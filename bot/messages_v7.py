@@ -2249,6 +2249,15 @@ def _sig_mirror(code: str, kind: str, text: str, chart=None, reply_kind: str = "
         _ph, mid = _post_chart_then_text(
             chart, text, CHAT_ID_VIVA_SIGNALS, reply_to=reply,
             reply_markup=markup, label=_chart_label(code=code, title_fa=_ttl))
+        if not mid and reply:
+            # Viva 09-17: a journal entry must NEVER die because its parent
+            # (a replaced/deleted update) is gone — retry as a plain post.
+            print(f"viva-signals mirror {code}/{kind}: reply target unusable, retry plain")
+            _ph, mid = _post_chart_then_text(
+                chart, text, CHAT_ID_VIVA_SIGNALS, reply_to=None,
+                reply_markup=markup, label=_chart_label(code=code, title_fa=_ttl))
+        if not mid:
+            print(f"viva-signals mirror FAILED {code}/{kind}: no message id")
         if mid:
             chain[f"sig_{kind}"] = int(mid)
             _setup_chain_set_by_code(code, chain)
