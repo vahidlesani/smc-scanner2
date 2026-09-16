@@ -8,10 +8,20 @@ from typing import Any
 
 
 def _f(value: Any, digits: int = 2) -> str:
+    """Viva 09-17 (verbatim): «حداکثر ۲ رقم اعشار» — the digits argument is
+    retired; numbers ≥1 get 2 decimals, sub-$1 keep 2 significant digits."""
     try:
-        return f"{float(value):.{digits}f}"
+        x = float(value)
     except (TypeError, ValueError):
         return "—"
+    a = abs(x)
+    if a >= 1000:
+        return f"{x:,.2f}"
+    if a >= 1:
+        return f"{x:.2f}"
+    if x == 0:
+        return "0"
+    return f"{x:.2g}"
 
 
 def detailed_warning_fa(metadata: dict, direction: str) -> str:

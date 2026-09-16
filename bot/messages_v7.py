@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import io
+import re
 import os
 import threading
 import time
@@ -53,10 +54,10 @@ _SESS_FA = {"SYDNEY": "سدنی", "ASIA": "آسیا", "TOKYO": "توکیو",
 
 
 def _sep_bullets(block: str) -> str:
-    """FORMAT-3 (09-16): an item rule between every line of a titled block —
-    exactly the readability surgery Viva applied by hand to his sample."""
-    lines = (block or "").split("\n")
-    return ("\n" + VIVA_SEP_ITEM + "\n").join(lines) if len(lines) > 1 else (block or "")
+    """Viva 09-17 (reverses FORMAT-3): «خطوط جدا کننده زیاد بود» — bullets
+    inside a section now stack with plain newlines; ━ lives ONLY between the
+    major sections of the detailed message."""
+    return block or ""
 CHAT_ID_ADMIN = os.getenv("CHAT_ID", "")
 
 # Chart identity: Viva's own TradingView look (light, monochrome candles,
@@ -330,7 +331,7 @@ def _confirm_rule_block(candidate: SignalCandidate) -> str:
             "<b>BOS</b> یعنی شکست سطح ساختاری. هرکدام که همین حالا روی ناحیه شکل "
             "گرفته، در بخش «🔥 نشانهٔ فعال روی ناحیه» با تحلیل دوخطی آمده است.")
     parts.append(f"<b>ابطال:</b> {kill}")
-    return ("\n" + VIVA_SEP_ITEM + "\n").join(parts)
+    return "\n".join(parts)
 
 
 def _why_fa(candidate: SignalCandidate, limit: int = 6) -> str:
@@ -364,12 +365,18 @@ def _why_fa(candidate: SignalCandidate, limit: int = 6) -> str:
 
 
 def _price(value: float) -> str:
+    """Viva 09-17 (verbatim): «اعداد با دو اعشار بیشتر نیان در هیچ عددی ...
+    حداکثر ۲ رقم اعشار» — big numbers 2 decimals; sub-$1 keeps 2 significant
+    digits so cheap coins stay readable."""
     value = float(value)
-    if value >= 1000:
+    absolute = abs(value)
+    if absolute >= 1000:
         return f"{value:,.2f}"
-    if value >= 1:
-        return f"{value:.4f}"
-    return f"{value:.6f}"
+    if absolute >= 1:
+        return f"{value:.2f}"
+    if value == 0:
+        return "0"
+    return f"{value:.2g}"
 
 
 def _axis_price(value: float, _position=None) -> str:
@@ -1900,15 +1907,15 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         + _confirm_rule_block(candidate) + "\n"
         f"{VIVA_SEP}\n"
         f"🧭 <b>کانتکست تایم بالاتر</b>\n"
-        + ("\n" + VIVA_SEP_ITEM + "\n").join(
+        + "\n".join(
             f"• {_e(b)}" for b in _htf_context_bits(candidate)) + "\n"
         f"{VIVA_SEP}\n"
         f"🧩 <b>تأییدهای کمکی</b>\n"
-        + ("\n" + VIVA_SEP_ITEM + "\n").join(_conf_lines) + "\n"
+        + "\n".join(_conf_lines) + "\n"
         f"{VIVA_SEP}\n"
         + _zt_sec
         + "⚠️ <b>شرایط و هشدارها</b>\n"
-        + ("\n" + VIVA_SEP_ITEM + "\n").join(_warn_lines) + "\n"
+        + "\n".join(_warn_lines) + "\n"
         + f"{VIVA_SEP}\n"
         + _ai_detail_block(candidate)
         + f"⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود\n"
@@ -2288,6 +2295,17 @@ def _sig_mirror(code: str, kind: str, text: str, chart=None, reply_kind: str = "
         return 0
 
 
+def _fa_start(text: str) -> str:
+    """Viva 09-17: «هیچ اصطلاح و کلمه انگلیسی اول جمله‌ها در هیچ خطی نیاد» —
+    but technical terms are never deleted; they just may not be FIRST. Emoji
+    prefixes stay put; an ASCII-leading word gets a Persian opener."""
+    m = re.match(r"^([^\w]*)([A-Za-z])", text or "")
+    if m:
+        head = m.group(1)
+        return f"{head}اندیکاتور {text[len(head):]}"
+    return text
+
+
 def _tech_aids_lines(candidate) -> list:
     """Viva 2026-09-13: session + EMA ladder + Fibo level + divergence in
     EVERY lifecycle message — detailed, compact, updates, final."""
@@ -2297,7 +2315,7 @@ def _tech_aids_lines(candidate) -> list:
     if sess:
         rows.append(f"• 🕐 سشن آخرین کندل: {_e(_SESS_FA.get(sess.upper(), sess))}")
     for line in (md.get("tech_aids") or []):
-        rows.append(f"• {_e(line)}")
+        rows.append(f"• {_e(_fa_start(str(line)))}")
     return rows
 
 
@@ -2666,7 +2684,7 @@ def _approaching_caption(candidate: SignalCandidate, current_price: float, dista
         f"{VIVA_SEP}\n"
         f"🎯 جهت محتمل پس از تأیید معتبر: "
         f"{'نزولی (SHORT)' if candidate.direction == 'SHORT' else 'صعودی (LONG)'}\n"
-        f"📏 فاصله زنده تا ناحیه: {distance_atr:.3f} ATR\n"
+        f"📏 فاصله زنده تا ناحیه: {distance_atr:.2f} ATR\n"
         f"{VIVA_SEP}\n"
         f"⚖️ {event.strip() or 'شرایط در آستانهٔ کامل‌شدن'}\n"
         f"🌀 {_e(advisory or 'شرط خاص اضافه‌ای ثبت نشده.')}\n"
@@ -3625,9 +3643,9 @@ def send_technoclassic_preview(ev: dict) -> bool:
             f"📐 خط روند اصلی روی تایم {_e(str(ev.get('pattern_tf') or ''))} • ضلع {side_fa}\n"
             f"{VIVA_SEP}\n"
             f"🎯 جهت محتمل پس از شکست معتبر: {_dir_fa}\n"
-            f"📏 فاصله زنده تا خط: {float(ev.get('distance_atr') or 0):.3f} ATR • "
+            f"📏 فاصله زنده تا خط: {float(ev.get('distance_atr') or 0):.2f} ATR • "
             f"پیوت‌های معتبر: {ev.get('touches')} (خطای فیت "
-            f"{float(ev.get('fit_error_atr') or 0):.3f} ATR)\n"
+            f"{float(ev.get('fit_error_atr') or 0):.2f} ATR)\n"
             f"{VIVA_SEP}\n"
             f"⚖️ تاریخچۀ برخورد روی این خط: {_rej} دفع / {_brk} شکست از {_tot} برخورد "
             f"(نرخ دفع {int(float(_react.get('reject_rate', 0) or 0) * 100)}٪)\n"

@@ -24,6 +24,20 @@ from analysis.indicators import adx, atr, structure_bias
 from analysis.models import EvidenceItem, SignalCandidate, generate_viva_public_code
 from analysis.pattern_engine import PATTERN_FA as _PATTERN_FA
 from config import get_settings
+
+
+def _n2(value: float) -> str:
+    """Viva 09-17: message numbers max 2 decimals; sub-1 -> 2 sig digits."""
+    value = float(value)
+    absolute = abs(value)
+    if absolute >= 1000:
+        return f"{value:,.2f}"
+    if absolute >= 1:
+        return f"{value:.2f}"
+    if value == 0:
+        return "0"
+    return f"{value:.2g}"
+
 from analysis.setups_v7 import (
     SETUP_NAMES,
     SETUP_NAMES_FA,
@@ -156,8 +170,8 @@ def detect_pattern_1234(bundle: MarketBundle, style: str) -> Optional[SignalCand
     }
     p1, p3 = found["p1"], found["p3"]
     detail = (
-        f"ساختار برگشتی ۱-۲-۳-۴ کامل شد: نقطه ۱ در {p1['price']:.4f}، نقطه ۲ (سقف/کف اصلاح) در {level:.4f} "
-        f"و نقطه ۳ در {p3['price']:.4f} که نتوانست نقطه ۱ را بشکند. قیمت سطح نقطه ۲ را با Close شکسته است؛ "
+        f"ساختار برگشتی ۱-۲-۳-۴ کامل شد: نقطه ۱ در {_n2(p1['price'])}، نقطه ۲ (سقف/کف اصلاح) در {_n2(level)} "
+        f"و نقطه ۳ در {_n2(p3['price'])} که نتوانست نقطه ۱ را بشکند. قیمت سطح نقطه ۲ را با Close شکسته است؛ "
         f"ورود فقط پس از اولین بازگشت به سطح شکسته و تشکیل کندل تأیید بررسی می‌شود."
     )
     special = EvidenceItem(
@@ -329,11 +343,11 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             _dist = abs(_px - line_price) / atr_watch
             candidate.evidence = [
                 EvidenceItem("tl_watch", "اعتبار خط دوپیوتی", f"خط از ۲ پیوتِ معتبر روی {refine_tf} ساخته شده؛ هر دو پیوت در جهتِ سناریو تست شده‌اند. این نسخه هنوز «در انتظار اعتبار» است و با یک کلوزِ معتبرِ فراتر از خط به ستاپ تمام‌عیار تبدیل می‌شود.", False, 1, level=line_price, timeframe=refine_tf),
-                EvidenceItem("tl_position", "موقعیت قیمت نسبت به خط", f"قیمت فعلی {_px:.6g} در فاصله‌ی {_dist:.2f} ATR از خطِ {line_price:.6g} است؛ شرط تأیید: یک کلوزِ معتبر فراتر از خط در جهت سناریو (پولبک شرط نیست).", False, 1, level=line_price, timeframe=trigger_tf),
+                EvidenceItem("tl_position", "موقعیت قیمت نسبت به خط", f"قیمت فعلی {_n2(_px)} در فاصله‌ی {_dist:.2f} ATR از خطِ {_n2(line_price)} است؛ شرط تأیید: یک کلوزِ معتبر فراتر از خط در جهت سناریو (پولبک شرط نیست).", False, 1, level=line_price, timeframe=trigger_tf),
             ]
             candidate.warnings = [
                 "این تحلیل تا بسته‌شدنِ یک کندلِ تأییدیِ معتبر، دستور ورود نیست.",
-                f"عبور معتبر قیمت از {candidate.sl:.6g} سناریوی تحلیلی را باطل می‌کند.",
+                f"عبور معتبر قیمت از {_n2(candidate.sl)} سناریوی تحلیلی را باطل می‌کند.",
             ]
             try:  # CHART-8: the WATCH chart paints zones/patterns like every setup
                 from analysis.render_kit import enrich_render
@@ -366,7 +380,7 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         poi = {"bottom": breakout.line_price - .15 * atr_t, "top": breakout.line_price + .15 * atr_t, "touches": 0, "type": f"VIVA {pattern} BREAK/RETEST"}
         bias = structure_bias(structure_df, 5)
         context = {"bias": bias.get("bias", "NEUTRAL")}
-        special = EvidenceItem("viva_tlbreak", "شکست ساختاری - VIVA-TLBREAK", f"{pattern} با {line.touch_count} پیوت تاییدشده و خطای فیت {line.fit_residual_atr:.2f} ATR؛ کلوز شکست {breakout.beyond_atr:.2f} ATR بیرون خط است.", True, 2, level=breakout.line_price, timeframe=refine_tf)
+        special = EvidenceItem("viva_tlbreak", "شکست ساختاری - VIVA-TLBREAK", f"سطح {pattern} با {line.touch_count} پیوت تاییدشده و خطای فیت {line.fit_residual_atr:.2f} ATR؛ کلوز شکست {breakout.beyond_atr:.2f} ATR بیرون خط است.", True, 2, level=breakout.line_price, timeframe=refine_tf)
         impulse = {"index": len(trigger_df)-1, "level": breakout.line_price, "valid": True, "direction": "BULLISH" if direction=="LONG" else "BEARISH", "body_atr": breakout.body_atr, "volume_ratio": 1.0}
         candidate = _base_candidate(bundle, style, "TLBREAK", direction, structure_tf, trigger_tf, context, poi, impulse, special, "viva_tlbreak_geometry", True)
         if candidate is None:
@@ -508,7 +522,7 @@ def detect_trendline_breakout(bundle: MarketBundle, style: str) -> Optional[Sign
         )
         detail = (
             f"خط {'مقاومت نزولی کانال' if direction == 'LONG' else 'حمایت صعودی کانال'} از دو پیوت "
-            f"{context_tf.upper()} ({fit['a']['price']:.6g} و {fit['b']['price']:.6g}) با {fit['touches']} برخورد قبلی رسم شده؛ "
+            f"خطِ {context_tf.upper()} ({_n2(fit['a']['price'])} و {_n2(fit['b']['price'])} با {fit['touches']} برخورد قبلی رسم شده؛ "
             f"ارتفاع کانال {fit['height'] / atr_c:.1f}×ATR است. {base_note}"
         )
         special = EvidenceItem("tlbreak", "شکست خط روند/کانال داینامیک", detail, True, 2,

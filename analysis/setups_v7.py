@@ -374,11 +374,16 @@ def enrich_candidate_context(bundle: MarketBundle, candidate: SignalCandidate) -
 
 
 def _fmt(value: float) -> str:
-    if value >= 1000:
+    """Viva 09-17: max 2 decimals in messages; sub-1 -> 2 significant digits."""
+    value = float(value)
+    absolute = abs(value)
+    if absolute >= 1000:
         return f"{value:,.2f}"
-    if value >= 1:
-        return f"{value:.4f}"
-    return f"{value:.6f}"
+    if absolute >= 1:
+        return f"{value:.2f}"
+    if value == 0:
+        return "0"
+    return f"{value:.2g}"
 
 
 def _direction(bias: str) -> str:
@@ -647,7 +652,7 @@ def _market_quality(bundle: MarketBundle, style: str) -> Tuple[bool, str, int]:
     points = 1 if valid and (relative >= 1.1 or projected_turnover >= SETTINGS.scalp_min_turnover_usd) else 0
     detail = (
         f"گردش مالی ثبت‌شده از ابتدای روز معاملاتی UTC حدود ${day_turnover:,.0f} "
-        f"(برآورد آهنگ روزانه ${projected_turnover:,.0f})، اسپرد تقریبی {spread:.3f}% "
+        f"(برآورد آهنگ روزانه ${projected_turnover:,.0f})، اسپرد تقریبی {spread:.2f}% "
         f"و آهنگ حجم نسبی {relative:.2f} برابر میانه روزهای اخیر است. "
         + ("نقدشوندگی برای این نوع معامله قابل قبول ارزیابی شده است." if valid else "نقدشوندگی روز جاری یا اسپرد هنوز استاندارد لازم برای اجرای معامله را ندارد.")
     )
