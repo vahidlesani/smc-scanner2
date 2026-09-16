@@ -395,6 +395,21 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         # Never move a structural stop inside the generic liquidity protected stop.
         candidate.sl = min(candidate.sl, pattern_sl) if direction == "LONG" else max(candidate.sl, pattern_sl)
         final_target = plan.structural_target or plan.measured_target
+        # Viva 09-17 (XRP complaint: 15m setup announced a 24%-away final
+        # target): a target must stay believable inside the trigger TF's own
+        # horizon — global doctrine picks the NEAREST credible opposing
+        # liquidity, not a distant weekly magnet. Beyond 25x trigger-ATR the
+        # pattern's own measured projection represents the trade instead.
+        try:
+            _tatr = float((trigger_df["high"] - trigger_df["low"]).tail(14).mean()) or 0.0
+        except Exception:
+            _tatr = 0.0
+        if _tatr > 0 and abs(final_target - candidate.planned_entry) > 25.0 * _tatr:
+            _mt = float(plan.measured_target or 0.0)
+            _mt_ok = ((direction == "LONG" and _mt > candidate.planned_entry)
+                      or (direction == "SHORT" and _mt < candidate.planned_entry))
+            if _mt_ok and abs(_mt - candidate.planned_entry) <= 25.0 * _tatr:
+                final_target = _mt
         if (direction == "LONG" and final_target <= candidate.planned_entry) or (direction == "SHORT" and final_target >= candidate.planned_entry):
             continue
         risk = abs(candidate.planned_entry - candidate.sl)
@@ -774,6 +789,16 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             float((bundle.ticker or {}).get("spread_pct", 0) or 0),
         )
         sl = float(invalidation["price"])
+        # Brooks stop law (Viva 09-17, his verbatim doctrine): «استاپ باید پشت
+        # آخرین کف یا آخرین سقف ماقبل با یک بافر استاندارد قرار بگیرد» — the
+        # stop must sit BEYOND the signal (pin) bar's extreme plus a standard
+        # buffer; a liquidity anchor landing INSIDE the pin bar is simply
+        # wrong. The farther of (liquidity anchor, pin-extreme+buffer) wins.
+        _sbuf = max(0.25 * atr_v, float(invalidation.get("buffer") or 0.0))
+        if direction == "LONG":
+            sl = min(sl, l - _sbuf)
+        else:
+            sl = max(sl, h + _sbuf)
         risk = abs(entry - sl)
         if risk <= 0:
             continue

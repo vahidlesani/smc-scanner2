@@ -156,7 +156,7 @@ def _dead_gate_recently_alerted(candidate: SignalCandidate) -> bool:
         f"{round(float(candidate.metadata.get('structure_level', 0) or 0), 6)}"
     )
     from analysis.setups_v7 import expiry_hours_for
-    expiry_hours = expiry_hours_for(candidate.style)
+    expiry_hours = expiry_hours_for(candidate.style, candidate.trigger_timeframe)
     return _kv_alerted(key, expiry_hours)
 
 
@@ -170,7 +170,7 @@ def _suppressed_edu_throttled(candidate) -> bool:
     key = (f"{candidate.symbol}:{candidate.style}:{candidate.setup_code}:{candidate.direction}:"
            f"{round(float(candidate.entry_zone_bottom), 6)}")
     from analysis.setups_v7 import expiry_hours_for
-    expiry_hours = expiry_hours_for(candidate.style)
+    expiry_hours = expiry_hours_for(candidate.style, candidate.trigger_timeframe)
     return _kv_alerted("sup:" + key, expiry_hours)
 
 

@@ -132,8 +132,21 @@ TIMEFRAME_PROFILES = {
 PROFILE_OVERRIDE: Dict[str, tuple] = {}
 
 
-def expiry_hours_for(style: str) -> int:
-    """Watch window of an unconfirmed scenario, per stream of the ladder."""
+# Viva 09-17 (his base-forming argument): a 1d/4h base can take 6-10 candles —
+# the watch window must outlive the SLOWEST reasonable base on that TF, else
+# the chain expires before its confirmation ever arrives (why 1d never spoke).
+# Global doctrine: confirmation is event-based (zone invalidated = dead),
+# never a candle count; expiry is hygiene only, so it stays generous.
+EXPIRY_HOURS_BY_TRIGGER = {"15m": 36, "1h": 96, "4h": 240, "1d": 360}
+
+
+def expiry_hours_for(style: str, trigger_tf: str = "") -> int:
+    """Watch window of an unconfirmed scenario — by TRIGGER timeframe first
+    (a SWING 4h chain and a SWING 1h chain are different animals), style as
+    the legacy fallback."""
+    tf = str(trigger_tf or "").lower()
+    if tf in EXPIRY_HOURS_BY_TRIGGER:
+        return EXPIRY_HOURS_BY_TRIGGER[tf]
     st = str(style or "").upper()
     if st == "GRAND":
         return int(getattr(SETTINGS, "candidate_expiry_hours_grand", 96) or 96)
@@ -828,7 +841,7 @@ def _base_candidate(
         # TechnoClassic (score 8) died there five cycles running. Ratios are
         # printed for the reader; the alert and its monitor life are unconditional.
         gates.pop("rr", None)
-    expiry_hours = expiry_hours_for(style)
+    expiry_hours = expiry_hours_for(style, trigger_tf)
     expires = utc_now() + timedelta(hours=expiry_hours)
     signal_id = generate_viva_signal_id(bundle.symbol, style, setup_code)
     public_code = generate_viva_public_code(setup_code, style)
