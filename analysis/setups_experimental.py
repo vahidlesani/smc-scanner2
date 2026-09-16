@@ -32,11 +32,18 @@ def _n2(value: float) -> str:
     absolute = abs(value)
     if absolute >= 1000:
         return f"{value:,.2f}"
-    if absolute >= 1:
-        return f"{value:.2f}"
-    if value == 0:
+    if absolute >= 100:
+        s = f"{value:.2f}"
+    elif absolute >= 1:
+        s = f"{value:.3f}"          # Viva 09-17: 1-99 -> 3 decimals
+    elif value == 0:
         return "0"
-    return f"{value:.2g}"
+    else:
+        import math as _math        # sub-$1 -> 4 significant digits
+        s = f"{value:.{max(1, 3 - _math.floor(_math.log10(absolute)))}f}"
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s or "0"
 
 from analysis.setups_v7 import (
     SETUP_NAMES,
@@ -799,6 +806,22 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             sl = min(sl, l - _sbuf)
         else:
             sl = max(sl, h + _sbuf)
+        # HYPE chart ruling (Viva 09-17): «پشت آخرین کف یا آخرین سقف ماقبل» —
+        # the stop must also clear the LAST SWING PIVOT of the trigger TF;
+        # a stop inside the recent swing high/low is doctrine-wrong.
+        try:
+            from analysis.indicators import pivots as _pv
+            _ph, _pl = _pv(df.reset_index(drop=True), 3, 3)
+        except Exception:
+            _ph, _pl = [], []
+        if direction == "SHORT":
+            _piv = max((float(pt["price"]) for pt in list(_ph)[-6:]), default=None)
+            if _piv:
+                sl = max(sl, _piv + _sbuf)
+        else:
+            _piv = min((float(pt["price"]) for pt in list(_pl)[-6:]), default=None)
+            if _piv:
+                sl = min(sl, _piv - _sbuf)
         risk = abs(entry - sl)
         if risk <= 0:
             continue

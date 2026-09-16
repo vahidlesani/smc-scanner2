@@ -392,11 +392,18 @@ def _fmt(value: float) -> str:
     absolute = abs(value)
     if absolute >= 1000:
         return f"{value:,.2f}"
-    if absolute >= 1:
-        return f"{value:.2f}"
-    if value == 0:
+    if absolute >= 100:
+        s = f"{value:.2f}"
+    elif absolute >= 1:
+        s = f"{value:.3f}"          # Viva 09-17: 1-99 -> 3 decimals
+    elif value == 0:
         return "0"
-    return f"{value:.2g}"
+    else:
+        import math as _math        # sub-$1 -> 4 significant digits
+        s = f"{value:.{max(1, 3 - _math.floor(_math.log10(absolute)))}f}"
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s or "0"
 
 
 def _direction(bias: str) -> str:

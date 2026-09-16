@@ -8,8 +8,9 @@ from typing import Any
 
 
 def _f(value: Any, digits: int = 2) -> str:
-    """Viva 09-17 (verbatim): «حداکثر ۲ رقم اعشار» — the digits argument is
-    retired; numbers ≥1 get 2 decimals, sub-$1 keep 2 significant digits."""
+    """Viva 09-17 decimal ladder (his verbatim ruling): ≥1000 → comma+2 dec;
+    100-999 → 2 dec; 1-99 → 3 dec; sub-$1 → 4 significant digits. The digits
+    argument is retired."""
     try:
         x = float(value)
     except (TypeError, ValueError):
@@ -17,11 +18,18 @@ def _f(value: Any, digits: int = 2) -> str:
     a = abs(x)
     if a >= 1000:
         return f"{x:,.2f}"
-    if a >= 1:
-        return f"{x:.2f}"
-    if x == 0:
+    if a >= 100:
+        s = f"{x:.2f}"
+    elif a >= 1:
+        s = f"{x:.3f}"
+    elif x == 0:
         return "0"
-    return f"{x:.2g}"
+    else:
+        import math as _math
+        s = f"{x:.{max(1, 3 - _math.floor(_math.log10(a)))}f}"
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s or "0"
 
 
 def detailed_warning_fa(metadata: dict, direction: str) -> str:

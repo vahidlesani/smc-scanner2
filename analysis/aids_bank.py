@@ -118,7 +118,7 @@ def fibo_note(level_pct: float, distance_pct: float, mode: str,
     bank = FIBO_BANK[key]
     lv = f"{level_pct:g}"
     txt = bank[_seed_index(symbol, tf, bar_key, key, mod=len(bank))]
-    return _disambiguate(txt.format(lv=lv, dist=distance_pct, dir=direction,
+    return _disambiguate(txt.format(lv=lv, dist=f"{abs(float(distance_pct)):.3f}", dir=direction,
                                     next_lv=f"{next_lv:g}"), direction)
 
 

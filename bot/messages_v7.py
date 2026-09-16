@@ -372,11 +372,18 @@ def _price(value: float) -> str:
     absolute = abs(value)
     if absolute >= 1000:
         return f"{value:,.2f}"
-    if absolute >= 1:
-        return f"{value:.2f}"
-    if value == 0:
+    if absolute >= 100:
+        s = f"{value:.2f}"
+    elif absolute >= 1:
+        s = f"{value:.3f}"          # Viva 09-17: 1-99 -> 3 decimals
+    elif value == 0:
         return "0"
-    return f"{value:.2g}"
+    else:
+        import math as _math        # sub-$1 -> 4 significant digits
+        s = f"{value:.{max(1, 3 - _math.floor(_math.log10(absolute)))}f}"
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s or "0"
 
 
 def _axis_price(value: float, _position=None) -> str:
@@ -1225,7 +1232,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             if (_fam8, _dir_key) in ZONE_PALETTE and _fam8 != "DEF":
                 _f8, _t8 = ZONE_PALETTE[(_fam8, _dir_key)]
             ax.fill_between([_x0, zone_end], float(_z["bottom"]),
-                            float(_z["top"]), color=_f8, alpha=0.13,
+                            float(_z["top"]), color=_f8, alpha=0.18,
                             linewidth=0, zorder=1)
             _zone_items.append({"x0": float(_x0), "x1": float(zone_end),
                                 "bottom": float(_z["bottom"]),

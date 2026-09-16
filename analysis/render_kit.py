@@ -50,6 +50,10 @@ def detect_zones(df: pd.DataFrame, direction: str,
     def _add(kind: str, bottom: float, top: float, x0: int, bias: str) -> None:
         if top - bottom <= 0 or _overlaps_entry(bottom, top):
             return
+        # Viva 09-17: «نواحی فقط با کیفیت» — a zone 8+ ATR away is history,
+        # not a level price can act on inside this alert's life.
+        if abs((bottom + top) / 2 - float(cl[-1])) > 8 * atr:
+            return
         if any(abs(bottom - z["bottom"]) < 0.5 * atr and z["kind"] == kind
                for z in zones):
             return
@@ -149,26 +153,75 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
     if df is None or len(df) < 45:
         return out
     try:
+
+        import dataclasses as _dc
         from analysis.viva_tlbreak import fit_validated_line, load_config
         from analysis.pattern_engine import classify_shape
-        cfg = load_config()
+        # RENDER-ONLY clone (Viva 09-17): painting tolerates 2-touch lines and
+        # a wider residual than TRADE detection ever may — doctrine lines are
+        # drawn for the eye here; entries keep the strict fitter.
+        cfg = _dc.replace(load_config(), pivot_left=3, pivot_right=3,
+                          min_touches=2, touch_tolerance_atr=0.20,
+                          max_fit_residual_atr=0.45)
         n = len(df) - 1
-        upper = fit_validated_line(df, "HIGH", cfg)
-        lower = fit_validated_line(df, "LOW", cfg)
-        shape = classify_shape(upper, lower, n)
-        lines = []
-        for ln in (upper, lower):
-            if ln is None:
-                continue
-            lines.append({
-                "slope": float(ln.slope), "intercept": float(ln.intercept),
-                "x0": int(ln.first_index), "x1": int(n),
-                "points": [{"ts": str(p.get("timestamp")),
-                            "price": float(p.get("price"))}
-                           for p in (ln.points or ())],
-            })
-        if shape not in ("NONE", "") and lines:
-            out.append({"type": str(shape), "lines": lines})
+
+        def _score(ln) -> float:
+            """Viva 09-17 (his option 1): validity = touches x fit x span —
+            the MOST valid line wins, never merely the nearest one."""
+            span = max(1, int(getattr(ln, "last_index", n)) - int(ln.first_index))
+            touch = max(1, int(getattr(ln, "touch_count", len(ln.points or ())) or 1))
+            fit = 1.0 / (1.0 + float(getattr(ln, "fit_residual_atr", 0.0) or 0.0))
+            return touch * fit * (span ** 0.5)
+
+        def _best(side: str):
+            """Best-fitting validated line across three lookback windows —
+            returns (line, x-offset) WITHOUT mutating the frozen dataclass."""
+            cands = []
+            for w in (90, 130, len(df)):
+                if w < 45:
+                    continue
+                off = max(0, len(df) - w)
+                ln = fit_validated_line(df.tail(w).reset_index(drop=True), side, cfg)
+                if ln is not None:
+                    cands.append((ln, off))
+            return max(cands, key=lambda t: _score(t[0]), default=(None, 0))
+
+        upper, u_off = _best("HIGH")
+        lower, l_off = _best("LOW")
+
+        def _ser(ln, off=0):
+            return {
+                "slope": float(ln.slope),
+                "intercept": float(ln.intercept) - float(ln.slope) * off,
+                "x0": int(off + ln.first_index), "x1": int(n),
+                "points": [{"ts": str(pp.get("timestamp")),
+                            "price": float(pp.get("price"))}
+                           for pp in (ln.points or ())],
+            }
+
+        if upper is not None and lower is not None:
+            shape = classify_shape(upper, lower, n)
+            if shape in ("NONE", ""):
+                # converging pair = wedge even when the classifier stays shy
+                g0 = (upper.price_at(max(upper.first_index, lower.first_index))
+                      - lower.price_at(max(upper.first_index, lower.first_index)))
+                g1 = upper.price_at(n) - lower.price_at(n)
+                same_dir = (upper.slope < 0) == (lower.slope < 0) and abs(upper.slope) > 0
+                if same_dir and 0 < g1 < g0:
+                    shape = "WEDGE_FALLING" if upper.slope < 0 else "WEDGE_RISING"
+            if shape not in ("NONE", ""):
+                out.append({"type": str(shape),
+                            "lines": [_ser(upper, u_off), _ser(lower, l_off)]})
+            else:
+                # No classified shape: BOTH lines still paint, each as its
+                # own TRENDLINE (CRV ruling 09-17: his two hand-drawn blue
+                # lines; FIL: the ascending support from the lows).
+                out.append({"type": "TRENDLINE", "lines": [_ser(upper, u_off)]})
+                out.append({"type": "TRENDLINE", "lines": [_ser(lower, l_off)]})
+        elif upper is not None or lower is not None:
+            out.append({"type": "TRENDLINE",
+                        "lines": [_ser(upper, u_off) if upper is not None
+                                  else _ser(lower, l_off)]})
     except Exception as exc:
         print(f"render-kit pattern warning: {exc}")
     # trading range: two tested horizontals wide enough to matter
@@ -184,7 +237,7 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
                 out.append({"type": "RANGE", "hi": rhi, "lo": rlo})
     except Exception:
         pass
-    return out[:2]
+    return out[:3]
 
 
 def enrich_render(candidate, trigger_df: pd.DataFrame,
