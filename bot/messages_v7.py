@@ -3569,43 +3569,37 @@ def send_technoclassic_preview(ev: dict) -> bool:
         # Viva 2026-09-12 (format law, verbatim skeleton): 🏷 + 🆔 header,
         # educational block, 🪙 with STYLE + TF beside the symbol, ━━━ sections,
         # 🔎 zone block, the standard ⛔/✅ tail and 📢 footer.
+        # Viva 09-17 «هشدار نهایی رو برگردان» — the preview body IS the
+        # final-warning skeleton (MESSAGE_REFERENCE §2), verbatim order.
+        _react = ev.get("reactions") or {}
+        _comp = ev.get("compression") or {}
+        _dir_fa = ("نزولی (SHORT)" if str(ev.get("direction")) == "SHORT"
+                   else "صعودی (LONG)")
+        _rej = int(_react.get("rejects", 0) or 0)
+        _brk = int(_react.get("breaks", 0) or 0)
+        _tot = max(1, _rej + _brk)
         caption = (
-            f"🏷 <b>VIVA-TECLASSIC</b>\n"
-            f"🆔 <code>{_e(code)}</code>\n"
+            f"🏷 <b>VIVA __ TecnoClasic</b>\n{VIVA_SEP}\n"
+            f"⚡<b>هشدار نهایی | آماده‌سازی ورود</b>\n\n"
+            f"🪙 <b>{_e(sym)}</b> • {_e(str(getattr(cand, 'style', '') or 'SWING'))} • "
+            f"{_e(str(ev.get('direction') or ''))}\n{VIVA_SEP}\n"
+            f"🔎 در آستانه شکست — تکنوکلاسیک (پیش‌نمایش؛ سیگنال نیست)\n"
+            f"📐 خط روند اصلی روی تایم {_e(str(ev.get('pattern_tf') or ''))} • ضلع {side_fa}\n"
             f"{VIVA_SEP}\n"
-            f"📚 <b>تحلیل آموزشی | ستاپ در حال بررسی</b>\n"
-            f"⛔ <b>این پیام تأیید ورود نیست</b>\n"
-            f"👀 فقط برای رصد بازار و اهداف آموزشی\n"
+            f"🎯 جهت محتمل پس از شکست معتبر: {_dir_fa}\n"
+            f"📏 فاصله زنده تا خط: {float(ev.get('distance_atr') or 0):.3f} ATR • "
+            f"پیوت‌های معتبر: {ev.get('touches')} (خطای فیت "
+            f"{float(ev.get('fit_error_atr') or 0):.3f} ATR)\n"
             f"{VIVA_SEP}\n"
-            f"🪙 <b>{_e(sym)}</b>  •  SWING  •  {_e(tf.upper())}\n"
-            f"🌐 {_e(_market_label(cand))}\n"
-            f"🧭 {_e(dir_fa)}\n"
-            f"🎯 ستاپ: <b>VIVA-TECLASSIC</b> | {_e(str(ev.get('pattern_fa') or ev.get('pattern')))} — ضلع {side_fa}\n"
-            f"⭐ امتیاز فعلی: <b>{int(ev.get('structure_score') or 0)}/10</b>\n"
+            f"⚖️ تاریخچۀ برخورد روی این خط: {_rej} دفع / {_brk} شکست از {_tot} برخورد "
+            f"(نرخ دفع {int(float(_react.get('reject_rate', 0) or 0) * 100)}٪)\n"
+            f"🌀 کامپرشن: {'قوی' if _comp.get('squeeze_ok') else 'ضعیف'} • "
+            f"دوجی/کندل کوچک: {int(_comp.get('doji_count', 0) or 0)}\n"
             f"{VIVA_SEP}\n"
-            f"🕓 <b>زمان رصد — ایران</b>\n{_iran_now()}\n"
+            f"سیگنال واقعی فقط با Close معتبرِ شکست + پولبک اول + BOS تایم پایین "
+            f"صادر می‌شود.\n"
             f"{VIVA_SEP}\n"
-            f"📍 <b>خط و موقعیت قیمت</b>\n"
-            f"خط: <b>{_price(ev.get('line_price'))}</b> • قیمت: <b>{_price(ev.get('live'))}</b>\n"
-            f"🚩 فاصله: {float(ev.get('distance_atr') or 0):.2f} ATR • برخوردهای معتبر: {ev.get('touches')}\n"
-            f"{VIVA_SEP}\n"
-            f"⚖️ <b>تاریخچۀ خط</b>\n"
-            f"{react.get('rejects', 0)} دفع / {react.get('breaks', 0)} شکست (نرخ دفع {int(float(react.get('reject_rate', 0)) * 100)}٪ — کمک‌تأیید، نه شرط قطعی)\n"
-            + plan_sec +
-            f"{VIVA_SEP}\n"
-            f"🎬 <b>سناریوهای محتمل</b>\n"
-            f"🎬 پایاییِ ضلع: {_e(scen.get('hold', ''))}\n"
-            f"🎬 شکستِ معتبر: {_e(scen.get('break', ''))}\n"
-            f"⏳ هیچ‌کدام ۱۰۰٪ نیست؛ ربات فقط احتمال را می‌گوید و منتظر نشانه/تأیید می‌ماند\n"
-            f"{VIVA_SEP}\n"
-            f"🔎 <b>ناحیه‌ای که زیر نظر داریم</b>\n"
-            f"از <b>{_price(cand.entry_zone_bottom)}</b> تا <b>{_price(cand.entry_zone_top)}</b>\n"
-            f"سطح خط (مرجع ابطال): <b>{_price(ev.get('line_price'))}</b>\n"
-            f"{VIVA_SEP}\n"
-            f"⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود\n"
-            f"✅ در صورت حرکتِ وضعیت، همین هشدار با همان شناسه به‌روزرسانی می‌شود.\n"
-            f"{VIVA_SEP}\n"
-            f"📢 <b>{_e(SETTINGS.channel_name)}</b>"
+            f"🆔<code>{_e(code)}</code>"
         )
         try:  # once-per-day separator
             today = _iran_now()[:10]
@@ -3626,15 +3620,7 @@ def send_technoclassic_preview(ev: dict) -> bool:
         # alert (DB-backed chain) keeps the permanent detailed post there.
         edu_mid = 0
         _dist = float(ev.get("distance_atr") or 0)
-        short = _compact_alert_caption(
-            cand, score=int(ev.get("structure_score") or 0),
-            extra_lines=[
-                f"📍 <b>خط {side_fa}:</b> {_price(ev.get('line_price'))} • "
-                f"<b>قیمت:</b> {_price(ev.get('live'))}",
-                (f"🚩 <b>فاصله:</b> {_dist:.2f} ATR • <b>برخوردهای معتبر:</b> {ev.get('touches')}"
-                 if _dist >= 0.01 else
-                 f"🚩 <b>قیمت رویِ خطِ مرجع</b> • برخوردهای معتبر: {ev.get('touches')}"),
-            ] + _tech_aids_lines(cand))
+        _dist = float(ev.get('distance_atr') or 0)
         # (the retired preview pair no longer posts into the alerts channel)
         markup = None
         if edu_mid:
@@ -3643,9 +3629,9 @@ def send_technoclassic_preview(ev: dict) -> bool:
                 markup = {"inline_keyboard": [[{"text": "📚 چارت و توضیحات هشدار اولیه",
                                                 "url": link}]]}
         _ph, mid = _post_chart_then_text(
-            chart, short, target, reply_markup=markup,
+            chart, caption, target, reply_markup=markup,
             label=_chart_label(symbol=str(getattr(cand, "symbol", "") or ""),
-                               code=code, title_fa="پیام مختصر ستاپ"))
+                               code=code, title_fa="هشدار نهایی"))
         if mid:
             # PRO anchor == the permanent compact; the first state change
             # posts a REPLACEMENT update above it and replies to this anchor.

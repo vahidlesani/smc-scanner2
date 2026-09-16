@@ -146,19 +146,23 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         cap = texts[1][1]
         code = cap.split("<code>")[1].split("</code>")[0]
         assert code
-        # Viva 2026-09-12 format law, now enforced on the TECHCLASSIC preview
-        # channel too: registry-unique T-code + the exact detailed skeleton.
+        # Viva 2026-09-17 AMENDMENT (his reference template §2, verbatim):
+        # the preview body is the FINAL-WARNING skeleton, registry-unique
+        # T-code kept at the tail.
         import re as _re
         assert _re.fullmatch(r"VIVA-TECLASSIC-T\d{6}", code), code
         _hdr = cap.split("\n")
-        assert _hdr[0] == "🏷 <b>VIVA ✦ TECHCLASSIC</b>"             # frozen compact family
+        assert _hdr[0] == "🏷 <b>VIVA __ TecnoClasic</b>"
         assert _hdr[1] == M.VIVA_SEP and "<code>" in cap
-        for _need in ("📚 <b>تحلیل آموزشی | ستاپ در حال بررسی</b>",
-                      "⛔ <b>این پیام تأیید ورود نیست</b>",
-                      "👀 فقط برای رصد بازار و اهداف آموزشی",
-                      "🪙 <b>GTTSTUSDT</b>  •  SWING  •  4H",
-                      "🔎 <b>ناحیه‌ای که زیر نظر داریم</b>",
-                      "⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود"):
+        for _need in ("⚡<b>هشدار نهایی | آماده‌سازی ورود</b>",
+                      "🪙 <b>GTTSTUSDT</b>",
+                      "🔎 در آستانه شکست — تکنوکلاسیک (پیش‌نمایش؛ سیگنال نیست)",
+                      "📐 خط روند اصلی روی تایم",
+                      "🎯 جهت محتمل پس از شکست معتبر:",
+                      "📏 فاصله زنده تا خط:",
+                      "⚖️ تاریخچۀ برخورد روی این خط:",
+                      "🌀 کامپرشن:",
+                      "سیگنال واقعی فقط با Close معتبرِ شکست + پولبک اول + BOS تایم پایین"):
             assert _need in cap, _need
         assert "🧠" not in cap and "⚡ <b>هشدار الگو" not in cap
 
