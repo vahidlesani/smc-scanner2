@@ -1015,8 +1015,10 @@ def _chart_cache_get(key: tuple):
 
 def _chart_cache_set(key: tuple, val: bytes) -> None:
     _CHART_CACHE[key] = val
-    if len(_CHART_CACHE) > 64:   # Railway RAM guard
-        for _k in list(_CHART_CACHE.keys())[:len(_CHART_CACHE) - 64]:
+    # Railway RAM guard (Viva 09-17): PNGs are ~2MB each — keep only the last 6
+    # (instant retries/mirrors reuse them); anything bigger risks an OOM kill.
+    if len(_CHART_CACHE) > 6:
+        for _k in list(_CHART_CACHE.keys())[:len(_CHART_CACHE) - 6]:
             _CHART_CACHE.pop(_k, None)
 
 
