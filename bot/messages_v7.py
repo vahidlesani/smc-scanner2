@@ -1178,8 +1178,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                       "TRENDLINE BREAK WATCH (LINE ZONE)": "BOS",
                       "PINVAL": "PIN BASE",
                       "ALBROX SPIKE RECLAIM BASE": "OB"}
-        zone_name = (f"{_POI_TOKEN.get(_poi, 'DEMAND' if _dir_key == 'LONG'
-                                       else 'SUPPLY')}  ·  POI / ENTRY")
+        # Python 3.11-safe: no multi-line f-string expressions (PEP 701 is 3.12+)
+        _zone_tok = _POI_TOKEN.get(_poi, "DEMAND" if _dir_key == "LONG" else "SUPPLY")
+        zone_name = f"{_zone_tok}  ·  POI / ENTRY"
         ax.fill_between(
             [zone_start, zone_end],
             candidate.entry_zone_bottom,
