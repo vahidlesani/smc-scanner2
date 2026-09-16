@@ -2793,13 +2793,18 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
             reply_markup=keyboard,
             label=_chart_label(symbol=candidate.symbol, code=_public_code(candidate),
                                title_fa="تأیید سیگنال"))
-        if not mid:
-            return False
-        chain["confirmed"] = int(mid)
-        chain["confirmed_photo"] = int(_ph or 0)
-        _setup_chain_set(candidate, chain)
+        if mid:
+            chain["confirmed"] = int(mid)
+            chain["confirmed_photo"] = int(_ph or 0)
+            _setup_chain_set(candidate, chain)
+            candidate.metadata["confirmation_chart_message_id"] = int(mid)
+            candidate.metadata["confirmation_chart_sent"] = True
+        else:
+            print(f"Confirmed execution-channel post failed {candidate.signal_id}")
         # PROP-1 mirror: Confirmed quotes the final alert inside the journal
-        # and buttons back to the main channel's compact anchor.
+        # and buttons back to the main channel's compact anchor.  Viva 09-17:
+        # the journal receives Confirmed EVEN IF the execution post failed —
+        # the signals channel must never go quiet because of another channel.
         _anchor = (int(chain.get("anchor_pro") or 0)
                    or int(chain.get("slot") or 0)
                    or int(chain.get("edu_short") or 0)
@@ -2808,8 +2813,6 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
         _sig_mirror(_public_code(candidate), "confirmed",
                     _confirmed_chart_caption(candidate), chart, reply_kind="approach",
                     link=_lnk, link_text="🔗 پیام مختصر در کانال اصلی")
-        candidate.metadata["confirmation_chart_message_id"] = int(mid)
-        candidate.metadata["confirmation_chart_sent"] = True
     # Deliberately no second verbose message in VivaMon Labs Pro.
     candidate.metadata["confirmation_message_sent"] = True
     return True
