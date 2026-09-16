@@ -1006,10 +1006,31 @@ def _draw_visible_fvgs(ax, frame: pd.DataFrame, count: int) -> list:
     return result
 
 
+_CHART_CACHE: Dict[tuple, bytes] = {}
+
+
+def _chart_cache_get(key: tuple):
+    return _CHART_CACHE.get(key)
+
+
+def _chart_cache_set(key: tuple, val: bytes) -> None:
+    _CHART_CACHE[key] = val
+    if len(_CHART_CACHE) > 64:   # Railway RAM guard
+        for _k in list(_CHART_CACHE.keys())[:len(_CHART_CACHE) - 64]:
+            _CHART_CACHE.pop(_k, None)
+
+
 def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool = False) -> Optional[bytes]:
     """Render a branded TradingView-inspired 1440×900 chart."""
     if df is None or df.empty:
         return None
+    # Viva 09-17 cost ruling: one render per (alert, frame, state) — retries,
+    # mirrors and cross-channel posts reuse the bytes from this cache.
+    _ck = (str(getattr(candidate, "signal_id", "")), bool(confirmed),
+           str(df["timestamp"].iloc[-1]), len(df))
+    _hit = _chart_cache_get(_ck)
+    if _hit is not None:
+        return _hit
     try:
         # Preserve enough history for real channel / wedge / range geometry;
         # the blank future panel is added separately, never by sacrificing bars.
@@ -1414,14 +1435,6 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 alpha=0.095,
                 zorder=1,
             )
-            ax.vlines(
-                [tool_start, tool_end],
-                min(candidate.sl, candidate.tp2),
-                max(candidate.sl, candidate.tp2),
-                color=CHART_THEME["muted"],
-                linewidth=0.65,
-                alpha=0.45,
-            )
             ladder = (candidate.metadata or {}).get("target_ladder") or {}
             ladder_targets = list(ladder.get("targets") or [candidate.tp1, candidate.tp2])
             ladder_weights = list(ladder.get("weights") or [35, 35])
@@ -1797,7 +1810,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         )
         plt.close(fig)
         buffer.seek(0)
-        return buffer.read()
+        _png = buffer.read()
+        _chart_cache_set(_ck, _png)
+        return _png
     except Exception as exc:
         print(f"Chart generation error {candidate.signal_id}: {exc}")
         return None

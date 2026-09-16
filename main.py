@@ -200,12 +200,21 @@ def run_discovery_scan() -> Dict[str, int]:
     # bounded number of NEW detailed alerts; everything beyond that defers to
     # the next scan instead of flooding the channels in a single burst.
     _edu_budget = {"left": max(1, int(getattr(SETTINGS, "education_max_per_scan", 8) or 8))}
+    # Viva 09-17 seesaw fix: WATCH/previews live on a SEPARATE small budget —
+    # a flood of two-pivot watches can never starve pins/other families again.
+    _watch_budget = {"left": 4}
 
     def _educate(cand, frame):
         if _edu_budget["left"] <= 0:
             stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
             return False
-        _edu_budget["left"] -= 1
+        _md9 = getattr(cand, "metadata", None) or {}
+        _is_watch = str(_md9.get("viva_state") or "").upper().startswith("S0_WATCH")
+        _b9 = _watch_budget if _is_watch else _edu_budget
+        if _b9["left"] <= 0:
+            stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
+            return False
+        _b9["left"] -= 1
         return send_educational_setup(cand, frame)
     # Observability only (no behaviour change): tally where each raw detector
     # candidate goes, per setup, so "0 confirmed" is diagnosable from logs.
@@ -681,6 +690,27 @@ def _live_break_watch(candidate, live_frame) -> Tuple[str, str]:
              "با کلوزِ معتبر، قانونِ یک‌کلوز تأیید می‌کند؛ بازگشت تا پیش از کلوز نقض است."), _key)
 
 
+def _tf_fetch_window(tf: str) -> bool:
+    """Railway cost guard (Viva 09-17): a TF frame is fetched live only in the
+    minutes right after its candle close — 3m always (monitor cadence), 15m in
+    the first 4 min of each quarter-hour, 1h/4h/1d in the first 4 min of their
+    close.  Between windows nothing can confirm, so nothing is fetched."""
+    now = datetime.now(timezone.utc)
+    m = now.minute
+    tf = str(tf or "").lower()
+    if tf == "3m":
+        return True
+    if tf == "15m":
+        return m % 15 < 4
+    if tf == "1h":
+        return m < 4
+    if tf == "4h":
+        return m < 4 and now.hour % 4 == 0
+    if tf == "1d":
+        return m < 4 and now.hour == 0
+    return True
+
+
 def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataFrame, pd.DataFrame, float]]:
     """One Bybit request per active symbol/TF for monitor and confirmation.
 
@@ -693,6 +723,8 @@ def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataF
         from analysis.setups_v7 import confirm_late_tf as _late_tf
         _late = _late_tf(candidate.trigger_timeframe)
         for tf in {confirm_tf, candidate.trigger_timeframe, _late} - {None}:
+            if not _tf_fetch_window(tf):
+                continue   # Viva 09-17 cost ruling: fetch only near candle close
             key = (candidate.symbol, tf)
             if key in frames:
                 continue
