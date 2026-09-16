@@ -329,11 +329,11 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             _dist = abs(_px - line_price) / atr_watch
             candidate.evidence = [
                 EvidenceItem("tl_watch", "اعتبار خط دوپیوتی", f"خط از ۲ پیوتِ معتبر روی {refine_tf} ساخته شده؛ هر دو پیوت در جهتِ سناریو تست شده‌اند. این نسخه هنوز «در انتظار اعتبار» است و با یک کلوزِ معتبرِ فراتر از خط به ستاپ تمام‌عیار تبدیل می‌شود.", False, 1, level=line_price, timeframe=refine_tf),
-                EvidenceItem("tl_position", "موقعیت قیمت نسبت به خط", f"قیمت فعلی {_px:.6g} در فاصله‌ی {_dist:.2f} ATR از خطِ {_price_watch := line_price:.6g} است؛ شرط تأیید: یک کلوزِ معتبر فراتر از خط در جهت سناریو (پولبک شرط نیست).", False, 1, level=line_price, timeframe=trigger_tf),
+                EvidenceItem("tl_position", "موقعیت قیمت نسبت به خط", f"قیمت فعلی {_px:.6g} در فاصله‌ی {_dist:.2f} ATR از خطِ {line_price:.6g} است؛ شرط تأیید: یک کلوزِ معتبر فراتر از خط در جهت سناریو (پولبک شرط نیست).", False, 1, level=line_price, timeframe=trigger_tf),
             ]
             candidate.warnings = [
                 "این تحلیل تا بسته‌شدنِ یک کندلِ تأییدیِ معتبر، دستور ورود نیست.",
-                f"عبور معتبر قیمت از {_sl := candidate.sl:.6g} سناریوی تحلیلی را باطل می‌کند.",
+                f"عبور معتبر قیمت از {candidate.sl:.6g} سناریوی تحلیلی را باطل می‌کند.",
             ]
             try:  # CHART-8: the WATCH chart paints zones/patterns like every setup
                 from analysis.render_kit import enrich_render
