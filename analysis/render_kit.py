@@ -189,9 +189,10 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
         upper, u_off = _best("HIGH")
         lower, l_off = _best("LOW")
 
-        def _glob(ln, off):
+        def _glob(ln, off, side):
             """Serialize into GLOBAL x-coordinates (windows are local)."""
             return {
+                "side": side,
                 "slope": float(ln.slope),
                 "intercept": float(ln.intercept) - float(ln.slope) * off,
                 "x0": int(off + ln.first_index), "x1": int(n),
@@ -200,8 +201,8 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
                            for pp in (ln.points or ())],
             }
 
-        gu = _glob(upper, u_off) if upper is not None else None
-        gl = _glob(lower, l_off) if lower is not None else None
+        gu = _glob(upper, u_off, "HIGH") if upper is not None else None
+        gl = _glob(lower, l_off, "LOW") if lower is not None else None
 
         def _ns(d):
             import types as _t8

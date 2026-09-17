@@ -1324,17 +1324,46 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                   "facecolor": CHART_THEME["panel"],
                                   "edgecolor": "none", "alpha": 0.78})
                 continue
-            _lns = _pat.get("lines") or []
+            # Viva 09-18 placement law: lines are re-anchored by PIVOT
+            # TIMESTAMP onto THIS frame (the fit window and the chart frame
+            # are different slices — index coords misplaced every line) and
+            # painted in the approved TLBREAK valid-line style: solid colored
+            # edge through LIVE, dashed to the canvas edge, hollow circles on
+            # every touch pivot.
+            _lns = []
+            for _ln0 in (_pat.get("lines") or []):
+                _sl8 = float(_ln0["slope"])
+                _pt8 = _ln0.get("points") or []
+                if _pt8:
+                    _x0f = float(np.searchsorted(
+                        frame.index, pd.Timestamp(str(_pt8[0].get("ts")))))
+                    _ic8 = float(_pt8[0].get("price")) - _sl8 * _x0f
+                else:
+                    _x0f = max(0.0, float(_ln0.get("x0", 0))
+                               - max(0, len(df) - len(frame)))
+                    _ic8 = float(_ln0["intercept"])
+                _lns.append({**_ln0, "slope": _sl8, "intercept": _ic8,
+                             "x0": _x0f})
             for _ln in _lns:
                 _sl, _ic = float(_ln["slope"]), float(_ln["intercept"])
                 _xa = max(0.0, float(_ln.get("x0", 0)))
-                _xb = min(count + future - 0.5, float(_ln.get("x1", count)) + 6)
-                # CryptoCove reference: trend/wedge/channel edges are THIN
-                # DARK SOLID lines — color carries no direction here.
-                _col8 = CHART_THEME["text"]
-                ax.plot([_xa, _xb], [_sl * _xa + _ic, _sl * _xb + _ic],
-                        color=_col8, linewidth=1.1, alpha=0.8, zorder=7,
+                _xe = count + future - 0.5
+                _col8 = CHART_THEME["supply"] if _ln.get("side") == "HIGH" \
+                    else CHART_THEME["demand"]
+                ax.plot([_xa, count], [_sl * _xa + _ic, _sl * count + _ic],
+                        color=_col8, linewidth=2.0, alpha=0.95, zorder=7,
                         solid_capstyle="round")
+                if count < _xe - 0.6:
+                    ax.plot([count, _xe], [_sl * count + _ic, _sl * _xe + _ic],
+                            color=_col8, linewidth=1.4, alpha=0.7, zorder=6,
+                            linestyle=(0, (6, 4)), solid_capstyle="butt")
+                _px8 = [float(q.get("price")) for q in (_ln.get("points") or [])]
+                _xs8 = [float(np.searchsorted(
+                    frame.index, pd.Timestamp(str(q.get("ts")))))
+                    for q in (_ln.get("points") or [])]
+                if _xs8:
+                    ax.scatter(_xs8, _px8, s=30, color=CHART_THEME["panel"],
+                               edgecolors=_col8, linewidths=1.4, zorder=9)
             if len(_lns) == 2:
                 # CryptoCove measured-move box: pattern height projected from
                 # the live price into the future panel — translucent green,
@@ -1672,11 +1701,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                 raise ValueError("degenerate fit span")
                             s_, b_ = np.polyfit(xs_, ys_, 1)
                             return s_, b_
-                        _su, _bu = _fitpts(_up0)
-                        _sl, _bl = _fitpts(_lo0)
-                        _xf = np.arange(0.0, count + future)
-                        ax.fill_between(_xf, _su * _xf + _bu, _sl * _xf + _bl,
-                                        color=CHART_THEME["structure"], alpha=0.05, zorder=1)
+                        # Viva 09-18: the grey-blue band between the two
+                        # valid lines («سایه آبی پشتش») is GONE — lines only.
                     except Exception:
                         pass
                 for key, color, label in (("viva_upper_points", CHART_THEME["supply"], "VALID UPPER LINE"), ("viva_lower_points", CHART_THEME["demand"], "VALID LOWER LINE")):
