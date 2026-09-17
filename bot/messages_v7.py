@@ -1052,6 +1052,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # the blank future panel is added separately, never by sacrificing bars.
         frame = df.tail(150).copy().set_index("timestamp")
         frame.index = pd.DatetimeIndex(frame.index)
+        # Viva 09-18 ruling (PINWALL/PINWALL-Q/ALBROX must paint trends too):
+        # ABSOLUTE safety net — any candidate that reaches the chart without
+        # render commands (old alert metadata, exotic path) gets enriched HERE.
+        try:
+            _md0 = getattr(candidate, "metadata", None) or {}
+            if not _md0.get("render_patterns") and not _md0.get("render_zones"):
+                from analysis.render_kit import enrich_render
+                enrich_render(candidate, frame.reset_index())
+        except Exception:
+            pass
         if _STYLE_NAME == "dark":
             market_colors = mpf.make_marketcolors(
                 up=CHART_THEME["bull"], down=CHART_THEME["bear"],
