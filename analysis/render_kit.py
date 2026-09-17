@@ -155,7 +155,8 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
     try:
 
         import dataclasses as _dc
-        from analysis.viva_tlbreak import fit_validated_line, load_config
+        from analysis.viva_tlbreak import fit_validated_line, load_config, \
+            pivots as _pv8
         from analysis.pattern_engine import classify_shape
         # RENDER-ONLY clone (Viva 09-17): painting tolerates 2-touch lines and
         # a wider residual than TRADE detection ever may — doctrine lines are
@@ -186,7 +187,24 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
                     cands.append((ln, off))
             return max(cands, key=lambda t: _score(t[0]), default=(None, 0))
 
-        def _scale(side: str):
+        # Viva 09-18 context ruling: price sitting ON a valid/local demand
+        # means the UPPER trend must paint (its future break = the alert);
+        # mirror for supply → the lower trend. Relaxed recency/edge gates
+        # let that opposite-side line survive while price hugs the zone.
+        _c0 = float(df["close"].iloc[-1]); _a0 = _atr(df)
+        _hi8, _lo8 = _pv8(df.reset_index(drop=True), 3, 3)
+        _on_dem = any((n - float(q["index"]) <= 25)
+                      and (0 <= _c0 - float(q["price"]) <= 1.2 * _a0)
+                      for q in _lo8[-6:]) and _a0 > 0
+        _on_sup = any((n - float(q["index"]) <= 25)
+                      and (0 <= float(q["price"]) - _c0 <= 1.2 * _a0)
+                      for q in _hi8[-6:]) and _a0 > 0
+        _cfg_hi = _dc.replace(cfg, recency_bars=90, edge_atr=16.0) \
+            if _on_dem else cfg
+        _cfg_lo = _dc.replace(cfg, recency_bars=90, edge_atr=16.0) \
+            if _on_sup else cfg
+
+        def _scale(side: str, cfgx=None):
             """Viva 09-18 flexibility law (his BCH/BTC/AVAX annotations):
             the market nests structures — a leg channel inside a bigger leg,
             a small wedge inside a channel (Brooks: spike → channel → TR).
@@ -198,7 +216,8 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
                 if w < 45:
                     continue
                 off = max(0, len(df) - w)
-                ln = fit_validated_line(df.tail(w).reset_index(drop=True), side, cfg)
+                ln = fit_validated_line(df.tail(w).reset_index(drop=True),
+                                        side, cfgx or cfg)
                 if ln is not None:
                     found.append((_score(ln), _glob(ln, off, side)))
             found.sort(key=lambda t: -t[0])
@@ -228,8 +247,8 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
                            for pp in (ln.points or ())],
             }
 
-        upper, sub_u = _scale("HIGH")
-        lower, sub_l = _scale("LOW")
+        upper, sub_u = _scale("HIGH", _cfg_hi)
+        lower, sub_l = _scale("LOW", _cfg_lo)
         gu = upper
         gl = lower
 
@@ -275,7 +294,8 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
             out.append({"type": "TRENDLINE", "lines": [gu if gu is not None else gl]})
         for _sub in (sub_u, sub_l):
             if _sub is not None:
-                out.append({"type": "TRENDLINE", "lines": [_sub]})
+                # spec §13: child patterns paint thinner & lighter
+                out.append({"type": "TRENDLINE", "lines": [_sub], "child": True})
     except Exception as exc:
         print(f"render-kit pattern warning: {exc}")
     # trading range: two tested horizontals wide enough to matter
@@ -306,6 +326,12 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
         float(getattr(candidate, "entry_zone_top", 0) or 0))
     pats = detect_patterns(trigger_df.tail(170))
     md["render_patterns"] = pats
+    md["render_line_watch"] = [
+        {"side": l.get("side"), "slope": l.get("slope"),
+         "intercept": l.get("intercept"),
+         "ts0": ((l.get("points") or [{}])[0].get("ts")),
+         "break_x": l.get("break_x")}
+        for pp in pats for l in (pp.get("lines") or [])][:4]
     # Viva 09-18 (his CRV note): the higher-TF pattern must be ANNOUNCED on
     # the trigger chart — «وج باید در ۴ ساعته یا روزانه پیدا بشه و اعلام بشه».
     try:

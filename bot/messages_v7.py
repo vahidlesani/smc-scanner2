@@ -1297,6 +1297,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                           "facecolor": CHART_THEME["panel"],
                           "edgecolor": "none", "alpha": 0.78})
         _chip_ys8 = []
+        for _bl8 in ((candidate.metadata or {}).get("brooks_labels") or []):
+            notes.append((str(_bl8), CHART_THEME["muted"]))
         _htfp = (candidate.metadata or {}).get("render_htf_pattern")
         if _htfp:
             notes.append((f"PAT 4H · {str(_htfp)}", CHART_THEME["muted"]))
@@ -1390,13 +1392,25 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _brk8.append(_bx8 is not None)
                 _xend8 = min(float(count), float(_bx8)) \
                     if _bx8 is not None else float(count)
+                # spec §13: parent patterns thick & solid, children thin
+                _lw8 = 1.2 if _pat.get("child") else 2.0
+                _al8 = 0.60 if _pat.get("child") else 0.95
                 ax.plot([_xa, _xend8], [_sl * _xa + _ic, _sl * _xend8 + _ic],
-                        color=_col8, linewidth=2.0, alpha=0.95, zorder=7,
+                        color=_col8, linewidth=_lw8, alpha=_al8, zorder=7,
                         solid_capstyle="round")
                 if _bx8 is None and count < _xe - 0.6:
                     ax.plot([count, _xe], [_sl * count + _ic, _sl * _xe + _ic],
-                            color=_col8, linewidth=1.4, alpha=0.7, zorder=6,
-                            linestyle=(0, (6, 4)), solid_capstyle="butt")
+                            color=_col8, linewidth=_lw8 * 0.7, alpha=_al8 * 0.75,
+                            zorder=6, linestyle=(0, (6, 4)),
+                            solid_capstyle="butt")
+                elif _bx8 is not None and _bx8 < _xe - 0.6:
+                    # Viva 09-18: every trend EXTENDS past price so its break
+                    # stays visible & alertable — broken history continues as
+                    # a faint dotted projection into the future panel.
+                    ax.plot([_xend8, _xe],
+                            [_sl * _xend8 + _ic, _sl * _xe + _ic],
+                            color=_col8, linewidth=0.9, alpha=0.35, zorder=5,
+                            linestyle=(0, (2, 3)), solid_capstyle="butt")
                 _px8, _xs8 = [], []
                 for q in (_ln.get("points") or []):
                     _qx = float(np.searchsorted(

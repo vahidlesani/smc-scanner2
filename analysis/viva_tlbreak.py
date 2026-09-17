@@ -28,6 +28,8 @@ class VivaTLBreakConfig:
     touch_tolerance_atr: float = 0.15
     max_fit_residual_atr: float = 0.25
     require_alive: bool = False
+    recency_bars: int = 40
+    edge_atr: float = 8.0
     min_score: float = 7.0
     retest_window_trigger_bars_daytrade: int = 16
     retest_window_trigger_bars_swing: int = 24
@@ -131,7 +133,19 @@ def fit_validated_line(
                        (side == "LOW" and yk < _val(p) - tol)
 
             # touches: every pool pivot the line actually passes through
-            touching = [q for q in pool if abs(float(q["price"]) - _val(q)) <= tol]
+            raw_touch = [q for q in pool
+                         if abs(float(q["price"]) - _val(q)) <= tol]
+            # spec §6.1: nearby touches are ONE cluster-touch (a single swing
+            # must not count as three touches because of twin pivots)
+            touching = []
+            for q in sorted(raw_touch, key=lambda z: float(z["index"])):
+                if touching and float(q["index"]) - \
+                        float(touching[-1]["index"]) <= max(2.0, float(cfg.pivot_right)):
+                    if abs(float(q["price"]) - _val(q)) < \
+                            abs(float(touching[-1]["price"]) - _val(touching[-1])):
+                        touching[-1] = q
+                else:
+                    touching.append(q)
             if len(touching) < cfg.min_touches:
                 continue
             fx = min(float(q["index"]) for q in touching)
@@ -187,9 +201,9 @@ def fit_validated_line(
                 # ALIVE line: touched price within the last 40 bars AND its
                 # projected edge value still sits near price (no line
                 # floating in the air above/below a market that moved on).
-                if lx < n - 40:
+                if lx < n - cfg.recency_bars:
                     continue
-                if abs(slope * n + intercept - float(closes[n])) > 8.0 * atr:
+                if abs(slope * n + intercept - float(closes[n])) > cfg.edge_atr * atr:
                     continue
             need = max(cfg.min_touches, 3) if pierces else cfg.min_touches
             if len(touching) < need:
@@ -205,6 +219,10 @@ def fit_validated_line(
                 score *= 0.55
             if break_at is not None:
                 score *= 0.80  # a live trend outranks a finished one
+            # spec §9 context_score: a line price actually sits near right
+            # now is the line the chart must show (Viva 09-18: best-of-cands)
+            if abs(slope * n + intercept - float(closes[n])) <= 2.0 * atr:
+                score *= 1.15
             # Viva 09-17 schematics: the trendline of a leg STARTS AT THE LEG
             # EXTREME (peak for highs, trough for lows) — reward such lines.
             _leg = pool[-10:]

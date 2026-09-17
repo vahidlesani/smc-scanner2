@@ -1140,6 +1140,49 @@ def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]
             "albrox_base_candles":len(base), "albrox_pinwall_confirm":pinwall_confirm,
             "public_code":generate_viva_public_code("ALBROX",style),
         })
+        # ── Brooks confirmation tiers (Viva 09-18: ALBROX ONLY, labels on
+        # chart + evidence, to collect live feedback before any other setup
+        # touches this doctrine) ─────────────────────────────────────────
+        from analysis.viva_tlbreak import pivots as _pv9
+        _brk9 = df.iloc[-1]
+        _rng9 = float(_brk9["high"]) - float(_brk9["low"])
+        _body9 = abs(float(_brk9["close"]) - float(_brk9["open"]))
+        _p1 = _rng9 > 0 and (_body9 / _rng9) >= 0.50 and (
+            (direction == "LONG" and float(_brk9["close"]) >= float(_brk9["open"]))
+            or (direction == "SHORT" and float(_brk9["close"]) <= float(_brk9["open"])))
+        _bdf9 = base.reset_index(drop=True)
+        try:
+            _ph9, _pl9 = _pv9(_bdf9, 2, 2)
+            _legs9 = 1 + len(_ph9) + len(_pl9)
+        except Exception:
+            _legs9 = 1
+        _p3weak = len(base) < 8 or _legs9 < 2
+        if _p3weak:
+            candidate.score = min(candidate.score, 6)
+        _labels9 = [
+            "BROOKS P1 SIGNAL-BAR " + ("OK" if _p1 else "MISSING"),
+            "BROOKS P2 H2/L2 WATCH · STOP BEHIND PULLBACK",
+            "BROOKS P3 " + ("WEAK BASE · EDU ONLY" if _p3weak else "BASE OK"),
+        ]
+        candidate.metadata["brooks_tiers"] = {
+            "p1_signal_bar": bool(_p1), "p2": "WATCH",
+            "p3_weak_base": bool(_p3weak), "base_legs": int(_legs9)}
+        candidate.metadata["brooks_labels"] = _labels9
+        candidate.evidence = list(candidate.evidence or []) + [
+            EvidenceItem("brooks_p1", "پلهٔ ۱ بروکس: سیگنال‌بار",
+                         "کندلِ شکستِ بیس بدنهٔ قوی در جهت شکست دارد و سیگنال‌بار معتبر است؛ ورود روی کلوز آن مجاز است."
+                         if _p1 else
+                         "کندلِ شکستِ بیس سیگنال‌بار معتبر نیست (بدنهٔ ضعیف/جهت مخالف)؛ ورود فقط پس از یک کلوز تأییدی معتبر بعدی.",
+                         bool(_p1), 2, timeframe=trigger_tf),
+            EvidenceItem("brooks_p2", "پلهٔ ۲ بروکس: ورود دوم H2/L2",
+                         "پس از این هشدار، اولین پولبکِ خلاف جهت، ورود دومِ محافظه‌کار است با استاپ پشت کف/سقف پولبک؛ ورود اول با استاپ پشت سیگنال‌بار می‌ماند.",
+                         False, 1, timeframe=trigger_tf),
+            EvidenceItem("brooks_p3", "پلهٔ ۳ بروکس: کیفیت پایه",
+                         "بیس کمتر از ۸ کندل یا بدون دو ساق داخلی است — پایهٔ ضعیفِ بروکسی؛ ستاپ فقط آموزشی می‌ماند تا پایه عمق بگیرد."
+                         if _p3weak else
+                         "بیس حداقل‌های بروکس را دارد (۸+ کندل و دو ساق داخلی)؛ تأییدیه مسیر عادی را می‌رود.",
+                         not _p3weak, 1, timeframe=trigger_tf),
+        ]
         return candidate
     return None
 
