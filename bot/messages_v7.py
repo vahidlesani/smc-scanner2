@@ -1352,6 +1352,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             _bt8, _tp8 = _lc8, _lc8 + _h8
                         else:
                             _bt8, _tp8 = _lc8 - _h8, _lc8
+                        # keep the box INSIDE the visible panel (a 15%-tall
+                        # wedge must not paint over the header like a banner)
+                        _lo8 = float(frame["low"].min()); _hi8 = float(frame["high"].max())
+                        _pd8 = 0.03 * (_hi8 - _lo8)
+                        _bt8c = max(_bt8, _lo8 - _pd8); _tp8c = min(_tp8, _hi8 + _pd8)
+                        if (_tp8c - _bt8c) < 0.25 * _h8:
+                            _bt8c, _tp8c = _bt8, _tp8
+                        _clamp8 = _tp8c < _tp8 - 1e-12
+                        _bt8, _tp8 = _bt8c, _tp8c
                         _bx0, _bx1 = count + 2, count + 2 + max(8, int(future * 0.55))
                         ax.fill_between([_bx0, _bx1], _bt8, _tp8,
                                         color=CHART_THEME["demand"],
@@ -1369,7 +1378,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         ax.text(_mx8, _tp8,
                                 f"{_price(_h8)} ({_h8 / _lc8 * 100:.1f}%)",
                                 color=CHART_THEME["muted"], fontsize=6.5,
-                                ha="center", va="bottom", zorder=9)
+                                ha="center",
+                                va="top" if _clamp8 else "bottom",
+                                zorder=9)
                 except Exception:
                     pass
             if _lns:

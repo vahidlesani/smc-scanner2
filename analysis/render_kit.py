@@ -162,7 +162,7 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
         # drawn for the eye here; entries keep the strict fitter.
         cfg = _dc.replace(load_config(), pivot_left=3, pivot_right=3,
                           min_touches=2, touch_tolerance_atr=0.20,
-                          max_fit_residual_atr=0.45)
+                          max_fit_residual_atr=0.45, require_alive=True)
         n = len(df) - 1
 
         def _score(ln) -> float:
@@ -222,6 +222,17 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
                 same_dir = (gu["slope"] < 0) == (gl["slope"] < 0) and gu["slope"] != 0
                 if same_dir and 0 < _g1 < _g0:
                     shape = "WEDGE_FALLING" if gu["slope"] < 0 else "WEDGE_RISING"
+            if shape not in ("NONE", ""):
+                # a pattern price has ALREADY LEFT is history, not a live
+                # pattern (Viva 09-17: no dead-leg wedges floating over
+                # price) — demote to two honest trendlines instead.
+                _a = _atr(df)
+                _c = float(df["close"].iloc[-1])
+                _u = gu["slope"] * n + gu["intercept"]
+                _l = gl["slope"] * n + gl["intercept"]
+                if _a > 0 and (_c > max(_u, _l) + 0.75 * _a
+                               or _c < min(_u, _l) - 0.75 * _a):
+                    shape = "NONE"
             if shape not in ("NONE", ""):
                 out.append({"type": str(shape), "lines": [gu, gl]})
             else:

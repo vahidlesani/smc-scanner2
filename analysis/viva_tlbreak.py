@@ -27,6 +27,7 @@ class VivaTLBreakConfig:
     min_touches: int = 3
     touch_tolerance_atr: float = 0.15
     max_fit_residual_atr: float = 0.25
+    require_alive: bool = False
     min_score: float = 7.0
     retest_window_trigger_bars_daytrade: int = 16
     retest_window_trigger_bars_swing: int = 24
@@ -90,43 +91,125 @@ def fit_validated_line(
     side: Literal["HIGH", "LOW"],
     cfg: Optional[VivaTLBreakConfig] = None,
 ) -> Optional[ValidatedLine]:
-    """Fit a line to >=3 confirmed fractal pivots with ATR residual control."""
+    """Classic-doctrine trendline (Viva 09-17 pivot ruling, his hand-drawn
+    schematics): a line is defined by TWO MAJOR PIVOTS of the active leg and
+    NO same-side pivot between them may cross it (a resistance line lives
+    ABOVE every high it spans; a support line BELOW every low).  Extra pivots
+    within tolerance add touches; validity = touches x span, recency breaks
+    ties.  The old «last-N-pivots polyfit» is what drew lines through candles
+    and misplaced wedges — retired here for both render AND trade, with the
+    trade gate still demanding cfg.min_touches (3) while render accepts 2."""
     cfg = cfg or load_config()
     atr = _atr(df)
     if atr <= 0:
         return None
     highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right)
     pts = highs if side == "HIGH" else lows
-    if len(pts) < cfg.min_touches:
+    n = len(df) - 1
+    if len(pts) < 2:
         return None
-    # Find the newest 3+ pivot set that genuinely lies on one line.
-    for take in range(min(len(pts), 6), cfg.min_touches - 1, -1):
-        chosen = tuple(pts[-take:])
-        xs = np.asarray([float(p["index"]) for p in chosen])
-        ys = np.asarray([float(p["price"]) for p in chosen])
-        if xs[-1] - xs[0] < cfg.pivot_left * 3:
-            continue
-        slope, intercept = np.polyfit(xs, ys, 1)
-        residual = float(np.max(np.abs(ys - (slope * xs + intercept))) / atr)
-        if residual > cfg.max_fit_residual_atr:
-            continue
-        touches = sum(
-            1 for p in chosen
-            if abs(float(p["price"]) - (slope * float(p["index"]) + intercept)) <= cfg.touch_tolerance_atr * atr
-        )
-        if touches < cfg.min_touches:
-            continue
-        return ValidatedLine(
-            side=side,
-            slope=float(slope),
-            intercept=float(intercept),
-            touch_count=touches,
-            fit_residual_atr=residual,
-            first_index=int(chosen[0]["index"]),
-            last_index=int(chosen[-1]["index"]),
-            points=chosen,
-        )
-    return None
+    tol = max(cfg.touch_tolerance_atr, 0.12) * atr
+    pool = pts[-16:]
+    best: Optional[ValidatedLine] = None
+    best_score = -1.0
+    for i in range(len(pool)):
+        for j in range(i + 1, len(pool)):
+            x0, y0 = float(pool[i]["index"]), float(pool[i]["price"])
+            x1, y1 = float(pool[j]["index"]), float(pool[j]["price"])
+            if x1 - x0 < max(20.0, float(cfg.pivot_left) * 4):
+                continue
+            slope = (y1 - y0) / (x1 - x0)
+            intercept = y0 - slope * x0
+
+            def _val(p):
+                return slope * float(p["index"]) + intercept
+
+            def _over(p):
+                yk = float(p["price"])
+                return (side == "HIGH" and yk > _val(p) + tol) or \
+                       (side == "LOW" and yk < _val(p) - tol)
+
+            # touches: every pool pivot the line actually passes through
+            touching = [q for q in pool if abs(float(q["price"]) - _val(q)) <= tol]
+            if len(touching) < cfg.min_touches:
+                continue
+            fx = min(float(q["index"]) for q in touching)
+            lx = max(float(q["index"]) for q in touching)
+            # VALID-UNTIL-BROKEN (classic doctrine, Viva 09-17): to the RIGHT
+            # of the defining pair no same-side pivot may cross the extended
+            # line — a broken line is history, never a live trendline. This
+            # is what killed the steep purple watch-line over candles.
+            broken = False
+            pierces = 0
+            closes = df["close"].to_numpy()
+            if cfg.require_alive:
+                # RENDER doctrine: a line whose close has already crossed it
+                # is a broken line — history, never a live drawn trend.
+                for kk in range(int(x1) + 1, n + 1):
+                    _lv = slope * kk + intercept
+                    if side == "HIGH" and float(closes[kk]) > _lv + 0.35 * atr:
+                        broken = True
+                        break
+                    if side == "LOW" and float(closes[kk]) < _lv - 0.35 * atr:
+                        broken = True
+                        break
+                if broken:
+                    continue
+            for q in pool:
+                xk = float(q["index"])
+                if xk > x1 and _over(q):
+                    broken = True
+                    break
+                if fx < xk < x1 and _over(q):
+                    # ONE piercing pivot = the head of a head-&-shoulders —
+                    # and H&S shoulders are FLAT by definition. On a sloped
+                    # line even a single pierce means the line cuts candles.
+                    pierces += 1
+                    if pierces > 1 or abs(y1 - y0) >= 0.5 * atr:
+                        broken = True
+                        break
+            if broken:
+                continue
+            if cfg.require_alive:
+                # ALIVE line: touched price within the last 40 bars AND its
+                # projected edge value still sits near price (no line
+                # floating in the air above/below a market that moved on).
+                if lx < n - 40:
+                    continue
+                if abs(slope * n + intercept - float(closes[n])) > 8.0 * atr:
+                    continue
+            need = max(cfg.min_touches, 3) if pierces else cfg.min_touches
+            if len(touching) < need:
+                continue
+            dev = max(abs(float(q["price"]) - _val(q)) for q in touching) / atr
+            if dev > cfg.max_fit_residual_atr:
+                continue
+            span = x1 - x0
+            score = len(touching) * (span ** 0.5) + 0.25 * (x1 / max(1.0, float(n)))
+            # a CLEAN classic line (nothing pierces it) always outranks a
+            # pierced one — the head exception exists for real H&S only.
+            if pierces:
+                score *= 0.55
+            # Viva 09-17 schematics: the trendline of a leg STARTS AT THE LEG
+            # EXTREME (peak for highs, trough for lows) — reward such lines.
+            _leg = pool[-10:]
+            _ext = max((float(q["price"]) for q in _leg), default=y0) if side == "HIGH" \
+                else min((float(q["price"]) for q in _leg), default=y0)
+            if abs(y0 - _ext) <= tol:
+                score *= 2.0
+            if score > best_score:
+                best_score = score
+                best = ValidatedLine(
+                    side=side,
+                    slope=float(slope),
+                    intercept=float(intercept),
+                    touch_count=len(touching),
+                    fit_residual_atr=float(dev),
+                    first_index=int(fx),
+                    last_index=int(lx),
+                    points=tuple(touching),
+                )
+    return best
 
 
 def classify_pattern(upper: Optional[ValidatedLine], lower: Optional[ValidatedLine], index: int) -> str:
