@@ -76,6 +76,7 @@ class ValidatedLine:
     first_index: int
     last_index: int
     points: tuple[dict, ...]
+    break_index: int | None = None
 
     def price_at(self, index: float) -> float:
         return self.slope * float(index) + self.intercept
@@ -139,38 +140,50 @@ def fit_validated_line(
             # of the defining pair no same-side pivot may cross the extended
             # line — a broken line is history, never a live trendline. This
             # is what killed the steep purple watch-line over candles.
-            broken = False
+            hard = False
             pierces = 0
+            break_at: Optional[int] = None
             closes = df["close"].to_numpy()
             if cfg.require_alive:
-                # RENDER doctrine: a line whose close has already crossed it
-                # is a broken line — history, never a live drawn trend.
+                # first close that crosses the extended line = the bar where
+                # the trend DIED (Viva 09-18: a broken leg-trend is still
+                # drawn — but only UP TO its break bar, never past it).
                 for kk in range(int(x1) + 1, n + 1):
                     _lv = slope * kk + intercept
                     if side == "HIGH" and float(closes[kk]) > _lv + 0.35 * atr:
-                        broken = True
+                        break_at = kk
                         break
                     if side == "LOW" and float(closes[kk]) < _lv - 0.35 * atr:
-                        broken = True
+                        break_at = kk
                         break
-                if broken:
-                    continue
             for q in pool:
                 xk = float(q["index"])
                 if xk > x1 and _over(q):
-                    broken = True
-                    break
+                    cand = int(xk)
+                    break_at = cand if break_at is None else min(break_at, cand)
+                    continue
                 if fx < xk < x1 and _over(q):
                     # ONE piercing pivot = the head of a head-&-shoulders —
                     # and H&S shoulders are FLAT by definition. On a sloped
                     # line even a single pierce means the line cuts candles.
                     pierces += 1
                     if pierces > 1 or abs(y1 - y0) >= 0.5 * atr:
-                        broken = True
+                        hard = True
                         break
-            if broken:
+            if hard:
                 continue
-            if cfg.require_alive:
+            if break_at is not None:
+                # BROKEN history line (Viva 09-18, his AAVE blue & LINK red
+                # rulings): drawn as the leg's record — must be substantial
+                # (3+ touches, 30+ bar span) and must have lived at least 10
+                # bars past its last defining pivot before dying.
+                if len(touching) < max(cfg.min_touches, 3):
+                    continue
+                if x1 - fx < 30:
+                    continue
+                if break_at - x1 < 10:
+                    continue
+            elif cfg.require_alive:
                 # ALIVE line: touched price within the last 40 bars AND its
                 # projected edge value still sits near price (no line
                 # floating in the air above/below a market that moved on).
@@ -190,6 +203,8 @@ def fit_validated_line(
             # pierced one — the head exception exists for real H&S only.
             if pierces:
                 score *= 0.55
+            if break_at is not None:
+                score *= 0.80  # a live trend outranks a finished one
             # Viva 09-17 schematics: the trendline of a leg STARTS AT THE LEG
             # EXTREME (peak for highs, trough for lows) — reward such lines.
             _leg = pool[-10:]
@@ -208,6 +223,7 @@ def fit_validated_line(
                     first_index=int(fx),
                     last_index=int(lx),
                     points=tuple(touching),
+                    break_index=break_at,
                 )
     return best
 

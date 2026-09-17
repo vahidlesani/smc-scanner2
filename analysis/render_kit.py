@@ -174,7 +174,7 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
             return touch * fit * (span ** 0.5)
 
         def _best(side: str):
-            """Best-fitting validated line across three lookback windows —
+            """Best-fitting validated line across lookback windows —
             returns (line, x-offset) WITHOUT mutating the frozen dataclass."""
             cands = []
             for w in (90, 130, len(df)):
@@ -186,8 +186,33 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
                     cands.append((ln, off))
             return max(cands, key=lambda t: _score(t[0]), default=(None, 0))
 
-        upper, u_off = _best("HIGH")
-        lower, l_off = _best("LOW")
+        def _scale(side: str):
+            """Viva 09-18 flexibility law (his BCH/BTC/AVAX annotations):
+            the market nests structures — a leg channel inside a bigger leg,
+            a small wedge inside a channel (Brooks: spike → channel → TR).
+            Fit every scale, keep the MAIN line plus ONE distinct sub-line
+            (different anchor OR clearly different slope) so both the old
+            leg trend AND the fresh small pattern paint together."""
+            found = []
+            for w in (len(df), 130, 90, 60):
+                if w < 45:
+                    continue
+                off = max(0, len(df) - w)
+                ln = fit_validated_line(df.tail(w).reset_index(drop=True), side, cfg)
+                if ln is not None:
+                    found.append((_score(ln), _glob(ln, off, side)))
+            found.sort(key=lambda t: -t[0])
+            main = found[0][1] if found else None
+            sub = None
+            for _, g in found:
+                if main is None or g is main:
+                    continue
+                if abs(g["x0"] - main["x0"]) >= 20 or \
+                        abs(g["slope"] - main["slope"]) > 0.6 * max(
+                            abs(main["slope"]), 1e-12):
+                    sub = g
+                    break
+            return main, sub
 
         def _glob(ln, off, side):
             """Serialize into GLOBAL x-coordinates (windows are local)."""
@@ -195,14 +220,18 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
                 "side": side,
                 "slope": float(ln.slope),
                 "intercept": float(ln.intercept) - float(ln.slope) * off,
+                "break_x": (int(off + ln.break_index)
+                            if ln.break_index is not None else None),
                 "x0": int(off + ln.first_index), "x1": int(n),
                 "points": [{"ts": str(pp.get("timestamp")),
                             "price": float(pp.get("price"))}
                            for pp in (ln.points or ())],
             }
 
-        gu = _glob(upper, u_off, "HIGH") if upper is not None else None
-        gl = _glob(lower, l_off, "LOW") if lower is not None else None
+        upper, sub_u = _scale("HIGH")
+        lower, sub_l = _scale("LOW")
+        gu = upper
+        gl = lower
 
         def _ns(d):
             import types as _t8
@@ -244,6 +273,9 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
                 out.append({"type": "TRENDLINE", "lines": [gl]})
         elif gu is not None or gl is not None:
             out.append({"type": "TRENDLINE", "lines": [gu if gu is not None else gl]})
+        for _sub in (sub_u, sub_l):
+            if _sub is not None:
+                out.append({"type": "TRENDLINE", "lines": [_sub]})
     except Exception as exc:
         print(f"render-kit pattern warning: {exc}")
     # trading range: two tested horizontals wide enough to matter
@@ -274,6 +306,14 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
         float(getattr(candidate, "entry_zone_top", 0) or 0))
     pats = detect_patterns(trigger_df.tail(170))
     md["render_patterns"] = pats
+    # Viva 09-18 (his CRV note): the higher-TF pattern must be ANNOUNCED on
+    # the trigger chart — «وج باید در ۴ ساعته یا روزانه پیدا بشه و اعلام بشه».
+    try:
+        _hp = detect_patterns(htf_df.tail(170)) if htf_df is not None \
+            and len(htf_df) >= 60 else []
+        md["render_htf_pattern"] = str(_hp[0]["type"]) if _hp else None
+    except Exception:
+        md["render_htf_pattern"] = None
     # FLAG / FLAG-LIMIT: the flag's far edge IS a limit-entry zone
     for _p in pats:
         if _p.get("type") in ("FLAG_BULL", "FLAG_BEAR") and _p.get("lines"):

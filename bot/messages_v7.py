@@ -1286,6 +1286,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     bbox={"boxstyle": "round,pad=0.26",
                           "facecolor": CHART_THEME["panel"],
                           "edgecolor": "none", "alpha": 0.78})
+        _chip_ys8 = []
+        _htfp = (candidate.metadata or {}).get("render_htf_pattern")
+        if _htfp:
+            notes.append((f"PAT 4H · {str(_htfp)}", CHART_THEME["muted"]))
         # pattern render commands: wedge / triangle / channel / flag / range
         for _pat in ((candidate.metadata or {}).get("render_patterns") or []):
             if _pat.get("type") == "RANGE":
@@ -1344,27 +1348,55 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _ic8 = float(_ln0["intercept"])
                 _lns.append({**_ln0, "slope": _sl8, "intercept": _ic8,
                              "x0": _x0f})
+            _atr9 = float((frame["high"] - frame["low"]).tail(14).mean())
+            _flat8 = []
+            _brk8 = []
             for _ln in _lns:
                 _sl, _ic = float(_ln["slope"]), float(_ln["intercept"])
                 _xa = max(0.0, float(_ln.get("x0", 0)))
                 _xe = count + future - 0.5
                 _col8 = CHART_THEME["supply"] if _ln.get("side") == "HIGH" \
                     else CHART_THEME["demand"]
-                ax.plot([_xa, count], [_sl * _xa + _ic, _sl * count + _ic],
+                # Viva 09-18 (his AAVE ruling): a FLAT «trendline» is not a
+                # trend — it is the supply/demand box of the base it came
+                # from, so paint it as a zone band instead of a line.
+                if _atr9 > 0 and abs(_sl) * max(1.0, count - _xa) < 0.5 * _atr9:
+                    _y8 = _sl * count + _ic
+                    ax.fill_between([_xa, _xe], _y8 - 0.12 * _atr9,
+                                    _y8 + 0.12 * _atr9, color=_col8,
+                                    alpha=0.10, linewidth=0, zorder=1)
+                    ax.text(_xe - 1.0, _y8,
+                            "SUPPLY" if _ln.get("side") == "HIGH" else "DEMAND",
+                            color=_col8, fontsize=6.5, va="center", ha="right",
+                            fontweight="bold", zorder=12)
+                    _flat8.append(True)
+                    _brk8.append(False)
+                    continue
+                _flat8.append(False)
+                # a BROKEN leg-trend paints only UP TO its break bar (his
+                # AAVE blue ends where price crossed it); a live trend runs
+                # solid to LIVE and dashed to the canvas edge.
+                _bx8 = _ln.get("break_x")
+                _brk8.append(_bx8 is not None)
+                _xend8 = min(float(count), float(_bx8)) \
+                    if _bx8 is not None else float(count)
+                ax.plot([_xa, _xend8], [_sl * _xa + _ic, _sl * _xend8 + _ic],
                         color=_col8, linewidth=2.0, alpha=0.95, zorder=7,
                         solid_capstyle="round")
-                if count < _xe - 0.6:
+                if _bx8 is None and count < _xe - 0.6:
                     ax.plot([count, _xe], [_sl * count + _ic, _sl * _xe + _ic],
                             color=_col8, linewidth=1.4, alpha=0.7, zorder=6,
                             linestyle=(0, (6, 4)), solid_capstyle="butt")
-                _px8 = [float(q.get("price")) for q in (_ln.get("points") or [])]
-                _xs8 = [float(np.searchsorted(
-                    frame.index, pd.Timestamp(str(q.get("ts")))))
-                    for q in (_ln.get("points") or [])]
+                _px8, _xs8 = [], []
+                for q in (_ln.get("points") or []):
+                    _qx = float(np.searchsorted(
+                        frame.index, pd.Timestamp(str(q.get("ts")))))
+                    if _qx <= _xend8 + 0.5:
+                        _xs8.append(_qx); _px8.append(float(q.get("price")))
                 if _xs8:
                     ax.scatter(_xs8, _px8, s=30, color=CHART_THEME["panel"],
                                edgecolors=_col8, linewidths=1.4, zorder=9)
-            if len(_lns) == 2:
+            if len(_lns) == 2 and not any(_flat8) and not any(_brk8):
                 # CryptoCove measured-move box: pattern height projected from
                 # the live price into the future panel — translucent green,
                 # double-arrow spine, small value label on top.
@@ -1414,8 +1446,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     pass
             if _lns:
                 _l0 = _lns[0]
-                ax.text(count + 1.0,
-                        float(_l0["slope"]) * count + float(_l0["intercept"]),
+                _cy8 = float(_l0["slope"]) * count + float(_l0["intercept"])
+                # chips must never sit on top of each other (Viva 09-18)
+                _rng8 = float(frame["high"].max() - frame["low"].min()) or 1.0
+                for _yy8 in list(_chip_ys8):
+                    if abs(_cy8 - _yy8) < 0.035 * _rng8:
+                        _cy8 = _yy8 + 0.045 * _rng8
+                _chip_ys8.append(_cy8)
+                ax.text(count + 1.0, _cy8,
                         str(_pat.get("type")), color=CHART_THEME["text"],
                         fontsize=7, va="center", ha="left", fontweight="bold",
                         zorder=12,
