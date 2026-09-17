@@ -189,7 +189,8 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
         upper, u_off = _best("HIGH")
         lower, l_off = _best("LOW")
 
-        def _ser(ln, off=0):
+        def _glob(ln, off):
+            """Serialize into GLOBAL x-coordinates (windows are local)."""
             return {
                 "slope": float(ln.slope),
                 "intercept": float(ln.intercept) - float(ln.slope) * off,
@@ -199,29 +200,38 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
                            for pp in (ln.points or ())],
             }
 
-        if upper is not None and lower is not None:
-            shape = classify_shape(upper, lower, n)
+        gu = _glob(upper, u_off) if upper is not None else None
+        gl = _glob(lower, l_off) if lower is not None else None
+
+        def _ns(d):
+            import types as _t8
+            return _t8.SimpleNamespace(
+                slope=d["slope"], first_index=d["x0"], last_index=d["x1"],
+                price_at=lambda X, _d=d: _d["slope"] * X + _d["intercept"])
+
+        if gu is not None and gl is not None:
+            shape = classify_shape(_ns(gu), _ns(gl), n)
             if shape in ("NONE", ""):
-                # converging pair = wedge even when the classifier stays shy
-                g0 = (upper.price_at(max(upper.first_index, lower.first_index))
-                      - lower.price_at(max(upper.first_index, lower.first_index)))
-                g1 = upper.price_at(n) - lower.price_at(n)
-                same_dir = (upper.slope < 0) == (lower.slope < 0) and abs(upper.slope) > 0
-                if same_dir and 0 < g1 < g0:
-                    shape = "WEDGE_FALLING" if upper.slope < 0 else "WEDGE_RISING"
+                # converging pair = wedge (global coords! the old check mixed
+                # per-window local x and misfired on CRV)
+                _xs = max(gu["x0"], gl["x0"])
+                _g0 = (gu["slope"] * _xs + gu["intercept"]) - \
+                      (gl["slope"] * _xs + gl["intercept"])
+                _g1 = (gu["slope"] * n + gu["intercept"]) - \
+                      (gl["slope"] * n + gl["intercept"])
+                same_dir = (gu["slope"] < 0) == (gl["slope"] < 0) and gu["slope"] != 0
+                if same_dir and 0 < _g1 < _g0:
+                    shape = "WEDGE_FALLING" if gu["slope"] < 0 else "WEDGE_RISING"
             if shape not in ("NONE", ""):
-                out.append({"type": str(shape),
-                            "lines": [_ser(upper, u_off), _ser(lower, l_off)]})
+                out.append({"type": str(shape), "lines": [gu, gl]})
             else:
                 # No classified shape: BOTH lines still paint, each as its
                 # own TRENDLINE (CRV ruling 09-17: his two hand-drawn blue
                 # lines; FIL: the ascending support from the lows).
-                out.append({"type": "TRENDLINE", "lines": [_ser(upper, u_off)]})
-                out.append({"type": "TRENDLINE", "lines": [_ser(lower, l_off)]})
-        elif upper is not None or lower is not None:
-            out.append({"type": "TRENDLINE",
-                        "lines": [_ser(upper, u_off) if upper is not None
-                                  else _ser(lower, l_off)]})
+                out.append({"type": "TRENDLINE", "lines": [gu]})
+                out.append({"type": "TRENDLINE", "lines": [gl]})
+        elif gu is not None or gl is not None:
+            out.append({"type": "TRENDLINE", "lines": [gu if gu is not None else gl]})
     except Exception as exc:
         print(f"render-kit pattern warning: {exc}")
     # trading range: two tested horizontals wide enough to matter

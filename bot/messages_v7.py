@@ -1292,6 +1292,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 ax.fill_between([zone_start, zone_end], float(_pat["lo"]),
                                 float(_pat["hi"]), color=CHART_THEME["muted"],
                                 alpha=0.07, linewidth=0, zorder=1)
+                # CryptoCove reference (his 08-14 green-bg charts): a range
+                # box carries a thin solid border AND a dashed midline.
+                ax.plot([zone_start, zone_start, zone_end, zone_end, zone_start],
+                        [float(_pat["lo"]), float(_pat["hi"]), float(_pat["hi"]),
+                         float(_pat["lo"]), float(_pat["lo"])],
+                        color=CHART_THEME["muted"], linewidth=0.7, alpha=0.5,
+                        zorder=2)
+                _mid8 = (float(_pat["lo"]) + float(_pat["hi"])) / 2
+                ax.hlines(_mid8, zone_start, zone_end,
+                          colors=CHART_THEME["muted"], linestyles="--",
+                          linewidth=0.7, alpha=0.55, zorder=2)
                 _rg = _place_in_box({"x0": float(zone_start),
                                      "x1": float(zone_end),
                                      "bottom": float(_pat["lo"]),
@@ -1318,11 +1329,49 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _sl, _ic = float(_ln["slope"]), float(_ln["intercept"])
                 _xa = max(0.0, float(_ln.get("x0", 0)))
                 _xb = min(count + future - 0.5, float(_ln.get("x1", count)) + 6)
-                _col8 = (CHART_THEME["demand"] if _sl > 0
-                         else CHART_THEME["invalidation"])
+                # CryptoCove reference: trend/wedge/channel edges are THIN
+                # DARK SOLID lines — color carries no direction here.
+                _col8 = CHART_THEME["text"]
                 ax.plot([_xa, _xb], [_sl * _xa + _ic, _sl * _xb + _ic],
-                        color=_col8, linewidth=1.5, alpha=0.85, zorder=7,
+                        color=_col8, linewidth=1.1, alpha=0.8, zorder=7,
                         solid_capstyle="round")
+            if len(_lns) == 2:
+                # CryptoCove measured-move box: pattern height projected from
+                # the live price into the future panel — translucent green,
+                # double-arrow spine, small value label on top.
+                try:
+                    _a8, _b8 = _lns[0], _lns[1]
+                    _x8 = max(float(_a8.get("x0", 0)), float(_b8.get("x0", 0)))
+                    _ya8 = float(_a8["slope"]) * _x8 + float(_a8["intercept"])
+                    _yb8 = float(_b8["slope"]) * _x8 + float(_b8["intercept"])
+                    _h8 = abs(_ya8 - _yb8)
+                    _lc8 = float(frame["close"].iloc[-1])
+                    _mean_sl8 = (float(_a8["slope"]) + float(_b8["slope"])) / 2
+                    if _h8 > 0 and _lc8 > 0:
+                        if _mean_sl8 < 0:
+                            _bt8, _tp8 = _lc8, _lc8 + _h8
+                        else:
+                            _bt8, _tp8 = _lc8 - _h8, _lc8
+                        _bx0, _bx1 = count + 2, count + 2 + max(8, int(future * 0.55))
+                        ax.fill_between([_bx0, _bx1], _bt8, _tp8,
+                                        color=CHART_THEME["demand"],
+                                        alpha=0.30, linewidth=0, zorder=2)
+                        ax.plot([_bx0, _bx0, _bx1, _bx1, _bx0],
+                                [_bt8, _tp8, _tp8, _bt8, _bt8],
+                                color=CHART_THEME["demand"], linewidth=0.7,
+                                alpha=0.55, zorder=3)
+                        _mx8 = (_bx0 + _bx1) / 2
+                        ax.annotate("", xy=(_mx8, _tp8), xytext=(_mx8, _bt8),
+                                    arrowprops=dict(arrowstyle="<->",
+                                                    color=CHART_THEME["text"],
+                                                    lw=0.7, alpha=0.8),
+                                    zorder=8)
+                        ax.text(_mx8, _tp8,
+                                f"{_price(_h8)} ({_h8 / _lc8 * 100:.1f}%)",
+                                color=CHART_THEME["muted"], fontsize=6.5,
+                                ha="center", va="bottom", zorder=9)
+                except Exception:
+                    pass
             if _lns:
                 _l0 = _lns[0]
                 ax.text(count + 1.0,
