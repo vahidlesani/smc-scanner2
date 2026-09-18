@@ -27,7 +27,7 @@ from database import db as legacy_db
 # 1H, 4H/2H/1H from 15m, 15m/30m from 5m (Ourbit has no 3m), 5m/3m from 1m.
 # Falls back to the trade TF when the venue lacks the finer interval.
 MONITOR_TF_FOR = {"1d": "1h", "4h": "15m", "2h": "15m", "1h": "15m",
-                  "30m": "5m", "15m": "3m", "5m": "1m", "3m": "1m"}
+                  "30m": "5m", "15m": "5m", "5m": "1m", "3m": "1m"}
 TF_MINUTES = {"1m": 1.0, "3m": 3.0, "5m": 5.0, "15m": 15.0, "30m": 30.0,
               "1h": 60.0, "2h": 120.0, "4h": 240.0, "1d": 1440.0}
 
@@ -1267,7 +1267,14 @@ def monitor_confirmed_trades() -> List[Dict]:
                         ladder = tstep["state"]
                         raw_events.extend(tstep["events"])
                         scan = smart_exit_scan(direction, wcandles, ladder)
-                        if scan.get("level") == "RED":
+                        # Viva 09-19/20 ruling (verbatim): in the PROFIT
+                        # PROTECTION phase (after TP1) reversal signs must
+                        # never «رد بشه و فقط هشدار بمونه» — two concurrent
+                        # signs (candle pattern + sell pressure / volume)
+                        # close ALL remainder at this monitor candle's close,
+                        # even before price returns to TP1. One sign = short
+                        # warning only; before TP1 the structural stop rules.
+                        if int(scan.get("score") or 0) >= 2:
                             _hit = int(ladder.get("hit_index") or 0)
                             _wts = [float(w) for w in (ladder.get("weights") or [])]
                             _remaining = 100.0 - sum(_wts[:_hit])
@@ -1281,7 +1288,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                             ladder["closed"] = True
                             ladder["close_reason"] = "SMART_EXIT"
                             ladder["exit_reasons_fa"] = list(scan.get("reasons") or [])
-                        elif (scan.get("level") == "ORANGE"
+                        elif (int(scan.get("score") or 0) == 1
                                 and int(ladder.get("warned_band") or 0) != int(ladder.get("hit_index") or 0)):
                             ladder["warned_band"] = int(ladder.get("hit_index") or 0)
                             raw_events.append({

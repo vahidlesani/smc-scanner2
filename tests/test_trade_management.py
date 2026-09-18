@@ -141,10 +141,11 @@ def test_monitor_tf_hierarchy_and_sqrt_scaling():
     assert monitor_tf_for("1d") == "1h"
     assert monitor_tf_for("4h") == "15m"
     assert monitor_tf_for("1h") == "15m"
-    assert monitor_tf_for("15m") == "3m"     # Ourbit HAS 3m (Viva 09-19/20)
+    assert monitor_tf_for("15m") == "5m"     # Viva 09-19/20: signs live on 5m
+    assert monitor_tf_for("3m") == "1m"
     assert monitor_tf_for("5m") == "1m"
     assert monitor_tf_for("7m") == "7m"
-    assert abs(vol_atr_n_for("15m", "3m") - 2.2360679) < 1e-6
+    assert abs(vol_atr_n_for("15m", "5m") - 1.7320508) < 1e-6
     assert abs(vol_atr_n_for("1d", "1h") - 4.8989795) < 1e-6
 
 
@@ -201,3 +202,42 @@ def test_smart_exit_short_mirror_red():
                "close": 101.0, "volume": 400.0}
     scan = smart_exit_scan("SHORT", win, armed)
     assert scan["level"] == "RED" and scan["score"] >= 3
+
+
+def test_money_management_refine_cost_inside_risk_and_wide_stop_penalty():
+    # Viva 09-19/20 refine: fees+slippage live inside effective risk, wide
+    # stops shrink the risk budget, degraded RR trims leverage.
+    from analysis.risk import calculate_position
+    acc = 10_000.0
+    tight = calculate_position(100.0, 98.0, "LONG", 8, acc, "SWING", 20, 102.0, 106.0)
+    assert tight is not None
+    # effective risk (stop + round-trip cost) must exceed the bare stop risk
+    assert tight["eff_risk_pct"] > tight["risk_pct"]
+    assert abs(tight["cost_pct"] - 0.18) < 1e-9
+    wide = calculate_position(100.0, 78.0, "LONG", 8, acc, "SWING", 20, 104.0, 110.0)
+    assert wide is not None
+    assert wide["position_size"] < tight["position_size"] / 3.0   # 22% stop → ×0.35
+    absurd = calculate_position(100.0, 55.0, "LONG", 8, acc, "SWING", 20, 104.0, 110.0)
+    assert absurd is None                                          # >30% = unsizeable
+    degraded = calculate_position(100.0, 98.0, "LONG", 8, acc, "SWING", 20, 100.5, 106.0)
+    assert degraded is not None
+    assert degraded["leverage"] <= 2                               # rr1 < 1 trim
+
+
+def test_protection_phase_two_signs_close_semantics():
+    # Viva 09-19/20: in the protection phase TWO concurrent signs close the
+    # remainder at the monitor candle close (score>=2), ONE sign warns only.
+    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
+    armed = advance_ladder(p, 102.1, 100.1)["state"]
+    win = _flat_window()
+    win[-2] = {"open": 100.0, "high": 100.6, "low": 99.9,
+               "close": 100.5, "volume": 100.0}
+    win[-1] = {"open": 100.6, "high": 100.7, "low": 99.3,
+               "close": 99.9, "volume": 400.0}                    # engulf + volume
+    scan = smart_exit_scan("LONG", win, armed)
+    assert scan["score"] == 2                                      # monitor closes NOW
+    win1 = _flat_window()
+    win1[-1] = {"open": 100.6, "high": 100.7, "low": 99.3,
+                "close": 99.9, "volume": 400.0}                    # volume surge only
+    scan1 = smart_exit_scan("LONG", win1, armed)
+    assert scan1["score"] == 1                                     # warning only

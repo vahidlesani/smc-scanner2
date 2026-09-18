@@ -65,7 +65,7 @@ CONFIRM_TF_BY_TRIGGER = {
     # Viva 09-19/20 restated ladder (verbatim): each TF confirms ONE step
     # below itself — 15m from 3m (Ourbit HAS 3m), 1h from 15m, 4h from 1h,
     # 1D from 4H. Finer-than-that closes are noise, not evidence.
-    "15m": "3m",
+    "15m": "5m",   # Viva 09-19/20: «تایم ۵ دقیقه رو نیاز داریم» — signs live on 5m
     "1h": "15m",
     "4h": "1h",
     "1d": "4h",
@@ -91,7 +91,7 @@ def confirm_late_tf(trigger_tf: str):
 #   1D → 4H close   4H → 1H close   1H → 15m close   15m → 5m close
 # If that single close is weak, Viva filters the trade himself — the scanner
 # must not burn the zone waiting for ceremony.
-CONFIRM_TF_BY_PATTERN = {"1d": "4h", "4h": "1h", "1h": "15m", "15m": "3m"}
+CONFIRM_TF_BY_PATTERN = {"1d": "4h", "4h": "1h", "1h": "15m", "15m": "5m"}
 
 
 def confirm_timeframe_for_pattern(pattern_tf: str, style: str, trigger_tf: str) -> str:

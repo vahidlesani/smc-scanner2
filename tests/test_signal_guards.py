@@ -623,13 +623,13 @@ def test_confirmation_ladder_one_step_below_pattern():
     assert f("1d", "GRAND", "1d") == "4h"
     assert f("4h", "SWING", "4h") == "1h"
     assert f("1H", "SWING", "1h") == "15m"
-    assert f("15m", "DAYTRADE", "15m") == "3m"
+    assert f("15m", "DAYTRADE", "15m") == "5m"
     assert late("15m") == "15m"
     assert late("1h") == "1h"
     assert late("4h") == "4h"
     assert late("1d") == "1d"
     # unknown pattern TF falls back to the trigger grid, never crashes
-    assert f("", "DAYTRADE", "15m") == "3m"
+    assert f("", "DAYTRADE", "15m") == "5m"
     assert f("", "SWING", "4h") == "1h"
 
 
@@ -931,7 +931,7 @@ def test_four_stream_ladder():
     assert cf("1d", "GRAND", "1d") == "4h"
     assert cf("4h", "SWING", "4h") == "1h"
     assert cf("1h", "SWING", "1h") == "15m"
-    assert cf("15m", "DAYTRADE", "15m") == "3m"
+    assert cf("15m", "DAYTRADE", "15m") == "5m"
     from analysis.quality_engine import ENGINES, _live_styles
     assert {"GRAND", "SWING", "DAYTRADE", "SCALP"} <= set(ENGINES)
     # SCALP engine stays built but is NOT live (scalp + 5m retired)

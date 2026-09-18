@@ -82,9 +82,28 @@ def calculate_position(
     risk_pct = plan["risk_pct"]
     if risk_pct <= 0:
         return None
+    # Viva 09-19/20 refine (his «روی محاسبات و لوریج رضایت ندارم»):
+    # (1) wide-stop volatility penalty — a 20%+ invalidation distance is a
+    #     different animal than a 2% one; size it as such.
+    if sl_fraction > 0.30:
+        return None                      # not a sizeable trade at all
+    if sl_fraction > 0.18:
+        risk_pct *= 0.35
+    elif sl_fraction > 0.10:
+        risk_pct *= 0.60
+    # (2) the round-trip fee+slippage is part of the real loss at the stop,
+    #     so it belongs INSIDE the effective risk per unit (spec §6).
+    cost_fraction = 2.0 * (SETTINGS.fee_rate_percent + SETTINGS.slippage_percent) / 100.0
+    eff_fraction = sl_fraction + cost_fraction
     desired_risk = account * risk_pct / 100
     leverage = suggested_leverage(score, sl_fraction, style, venue_max_leverage)
-    desired_notional = desired_risk / sl_fraction
+    # (3) RR-aware leverage trim: a degraded first target must not ride on
+    #     full leverage.
+    if tp1 and sl_distance > 0:
+        _rr1 = abs(float(tp1) - entry) / sl_distance
+        if _rr1 < 1.0:
+            leverage = max(1, min(int(leverage), 2))
+    desired_notional = desired_risk / eff_fraction
 
     target_margin_pct = float(plan["margin_pct"])
     if target_margin_pct <= 0:
@@ -95,6 +114,7 @@ def calculate_position(
     margin = notional / leverage
     actual_risk = notional * sl_fraction
     actual_risk_pct = actual_risk / account * 100
+    eff_risk_pct = notional * eff_fraction / account * 100
 
     # Legacy callers without structural targets retain a fallback only for UI
     # compatibility. Live v7 candidates always pass their own targets below.
@@ -106,6 +126,8 @@ def calculate_position(
 
     return {
         "sl_pct": sl_fraction * 100,
+        "cost_pct": cost_fraction * 100,
+        "eff_risk_pct": eff_risk_pct,
         "risk_amount": actual_risk,
         "risk_pct": actual_risk_pct,
         "requested_risk_pct": risk_pct,
