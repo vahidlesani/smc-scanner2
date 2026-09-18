@@ -755,6 +755,16 @@ def monitor_candidates() -> Dict[str, int]:
     for candidate in candidates:
         key = (candidate.symbol, candidate.metadata.get("confirm_tf") or candidate.trigger_timeframe)
         market_data = frames.get(key)
+        if market_data is None:
+            # Viva 09-19/20: a missing finer confirm frame must NEVER stall
+            # the candidate (the 09-17→09-19 Ourbit 3m gap did exactly that).
+            from analysis.setups_v7 import confirm_late_tf as _fb_late
+            for _fb in (candidate.trigger_timeframe, _fb_late(candidate.trigger_timeframe)):
+                if _fb:
+                    market_data = frames.get((candidate.symbol, _fb))
+                    if market_data:
+                        candidate.metadata["confirm_tf_fallback"] = _fb
+                        break
         publication_in_progress = bool(
             candidate.metadata.get("technical_confirmation_complete")
             and (

@@ -62,19 +62,23 @@ CONFIRM_TF = {
 #   15m trigger -> 5m confirm
 #   1h trigger  -> 5m confirm
 CONFIRM_TF_BY_TRIGGER = {
-    # Viva 09-17: early confirm = monitor TF one step below the trigger
+    # Viva 09-19/20 restated ladder (verbatim): each TF confirms ONE step
+    # below itself — 15m from 3m (Ourbit HAS 3m), 1h from 15m, 4h from 1h,
+    # 1D from 4H. Finer-than-that closes are noise, not evidence.
     "15m": "3m",
-    "1h": "3m",
-    "4h": "15m",
-    "1d": "1h",
+    "1h": "15m",
+    "4h": "1h",
+    "1d": "4h",
 }
 
 # late bound: if the monitor TF missed, the scan/structure candle still confirms
 CONFIRM_LATE_BY_TRIGGER = {
+    # Last resort ONLY: if the one-step-below candle never printed the valid
+    # close, the pattern TF's OWN closed candle confirms (never stalls).
     "15m": "15m",
-    "1h": "15m",
-    "4h": "1h",
-    "1d": "4h",
+    "1h": "1h",
+    "4h": "4h",
+    "1d": "1d",
 }
 
 
@@ -87,7 +91,7 @@ def confirm_late_tf(trigger_tf: str):
 #   1D → 4H close   4H → 1H close   1H → 15m close   15m → 5m close
 # If that single close is weak, Viva filters the trade himself — the scanner
 # must not burn the zone waiting for ceremony.
-CONFIRM_TF_BY_PATTERN = {"1d": "1h", "4h": "15m", "1h": "3m", "15m": "3m"}
+CONFIRM_TF_BY_PATTERN = {"1d": "4h", "4h": "1h", "1h": "15m", "15m": "3m"}
 
 
 def confirm_timeframe_for_pattern(pattern_tf: str, style: str, trigger_tf: str) -> str:
