@@ -75,12 +75,11 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
     valid_final = (proposed_final > entry if sign > 0 else proposed_final < entry)
     final_price = proposed_final if valid_final else entry + sign * risk * 3
     dist = abs(final_price - entry)
-    # First exit: the structural TP1 when it already clears the 1R floor,
-    # otherwise pinned at exactly 1R (the drawn pill moves to the floor).
-    st = float(structural_tp1 or 0.0)
-    if st <= 0.0 or not ((st > entry) if sign > 0 else (st < entry)):
-        st = entry + sign * dist * STRUCTURAL_TP1_SHARE
-    tp1 = st if abs(st - entry) >= risk * TP1_FLOOR_R else entry + sign * risk * TP1_FLOOR_R
+    # Viva 09-19 ruling (verbatim): «TP1 = ۱× استاپ» / «پیل TP1 روی قیمت 1R
+    # می‌نشیند». The first exit is ALWAYS exactly one stop-distance away;
+    # the detector's structural 40%-point is recorded for the journal but
+    # never moves the exit. TP2 = midpoint(TP1, final), TP3 = final target.
+    tp1 = entry + sign * risk * TP1_FLOOR_R
     if abs(tp1 - entry) >= dist:
         targets = [final_price]
         weights = [100.0]
@@ -125,6 +124,7 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
         "warned_band": 0,
         "close_reason": "",
         "exit_reasons_fa": [],
+        "structural_tp1": float(structural_tp1 or 0.0),
     }
 
 

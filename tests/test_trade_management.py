@@ -18,9 +18,9 @@ def test_entry_fill_requires_a_real_ohlc_touch():
 
 def test_ladder_long_three_aligned_exits():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
-    # risk=2, dist=10 (5R): structural TP1 = 104 (2R, clears the 1R floor)
-    # is kept as drawn; TP2 = midpoint(104,110); final = structural target.
-    assert p["targets"] == [104.0, 107.0, 110.0]
+    # risk=2, dist=10 (5R): TP1 pinned at exactly 1R per the ruling;
+    # TP2 = midpoint(102,110); TP3 = structural final target.
+    assert p["targets"] == [102.0, 106.0, 110.0]
     assert p["weights"] == [50.0, 30.0, 20.0]
     assert p["version"] == 2
     assert p["trail_stops"][0] == 100.05          # net BE, fee 0 → 5 ticks
@@ -54,7 +54,7 @@ def test_net_breakeven_includes_roundtrip_cost():
 
 def test_ladder_stop_is_conservative_when_same_candle_hits_tp():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01})
-    # fallback final = 3R → targets [102.4, 104.2, 106]; low crosses the
+    # fallback final = 3R → targets [102, 104, 106]; low crosses the
     # original stop in the same candle → STOP is assumed first.
     result = advance_ladder(p, 102.2, 97.9)
     assert result["events"][0]["event"] == "STOP"
@@ -63,7 +63,7 @@ def test_ladder_stop_is_conservative_when_same_candle_hits_tp():
 
 def test_ladder_short_three_exits_and_trail():
     p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01}, 90)
-    assert p["targets"] == [96.0, 93.0, 90.0]
+    assert p["targets"] == [98.0, 94.0, 90.0]
     assert p["weights"] == [50.0, 30.0, 20.0]
     result = advance_ladder(p, 99.9, 95.9)
     assert result["events"][0]["event"] == "TP1"
@@ -90,7 +90,7 @@ def test_band_trailing_ratchets_to_profit_floor_long():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
     st = advance_ladder(p, 104.5, 103.9)["state"]                # TP1 printed
     assert st["hit_index"] == 1
-    assert abs(st["band_floors"][0] - 101.6) < 1e-9              # α = 0.40
+    assert abs(st["band_floors"][0] - 100.8) < 1e-9              # α = 0.40 of entry→TP1
     candles = [{"open": 104.0, "high": 104.2, "low": 103.6,
                 "close": 104.0, "volume": 10.0} for _ in range(25)]
     candles[-1] = {"open": 105.0, "high": 105.5, "low": 104.8,
@@ -111,7 +111,7 @@ def test_band_trailing_ratchets_to_profit_floor_long():
 def test_band_trailing_short_mirrors():
     p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01}, 90)
     st = advance_ladder(p, 96.1, 95.5)["state"]                  # TP1 printed
-    assert abs(st["band_floors"][0] - 98.4) < 1e-9
+    assert abs(st["band_floors"][0] - 99.2) < 1e-9
     candles = [{"open": 95.8, "high": 96.2, "low": 95.6,
                 "close": 95.8, "volume": 10.0} for _ in range(25)]
     candles[-1] = {"open": 95.0, "high": 95.2, "low": 94.5,
