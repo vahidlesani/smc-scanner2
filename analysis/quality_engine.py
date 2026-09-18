@@ -420,8 +420,17 @@ def evaluate_confirmation(
     elif pinbar:
         trigger_type = "یک Pin Bar معتبر با رد قیمت از ناحیه تشکیل داد"
     else:
-        from analysis.trigger_patterns import describe as describe_alt_trigger
-        trigger_type = describe_alt_trigger(alt, candidate.direction)
+        # Viva 09-19 hotfix (AVAX PINWALL-Q crash): the S6/fast-break lanes
+        # validate the trigger WITHOUT any candle pattern, so alt can still
+        # be None here — describe(None) used to kill the candidate cycle.
+        if alt is not None:
+            from analysis.trigger_patterns import describe as describe_alt_trigger
+            trigger_type = describe_alt_trigger(alt, candidate.direction)
+        elif str(candidate.metadata.get("viva_state") or "") == "S6_CONFIRMED" \
+                and candidate.metadata.get("strategy_variant") == "VIVA_TLBREAK":
+            trigger_type = "کلوز معتبرِ سازندهٔ S6 (Retest→Rejection→BOS)"
+        else:
+            trigger_type = "اولین کلوز معتبر پشت خط/لبه (بدون پولبک)"
     if alt_only:
         trigger_detail = (
             f"پس از اولین تماس با ناحیه، هیچ کندل تکیِ پین‌باری وجود نداشت؛ خودِ {trigger_type} "

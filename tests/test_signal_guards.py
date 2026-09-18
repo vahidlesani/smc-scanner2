@@ -507,6 +507,48 @@ def test_s6_fast_confirm_survives_later_ticks():
         cand2.metadata.get("last_reject_code") or "")
 
 
+def test_s6_lane_with_no_trigger_candle_does_not_crash():
+    """Viva 09-19 hotfix (AVAX PINWALL-Q): S6/fast-break lanes validate the
+    trigger without any candle pattern; with alt=None the describe() call
+    used to raise 'NoneType' object has no attribute 'size' and freeze the
+    candidate cycle. Must return a verdict, never raise."""
+    import pandas as pd
+    from datetime import datetime, timedelta, timezone
+    from test_v7 import make_candidate
+    from analysis.quality_engine import evaluate_confirmation
+    import analysis.trigger_patterns as tp
+
+    t0 = datetime(2026, 9, 11, 12, 0, tzinfo=timezone.utc)
+    rows = []
+    for i in range(32):
+        base = 98.0 if i < 28 else 100.2
+        rows.append({"timestamp": t0 + timedelta(minutes=15 * i), "open": base - 0.02,
+                     "high": base + 0.05, "low": base - 0.10, "close": base, "volume": 1000.0})
+    df = pd.DataFrame(rows).set_index("timestamp")
+    df.index.name = "timestamp"
+    df["timestamp"] = df.index
+    cand = make_candidate()
+    cand.setup_code = "TLBREAK"
+    cand.status = "NEAR_CONFIRM"
+    cand.entry_zone_bottom, cand.entry_zone_top = 99.8, 100.2
+    cand.planned_entry, cand.sl = 100.1, 98.6
+    cand.tp1, cand.tp2 = 106.0, 109.0
+    cand.created_at = (t0 + timedelta(minutes=15 * 27)).isoformat()
+    cand.metadata.update({
+        "strategy_variant": "VIVA_TLBREAK", "viva_breakout_line": 100.0, "atr": 1.0,
+        "confirm_tf": "15m", "touched": True, "viva_state": "S6_CONFIRMED",
+        "viva_state_machine": {"stage": "S6_CONFIRMED"},
+    })
+    orig = tp.multi_candle_trigger
+    tp.multi_candle_trigger = lambda *a, **k: None   # force alt=None
+    try:
+        ok, _c, reason = evaluate_confirmation(cand, df)
+        assert isinstance(ok, bool)
+        assert "NoneType" not in str(reason)
+    finally:
+        tp.multi_candle_trigger = orig
+
+
 def test_fast_break_followthrough_confirms_without_retest():
     """Viva 2026-09-11: BTCUSDT/CRVUSDT burn case — price breaks the fitted
     line and RUNS. Two consecutive closes beyond the line with displacement
