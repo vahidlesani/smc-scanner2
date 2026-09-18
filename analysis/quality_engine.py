@@ -393,6 +393,14 @@ def evaluate_confirmation(
         if candidate.direction == "LONG"
         else (executable_entry - candidate.tp2) / risk
     )
+    # Viva 09-19/20 (SUI 1D case: R:R 0.02/0.03 with a 64%-away stop): a tool
+    # whose targets are a rounding error versus its stop is not a trade.
+    # Hard GEOMETRY sanity — distinct from the RR-veto law, which protects
+    # valid first closes with *degraded but real* ratios.
+    if rr1 < 0.25 or rr2 < 0.50:
+        return reject("DEGENERATE_GEOMETRY", (
+            f"هندسهٔ ابزار بی‌معنی است: TP1={rr1:.2f}R و TP2={rr2:.2f}R نسبت به استاپ؛ "
+            "سناریو فقط به‌صورت هشدار/تحلیل باقی می‌ماند."))
     if rr1 < SETTINGS.confirm_rr1_floor or rr2 < SETTINGS.confirm_rr2_floor:
         # Viva 2026-09-14: «اولین کلوز معتبر پشت خط = تأیید؛ مدیریت با خودم»
         # — an RR floor may never veto a first valid close beyond the line.
@@ -454,4 +462,68 @@ def evaluate_confirmation(
     candidate.status = "CONFIRMED"
     candidate.confirmed_at = candidate.confirmed_at or iso_now()
     candidate.metadata["technical_confirmation_complete"] = True
+    # ── Viva 09-19/20 counter-trend & MTF-zone confirmation laws ──────────
+    # (a) A TOUCH is never a confirmation against the structure: counter
+    #     setups need a closed structure break in the trade direction (close
+    #     beyond the nearest swing); 1D counters additionally need the 4H
+    #     structure break first (ZEC ruling: sellers get hunted at the touch).
+    # (b) No LONG confirmation at the edge of a parent-TF supply cluster and
+    #     no SHORT at a parent-TF demand cluster (0.5×ATR(parent) band) —
+    #     fractal chain 15m→1h→4h→1d, never small-TF-vs-daily.
+    try:
+        from data.fetcher import get_klines as _gk
+        _trg_tf = str(candidate.trigger_timeframe or "").lower()
+        _close_px = float(close)
+        _parent_tf = {"5m": "15m", "15m": "1h", "30m": "1h", "1h": "4h",
+                      "2h": "4h", "4h": "1d"}.get(_trg_tf)
+        _pdf = None
+        if _parent_tf:
+            _pdf = _gk(candidate.symbol, _parent_tf, 200, closed_only=True)
+        _counter = bool(candidate.metadata.get("tl_context_conflict"))
+        if _pdf is not None and len(_pdf) >= 40 and not _counter:
+            _pc = float(_pdf["close"].iloc[-1])
+            _pc0 = float(_pdf["close"].iloc[-30])
+            _counter = ((candidate.direction == "LONG" and _pc < _pc0)
+                        or (candidate.direction == "SHORT" and _pc > _pc0))
+        if _counter and len(closed_df) >= 12:
+            _prior = closed_df.iloc[-11:-1]
+            if candidate.direction == "SHORT":
+                _brk = _close_px < float(_prior["low"].min())
+            else:
+                _brk = _close_px > float(_prior["high"].max())
+            if not _brk:
+                return reject("COUNTER_TREND_TOUCH_ONLY", (
+                    "سیگنال خلاف جهت ساختار است: برخورد به خط/ناحیه فقط هشدار است؛ "
+                    "تأیید نیازمند کلوز معتبر فراتر از سوینگ هم‌جهت است "
+                    "(سلرها/خریداران در برخورد شکار می‌شوند)."))
+            if _trg_tf == "1d" and _pdf is not None and len(_pdf) >= 12:
+                _pp = _pdf.iloc[-11:-1]
+                if candidate.direction == "SHORT":
+                    _hbrk = float(_pdf["close"].iloc[-1]) < float(_pp["low"].min())
+                else:
+                    _hbrk = float(_pdf["close"].iloc[-1]) > float(_pp["high"].max())
+                if not _hbrk:
+                    return reject("COUNTER_1D_NEEDS_4H_BREAK", (
+                        "خلاف جهت در تایم روزانه: ابتدا کلوزِ بریک ساختار در ۴ساعته لازم است، "
+                        "سپس کلوز روزانه فراتر از ضلع پایین/بالای الگو."))
+        if _pdf is not None and len(_pdf) >= 40:
+            from analysis.indicators import pivots as _pv
+            _ph, _pl = _pv(_pdf.reset_index(), 3, 3)
+            _patr = float((_pdf["high"] - _pdf["low"]).tail(14).mean() or 0.0)
+            if _patr > 0 and _ph and _pl:
+                _band = 0.5 * _patr
+                if candidate.direction == "LONG":
+                    _near = [float(x["price"]) for x in _ph[-6:]
+                             if 0.0 <= (float(x["price"]) - _close_px) <= _band]
+                else:
+                    _near = [float(x["price"]) for x in _pl[-6:]
+                             if 0.0 <= (_close_px - float(x["price"])) <= _band]
+                if _near:
+                    return reject("NEAR_OPPOSING_ZONE_MTF", (
+                        f"قیمت در آستانهٔ ناحیه مخالف در تایم والد ({_parent_tf}) است "
+                        f"(فاصله ≤ ۰٫۵×ATR والد): لانگ زیر سقف/عرضه و شورت بالای کف/تقاضا "
+                        "تأیید نمی‌شود؛ ابتدا شکست معتبر، سپس تأیید در پولبک."))
+    except Exception as _gexc:
+        candidate.metadata["mtf_gate_error"] = str(_gexc)[:120]
+
     return True, candidate, "تأیید ورود با کندل بسته‌شده صادر شد."

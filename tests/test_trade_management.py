@@ -13,111 +13,88 @@ def test_entry_fill_requires_a_real_ohlc_touch():
     assert not entry_touched(100.0, 99.99, 98.0)
 
 
-# ── Viva 09-19 aligned ladder: exits sit ON the drawn levels ──────────────
+# ── Viva 09-19/20 ladder v3: original 5-pill shape, exits 40/30/30 ────────
 
 
-def test_ladder_long_three_aligned_exits():
+def test_ladder_v3_five_pills_forty_thirty_thirty():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
-    # risk=2, dist=10 (5R): TP1 pinned at exactly 1R per the ruling;
-    # TP2 = midpoint(102,110); TP3 = structural final target.
-    assert p["targets"] == [102.0, 106.0, 110.0]
-    assert p["weights"] == [50.0, 30.0, 20.0]
+    # five equal segments entry→final — the approved tool shape; TP1 keeps
+    # its original distance (no 1R floor); TP4/TP5 are INFO (zero weight).
+    assert p["targets"] == [102.0, 104.0, 106.0, 108.0, 110.0]
+    assert p["weights"] == [40.0, 30.0, 30.0, 0.0, 0.0]
     assert p["version"] == 2
     assert p["trail_stops"][0] == 100.05          # net BE, fee 0 → 5 ticks
-    result = advance_ladder(p, 104.1, 100.2)
+    result = advance_ladder(p, 102.1, 100.2)
     assert result["events"][0]["event"] == "TP1"
     assert result["state"]["current_sl"] == 100.05
     assert result["state"]["hit_index"] == 1
+    assert abs(result["state"]["realized_r"] - 0.4) < 1e-9   # 1R × 40%
 
 
-def test_tp1_floor_never_below_one_r():
-    # final = 1.8R → structural 40% point (0.72R) is floored to exactly 1R
-    # and the ladder drops to the 2-exit 60/40 plan.
-    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 103.6)
-    assert p["targets"][0] == 102.0
-    assert p["targets"][-1] == 103.6
-    assert p["weights"] == [60.0, 40.0]
+def test_ladder_closes_when_weight_exhausted_at_tp3():
+    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
+    out = advance_ladder(p, 106.5, 100.2)["state"]   # TP1+TP2+TP3 same candle
+    assert out["closed"]
+    assert out["hit_index"] == 3
+    assert abs(out["realized_r"] - (0.4 * 1.0 + 0.3 * 2.0 + 0.3 * 3.0)) < 1e-9
 
 
-def test_single_exit_when_final_inside_one_r():
-    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 101.5)
-    assert p["targets"] == [101.5]
-    assert p["weights"] == [100.0]
+def test_ladder_stop_is_conservative_when_same_candle_hits_tp():
+    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01})
+    result = advance_ladder(p, 102.2, 97.9)          # original stop first
+    assert result["events"][0]["event"] == "STOP"
+    assert result["state"]["closed"]
+
+
+def test_ladder_short_five_segments_and_trail():
+    p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01}, 90)
+    assert p["targets"] == [98.0, 96.0, 94.0, 92.0, 90.0]
+    assert p["weights"] == [40.0, 30.0, 30.0, 0.0, 0.0]
+    result = advance_ladder(p, 99.9, 97.9)
+    assert result["events"][0]["event"] == "TP1"
+    assert result["state"]["current_sl"] == 99.95
 
 
 def test_net_breakeven_includes_roundtrip_cost():
-    # professional point 5: BE = entry + fee/slippage allowance, not raw entry.
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, fee_pct=0.0018)
     assert abs(p["be_gap"] - 0.18) < 1e-9
     assert abs(p["trail_stops"][0] - 100.18) < 1e-9
 
 
-def test_ladder_stop_is_conservative_when_same_candle_hits_tp():
-    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01})
-    # fallback final = 3R → targets [102, 104, 106]; low crosses the
-    # original stop in the same candle → STOP is assumed first.
-    result = advance_ladder(p, 102.2, 97.9)
-    assert result["events"][0]["event"] == "STOP"
-    assert result["state"]["closed"]
-
-
-def test_ladder_short_three_exits_and_trail():
-    p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01}, 90)
-    assert p["targets"] == [98.0, 94.0, 90.0]
-    assert p["weights"] == [50.0, 30.0, 20.0]
-    result = advance_ladder(p, 99.9, 95.9)
-    assert result["events"][0]["event"] == "TP1"
-    assert result["state"]["current_sl"] == 99.95
-
-
-def test_worst_win_after_tp1_is_half_r():
-    # The whole point of the 09-19 ruling: a TP1-then-BE trade banks +0.5R
-    # worst case (the old 5-segment ladder banked only +0.14R).
-    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 104)  # dist = 2R
-    assert p["targets"] == [102.0, 103.0, 104.0]                 # TP1 floored
-    st = advance_ladder(p, 102.2, 101.0)["state"]
-    assert st["hit_index"] == 1
-    assert abs(st["realized_r"] - 0.5) < 1e-9                    # 1R × 50%
-    out = advance_ladder(st, 101.0, 99.0)["state"]               # BE stop
-    assert out["closed"]
-    assert out["realized_r"] >= 0.5
-
-
-# ── Formula-based protection floors between targets (spec §4/§5) ──────────
+# ── Formula-based protection floors (adaptive, spec §4/§5) ────────────────
 
 
 def test_band_trailing_ratchets_to_profit_floor_long():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
-    st = advance_ladder(p, 104.5, 103.9)["state"]                # TP1 printed
+    st = advance_ladder(p, 102.1, 100.1)["state"]
     assert st["hit_index"] == 1
-    assert abs(st["band_floors"][0] - 100.7) < 1e-9              # adaptive k=0.35 for a 1R band
+    assert abs(st["band_floors"][0] - 100.7) < 1e-9   # 1R band → k=0.35
     candles = [{"open": 104.0, "high": 104.2, "low": 103.6,
                 "close": 104.0, "volume": 10.0} for _ in range(25)]
     candles[-1] = {"open": 105.0, "high": 105.5, "low": 104.8,
                    "close": 105.2, "volume": 10.0}
     step = band_trailing(st, candles)
     new_sl = step["state"]["current_sl"]
-    assert new_sl > st["current_sl"]                             # trailed up
-    assert new_sl >= st["band_floors"][0] - 1e-9                 # ≥ floor
+    assert new_sl > st["current_sl"]
+    assert new_sl >= st["band_floors"][0] - 1e-9
     assert step["events"] and step["events"][0]["event"] == "PROFIT_FLOOR"
-    # ratchet: a weak candle never lowers the stop (غیرقابل‌برگشت)
     candles2 = candles[:-1] + [{"open": 104.0, "high": 104.1, "low": 100.2,
                                 "close": 100.3, "volume": 10.0}]
     step2 = band_trailing(step["state"], candles2)
-    assert step2["state"]["current_sl"] >= new_sl - 1e-12
-    assert not step2["events"]                                   # announced once
+    assert step2["state"]["current_sl"] >= new_sl - 1e-12   # ratchet only
+    assert not step2["events"]
 
 
 def test_band_trailing_short_mirrors():
     p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01}, 90)
-    st = advance_ladder(p, 96.1, 95.5)["state"]                  # TP1 printed
+    st = advance_ladder(p, 99.9, 97.9)["state"]
     assert abs(st["band_floors"][0] - 99.3) < 1e-9
     candles = [{"open": 95.8, "high": 96.2, "low": 95.6,
                 "close": 95.8, "volume": 10.0} for _ in range(25)]
     candles[-1] = {"open": 95.0, "high": 95.2, "low": 94.5,
                    "close": 94.8, "volume": 10.0}
     step = band_trailing(st, candles)
-    assert step["state"]["current_sl"] < st["current_sl"]        # trailed down
+    assert step["state"]["current_sl"] < st["current_sl"]
     assert step["state"]["current_sl"] <= st["band_floors"][0] + 1e-9
     candles2 = candles[:-1] + [{"open": 96.0, "high": 99.8, "low": 95.9,
                                 "close": 99.5, "volume": 10.0}]
@@ -127,13 +104,48 @@ def test_band_trailing_short_mirrors():
 
 def test_band_trailing_ignores_legacy_v1_ladders():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
-    st = advance_ladder(p, 104.5, 103.9)["state"]
-    st["version"] = 1                                            # live old row
+    st = advance_ladder(p, 102.1, 100.1)["state"]
+    st["version"] = 1
     candles = [{"open": 105.0, "high": 105.5, "low": 104.8,
                 "close": 105.2, "volume": 10.0} for _ in range(25)]
     step = band_trailing(st, candles)
     assert step["state"]["current_sl"] == st["current_sl"]
     assert not step["events"]
+
+
+def test_band_floor_ratios_adapt_to_band_width():
+    # k = clip(0.30 + 0.10×(width_R − 0.5), 0.30, 0.50)
+    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)   # 1R bands
+    assert [round(k, 3) for k in p["band_ks"]] == [0.35] * 4
+    q = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 120)   # 2R bands
+    assert [round(k, 3) for k in q["band_ks"]] == [0.45] * 4
+    assert abs(q["band_floors"][0] - 101.8) < 1e-9
+    assert abs(q["band_floors"][1] - 105.8) < 1e-9
+
+
+def test_vol_stop_scales_with_atr_n_argument():
+    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
+    st = advance_ladder(p, 102.1, 100.1)["state"]
+    candles = [{"open": 104.0, "high": 104.2, "low": 103.6,
+                "close": 104.0, "volume": 10.0} for _ in range(25)]
+    candles[-1] = {"open": 105.0, "high": 105.5, "low": 104.8,
+                   "close": 105.2, "volume": 10.0}
+    tight = band_trailing(st, candles)["state"]["current_sl"]
+    loose = band_trailing(st, candles, atr_n=50.0)["state"]["current_sl"]
+    assert tight > loose > st["current_sl"]
+    assert abs(loose - 100.7) < 1e-6        # pure progress interpolation
+
+
+def test_monitor_tf_hierarchy_and_sqrt_scaling():
+    from database.repository_v7 import monitor_tf_for, vol_atr_n_for
+    assert monitor_tf_for("1d") == "1h"
+    assert monitor_tf_for("4h") == "15m"
+    assert monitor_tf_for("1h") == "15m"
+    assert monitor_tf_for("15m") == "3m"     # Ourbit HAS 3m (Viva 09-19/20)
+    assert monitor_tf_for("5m") == "1m"
+    assert monitor_tf_for("7m") == "7m"
+    assert abs(vol_atr_n_for("15m", "3m") - 2.2360679) < 1e-6
+    assert abs(vol_atr_n_for("1d", "1h") - 4.8989795) < 1e-6
 
 
 # ── Smart exit: reversal pressure on the monitor TF (spec §7/§9) ──────────
@@ -155,76 +167,37 @@ def test_smart_exit_disarmed_before_tp1():
 
 def test_smart_exit_red_needs_three_concurrent_signs():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
-    armed = advance_ladder(p, 104.5, 103.9)["state"]
+    armed = advance_ladder(p, 102.1, 100.1)["state"]
     win = _flat_window()
-    scan = smart_exit_scan("LONG", win, armed)
-    assert scan["level"] == ""
+    assert smart_exit_scan("LONG", win, armed)["level"] == ""
     win[-2] = {"open": 100.0, "high": 100.6, "low": 99.9,
-               "close": 100.5, "volume": 100.0}                  # bull candle
+               "close": 100.5, "volume": 100.0}
     win[-1] = {"open": 100.6, "high": 100.7, "low": 98.9,
-               "close": 99.0, "volume": 400.0}                    # engulf+vol+break
+               "close": 99.0, "volume": 400.0}
     scan = smart_exit_scan("LONG", win, armed)
     assert scan["level"] == "RED" and scan["score"] >= 3
-    assert len(scan["reasons"]) >= 3                              # explainable
+    assert len(scan["reasons"]) >= 3
 
 
 def test_smart_exit_orange_warns_but_never_closes():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
-    armed = advance_ladder(p, 104.5, 103.9)["state"]
+    armed = advance_ladder(p, 102.1, 100.1)["state"]
     win = _flat_window()
     win[-2] = {"open": 100.0, "high": 100.6, "low": 99.9,
                "close": 100.5, "volume": 100.0}
     win[-1] = {"open": 100.6, "high": 100.7, "low": 99.3,
-               "close": 99.9, "volume": 400.0}                    # no low break
+               "close": 99.9, "volume": 400.0}
     scan = smart_exit_scan("LONG", win, armed)
     assert scan["level"] == "ORANGE" and scan["score"] == 2
 
 
 def test_smart_exit_short_mirror_red():
     p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01}, 90)
-    armed = advance_ladder(p, 96.1, 95.5)["state"]
+    armed = advance_ladder(p, 98.1, 97.5)["state"]
     win = _flat_window()
     win[-2] = {"open": 100.0, "high": 100.1, "low": 99.4,
-               "close": 99.5, "volume": 100.0}                    # bear candle
+               "close": 99.5, "volume": 100.0}
     win[-1] = {"open": 99.4, "high": 101.1, "low": 99.3,
-               "close": 101.0, "volume": 400.0}                   # engulf+vol+break
+               "close": 101.0, "volume": 400.0}
     scan = smart_exit_scan("SHORT", win, armed)
     assert scan["level"] == "RED" and scan["score"] >= 3
-
-
-def test_band_floor_ratios_adapt_to_band_width():
-    # Viva 09-19 flexibility ruling: k adapts to band width in R
-    # (0.5R→0.30 · 1R→0.35 · 1.5R→0.40 · ≥2.5R→0.50), clipped to [0.30, 0.50].
-    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 104)   # bands 1R, 0.5R
-    assert [round(k, 3) for k in p["band_ks"]] == [0.35, 0.30]
-    assert abs(p["band_floors"][0] - 100.7) < 1e-9
-    assert abs(p["band_floors"][1] - 102.3) < 1e-9
-    q = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 116)   # bands 1R, 3.5R
-    assert [round(k, 3) for k in q["band_ks"]] == [0.35, 0.50]
-    assert abs(q["band_floors"][1] - 105.5) < 1e-9
-
-
-def test_vol_stop_scales_with_atr_n_argument():
-    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
-    st = advance_ladder(p, 104.5, 103.9)["state"]
-    candles = [{"open": 104.0, "high": 104.2, "low": 103.6,
-                "close": 104.0, "volume": 10.0} for _ in range(25)]
-    candles[-1] = {"open": 105.0, "high": 105.5, "low": 104.8,
-                   "close": 105.2, "volume": 10.0}
-    tight = band_trailing(st, candles)["state"]["current_sl"]          # n=1 default
-    loose = band_trailing(st, candles, atr_n=50.0)["state"]["current_sl"]  # vol stop muted
-    assert tight > loose > st["current_sl"]
-    # with the vol stop muted the stop equals the progress interpolation
-    assert abs(loose - (100.05 + 0.875 * (100.7 - 100.05))) < 1e-6
-
-
-def test_monitor_tf_hierarchy_and_sqrt_scaling():
-    from database.repository_v7 import monitor_tf_for, vol_atr_n_for
-    assert monitor_tf_for("1d") == "1h"
-    assert monitor_tf_for("4h") == "15m"
-    assert monitor_tf_for("1h") == "15m"
-    assert monitor_tf_for("15m") == "5m"
-    assert monitor_tf_for("5m") == "1m"
-    assert monitor_tf_for("7m") == "7m"          # unknown → unchanged
-    assert abs(vol_atr_n_for("15m", "5m") - 1.7320508) < 1e-6
-    assert abs(vol_atr_n_for("1d", "1h") - 4.8989795) < 1e-6

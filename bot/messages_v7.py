@@ -1613,7 +1613,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _tpg = (candidate.metadata or {}).get("tp_gates") or {}
             _tp_locked = set(_tpg.get("locked") or [])
             for i, level in enumerate(ladder_targets):
-                label = f"TP{i+1} {float(ladder_weights[i]) if i < len(ladder_weights) else 0:.0f}%"
+                _w = float(ladder_weights[i]) if i < len(ladder_weights) else 0.0
+                # Viva 09-19/20: zero-weight levels stay drawn (tool shape
+                # frozen) but read as information pills, not exit promises.
+                label = f"TP{i+1} {_w:.0f}%" if _w > 0 else f"TP{i+1} INFO"
                 if i in _tp_locked:
                     label += " • POST-BREAK"   # doctrine: خارج از رنج فقط بعد از بریک
                 # Viva 09-19: the FINAL target pill keeps the tp2 tint (visual
@@ -2215,7 +2218,8 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
         _risk_px = max(abs(candidate.planned_entry - candidate.sl), 1e-12)
         _rrs = [abs(float(t) - candidate.planned_entry) / _risk_px for t in _tgts]
     _tp_rows = "\n".join(
-        f"{'└' if i == len(_tgts) - 1 else '├'} TP{i + 1}: <b>{_price(t)}</b> • {r:.2f}R • بستن {w:.0f}%"
+        f"{'└' if i == len(_tgts) - 1 else '├'} TP{i + 1}: <b>{_price(t)}</b> • {r:.2f}R • "
+        + (f"بستن {w:.0f}%" if w > 0 else "بدون خروج — سطح اطلاع‌رسانی")
         for i, (t, r, w) in enumerate(zip(_tgts, _rrs, _wts)))
     return (
         f"✅ <b>ENTRY CONFIRMED</b>\n"

@@ -26,6 +26,7 @@ BASE_URL = os.getenv("OURBIT_BASE_URL", "https://futures.ourbit.com").rstrip("/"
 
 TF_MAP = {
     "1m": "Min1",
+    "3m": "Min3",   # Viva 09-19/20: «اوربیت ۳ دقیقه داره ها» — venue confirms Min3
     "5m": "Min5",
     "15m": "Min15",
     "30m": "Min30",
@@ -34,7 +35,7 @@ TF_MAP = {
     "4h": "Hour4",
     "1d": "Day1",
 }
-TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400}
+TF_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400}
 
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": "viva-signal-bot/7.6"})

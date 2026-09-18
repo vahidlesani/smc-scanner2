@@ -12,9 +12,16 @@ from typing import Dict, List, Optional
 # 77–88% win rate. The aligned ladder exits ON the drawn levels instead:
 #   3 exits 50/30/20 when the final target is ≥2R away,
 #   2 exits 60/40 when it is ≥1R, single final exit below that.
-DEFAULT_WEIGHTS = (50.0, 30.0, 20.0)
+# Viva 09-19/20 ruling (revisit of the ladder): the tool keeps its ORIGINAL
+# five-pill shape (five equal price segments entry→final — the art he
+# approved), TP1 distance stays exactly as before (no 1R floor: «نیاز نیست
+# TP1 و استاپ هم‌اندازه باشن»), and the EXITS are 40/30/30 on TP1..TP3 while
+# TP4/TP5 stay drawn as information-only levels (he may move to four TPs
+# later; journal data decides). The P&L guards (net-BE, protection floors,
+# ratchet, smart exit) stay on top of this geometry.
+DEFAULT_WEIGHTS = (40.0, 30.0, 30.0, 0.0, 0.0)
 FALLBACK_WEIGHTS_2 = (60.0, 40.0)
-TP1_FLOOR_R = 1.0            # first exit never below 1× stop distance (his ruling)
+TP1_FLOOR_R = 1.0            # RETIRED 09-19/20 (Viva: TP1 و استاپ هم‌اندازه نیستند); kept for legacy state readers
 STRUCTURAL_TP1_SHARE = 0.40  # detector TP1 = 40% of the entry→final path
 # Viva 09-19 (his delegation: «اندازه فرمول باید انعطاف داشته باشد — تو بگو»):
 # protection-floor ratios adapt to the WIDTH of each band in R — a wider band
@@ -57,18 +64,18 @@ def venue_tick(price: float, market: Optional[Dict] = None) -> float:
 def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict] = None,
                  final_target: Optional[float] = None, structural_tp1: Optional[float] = None,
                  fee_pct: float = 0.0) -> Dict:
-    """Aligned exit ladder — exits sit ON the levels the tool draws.
+    """Five-pill exit ladder — the ORIGINAL approved tool shape (Viva
+    09-19/20 revisit): five equal price segments entry→final, TP1 distance
+    exactly as before (no 1R floor), exits 40/30/30 on TP1..TP3, TP4/TP5
+    information-only (zero weight).
 
-    Viva 09-19 rulings + his professional engine spec:
-      • 3 exits (50/30/20) when the final target is ≥2R away; 2 exits
-        (60/40) when ≥1R; a single final exit below that.
-      • TP1 floor: the first exit is never below 1× stop distance; a farther
-        structural TP1 is kept exactly where the detector drew it.
       • After TP1 the stop moves to NET breakeven (entry plus the round-trip
         fee/slippage allowance — professional point 5), after each later
         target to just beyond the previous target (5 ticks).
       • Between targets a formula-based protection floor trails the stop
-        (band_trailing) — it only ratchets, never loosens.
+        (band_trailing) — adaptive ratios, ratchet-only, never loosens.
+      • The position closes when the exit weight is exhausted (TP3) or the
+        last segment prints; smart exit can close earlier on RED signs.
     """
     entry, sl = float(entry), float(sl)
     risk = abs(entry - sl)
@@ -83,20 +90,14 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
     valid_final = (proposed_final > entry if sign > 0 else proposed_final < entry)
     final_price = proposed_final if valid_final else entry + sign * risk * 3
     dist = abs(final_price - entry)
-    # Viva 09-19 ruling (verbatim): «TP1 = ۱× استاپ» / «پیل TP1 روی قیمت 1R
-    # می‌نشیند». The first exit is ALWAYS exactly one stop-distance away;
-    # the detector's structural 40%-point is recorded for the journal but
-    # never moves the exit. TP2 = midpoint(TP1, final), TP3 = final target.
-    tp1 = entry + sign * risk * TP1_FLOOR_R
-    if abs(tp1 - entry) >= dist:
+    # Viva 09-19/20: five equal segments entry→final — the ORIGINAL approved
+    # tool shape; TP1 distance exactly as before (structural share of the
+    # path, no forced 1R). TP4/TP5 carry zero exit weight (INFO pills).
+    targets = [entry + (final_price - entry) * i / 5.0 for i in range(1, 6)]
+    weights = list(DEFAULT_WEIGHTS)
+    if dist <= 1e-12:
         targets = [final_price]
         weights = [100.0]
-    elif dist >= 2.0 * risk:
-        targets = [tp1, tp1 + (final_price - tp1) / 2.0, final_price]
-        weights = list(DEFAULT_WEIGHTS)
-    else:
-        targets = [tp1, final_price]
-        weights = list(FALLBACK_WEIGHTS_2)
     # after TP1 stop moves to net BE; afterwards just beyond the prior TP
     trail_stops = [entry + sign * be_gap]
     trail_stops += [targets[n] + sign * tick_gap for n in range(len(targets) - 1)]
@@ -346,6 +347,11 @@ def advance_ladder(state: Dict, high: float, low: float) -> Dict:
         out["hit_index"] = idx
         events.append({"event": f"TP{idx}", "target": target, "weight": weight, "new_sl": out["current_sl"]})
     if idx >= len(out["targets"]):
+        out["closed"] = True
+        events.append({"event": "LADDER_COMPLETE", "realized_r": out["realized_r"]})
+    elif (100.0 - sum(float(w) for w in out["weights"][:idx])) <= 1e-9:
+        # Viva 09-19/20: exits end at TP3 (40/30/30) — zero-weight TP4/TP5 are
+        # information pills, so the position closes once weight is exhausted.
         out["closed"] = True
         events.append({"event": "LADDER_COMPLETE", "realized_r": out["realized_r"]})
     return {"state": out, "events": events}

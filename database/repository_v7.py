@@ -27,7 +27,7 @@ from database import db as legacy_db
 # 1H, 4H/2H/1H from 15m, 15m/30m from 5m (Ourbit has no 3m), 5m/3m from 1m.
 # Falls back to the trade TF when the venue lacks the finer interval.
 MONITOR_TF_FOR = {"1d": "1h", "4h": "15m", "2h": "15m", "1h": "15m",
-                  "30m": "5m", "15m": "5m", "5m": "1m", "3m": "1m"}
+                  "30m": "5m", "15m": "3m", "5m": "1m", "3m": "1m"}
 TF_MINUTES = {"1m": 1.0, "3m": 3.0, "5m": 5.0, "15m": 15.0, "30m": 30.0,
               "1h": 60.0, "2h": 120.0, "4h": 240.0, "1d": 1440.0}
 

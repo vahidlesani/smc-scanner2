@@ -1,3 +1,4 @@
+import pytest
 """Viva 2026-09-11 guards: no identical-point re-confirms; TC preview chain
 uses ONE replaceable update that replies to the permanent anchor."""
 import datetime as dt
@@ -1208,14 +1209,22 @@ def test_compact_captions_fit_under_media_cap_for_every_setup():
         assert "نظر AI" in upd and "آپدیت ۳" in upd
 
 
+@pytest.fixture(autouse=True)
+def _no_net_in_confirmation_gates(monkeypatch):
+    """The 09-19/20 MTF confirmation gates fetch the parent TF; unit tests
+    must stay offline (gate fails open when the frame is unavailable)."""
+    import data.fetcher as dfb
+    monkeypatch.setattr(dfb, "get_klines", lambda *a, **k: None)
+
+
 def test_zec_protected_exit_settlement_is_win():
     """The K120563 case: SHORT banked 50% at TP1 (1R floor, 09-19 ladder)
     then the net-BE trail executed. That is NOT 'INITIAL STOP LOSS' / a loss."""
     from analysis.trade_management import build_ladder, advance_ladder
     lad = build_ladder(1136.41, 1147.4419, "SHORT", {"tick_size": 0.01}, 1112.07)
-    assert abs(lad["targets"][0] - 1125.378) < 0.01          # TP1 = 1R floor BELOW entry
-    assert lad["weights"] == [50.0, 30.0, 20.0]
-    step = advance_ladder(lad, 1126.0, 1125.0)               # TP1 printed
+    assert abs(lad["targets"][0] - 1131.542) < 0.01          # v3: 5 segments, original TP1 distance
+    assert lad["weights"] == [40.0, 30.0, 30.0, 0.0, 0.0]
+    step = advance_ladder(lad, 1131.0, 1130.5)               # TP1 printed
     assert step["state"]["hit_index"] == 1
     assert abs(step["state"]["current_sl"] - 1136.36) < 1e-6  # entry −5 ticks (short)
     step2 = advance_ladder(step["state"], 1136.40, 1136.30)  # trail executes
@@ -1375,6 +1384,63 @@ def test_chart_pills_match_ladder_exits():
     finally:
         m7._level_tag = orig
     joined = " | ".join(tags)
-    assert "TP1 50%" in joined, joined
+    assert "TP1 40%" in joined, joined
     assert "TP2 30%" in joined, joined
-    assert "TP3 20%" in joined, joined
+    assert "TP3 30%" in joined, joined
+    assert "TP4 INFO" in joined, joined
+
+
+def _s6_frame_and_candidate(direction="LONG"):
+    import pandas as pd
+    from datetime import datetime, timedelta, timezone
+    from test_v7 import make_candidate
+    t0 = datetime(2026, 9, 11, 12, 0, tzinfo=timezone.utc)
+    rows = []
+    for i in range(32):
+        base = 98.0 if i < 28 else 100.2
+        rows.append({"timestamp": t0 + timedelta(minutes=15 * i), "open": base - 0.02,
+                     "high": base + 0.05, "low": base - 0.10, "close": base, "volume": 1000.0})
+    df = pd.DataFrame(rows).set_index("timestamp")
+    df.index.name = "timestamp"
+    df["timestamp"] = df.index
+    cand = make_candidate()
+    cand.setup_code = "TLBREAK"
+    cand.status = "NEAR_CONFIRM"
+    cand.entry_zone_bottom, cand.entry_zone_top = 99.8, 100.2
+    cand.created_at = (t0 + timedelta(minutes=15 * 27)).isoformat()
+    cand.metadata.update({
+        "strategy_variant": "VIVA_TLBREAK", "viva_breakout_line": 100.0, "atr": 1.0,
+        "confirm_tf": "15m", "touched": True, "viva_state": "S6_CONFIRMED",
+        "viva_state_machine": {"stage": "S6_CONFIRMED"},
+    })
+    if direction == "LONG":
+        cand.direction = "LONG"
+        cand.planned_entry, cand.sl = 100.1, 98.6
+        cand.tp1, cand.tp2 = 106.0, 109.0
+    else:
+        cand.direction = "SHORT"
+        cand.planned_entry, cand.sl = 100.1, 101.9
+        cand.tp1, cand.tp2 = 96.0, 93.0
+    return df, cand
+
+
+def test_degenerate_geometry_rejects_confirmation():
+    """Viva 09-19/20 (SUI 1D): targets that are a rounding error versus the
+    stop must never confirm — the scenario stays alert/analysis only."""
+    from analysis.quality_engine import evaluate_confirmation
+    df, cand = _s6_frame_and_candidate("LONG")
+    cand.tp1, cand.tp2 = 100.3, 100.6          # rr ≈ 0.13 / 0.33
+    ok, _c, reason = evaluate_confirmation(cand, df)
+    assert ok is False
+    assert cand.metadata.get("last_reject_code") == "DEGENERATE_GEOMETRY"
+
+
+def test_counter_trend_touch_only_never_confirms():
+    """Viva 09-19/20 (ZEC/LTC/POL): against the structure a TOUCH is only an
+    alert; confirmation needs a closed structure break in trade direction."""
+    from analysis.quality_engine import evaluate_confirmation
+    df, cand = _s6_frame_and_candidate("SHORT")   # frame rallies = bull structure
+    cand.metadata["tl_context_conflict"] = True
+    ok, _c, reason = evaluate_confirmation(cand, df)
+    assert ok is False
+    assert cand.metadata.get("last_reject_code") == "COUNTER_TREND_TOUCH_ONLY"

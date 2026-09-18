@@ -429,7 +429,8 @@ class V7PersistenceTests(unittest.TestCase):
         # TP1=101 (1R) and TP2=105, stop trails to TP1+ticks; candle 3's dip
         # exits the remainder on the protected trail — still a WIN,
         # processed strictly in chronological order.
-        self.assertEqual([event["event"] for event in events], ["TP1", "TP2", "TRAIL_STOP", "CLOSED"])
+        self.assertEqual([event["event"] for event in events],
+                         ["TP1", "TP2", "TP3", "LADDER_COMPLETE", "CLOSED"])
         self.assertEqual(events[-1]["result"], "WIN")
         self.assertGreater(get_recent_signals()[0]["pnl_pct"], 0)
 
