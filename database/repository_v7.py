@@ -7,6 +7,7 @@ and unmonitorable until its complete Telegram publication is committed.
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
@@ -19,6 +20,33 @@ from analysis.trade_management import build_ladder, advance_ladder, entry_touche
 from config import get_settings
 from data.fetcher import get_klines
 from database import db as legacy_db
+
+# Viva 09-19 monitoring-hierarchy ruling (his delegation: «تو باید بگی»): the
+# lifecycle of EVERY setup is watched on a FINER TF than the trade TF so
+# fills, profit-floor trails and reversal scores see price sooner — 1D from
+# 1H, 4H/2H/1H from 15m, 15m/30m from 5m (Ourbit has no 3m), 5m/3m from 1m.
+# Falls back to the trade TF when the venue lacks the finer interval.
+MONITOR_TF_FOR = {"1d": "1h", "4h": "15m", "2h": "15m", "1h": "15m",
+                  "30m": "5m", "15m": "5m", "5m": "1m", "3m": "1m"}
+TF_MINUTES = {"1m": 1.0, "3m": 3.0, "5m": 5.0, "15m": 15.0, "30m": 30.0,
+              "1h": 60.0, "2h": 120.0, "4h": 240.0, "1d": 1440.0}
+
+
+def monitor_tf_for(tf: str) -> str:
+    tf = str(tf or "").lower()
+    return MONITOR_TF_FOR.get(tf, tf)
+
+
+def vol_atr_n_for(trade_tf: str, monitor_tf: str) -> float:
+    """√-time scaling (Viva 09-19 formula-flexibility ruling): n ATR on the
+    monitor TF ≈ 1 ATR on the trade TF, so a finer candle stream never
+    tightens the volatility stop in absolute price terms."""
+    from analysis.trade_management import VOL_STOP_ATR_N
+    tm = TF_MINUTES.get(str(trade_tf).lower(), 15.0)
+    mm = TF_MINUTES.get(str(monitor_tf).lower(), tm)
+    if mm <= 0:
+        return VOL_STOP_ATR_N
+    return VOL_STOP_ATR_N * math.sqrt(tm / mm)
 
 SETTINGS = get_settings()
 
@@ -1100,14 +1128,25 @@ def monitor_confirmed_trades() -> List[Dict]:
             tp1_hit, source, strategy_fa, strategy_version, pro_message_id, target_state_json, public_code, first_tp_message_id, trigger_timeframe,
             entry_filled, entry_filled_at,
         ) = row
-        # Monitor the same trigger TF shown in Confirmed, not a generic 15m.
-        timeframe = str(trigger_timeframe or ("5m" if style == "SCALP" else "15m")).lower()
+        # Viva 09-19 monitoring hierarchy (ALL setups): fills, ladder,
+        # profit-floor trail and reversal score run on the FINER monitor TF
+        # (1D→1H, 4H/1H→15m, 15m→5m, 5m→1m); falls back to the trade TF when
+        # the venue has no finer interval for this symbol.
+        trade_tf = str(trigger_timeframe or ("5m" if style == "SCALP" else "15m")).lower()
+        timeframe = monitor_tf_for(trade_tf)
         key = (symbol, timeframe)
         if key not in by_symbol_tf:
             by_symbol_tf[key] = get_klines(symbol, timeframe, 300, closed_only=True, use_cache=False)
         frame = by_symbol_tf[key]
+        if (frame is None or frame.empty) and timeframe != trade_tf:
+            timeframe = trade_tf
+            key = (symbol, timeframe)
+            if key not in by_symbol_tf:
+                by_symbol_tf[key] = get_klines(symbol, timeframe, 300, closed_only=True, use_cache=False)
+            frame = by_symbol_tf[key]
         if frame is None or frame.empty:
             continue
+        _atr_n = vol_atr_n_for(trade_tf, timeframe)
         start = _naive_timestamp(last_checked_at) or _naive_timestamp(confirmed_at)
         timestamps = pd.to_datetime(frame["timestamp"])
         if getattr(timestamps.dt, "tz", None) is not None:
@@ -1224,7 +1263,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                     except Exception:
                         wcandles = []
                     if len(wcandles) >= 21:
-                        tstep = band_trailing(ladder, wcandles)
+                        tstep = band_trailing(ladder, wcandles, atr_n=_atr_n)
                         ladder = tstep["state"]
                         raw_events.extend(tstep["events"])
                         scan = smart_exit_scan(direction, wcandles, ladder)
@@ -1258,7 +1297,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                         "confirmation_sent": True, "pro_message_id": int(pro_message_id or 0), "public_code": public_code,
                         "entry": float(entry), "sl": float(ladder["current_sl"]), "original_sl": float(original_sl),
                         "leverage": int(leverage or 1), "margin": float(margin or 0), "live_price": float(candle["close"]),
-                        "event_at": str(candle["close_time"] if "close_time" in candle else candle["timestamp"]), "trigger_timeframe": str(trigger_timeframe or ""), "targets": list(ladder["targets"]), "hit_index": int(ladder["hit_index"]), "last_tp_message_id": int(ladder.get("last_tp_message_id") or 0),
+                        "event_at": str(candle["close_time"] if "close_time" in candle else candle["timestamp"]), "trigger_timeframe": str(trigger_timeframe or ""), "monitor_tf": str(timeframe), "targets": list(ladder["targets"]), "hit_index": int(ladder["hit_index"]), "last_tp_message_id": int(ladder.get("last_tp_message_id") or 0),
                     })
                     notional = float(margin or 0) * int(leverage or 1)
                     risk_pct_move = abs(float(entry) - float(original_sl)) / float(entry) * 100

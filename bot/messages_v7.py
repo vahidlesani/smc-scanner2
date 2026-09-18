@@ -3564,9 +3564,11 @@ def send_ladder_event(event: dict) -> bool:
     reply_id = _ladder_reply_id(event, kind)
     code = _e(event.get("public_code") or event.get("signal_id"))
     setup = _setup_display(event.get("source") or event.get("strategy_fa"))
+    _mtf = str(event.get("monitor_tf") or "")
     common = (
         f"🏷 <b>{_e(setup)}</b>\n\n"
-        f"🏦 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('style'))} • {_e(event.get('direction'))}\n\n"
+        f"🏦 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('style'))} • {_e(event.get('direction'))}"
+        + (f" • مانیتور {_e(_mtf)}" if _mtf else "") + "\n\n"
         f"━━━━━━━━━━━━━━━━━━\n{_event_timing_lines(event)}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🔰 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
@@ -3653,9 +3655,18 @@ def send_trailing_note(event: dict) -> int:
     code = _e(event.get("public_code") or event.get("signal_id"))
     setup = _setup_display(event.get("source") or event.get("strategy_fa"))
     hit = int(event.get("hit_index") or 0)
-    reply_id = int(event.get("last_tp_message_id") or 0) or int(event.get("pro_message_id") or 0) or None
+    # Viva 09-19 (verbatim): the short note REPLIES to the last TP-HIT receipt
+    # of the same unique code; the journal mirror then buttons back to it.
+    reply_id = 0
+    for _n in range(hit, 0, -1):
+        reply_id = int(_exact_event_message_id(str(event.get("signal_id") or ""), f"TP{_n}") or 0)
+        if reply_id:
+            break
+    reply_id = reply_id or int(event.get("pro_message_id") or 0) or None
+    _mtf = str(event.get("monitor_tf") or "")
     head = (f"🏷 <b>{_e(setup)}</b>\n"
-            f"🏦 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('direction'))}\n"
+            f"🏦 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('direction'))}"
+            + (f" • مانیتور {_e(_mtf)}" if _mtf else "") + "\n"
             f"🆔 <code>{code}</code>")
     if kind == "PROFIT_FLOOR":
         text = (

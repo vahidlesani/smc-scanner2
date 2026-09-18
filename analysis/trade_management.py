@@ -16,9 +16,17 @@ DEFAULT_WEIGHTS = (50.0, 30.0, 20.0)
 FALLBACK_WEIGHTS_2 = (60.0, 40.0)
 TP1_FLOOR_R = 1.0            # first exit never below 1× stop distance (his ruling)
 STRUCTURAL_TP1_SHARE = 0.40  # detector TP1 = 40% of the entry→final path
-BAND_K_FIRST = 0.40          # α: protection floor of the entry→TP1 band (spec §4)
-BAND_K_NEXT = 0.50           # β: protection floor of TP(i-1)→TP(i) bands (spec §4)
-VOL_STOP_ATR_N = 1.0         # volatility stop = recent swing ∓ n×ATR (spec §5.3)
+# Viva 09-19 (his delegation: «اندازه فرمول باید انعطاف داشته باشد — تو بگو»):
+# protection-floor ratios adapt to the WIDTH of each band in R — a wider band
+# carries more give-back risk, so it protects a larger share of it. Clipped
+# to the 0.20–0.50 corridor his professional spec §4 allows.
+BAND_K_MIN = 0.30
+BAND_K_MAX = 0.50
+BAND_K_SLOPE = 0.10
+BAND_K_MID = 0.5             # band width (in R) that maps to the α=0.40 baseline
+BAND_K_FIRST = 0.40          # legacy default kept for v1 readers / tests
+BAND_K_NEXT = 0.50
+VOL_STOP_ATR_N = 1.0         # base volatility stop = recent swing ∓ n×ATR
 SWING_BARS = 5
 SMART_EXIT_RED = 3           # ≥3 concurrent reversal signs → close ALL remainder
 SMART_EXIT_ORANGE = 2        # 2 signs → warning only, never a close (spec §7/§9)
@@ -92,12 +100,19 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
     # after TP1 stop moves to net BE; afterwards just beyond the prior TP
     trail_stops = [entry + sign * be_gap]
     trail_stops += [targets[n] + sign * tick_gap for n in range(len(targets) - 1)]
-    # Protection floors (spec §4): while price travels from targets[i] toward
-    # targets[i+1], the trailing stop may rise but never below this level.
+    # Protection floors (spec §4, Viva 09-19 adaptive ruling): while price
+    # travels from targets[i] toward targets[i+1], the trailing stop may rise
+    # but never below this level. The ratio k adapts to the band's width in R
+    # (wider band = more profit at risk = larger protected share).
     band_floors = []
+    band_ks = []
     for i in range(len(targets) - 1):
         prev_lvl = entry if i == 0 else targets[i - 1]
-        k = BAND_K_FIRST if i == 0 else BAND_K_NEXT
+        width_r = abs(targets[i] - prev_lvl) / risk
+        # 0.5R band → 0.30 · 1R → 0.35 · 1.5R → 0.40 · ≥2.5R → 0.50
+        k = min(BAND_K_MAX, max(BAND_K_MIN,
+                                BAND_K_MIN + BAND_K_SLOPE * (width_r - BAND_K_MID)))
+        band_ks.append(k)
         # (targets[i] − prev_lvl) already carries the direction sign.
         band_floors.append(prev_lvl + k * (targets[i] - prev_lvl))
     return {
@@ -114,6 +129,7 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
         "target_r": [abs(t - entry) / risk for t in targets],
         "trail_stops": trail_stops,
         "band_floors": band_floors,
+        "band_ks": band_ks,
         "weights": weights,
         "hit_index": 0,
         "realized_r": 0.0,
@@ -140,7 +156,7 @@ def _window_atr(candles: List[Dict]) -> float:
     return sum(trs) / len(trs)
 
 
-def band_trailing(state: Dict, candles: List[Dict]) -> Dict:
+def band_trailing(state: Dict, candles: List[Dict], atr_n: Optional[float] = None) -> Dict:
     """Formula-based profit-floor trailing between targets (spec §4/§5).
 
     Runs on every CLOSED monitor candle once the first target has printed.
@@ -150,6 +166,12 @@ def band_trailing(state: Dict, candles: List[Dict]) -> Dict:
     it never moves down, in a SHORT never up (his professional point list:
     «استاپ پله‌ای و غیرقابل‌برگشت»). Updates happen once per closed candle,
     never per tick (professional point 6).
+
+    ``atr_n`` lets the caller scale the volatility stop to the monitor TF
+    (n_monitor = n_base × √(trade_tf / monitor_tf)) so a finer candle stream
+    does not tighten the stop in absolute terms (Viva 09-19 flexibility
+    ruling: formulas adapt to timeframe, target size and symbol price — all
+    other components are already R/ATR-relative, hence price-scale-free).
     """
     events: List[Dict] = []
     out = dict(state)
@@ -180,15 +202,16 @@ def band_trailing(state: Dict, candles: List[Dict]) -> Dict:
         p = min(1.0, max(0.0, (extreme - targets[hit - 1]) / span))
         interp = base + p * (floor - base)
         atr = _window_atr(candles)
+        n = float(atr_n if atr_n is not None else state.get("vol_atr_n") or VOL_STOP_ATR_N)
         current = float(out.get("current_sl") or base)
         if sign > 0:
             swing = min(float(c["low"]) for c in candles[-SWING_BARS:])
-            candidate = max(interp, swing - VOL_STOP_ATR_N * atr)
+            candidate = max(interp, swing - n * atr)
             new_sl = max(current, candidate)
             improved = new_sl - current > max(tick_gap, 1e-12)
         else:
             swing = max(float(c["high"]) for c in candles[-SWING_BARS:])
-            candidate = min(interp, swing + VOL_STOP_ATR_N * atr)
+            candidate = min(interp, swing + n * atr)
             new_sl = min(current, candidate)
             improved = current - new_sl > max(tick_gap, 1e-12)
         if improved:

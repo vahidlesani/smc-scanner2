@@ -90,7 +90,7 @@ def test_band_trailing_ratchets_to_profit_floor_long():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
     st = advance_ladder(p, 104.5, 103.9)["state"]                # TP1 printed
     assert st["hit_index"] == 1
-    assert abs(st["band_floors"][0] - 100.8) < 1e-9              # α = 0.40 of entry→TP1
+    assert abs(st["band_floors"][0] - 100.7) < 1e-9              # adaptive k=0.35 for a 1R band
     candles = [{"open": 104.0, "high": 104.2, "low": 103.6,
                 "close": 104.0, "volume": 10.0} for _ in range(25)]
     candles[-1] = {"open": 105.0, "high": 105.5, "low": 104.8,
@@ -111,7 +111,7 @@ def test_band_trailing_ratchets_to_profit_floor_long():
 def test_band_trailing_short_mirrors():
     p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01}, 90)
     st = advance_ladder(p, 96.1, 95.5)["state"]                  # TP1 printed
-    assert abs(st["band_floors"][0] - 99.2) < 1e-9
+    assert abs(st["band_floors"][0] - 99.3) < 1e-9
     candles = [{"open": 95.8, "high": 96.2, "low": 95.6,
                 "close": 95.8, "volume": 10.0} for _ in range(25)]
     candles[-1] = {"open": 95.0, "high": 95.2, "low": 94.5,
@@ -190,3 +190,41 @@ def test_smart_exit_short_mirror_red():
                "close": 101.0, "volume": 400.0}                   # engulf+vol+break
     scan = smart_exit_scan("SHORT", win, armed)
     assert scan["level"] == "RED" and scan["score"] >= 3
+
+
+def test_band_floor_ratios_adapt_to_band_width():
+    # Viva 09-19 flexibility ruling: k adapts to band width in R
+    # (0.5R→0.30 · 1R→0.35 · 1.5R→0.40 · ≥2.5R→0.50), clipped to [0.30, 0.50].
+    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 104)   # bands 1R, 0.5R
+    assert [round(k, 3) for k in p["band_ks"]] == [0.35, 0.30]
+    assert abs(p["band_floors"][0] - 100.7) < 1e-9
+    assert abs(p["band_floors"][1] - 102.3) < 1e-9
+    q = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 116)   # bands 1R, 3.5R
+    assert [round(k, 3) for k in q["band_ks"]] == [0.35, 0.50]
+    assert abs(q["band_floors"][1] - 105.5) < 1e-9
+
+
+def test_vol_stop_scales_with_atr_n_argument():
+    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
+    st = advance_ladder(p, 104.5, 103.9)["state"]
+    candles = [{"open": 104.0, "high": 104.2, "low": 103.6,
+                "close": 104.0, "volume": 10.0} for _ in range(25)]
+    candles[-1] = {"open": 105.0, "high": 105.5, "low": 104.8,
+                   "close": 105.2, "volume": 10.0}
+    tight = band_trailing(st, candles)["state"]["current_sl"]          # n=1 default
+    loose = band_trailing(st, candles, atr_n=50.0)["state"]["current_sl"]  # vol stop muted
+    assert tight > loose > st["current_sl"]
+    # with the vol stop muted the stop equals the progress interpolation
+    assert abs(loose - (100.05 + 0.875 * (100.7 - 100.05))) < 1e-6
+
+
+def test_monitor_tf_hierarchy_and_sqrt_scaling():
+    from database.repository_v7 import monitor_tf_for, vol_atr_n_for
+    assert monitor_tf_for("1d") == "1h"
+    assert monitor_tf_for("4h") == "15m"
+    assert monitor_tf_for("1h") == "15m"
+    assert monitor_tf_for("15m") == "5m"
+    assert monitor_tf_for("5m") == "1m"
+    assert monitor_tf_for("7m") == "7m"          # unknown → unchanged
+    assert abs(vol_atr_n_for("15m", "5m") - 1.7320508) < 1e-6
+    assert abs(vol_atr_n_for("1d", "1h") - 4.8989795) < 1e-6
