@@ -41,6 +41,7 @@ from bot.messages_v7 import (
     purge_pro_watch_post,
     send_tp1_event,
     send_ladder_event,
+    send_trailing_note,
     send_trade_result,
     send_trade_close_event,
     send_stop_event_to_results,
@@ -1062,6 +1063,10 @@ def _publish_trade_events(events) -> int:
                 res_mid = send_stop_event_to_results(event, int(lifecycle_mid))
                 if res_mid:
                     attach_results_link(int(lifecycle_mid), int(res_mid))
+        elif kind in {"PROFIT_FLOOR", "EXIT_WARNING"}:
+            # Viva 09-19: short trailing lifecycle notes (main + journal
+            # mirror, no chart) — never spam per-candle micro-moves.
+            send_trailing_note(event)
         elif kind == "NO_FILL":
             send_no_fill_event(event)
         elif kind == "CLOSED":

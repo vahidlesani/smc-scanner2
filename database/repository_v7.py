@@ -15,7 +15,7 @@ import pandas as pd
 
 from analysis.models import SignalCandidate, generate_viva_public_code
 from analysis.risk import build_money_management
-from analysis.trade_management import build_ladder, advance_ladder, entry_touched
+from analysis.trade_management import build_ladder, advance_ladder, entry_touched, band_trailing, smart_exit_scan
 from config import get_settings
 from data.fetcher import get_klines
 from database import db as legacy_db
@@ -701,7 +701,13 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
         VALUES ({','.join([p] * 29)})
     """
 
-    ladder = build_ladder(candidate.planned_entry, candidate.sl, candidate.direction, candidate.market, candidate.tp2)
+    # Viva 09-19 ladder ruling: exits sit on the DRAWN levels (TP1 floor = 1R),
+    # BE is net of the round-trip fee/slippage allowance (professional point 5).
+    ladder = build_ladder(
+        candidate.planned_entry, candidate.sl, candidate.direction, candidate.market,
+        candidate.tp2, structural_tp1=candidate.tp1,
+        fee_pct=(SETTINGS.fee_rate_percent + SETTINGS.slippage_percent) * 2.0 / 100.0,
+    )
     ladder_json = json.dumps(ladder, ensure_ascii=False)
     with legacy_db.db_cursor() as cursor:
         cursor.execute(sql, params)
@@ -1193,11 +1199,58 @@ def monitor_confirmed_trades() -> List[Dict]:
         if ladder and ladder.get("targets") and not ladder.get("closed"):
             ladder_events = []
             latest_checked = start
-            for _, candle in pending.iterrows():
+            for _cidx, candle in pending.iterrows():
                 latest_checked = _naive_timestamp(candle["timestamp"])
                 step = advance_ladder(ladder, float(candle["high"]), float(candle["low"]))
                 ladder = step["state"]
-                for event in step["events"]:
+                raw_events = list(step["events"])
+                # Viva 09-19 smart-trailing ruling (+ his professional engine
+                # spec §4/§5/§7/§9): after the first target prints, the stop
+                # follows the formula-based protection floor between targets
+                # (ratcheting, once per CLOSED candle — never per tick), and
+                # the monitor TF scores reversal pressure. ORANGE = warning
+                # only; RED (≥3 concurrent signs) = close ALL remainder at
+                # this candle's close, with an explainable reason list.
+                if (not ladder.get("closed") and int(ladder.get("version") or 1) >= 2
+                        and int(ladder.get("hit_index") or 0) >= 1):
+                    wcandles = []
+                    try:
+                        _pos = frame.index.get_loc(_cidx)
+                        _win = frame.iloc[max(0, int(_pos) - 30):int(_pos) + 1]
+                        wcandles = [{"open": float(r["open"]), "high": float(r["high"]),
+                                     "low": float(r["low"]), "close": float(r["close"]),
+                                     "volume": float(r["volume"] or 0.0)}
+                                    for _, r in _win.iterrows()]
+                    except Exception:
+                        wcandles = []
+                    if len(wcandles) >= 21:
+                        tstep = band_trailing(ladder, wcandles)
+                        ladder = tstep["state"]
+                        raw_events.extend(tstep["events"])
+                        scan = smart_exit_scan(direction, wcandles, ladder)
+                        if scan.get("level") == "RED":
+                            _hit = int(ladder.get("hit_index") or 0)
+                            _wts = [float(w) for w in (ladder.get("weights") or [])]
+                            _remaining = 100.0 - sum(_wts[:_hit])
+                            _close_px = float(candle["close"])
+                            _risk = float(ladder.get("risk") or abs(float(entry) - float(original_sl)))
+                            _exit_r = ((_close_px - float(entry)) / _risk
+                                       if str(direction).upper() == "LONG"
+                                       else ((float(entry) - _close_px) / _risk))
+                            ladder["realized_r"] = float(ladder.get("realized_r") or 0.0) + _exit_r * _remaining / 100.0
+                            ladder["current_sl"] = _close_px
+                            ladder["closed"] = True
+                            ladder["close_reason"] = "SMART_EXIT"
+                            ladder["exit_reasons_fa"] = list(scan.get("reasons") or [])
+                        elif (scan.get("level") == "ORANGE"
+                                and int(ladder.get("warned_band") or 0) != int(ladder.get("hit_index") or 0)):
+                            ladder["warned_band"] = int(ladder.get("hit_index") or 0)
+                            raw_events.append({
+                                "event": "EXIT_WARNING", "score": int(scan.get("score") or 0),
+                                "reasons_fa": list(scan.get("reasons") or []),
+                                "hit_index": int(ladder.get("hit_index") or 0),
+                            })
+                for event in raw_events:
                     event.update({
                         "signal_id": signal_id, "symbol": symbol, "direction": direction,
                         "style": style, "source": source, "strategy_fa": strategy_fa,
@@ -1261,6 +1314,9 @@ def monitor_confirmed_trades() -> List[Dict]:
                         "live_price":float(candle["close"]),
                         "trailing_used": bool(int(ladder.get("hit_index") or 0) > 0
                                               and abs(float(ladder.get("current_sl") or 0) - float(original_sl)) > 1e-9),
+                        "close_reason": str(ladder.get("close_reason") or ""),
+                        "exit_reasons_fa": list(ladder.get("exit_reasons_fa") or []),
+                        "direction": direction,
                     })
             events.extend(ladder_events)
             continue

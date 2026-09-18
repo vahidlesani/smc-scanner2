@@ -1605,7 +1605,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             )
             ladder = (candidate.metadata or {}).get("target_ladder") or {}
             ladder_targets = list(ladder.get("targets") or [candidate.tp1, candidate.tp2])
-            ladder_weights = list(ladder.get("weights") or [35, 35])
+            ladder_weights = list(ladder.get("weights") or [50, 30, 20])
             levels = [
                 (candidate.planned_entry, "ENTRY", CHART_THEME["entry"]),
                 (candidate.sl, "FIRST STOP", CHART_THEME["invalidation"]),
@@ -1616,7 +1616,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 label = f"TP{i+1} {float(ladder_weights[i]) if i < len(ladder_weights) else 0:.0f}%"
                 if i in _tp_locked:
                     label += " • POST-BREAK"   # doctrine: خارج از رنج فقط بعد از بریک
-                levels.append((float(level), label, CHART_THEME["tp1"] if i < 3 else CHART_THEME["tp2"]))
+                # Viva 09-19: the FINAL target pill keeps the tp2 tint (visual
+                # grammar frozen); with the 3-exit ladder that is the last pill.
+                levels.append((float(level), label,
+                               CHART_THEME["tp1"] if (i < 3 and i < len(ladder_targets) - 1) else CHART_THEME["tp2"]))
             # Viva 2026-09-14 «شکل ابزار LONG/SHORT خراب شده»: the art itself is
             # FROZEN — same pills, same colors, same dashes. What is fixed here
             # is purely COLLISION: tags closer than 3% of the visible range
@@ -2202,6 +2205,18 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
         if candidate.style.upper() in {"SWING", "GRAND"}
         else "Stop و اندازه پوزیشن صرفاً پیشنهاد سیستم‌اند و باید با مدیریت شخصی معامله‌گر تطبیق داده شوند."
     )
+    # Viva 09-19 ladder ruling: the confirmed message must show the SAME
+    # levels/weights the monitor executes — read them from the ladder itself.
+    _lad = (candidate.metadata or {}).get("target_ladder") or {}
+    _tgts = [float(t) for t in (_lad.get("targets") or [])] or [candidate.tp1, candidate.tp2]
+    _wts = [float(w) for w in (_lad.get("weights") or [])] or [SETTINGS.partial_tp1_percent, SETTINGS.partial_tp2_percent]
+    _rrs = [float(r) for r in (_lad.get("target_r") or [])]
+    if len(_rrs) != len(_tgts):
+        _risk_px = max(abs(candidate.planned_entry - candidate.sl), 1e-12)
+        _rrs = [abs(float(t) - candidate.planned_entry) / _risk_px for t in _tgts]
+    _tp_rows = "\n".join(
+        f"{'└' if i == len(_tgts) - 1 else '├'} TP{i + 1}: <b>{_price(t)}</b> • {r:.2f}R • بستن {w:.0f}%"
+        for i, (t, r, w) in enumerate(zip(_tgts, _rrs, _wts)))
     return (
         f"✅ <b>ENTRY CONFIRMED</b>\n"
         f"📊 <b>{_e(candidate.style)} • {_e(candidate.symbol)} • {_e(candidate.direction)}</b>\n"
@@ -2218,8 +2233,7 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
         f"📍 <b>سطوح معامله</b>\n"
         f"├ Entry: <b>{_price(candidate.planned_entry)}</b>\n"
         f"├ {_e(invalidation_label)}: <b>{_price(candidate.sl)}</b>\n"
-        f"├ TP1: <b>{_price(candidate.tp1)}</b> • {candidate.rr_tp1:.2f}R • بستن {SETTINGS.partial_tp1_percent:.0f}%\n"
-        f"└ TP2: <b>{_price(candidate.tp2)}</b> • {candidate.rr_tp2:.2f}R • بستن {SETTINGS.partial_tp2_percent:.0f}%\n\n"
+        f"{_tp_rows}\n\n"
         f"💼 <b>مدیریت سرمایه بهینه</b>\n"
         f"├ اندازه حساب: <b>${mm.get('account', 0):,.0f}</b>\n"
         f"├ ریسک محاسباتی تا ابطال: <b>{mm.get('risk_pct', 0):.2f}% = ${mm.get('risk_amount', 0):.2f}</b>\n"
@@ -2228,11 +2242,11 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
         f"├ سقف Margin این کیفیت: <b>{mm.get('margin_limit_pct', 0):.1f}% حساب</b>\n"
         f"├ Position Size: <b>${mm.get('position_size', 0):,.0f}</b>\n"
         f"├ سود تقریبی TP1: <b>${mm.get('tp1_profit', 0):.2f}</b>\n"
-        f"├ سود تقریبی TP2: <b>${mm.get('tp2_profit', 0):.2f}</b>\n"
+        f"├ سود تقریبی هدف نهایی (باقی‌مانده): <b>${mm.get('tp2_profit', 0):.2f}</b>\n"
         f"└ هزینه تخمینی Fee/Slippage: <b>${mm.get('estimated_roundtrip_cost', 0):.2f}</b>"
         f"{mm_warning}\n\n"
         f"{_ai_note(candidate)}\n\n"
-        f"📌 پیشنهاد سیستم: بعد از TP1، حد ضرر باقیمانده به Breakeven منتقل شود.\n"
+        f"📌 پیشنهاد سیستم: بعد از TP1 استاپ به ورودِ خالص (ورود + کارمزد/لغزش) منتقل می‌شود و بین هر دو هدف، کف حفاظتیِ فرمول‌محور فقط در جهت سود حرکت می‌کند (بدون برگشت).\n"
         f"⚠️ لمس/عبور معتبر از {_price(candidate.sl)} سناریوی تحلیلی را باطل می‌کند.\n"
         f"🧭 {_e(management_note)}\n"
         f"📢 <b>{_e(SETTINGS.channel_name)}</b>"
@@ -2947,7 +2961,7 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         f"🎯 Entry: <b>{_price(candidate.planned_entry)}</b>",
         f"🛑 First Stop: <b>{_price(candidate.sl)}</b>",
         f"📈 Live Price: <b>{_price(float((candidate.metadata or {}).get('live_price') or candidate.planned_entry))}</b>",
-        *[f"🏁 TP{i+1}: {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [35, 35])))],
+        *[f"🏁 TP{i+1}: {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [50, 30, 20])))],
         f"⚖️ R:R {candidate.rr_tp1:.2f} / {candidate.rr_tp2:.2f} • ⭐ {candidate.score}/10",
     ]
     rows.append(f"🤖 <b>نظر AI:</b> {_e(advisory or _ai_rich_note(candidate))}")
@@ -2967,7 +2981,11 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
     """Execution channel is intentionally chart-first: confirmed trade numbers
     plus a one-click link back to its educational alert/chart."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
-    candidate.metadata["target_ladder"] = build_ladder(candidate.planned_entry, candidate.sl, candidate.direction, candidate.market, candidate.tp2)
+    candidate.metadata["target_ladder"] = build_ladder(
+        candidate.planned_entry, candidate.sl, candidate.direction, candidate.market,
+        candidate.tp2, structural_tp1=candidate.tp1,
+        fee_pct=(SETTINGS.fee_rate_percent + SETTINGS.slippage_percent) * 2.0 / 100.0,
+    )
     if chart_df is not None and not chart_df.empty and "close" in chart_df.columns:
         candidate.metadata["live_price"] = float(chart_df["close"].iloc[-1])
     if not candidate.metadata.get("confirmation_chart_sent"):
@@ -3287,10 +3305,19 @@ def send_trade_close_event(event: dict) -> bool:
         hit > 0 and abs(float(event.get("sl") or 0) - float(event.get("original_sl") or 0)) > 1e-9)
     # Viva 2026-09-16: «هیچ کلمه انگلیسی نیاد» — exit kinds and the verdict
     # speak Persian (TP stays as the ladder code members already know).
-    exit_kind = ("هر پنج پله" if hit >= 5 else
-                 (f"TP{hit} + خروجِ محافظت‌شده با استاپ تریل‌شده" if trailed
-                  else (f"TP{hit} + خروجِ محافظت‌شده" if hit and result == "WIN"
-                        else "استاپ ابتدایی")))
+    # Viva 09-19: the ladder now carries 2–3 aligned exits (was 5 hidden
+    # segments); name the count dynamically and surface SMART_EXIT reasons
+    # (spec §2.2: every decision must be explainable).
+    _n_tgts = len(event.get("targets") or []) or 3
+    _smart = str(event.get("close_reason") or "") == "SMART_EXIT"
+    exit_kind = ("خروج هوشمند — تأیید بازگشت در تایم مانیتور" if _smart else
+                 (f"هر {_n_tgts} پله" if hit >= _n_tgts else
+                  (f"TP{hit} + خروجِ محافظت‌شده با استاپ تریل‌شده" if trailed
+                   else (f"TP{hit} + خروجِ محافظت‌شده" if hit and result == "WIN"
+                         else "استاپ ابتدایی"))))
+    _reasons = list(event.get("exit_reasons_fa") or [])
+    _why = ("🧠 علت خروج هوشمند (روی کندل بستهٔ تایم مانیتور):\n"
+            + "\n".join(f"• {_e(r)}" for r in _reasons) + "\n\n") if _smart and _reasons else ""
     result_fa = {"WIN": "برد ✅", "LOSS": "باخت ❌"}.get(result, "بدون معامله ⚪")
     text = (
         f"{emoji} <b>نتیجه نهایی پوزیشن</b>   🆔 <code>{code}</code>\n\n"
@@ -3300,8 +3327,9 @@ def send_trade_close_event(event: dict) -> bool:
         f"━━━━━━━━━━━━━━━━━━\n🔰 ورود: <b>{_price(float(event.get('entry') or 0))}</b>\n"
         f"⭕️ استاپ ابتدایی: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
         f"📈 قیمت زنده/خروج: <b>{_price(float(event.get('live_price') or 0))}</b>\n"
-        f"🏁 TPهای زده‌شده: <b>{hit}/5</b>\n"
+        f"🏁 TPهای زده‌شده: <b>{hit}/{_n_tgts}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n📌 نوع خروج: <b>{exit_kind}</b>\n\n"
+        f"{_why}"
         f"• سود/ضرر نهایی: <b>${float(event.get('profit_usd') or 0):+.2f}</b>\n\n"
         f"• بازده قیمت: <b>{float(event.get('pnl') or 0):+.2f}%</b>\n\n"
         f"• اثر نهایی بر کل مارجین: <b>{float(event.get('margin_roi_pct') or 0):+.2f}%</b>\n"
@@ -3612,6 +3640,53 @@ def send_ladder_event(event: dict) -> bool:
                         link=_lnk, link_text="🔗 همین پیام در کانال اصلی")
     return mid
 
+
+
+def send_trailing_note(event: dict) -> int:
+    """Viva 09-19 smart-trailing ruling: SHORT lifecycle notes — profit-floor
+    upgrades (🔒) and orange exit warnings (🟠) land in the main channel and
+    the journal mirror. No chart (consumption law); these are one-liners."""
+    kind = str(event.get("event") or "")
+    if kind not in {"PROFIT_FLOOR", "EXIT_WARNING"}:
+        return 0
+    target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    code = _e(event.get("public_code") or event.get("signal_id"))
+    setup = _setup_display(event.get("source") or event.get("strategy_fa"))
+    hit = int(event.get("hit_index") or 0)
+    reply_id = int(event.get("last_tp_message_id") or 0) or int(event.get("pro_message_id") or 0) or None
+    head = (f"🏷 <b>{_e(setup)}</b>\n"
+            f"🏦 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('direction'))}\n"
+            f"🆔 <code>{code}</code>")
+    if kind == "PROFIT_FLOOR":
+        text = (
+            f"🔒 <b>کف حفاظتی سود فعال شد</b> (پس از TP{hit})\n\n{head}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"استاپ محافظتی: <b>{_price(float(event.get('new_sl') or event.get('sl') or 0))}</b>\n"
+            f"طبق فرمول مرحله‌ای، استاپ از این سطح در جهت ضرر برنمی‌گردد.\n"
+            f"📌 <b>VIVAMON-Labs-Pro</b>"
+        )
+        _ttl = "کف حفاظتی سود"
+    else:
+        reasons = list(event.get("reasons_fa") or [])
+        text = (
+            f"🟠 <b>هشدار خروج — {int(event.get('score') or 0)} نشانهٔ بازگشت در تایم مانیتور</b>\n\n{head}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            + "\n".join(f"• {_e(r)}" for r in reasons) + "\n"
+            f"اقدام: فقط هشدار — استاپ محافظتی فعال است. خروج کامل با تأیید قرمز (۳ نشانهٔ هم‌زمان) یا استاپ.\n"
+            f"📌 <b>VIVAMON-Labs-Pro</b>"
+        )
+        _ttl = "هشدار خروج"
+    _ph, mid = _post_chart_then_text(
+        None, text, target, reply_to=reply_id,
+        label=_chart_label(symbol=str(event.get("symbol") or ""),
+                           code=str(event.get("public_code") or ""), title_fa=_ttl))
+    mid = int(mid or 0)
+    if mid:
+        _lnk = _telegram_message_link(str(target), mid)
+        _sig_mirror(str(event.get("public_code") or ""), "stop", text, None,
+                    reply_kind=(f"tp{hit}" if hit else "confirmed"),
+                    link=_lnk, link_text="🔗 همین پیام در کانال اصلی")
+    return mid
 
 
 def _technoclassic_preview_candidate(ev: dict):

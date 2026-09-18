@@ -1167,12 +1167,13 @@ def test_compact_captions_fit_under_media_cap_for_every_setup():
 
 
 def test_zec_protected_exit_settlement_is_win():
-    """The K120563 case: SHORT banked 35% at TP1 then the BE+5-tick trail
-    executed. That is NOT 'INITIAL STOP LOSS' and NOT a loss."""
+    """The K120563 case: SHORT banked 50% at TP1 (1R floor, 09-19 ladder)
+    then the net-BE trail executed. That is NOT 'INITIAL STOP LOSS' / a loss."""
     from analysis.trade_management import build_ladder, advance_ladder
     lad = build_ladder(1136.41, 1147.4419, "SHORT", {"tick_size": 0.01}, 1112.07)
-    assert abs(lad["targets"][0] - 1131.542) < 0.01          # TP1 BELOW entry on a short
-    step = advance_ladder(lad, 1131.0, 1130.5)               # TP1 printed
+    assert abs(lad["targets"][0] - 1125.378) < 0.01          # TP1 = 1R floor BELOW entry
+    assert lad["weights"] == [50.0, 30.0, 20.0]
+    step = advance_ladder(lad, 1126.0, 1125.0)               # TP1 printed
     assert step["state"]["hit_index"] == 1
     assert abs(step["state"]["current_sl"] - 1136.36) < 1e-6  # entry −5 ticks (short)
     step2 = advance_ladder(step["state"], 1136.40, 1136.30)  # trail executes
@@ -1286,3 +1287,52 @@ def test_slot_never_emits_detached_continuation_2026_09_16():
     assert len(out) <= 4096
     assert all(k in out for k in ("🕐 سشن", "📊", "🌀", "📈"))
     assert "ادامه" not in out
+
+
+def test_chart_pills_match_ladder_exits():
+    """Viva 09-19: the confirmed chart must show EVERY ladder exit pill.
+    Guards the de-indent regression that silently dropped TP1/TP2 pills."""
+    import numpy as np
+    import pandas as pd
+    from datetime import datetime, timedelta, timezone
+    import bot.messages_v7 as m7
+    from analysis.models import SignalCandidate, EvidenceItem
+    from analysis.trade_management import build_ladder
+
+    rng = np.random.default_rng(11)
+    n = 90
+    ts = [datetime(2026, 9, 19, tzinfo=timezone.utc) + timedelta(minutes=15 * i) for i in range(n)]
+    close = 96.5 + np.linspace(0, 8.0, n) + rng.normal(0, 0.05, n)
+    frame = pd.DataFrame({"timestamp": ts, "open": close - 0.08, "high": close + 0.2,
+                          "low": close - 0.2, "close": close, "volume": np.full(n, 900.0)})
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    c = SignalCandidate(
+        signal_id="PILL-REGRESSION-1", symbol="BTCUSDT", style="DAYTRADE",
+        setup_code="TLBREAK", setup_name="VIVA-TLBREAK", strategy_fa="x",
+        direction="LONG", score=8, status="CONFIRMED",
+        entry_zone_bottom=99.4, entry_zone_top=99.6, planned_entry=99.5, sl=97.5,
+        tp1=103.5, tp2=107.5, rr_tp1=2.0, rr_tp2=4.0, bias="BULLISH",
+        trigger_timeframe="15m",
+        evidence=[EvidenceItem("tlbreak", "t", "d", True, 2)],
+        confirmations=[], warnings=[], mandatory_gates={"rr": True},
+        market={"turnover24h": 1e9, "spread_pct": 0.02, "tick_size": 0.01},
+        metadata={"atr": 1.0, "public_code": "PILL-1"},
+        created_at=now.isoformat(timespec="seconds"),
+        confirmed_at=now.isoformat(timespec="seconds"))
+    c.metadata["target_ladder"] = build_ladder(
+        c.planned_entry, c.sl, c.direction, c.market, c.tp2,
+        structural_tp1=c.tp1, fee_pct=0.0018)
+    tags = []
+    orig = m7._level_tag
+    def spy(ax, x, y, label, color):
+        tags.append(label)
+        return orig(ax, x, y, label, color)
+    m7._level_tag = spy
+    try:
+        assert m7.generate_chart(frame, c, confirmed=True)
+    finally:
+        m7._level_tag = orig
+    joined = " | ".join(tags)
+    assert "TP1 50%" in joined, joined
+    assert "TP2 30%" in joined, joined
+    assert "TP3 20%" in joined, joined

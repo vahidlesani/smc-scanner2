@@ -140,23 +140,33 @@ def build_money_management(candidate, account: Optional[float] = None) -> Dict:
     )
     if not position:
         return {}
+    # Viva 09-19 ladder ruling: profit display follows the ACTUAL exit ladder
+    # (the levels/weights the monitor executes), not the legacy two-target
+    # partial settings. tp2_profit = the remaining size at the final target.
+    _lad = (getattr(candidate, "metadata", None) or {}).get("target_ladder") or {}
+    _tgts = [float(t) for t in (_lad.get("targets") or [])]
+    _wts = [float(w) for w in (_lad.get("weights") or [])]
+    tp_first = _tgts[0] if _tgts else candidate.tp1
+    tp_final = _tgts[-1] if _tgts else candidate.tp2
+    w_first = _wts[0] if _wts else SETTINGS.partial_tp1_percent
+    w_rest = (100.0 - w_first) if _wts else SETTINGS.partial_tp2_percent
     notional = position["position_size"]
     if candidate.direction == "LONG":
-        tp1_move = (candidate.tp1 - candidate.planned_entry) / candidate.planned_entry
-        tp2_move = (candidate.tp2 - candidate.planned_entry) / candidate.planned_entry
+        tp1_move = (tp_first - candidate.planned_entry) / candidate.planned_entry
+        tp2_move = (tp_final - candidate.planned_entry) / candidate.planned_entry
     else:
-        tp1_move = (candidate.planned_entry - candidate.tp1) / candidate.planned_entry
-        tp2_move = (candidate.planned_entry - candidate.tp2) / candidate.planned_entry
-    gross_tp1 = notional * tp1_move * SETTINGS.partial_tp1_percent / 100
-    gross_tp2 = notional * tp2_move * SETTINGS.partial_tp2_percent / 100
+        tp1_move = (candidate.planned_entry - tp_first) / candidate.planned_entry
+        tp2_move = (candidate.planned_entry - tp_final) / candidate.planned_entry
+    gross_tp1 = notional * tp1_move * w_first / 100
+    gross_tp2 = notional * tp2_move * w_rest / 100
     estimated_cost = notional * (SETTINGS.fee_rate_percent + SETTINGS.slippage_percent) / 100 * 2
     return {
         **position,
         "account": account,
-        "partial_tp1": SETTINGS.partial_tp1_percent,
-        "partial_tp2": SETTINGS.partial_tp2_percent,
-        "tp1_profit": gross_tp1 - estimated_cost * SETTINGS.partial_tp1_percent / 100,
-        "tp2_profit": gross_tp2 - estimated_cost * SETTINGS.partial_tp2_percent / 100,
+        "partial_tp1": w_first,
+        "partial_tp2": w_rest,
+        "tp1_profit": gross_tp1 - estimated_cost * w_first / 100,
+        "tp2_profit": gross_tp2 - estimated_cost * w_rest / 100,
         "total_profit": gross_tp1 + gross_tp2 - estimated_cost,
         "estimated_roundtrip_cost": estimated_cost,
         "max_loss_with_cost": position["risk_amount"] + estimated_cost,
