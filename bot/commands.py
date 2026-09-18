@@ -801,30 +801,58 @@ def handle_protected_exit_audit(chat_id):
 
 
 def handle_setup_management(chat_id, message_id=None):
-    enabled = os.getenv("VIVA_TLBREAK_ENABLED", "false").lower() in {"1","true","yes","on"}
-    dot, label = ("🟢", "فعال") if enabled else ("🔴", "خاموش")
-    from database.repository_v7 import viva_tlbreak_performance
-    perf = viva_tlbreak_performance()
-    text = ("⚙️ <b>مدیریت ستاپ‌ها</b>\n━━━━━━━━━━━━━━━━━━\n"
-            f"📐 <b>VIVA-TLBREAK</b>: {dot} <b>{label}</b>\n"
-            f"📊 {perf['total']} مورد • ✅{perf['wins']} ❌{perf['losses']} • WR {perf['winrate']:.1f}%\n"
-            f"💰 P&L: {perf['pnl_pct']:+.2f}% / ${perf['pnl_usd']:+.2f}\n"
-            "فقط این ستاپ شخصی Viva از این صفحه کنترل می‌شود. تغییر در Railway ذخیره و سرویس restart می‌شود.")
-    keyboard={"inline_keyboard":[
-        [{"text":"🟢 روشن کن","callback_data":"setup_vtl_on"},{"text":"🔴 خاموش کن","callback_data":"setup_vtl_off"}],
-        [{"text":"📊 نتایج VIVA-TLBREAK","callback_data":"res_TLBREAK"}],
-        [{"text":"◀️ بازگشت","callback_data":"main_menu"}],
+    # Viva 09-19: the management panel covers ALL FIVE setups — stats per
+    # setup from the journal, switches only where an env gate exists
+    # (TLBREAK & TECHCLASSIC); the core cycle setups stay always-on.
+    from database.repository_v7 import setup_performance
+    def _on(env):
+        return os.getenv(env, "true").lower() in {"1", "true", "yes", "on"}
+    rows_def = [
+        ("VIVA-TLBREAK", "TLBREAK", "VIVA_TLBREAK_ENABLED", "setup_vtl_on", "setup_vtl_off"),
+        ("ALBROX", "ALBROX", None, None, None),
+        ("TECHCLASSIC", "TECHCLASSIC", "TECHCLASSIC_ENABLED", "setup_tc_on", "setup_tc_off"),
+        ("PINWALL", "PINVAL", None, None, None),
+        ("PINWALL-Q", "PINWALLQ", None, None, None),
+    ]
+    lines = ["⚙️ <b>مدیریت ستاپ‌ها</b>", "━━━━━━━━━━━━━━━━━━"]
+    for label, code, env, _on_cb, _off_cb in rows_def:
+        if env:
+            enabled = _on(env)
+            dot, state = ("🟢", "فعال") if enabled else ("🔴", "خاموش")
+        else:
+            dot, state = ("🟢", "فعال · چرخهٔ اصلی")
+        perf = setup_performance(code)
+        lines.append(f"📐 <b>{label}</b>: {dot} <b>{state}</b>")
+        lines.append(
+            f"📊 {perf['total']} مورد • ✅{perf['wins']} ❌{perf['losses']} • WR {perf['winrate']:.1f}%"
+            f" | 💰 {perf['pnl_pct']:+.2f}% / ${perf['pnl_usd']:+.2f}")
+        if perf["wins"] or perf["losses"]:
+            lines.append(
+                f"├ میانگین برد {perf['avg_win']:+.2f}% • میانگین باخت {perf['avg_loss']:+.2f}%")
+    lines.append("━━━━━━━━━━━━━━━━━━")
+    lines.append("سوئیچ فقط برای ستاپ‌های دارای گیت env؛ بقیه همیشه در چرخهٔ اسکن فعال‌اند. تغییر در Railway ذخیره و سرویس restart می‌شود.")
+    keyboard = {"inline_keyboard": [
+        [{"text": "🟢 روشن کن TLBREAK", "callback_data": "setup_vtl_on"},
+         {"text": "🔴 خاموش کن TLBREAK", "callback_data": "setup_vtl_off"}],
+        [{"text": "🟢 روشن کن TECHCLASSIC", "callback_data": "setup_tc_on"},
+         {"text": "🔴 خاموش کن TECHCLASSIC", "callback_data": "setup_tc_off"}],
+        [{"text": "📊 TLBREAK", "callback_data": "res_TLBREAK"},
+         {"text": "📊 ALBROX", "callback_data": "res_ALBROX"}],
+        [{"text": "📊 TECHCLASSIC", "callback_data": "res_TECHCLASSIC"},
+         {"text": "📊 PINWALL", "callback_data": "res_PINVAL"}],
+        [{"text": "📊 PINWALL-Q", "callback_data": "res_PINWALLQ"}],
+        [{"text": "◀️ بازگشت", "callback_data": "main_menu"}],
     ]}
-    if message_id: edit_message(chat_id,message_id,text,keyboard)
-    else: send_message(text,chat_id,keyboard)
+    if message_id: edit_message(chat_id, message_id, "\n".join(lines), keyboard)
+    else: send_message("\n".join(lines), chat_id, keyboard)
 
 
-def handle_setup_toggle(chat_id, message_id, enabled):
+def handle_setup_toggle(chat_id, message_id, enabled, env_key="VIVA_TLBREAK_ENABLED"):
     from bot.railway_control import set_env_flag, setup_toggle_available
     if not setup_toggle_available():
         send_message("❌ کنترل Railway در ربات هنوز پیکربندی نشده.",chat_id)
         return
-    ok=set_env_flag("VIVA_TLBREAK_ENABLED",enabled)
+    ok=set_env_flag(env_key,enabled)
     if ok:
         send_message("✅ تنظیم ذخیره شد؛ Railway سرویس را با وضعیت جدید restart می‌کند.",chat_id)
     else:
@@ -859,6 +887,12 @@ def handle_callback(callback_query):
         else: answer_callback(callback_id, "فقط ادمین")
     elif data == "setup_vtl_off":
         if _is_admin(uid): handle_setup_toggle(chat_id, message_id, False)
+        else: answer_callback(callback_id, "فقط ادمین")
+    elif data == "setup_tc_on":
+        if _is_admin(uid): handle_setup_toggle(chat_id, message_id, True, "TECHCLASSIC_ENABLED")
+        else: answer_callback(callback_id, "فقط ادمین")
+    elif data == "setup_tc_off":
+        if _is_admin(uid): handle_setup_toggle(chat_id, message_id, False, "TECHCLASSIC_ENABLED")
         else: answer_callback(callback_id, "فقط ادمین")
     elif data == "education":
         handle_education(chat_id)

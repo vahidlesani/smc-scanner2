@@ -969,6 +969,33 @@ def viva_tlbreak_performance() -> dict:
     return {"total":len(rows),"wins":wins,"losses":losses,"pending":sum(1 for r,*_ in rows if r=="PENDING"),"winrate":wins/closed*100 if closed else 0.0,"pnl_pct":sum(float(x[1] or 0) for x in rows),"pnl_usd":sum(float(x[2] or 0) for x in rows)}
 
 
+def setup_performance(source_code: str) -> dict:
+    """Per-setup journal stats (Viva 09-19: the management panel must cover
+    ALL five setups, not only TLBREAK) — wins/losses/WR plus average win and
+    average loss so the R-asymmetry is visible, never hidden."""
+    p = legacy_db._ph()
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(
+            f"SELECT result, pnl_pct, pnl_usd FROM signals "
+            f"WHERE strategy_version={p} AND source={p}",
+            (SETTINGS.strategy_version, str(source_code)),
+        )
+        rows = cursor.fetchall()
+    wins = [float(x[1] or 0) for r, x in [(r[0], r) for r in rows] if r == "WIN"]
+    wins = [float(r[1] or 0) for r in rows if r[0] == "WIN"]
+    losses = [float(r[1] or 0) for r in rows if r[0] == "LOSS"]
+    closed = len(wins) + len(losses)
+    return {
+        "total": len(rows), "wins": len(wins), "losses": len(losses),
+        "pending": sum(1 for r in rows if r[0] == "PENDING"),
+        "winrate": len(wins) / closed * 100 if closed else 0.0,
+        "pnl_pct": sum(float(r[1] or 0) for r in rows),
+        "pnl_usd": sum(float(r[2] or 0) for r in rows),
+        "avg_win": sum(wins) / len(wins) if wins else 0.0,
+        "avg_loss": sum(losses) / len(losses) if losses else 0.0,
+    }
+
+
 def protected_exit_audit(limit: int = 100) -> dict:
     """Forensic report for losses that may actually contain protected profit."""
     p = legacy_db._ph()
@@ -1120,10 +1147,19 @@ def monitor_confirmed_trades() -> List[Dict]:
                 # this avoids taking credit for a target crossed before entry.
                 continue
 
-            fill_history = frame.loc[timestamps > confirmed_ts] if confirmed_ts is not None else pending
-            expired = len(fill_history) >= max(1, int(max_fill_bars))
+            # Viva 09-19 (his restated ruling): NO candle-count limit on
+            # filling — an unfilled position is cancelled ONLY when its
+            # time expiry (zone-invalidation horizon) passes, never because
+            # N candles printed without a touch.
+            from analysis.setups_v7 import expiry_hours_for
+            _hrs = float(expiry_hours_for(str(style).upper(),
+                                          str(trigger_timeframe or "")))
+            _conf_ts = _naive_timestamp(confirmed_at)
+            _now_ts = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+            expired = _conf_ts is not None and \
+                _now_ts >= _conf_ts + pd.Timedelta(hours=_hrs)
             if ambiguous_entry_stop or expired:
-                reason = "AMBIGUOUS_ENTRY_STOP_SAME_CANDLE" if ambiguous_entry_stop else "ENTRY_NOT_TOUCHED"
+                reason = "AMBIGUOUS_ENTRY_STOP_SAME_CANDLE" if ambiguous_entry_stop else "EXPIRED_UNFILLED"
                 closed_at = _now()
                 with legacy_db.db_cursor() as cursor:
                     cursor.execute(f"UPDATE signals SET status='CANCELLED', result='CANCELLED', cancel_reason={p}, closed_at={p}, last_checked_at={p} WHERE signal_id={p}", (reason, closed_at, closed_at, signal_id))
@@ -1233,17 +1269,31 @@ def monitor_confirmed_trades() -> List[Dict]:
         closed_event = None
         tp1_event = None
         latest_checked = start
+        # Viva 09-19 P&L truth: a trailed stop that sits BETTER than the
+        # original one IS the real exit level; booking the original stop
+        # after a trail inflated losses. Zero targets = no target logic at
+        # all (watch-style rows must never "hit TP1 at price 0").
+        _live_sl = original_sl
+        try:
+            _row_sl = float(row.get("sl") or original_sl) if hasattr(row, "get") else original_sl
+        except Exception:
+            _row_sl = original_sl
+        if direction == "LONG" and original_sl < _row_sl < entry:
+            _live_sl = _row_sl
+        if direction == "SHORT" and entry < _row_sl < original_sl:
+            _live_sl = _row_sl
+        _has_targets = float(tp1) > 0 and float(tp2) > 0
         for _, candle in pending.iterrows():
             latest_checked = _naive_timestamp(candle["timestamp"])
             high, low = float(candle["high"]), float(candle["low"])
             if direction == "LONG":
-                stop_hit = low <= (entry if state_tp1 else original_sl)
-                first_hit = high >= tp1
-                final_hit = high >= tp2
+                stop_hit = low <= (max(entry, _live_sl) if state_tp1 else _live_sl)
+                first_hit = _has_targets and high >= tp1
+                final_hit = _has_targets and high >= tp2
             else:
-                stop_hit = high >= (entry if state_tp1 else original_sl)
-                first_hit = low <= tp1
-                final_hit = low <= tp2
+                stop_hit = high >= (min(entry, _live_sl) if state_tp1 else _live_sl)
+                first_hit = _has_targets and low <= tp1
+                final_hit = _has_targets and low <= tp2
 
             # Conservative ambiguity rule: if stop and target occur in the same
             # candle, assume the stop happened first because tick order is unknown.
@@ -1253,7 +1303,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                     result = "WIN"
                     reason = "TP1 سپس Breakeven"
                 else:
-                    pnl = ((original_sl - entry) / entry * 100) if direction == "LONG" else ((entry - original_sl) / entry * 100)
+                    pnl = ((_live_sl - entry) / entry * 100) if direction == "LONG" else ((entry - _live_sl) / entry * 100)
                     result = "LOSS"
                     reason = "Stop Loss"
                 closed_event = {"result": result, "pnl": pnl, "reason": reason}
