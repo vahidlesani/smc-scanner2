@@ -188,7 +188,13 @@ class V7ModelTests(unittest.TestCase):
         )
         self.assertLess(result["price"], result["liquidity_anchor"])
         self.assertLessEqual(result["liquidity_anchor"], 99.0)
-        self.assertGreaterEqual(result["buffer"], 0.35)
+        # Viva 09-20 round 11: «بدون atr / پشت آخرین سویینگ با بافر» → the
+        # buffer is the standard price allowance (5 ticks or 0.10%), NOT ATR.
+        self.assertEqual(result.get("no_atr"), True)
+        self.assertGreaterEqual(result["buffer"], 0.0975)      # ≥ 0.10% of ~97.5
+        self.assertLess(result["buffer"], 0.35)                # no ATR term left
+        # the anchor is the MOST RECENT swing low below the POI edge
+        self.assertAlmostEqual(result["liquidity_anchor"], 97.5, places=6)
 
     def test_bybit_tradfi_asset_classification(self):
         from data.universe import _asset_class

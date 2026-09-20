@@ -297,7 +297,10 @@ def evaluate_confirmation(
             _rng20 = max(_h20 - _l20, 1e-12)
             _prev_o20 = float(closed_df.iloc[-2]["open"])
             _prev_c20 = float(closed_df.iloc[-2]["close"])
-            _buf20i = max(0.35 * _atr20, 0.0015 * _close20)
+            # Viva 09-20 round 11: «بدون atr … پشت آخرین سویینگ با بافر» →
+            # the internal-lane buffer is the standard price allowance.
+            from analysis.trade_management import structural_buffer
+            _buf20i = structural_buffer(_close20)
             if candidate.direction == "LONG" and _close20 <= _band_lo20 + 0.30 * _w20:
                 _bull_pin = ((min(_o20, _close20) - _l20) >= 2.0 * max(_body20, 1e-12)
                              and (_h20 - _close20) <= 0.35 * _rng20)
@@ -545,6 +548,12 @@ def evaluate_confirmation(
                 f"محدود شد؛ هدف ساختاری خام {candidate.tp2:.8g} بود.")
             candidate.metadata["raw_structural_tp2"] = float(candidate.tp2)
             candidate.tp2 = float(_capped_tp2)
+            # keep the five-part doctrine intact after the clamp: TP1 is one
+            # fifth of the CAPPED path (round 11), never a leftover ratio.
+            if candidate.direction == "LONG" and candidate.tp2 > executable_entry:
+                candidate.tp1 = executable_entry + (candidate.tp2 - executable_entry) / 5.0
+            elif candidate.direction == "SHORT" and candidate.tp2 < executable_entry:
+                candidate.tp1 = executable_entry - (executable_entry - candidate.tp2) / 5.0
     except Exception:
         pass
     atr_value = float(candidate.metadata.get("atr", 0) or 0)

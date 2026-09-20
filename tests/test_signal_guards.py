@@ -1227,10 +1227,10 @@ def test_zec_protected_exit_settlement_is_win():
     from analysis.trade_management import build_ladder, advance_ladder
     lad = build_ladder(1136.41, 1147.4419, "SHORT", {"tick_size": 0.01}, 1112.07,
                        trigger_tf="15m")
-    # Round-10 doctrine: the only structural level (1112.07 = 2.1%) is closer
-    # than the 15m floor (3%), so the path is the 15m norm (5%) split in five
-    # parts → TP1 = entry − 1% = 1125.05.
-    assert abs(lad["targets"][0] - 1125.0459) < 0.01
+    # Round-11 doctrine: the only level (1112.07 = 2.1%) sits below the 15m
+    # band floor (3%) and there is no previous extreme in the ladder call, so
+    # the path is the band middle (4%) split in five → TP1 = entry − 0.8%.
+    assert abs(lad["targets"][0] - 1127.32) < 0.05
     assert lad["weights"] == [40.0, 30.0, 30.0, 0.0, 0.0]
     step = advance_ladder(lad, 1131.0, 1124.8)               # TP1 printed (round-10 path)
     assert step["state"]["hit_index"] == 1

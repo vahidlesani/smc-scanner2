@@ -78,37 +78,92 @@ def target_distance_floor_pct(trigger_tf: str) -> float:
                                            TARGET_BAND_PCT_BY_TF["15m"])[0])
 
 
-def tf_target_distance(entry: float, trigger_tf: str, structural_level: float = 0.0,
-                       direction: str = "LONG", wall_level: float = 0.0) -> float:
-    """The path length the ladder splits into five parts.
+# Viva 09-20 round 11 (verbatim): «بدون atr / پشت آخرین سویینگ با بافر» +
+# «هم سقف و هم کف ۳ تا ۵ درصد بسته با موقعیت پوزیشن و سقف و کف قبلی» +
+# «اگر سطح معتبر در سقف یا کف وجود داشت همان فاصله به ۵ قسمت» → the shared
+# doctrine helpers. NO ATR anywhere in a stop or a target path.
+STOP_BUFFER_PCT = 0.0010          # 0.10% of price — the «بافر» (never ATR)
+LEVEL_MIN_PCT = 0.006             # absolute minimum for a level to count
 
-    Order of precedence (his doctrine, round 10):
-      1. the OPPOSITE WALL of the pattern (internal/range entries) — the price
-         distance from the entry to that wall;
-      2. a VALID ceiling/floor of the trigger TF (or a higher TF): a level at
-         least the TF floor away (15m/1h 3%, 4h 5%) — closer pivots are noise,
-         not targets;
-      3. otherwise the TF norm distance (15m/1h 5%, 4h 7%, 1d 10%).
-    Everything is clamped into the TF band, never derived from the stop.
+
+def structural_buffer(price: float, market: Optional[Dict] = None) -> float:
+    """The standard buffer for a stop behind structure: 5 venue ticks or
+    0.10% of price — Viva 09-20: «بدون atr … پشت آخرین سویینگ با بافر»."""
+    try:
+        price = abs(float(price or 0.0))
+        if price <= 0:
+            return 0.0
+        return float(max(5.0 * venue_tick(price, market), price * STOP_BUFFER_PCT))
+    except Exception:
+        return abs(float(price or 0.0)) * STOP_BUFFER_PCT
+
+
+def band_for_tf(trigger_tf: str) -> tuple:
+    """The 3–5% style band of a trigger TF (4h 5–7%, 1d 5–10%)."""
+    return TARGET_BAND_PCT_BY_TF.get(str(trigger_tf or "15m").lower(),
+                                     TARGET_BAND_PCT_BY_TF["15m"])
+
+
+def doctrine_path(entry: float, trigger_tf: str, level: float = 0.0,
+                  prev_extreme: float = 0.0) -> tuple:
+    """(path_distance, source) — the price distance the ladder splits in five.
+
+    1. «اگر سطح معتبر در سقف یا کف وجود داشت همان فاصله به ۵ قسمت» → a level
+       inside the TF band sets the path; farther than the ceiling it is capped
+       (round-9 rule: a level beyond the ceiling is a different trade); closer
+       than the floor it is the next structure, not a target.
+    2. otherwise «هم سقف و هم کف ۳ تا ۵ درصد بسته با موقعیت پوزیشن و سقف و کف
+       قبلی» → the distance to the PREVIOUS opposite extreme (previous ceiling
+       for a long / previous floor for a short) clamped into the TF band — the
+       position decides the value inside the band.
+    3. no previous extreme at all → the middle of the TF band.
+    The stop distance never appears here (his ruling, repeated three times).
     """
     try:
-        entry = float(entry)
+        entry = float(entry or 0.0)
+        if entry <= 0:
+            return 0.0, "NONE"
+        lo_pct, hi_pct = band_for_tf(trigger_tf)
+        lo, hi = entry * lo_pct / 100.0, entry * hi_pct / 100.0
+        lvl = float(level or 0.0)
+        if lvl > 0:
+            d = abs(lvl - entry)
+            _min_level = max(lo, entry * LEVEL_MIN_PCT)
+            if d >= _min_level:
+                return (float(min(d, hi)) if hi > 0 else float(d),
+                        "STRUCTURE_LEVEL" if d <= hi else "STRUCTURE_LEVEL_CAPPED")
+        prev = float(prev_extreme or 0.0)
+        if prev > 0:
+            d = abs(prev - entry)
+            if d > 0:
+                return float(min(max(d, lo), hi)), "BAND_FROM_PREVIOUS_EXTREME"
+        return float((lo + hi) / 2.0), "BAND_MID"
+    except Exception:
+        return 0.0, "NONE"
+
+
+def tf_target_distance(entry: float, trigger_tf: str, structural_level: float = 0.0,
+                       direction: str = "LONG", wall_level: float = 0.0) -> float:
+    """The path the ladder splits in five (legacy signature, doctrine inside).
+
+    WALL first — a range/channel entry aims at the opposite side («تی‌پی فاصله
+    تا سقف کانال یا تریدینگ رنج»), and that distance is honoured even below
+    the TF band. Then the round-11 doctrine. Only the TF ceiling may shorten a
+    distance; NO ATR and NO stop distance anywhere.
+    """
+    try:
+        entry = float(entry or 0.0)
         if entry <= 0:
             return 0.0
-        lo = target_distance_floor_pct(trigger_tf) / 100.0 * entry
-        hi = target_distance_cap_pct(trigger_tf) / 100.0 * entry
-        for _lvl in (wall_level, structural_level):
-            try:
-                _lvl = float(_lvl or 0.0)
-            except Exception:
-                _lvl = 0.0
-            if _lvl <= 0:
-                continue
-            _d = abs(_lvl - entry)
-            if lo <= _d <= hi:
-                return float(_d)
-        # no valid structural level in-band → the TF norm distance
-        return float(hi if str(trigger_tf).lower() not in ("4h",) else 0.9 * hi)
+        hi = entry * target_distance_cap_pct(trigger_tf) / 100.0
+        wall = float(wall_level or 0.0)
+        if wall > 0:
+            d = abs(wall - entry)
+            if d > 0:
+                return float(min(d, hi))
+        path, _src = doctrine_path(entry, trigger_tf,
+                                   level=float(structural_level or 0.0))
+        return float(min(path, hi) if hi > 0 else path)
     except Exception:
         return 0.0
 
@@ -187,7 +242,12 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
     be_gap = max(tick_gap, abs(entry) * max(0.0, float(fee_pct or 0.0)))
     proposed_final = float(final_target or 0)
     valid_final = (proposed_final > entry if sign > 0 else proposed_final < entry)
-    final_price = proposed_final if valid_final else entry + sign * risk * 3
+    if not valid_final:
+        # Viva 09-20 round 11: no R-based fallback any more — with no level the
+        # path is the TF band (3–5% for 15m/1h, 5–7% for 4h, up to 10% for 1d).
+        _fb_path, _ = doctrine_path(entry, str(trigger_tf or "15m"))
+        proposed_final = entry + sign * (_fb_path or abs(entry) * 0.04)
+    final_price = proposed_final
     # «مدیریت ویوا» §4: the TF distance ceiling clamps the FINAL target, so
     # the five equal segments stay inside a distance this TF can actually
     # travel (a 15m trade may not carry a 19% target).

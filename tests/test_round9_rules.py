@@ -83,8 +83,17 @@ def test_round10_path_doctrine_examples():
     assert abs(tf_target_distance(100.0, "4h", structural_level=94.5) - 5.5) < 1e-9
     lad = build_ladder(100.0, 103.0, "SHORT", {"tick_size": 0.001}, 94.5, trigger_tf="4h")
     assert abs(lad["targets"][0] - 98.9) < 1e-9 and abs(lad["targets"][-1] - 94.5) < 1e-9
-    # 15m: a level only 1% away is noise → the 5% norm path is used
-    assert abs(tf_target_distance(100.0, "15m", structural_level=99.0) - 5.0) < 1e-9
+    # 15m round 11: a level only 1% away is the NEXT structure, not a target
+    # → with no previous extreme the band middle (4%) is used
+    assert abs(tf_target_distance(100.0, "15m", structural_level=99.0) - 4.0) < 1e-9
+    from analysis.trade_management import doctrine_path, structural_buffer
+    # …and the previous ceiling/floor decides inside the band (his round-11 rule)
+    assert doctrine_path(100.0, "15m", prev_extreme=97.0)[0] == 3.0   # 3% → floor
+    assert doctrine_path(100.0, "15m", prev_extreme=93.0)[0] == 5.0   # 7% → ceiling
+    assert doctrine_path(100.0, "15m", level=104.0)[1] == "STRUCTURE_LEVEL"
+    assert doctrine_path(100.0, "15m", level=107.0)[1] == "STRUCTURE_LEVEL_CAPPED"
+    # the stop buffer is price-based only (no ATR anywhere)
+    assert abs(structural_buffer(100.0) - 0.10) < 1e-9
     # internal entry: the wall IS the path
     lad2 = build_ladder(100.0, 98.6, "LONG", {"tick_size": 0.001}, 0.0,
                         trigger_tf="15m", wall_level=104.0)

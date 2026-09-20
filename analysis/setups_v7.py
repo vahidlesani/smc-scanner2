@@ -578,50 +578,49 @@ def _liquidity_protected_invalidation(
     spread_pct: float = 0.0,
     market: Optional[Dict] = None,
 ) -> Dict:
-    """Place invalidation beyond nearby pivot liquidity, not directly on it."""
+    """Stop behind the LAST swing + buffer — NO ATR (Viva 09-20 round 11).
+
+    Verbatim: «بدون atr / پشت آخرین سویینگ با بافر» → the anchor is the most
+    recent opposite swing of the trigger TF (the last pivot high above entry
+    for a SHORT, the last pivot low below entry for a LONG); when no such
+    pivot exists the POI edge is used. The buffer is the standard price-based
+    allowance (5 venue ticks or 0.10% of price, plus the spread) — the old ATR
+    volatility floors and percentage floors are gone, so a 15m stop is no
+    longer born 2–3% wide.
+    """
+    from analysis.trade_management import structural_buffer
     pivot_highs, pivot_lows = pivots(trigger_df, 3, 3)
     edge = float(poi["bottom"] if direction == "LONG" else poi["top"])
-    nearby_distance = 1.5 * atr_value
-    points = pivot_lows if direction == "LONG" else pivot_highs
+    points = (pivot_lows if direction == "LONG" else pivot_highs)[-20:]
+    anchor = edge
+    picked = 0
     if direction == "LONG":
-        protected = [
-            float(point["price"])
-            for point in points[-20:]
-            if edge - nearby_distance <= float(point["price"]) <= edge + 0.10 * atr_value
-        ]
-        liquidity_anchor = min([edge] + protected)
+        below = [(int(p.get("index", 0)), float(p["price"])) for p in points
+                 if float(p["price"]) < edge]
+        if below:
+            # the MOST RECENT swing (largest index) — not the farthest one
+            below.sort(key=lambda t: t[0])
+            anchor = below[-1][1]
+            picked = len(below)
     else:
-        protected = [
-            float(point["price"])
-            for point in points[-20:]
-            if edge - 0.10 * atr_value <= float(point["price"]) <= edge + nearby_distance
-        ]
-        liquidity_anchor = max([edge] + protected)
-
-    style_key = str(style).upper()
-    atr_buffer = (
-        SETTINGS.sl_buffer_atr_swing if style_key == "SWING" else SETTINGS.sl_buffer_atr_scalp
-    ) * atr_value
-    # Price/volatility floor prevents absurdly thin invalidations on low-priced
-    # contracts, while still adapting to each asset and timeframe.
-    pct_floor = float(getattr(SETTINGS, f"min_stop_pct_{style_key.lower()}", SETTINGS.min_stop_pct_daytrade))
-    atr_floor_mult = float(getattr(SETTINGS, f"min_stop_atr_{style_key.lower()}", SETTINGS.min_stop_atr_daytrade))
-    structural_floor = abs(edge) * max(0.0, pct_floor)
-    volatility_floor = max(0.0, atr_value) * max(0.0, atr_floor_mult)
-    base_gap = _five_tick_gap(liquidity_anchor, market)
-    spread_buffer = abs(liquidity_anchor) * max(0.0, float(spread_pct)) / 100 * 2.0
-    buffer_value = max(atr_buffer, spread_buffer, structural_floor, volatility_floor, base_gap)
-    invalidation = (
-        liquidity_anchor - buffer_value
-        if direction == "LONG"
-        else liquidity_anchor + buffer_value
-    )
+        above = [(int(p.get("index", 0)), float(p["price"])) for p in points
+                 if float(p["price"]) > edge]
+        if above:
+            above.sort(key=lambda t: t[0])
+            anchor = above[-1][1]
+            picked = len(above)
+    base_gap = _five_tick_gap(anchor, market)
+    buffer_value = structural_buffer(anchor, market)
+    spread_buffer = abs(anchor) * max(0.0, float(spread_pct)) / 100 * 2.0
+    buffer_value = max(buffer_value, spread_buffer, base_gap)
+    invalidation = anchor - buffer_value if direction == "LONG" else anchor + buffer_value
     return {
         "price": float(invalidation),
-        "liquidity_anchor": float(liquidity_anchor),
+        "liquidity_anchor": float(anchor),
         "buffer": float(buffer_value),
-        "protected_pivots": len(protected),
+        "protected_pivots": int(picked),
         "base_gap": float(base_gap),
+        "no_atr": True,
     }
 
 
@@ -631,39 +630,32 @@ def _structural_targets(
     trigger_tf: str = "", require_real_levels: bool = False,
     min_gap_atr: float = 0.6,
 ) -> Optional[Dict]:
-    """Targets per Viva's round-10 doctrine — a PRICE DISTANCE, never R:R.
+    """Target path per Viva 09-20 round 11 (verbatim).
 
-    Verbatim: «خارج از الگوها پس از بریک اگر در تایم سقف و کف معتبری داشتیم
-    فاصله نقطه ورود تا آن‌جا به ۵ قسمت اما خروج در تی‌پی ۱ تا ۳» و «اگر کف و
-    سقف معتبر نبود … طبق درصدهای اعلان‌شده مثلا در ۱۵ دقیقه ۳ تا ۵ درصد قیمت
-    در سمت هدف مشخص و از نقطه ورود تا آن‌جا به ۵ قسمت تقسیم».
-
-    So: pick the trigger TF's own next valid ceiling/floor (a level at least
-    the TF floor away — closer pivots are noise), else fall back to the TF's
-    norm distance (15m/1h 5%, 4h 7%, 1d 10%). TP1 is exactly one fifth of
-    that path, TP2 the far level; the ladder splits it in five and exits at
-    TP1..TP3. The stop distance is NOT part of this arithmetic (his ruling,
-    repeated three times).
+    1. «اگر سطح معتبر در سقف یا کف وجود داشت همان فاصله به ۵ قسمت تقسیم» →
+       a valid ceiling/floor (of the trigger TF, else the higher TF) sets the
+       path; only the TF distance ceiling may clamp it.
+    2. «اگر کف و سقف معتبر نبود … هم سقف و هم کف ۳ تا ۵ درصد بسته با موقعیت
+       پوزیشن و سقف و کف قبلی» → otherwise the path is the distance to the
+       PREVIOUS opposite extreme clamped into the TF band (3–5% for 15m/1h,
+       5–7% for 4h, up to 10% for 1d); no previous extreme → the band middle.
+    3. TP1 is always one fifth of that path and the ladder exits 40/30/30 at
+       TP1..TP3 (60% of the path) — «۴۰ درصد در تی‌پی۱ و دو تا ۳۰ درصد تا ۲ و
+       ۳ خالی بشه».
+    NO ATR and NO stop distance anywhere in this arithmetic.
     """
     try:
         entry = float(entry)
         risk = abs(entry - float(sl))
         if entry <= 0:
             return None
-        _atr = float(atr_value or 0)
-        if _atr <= 0 and df is not None and len(df):
-            try:
-                _atr = float((df["high"] - df["low"]).tail(14).mean() or 0.0)
-            except Exception:
-                _atr = 0.0
-        from analysis.trade_management import (tf_target_distance,
-                                               target_distance_floor_pct,
-                                               target_distance_cap_pct)
-        floor_dist = entry * target_distance_floor_pct(trigger_tf or "15m") / 100.0
-        cap_dist = entry * target_distance_cap_pct(trigger_tf or "15m") / 100.0
-        levels = []
-        source = "TF_NORM"
-        for _frame, _tag in ((df, "TRIGGER"), (extra_df, "HTF")):
+        from analysis.trade_management import doctrine_path, band_for_tf
+        band_lo, band_hi = band_for_tf(trigger_tf or "15m")
+        floor_dist = entry * band_lo / 100.0
+        cap_dist = entry * band_hi / 100.0
+        # levels: trigger TF first, then the higher TF (important zones)
+        levels: List[float] = []
+        for _frame in (df, extra_df):
             if _frame is None or len(_frame) < 20:
                 continue
             try:
@@ -675,44 +667,41 @@ def _structural_targets(
                     _lv = float(_pt["price"])
                 except Exception:
                     continue
-                if levels and any(abs(_lv - _e) <= 0.25 * _atr for _e in levels):
+                if levels and any(abs(_lv - _e) <= 0.0015 * entry for _e in levels):
                     continue
-                levels.append((_lv, _tag))
+                levels.append(_lv)
         if direction == "LONG":
-            valid = sorted((lv for lv in levels if lv >= entry + max(0.5 * _atr, floor_dist * 0.35)))
+            valid = sorted(lv for lv in levels if lv > entry)
+            extreme = max((lv for lv in levels if lv <= entry), default=0.0)  # previous low
         else:
-            valid = sorted((lv for lv in levels if lv <= entry - max(0.5 * _atr, floor_dist * 0.35)),
-                           reverse=True)
-        # the nearest VALID level inside the TF band is the «سقف/کف معتبر»
-        far_level, far_tag = 0.0, ""
-        for _lv, _tag in valid:
-            _d = abs(_lv - entry)
-            if _d >= floor_dist:
-                far_level, far_tag = _lv, _tag
+            valid = sorted((lv for lv in levels if lv < entry), reverse=True)
+            extreme = min((lv for lv in levels if lv >= entry), default=0.0)  # previous high
+        # nearest level inside the band counts as «سطح معتبر»; beyond the band
+        # the cap rules (round 9); closer than the floor is not a target.
+        level = 0.0
+        for _lv in valid:
+            if abs(_lv - entry) >= max(floor_dist, 0.006 * entry):
+                level = _lv
                 break
-        if far_level <= 0 and valid:
-            far_level, far_tag = valid[0]           # closer than the floor: clamp later
-        path = tf_target_distance(entry, trigger_tf or "15m",
-                                  structural_level=far_level, direction=direction)
+        path, source = doctrine_path(entry, trigger_tf or "15m", level=level,
+                                     prev_extreme=extreme)
         if path <= 0:
-            path = cap_dist
-        path = min(path, cap_dist)
-        source = "STRUCTURE_TRIGGER_TF" if (far_level and far_tag == "TRIGGER") else (
-            "STRUCTURE_HIGHER_TF" if far_level else "TF_NORM")
+            return None
+        if require_real_levels and level <= 0:
+            return None
         step = path / 5.0
         tp1 = entry + (step if direction == "LONG" else -step)
         tp2 = entry + (path if direction == "LONG" else -path)
-        if require_real_levels and not far_level:
-            return None
         return {
             "tp1": float(tp1),
             "tp2": float(tp2),
-            "far_level": float(far_level or 0.0),
+            "far_level": float(level or 0.0),
+            "prev_extreme": float(extreme or 0.0),
             "path_pct": float(path / entry * 100.0),
-            # R/R is REPORTED, never a criterion (Viva 09-20, verbatim)
+            "source": source,
+            "no_atr": True,
             "rr1": abs(tp1 - entry) / risk if risk else 0,
             "rr2": abs(tp2 - entry) / risk if risk else 0,
-            "source": source,
         }
     except Exception:
         return None

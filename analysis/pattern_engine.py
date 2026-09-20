@@ -492,11 +492,15 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                 ftgt = float(opp.price_at(n))
             else:
                 ftgt = live - 1.8 * atr_p if fdir == "SHORT" else live + 1.8 * atr_p
+            # round 11: the fade stop sits behind the line and the last bar's
+            # extreme with the STANDARD buffer (no ATR term).
+            from analysis.trade_management import structural_buffer as _sbuf
+            _bf = _sbuf(live)
             if fdir == "SHORT":
-                stop = max(line_now, float(trigger_df["high"].iloc[-1])) + 0.35 * atr_p
+                stop = max(line_now, float(trigger_df["high"].iloc[-1])) + _bf
                 risk, rew = stop - live, live - ftgt
             else:
-                stop = min(line_now, float(trigger_df["low"].iloc[-1])) - 0.35 * atr_p
+                stop = min(line_now, float(trigger_df["low"].iloc[-1])) - _bf
                 risk, rew = live - stop, ftgt - live
             if 0.15 * atr_p <= risk <= 3.0 * atr_p and rew >= 1.3 * max(risk, 1e-9):
                 ev["fade"] = {"direction": fdir, "entry": live, "stop": stop, "target": ftgt,
@@ -661,8 +665,11 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     lower = fit_validated_line(pat, "LOW", cfg)
     opp = lower if direction == "LONG" else upper
     # stop = NEAREST recent opposite validated touch (never the global min/max
-    # that produced Viva's absurd 74%-away shorts)
-    buffer = 0.35 * atr_p
+    # that produced Viva's absurd 74%-away shorts).
+    # Viva 09-20 round 11: «بدون atr … پشت آخرین سویینگ با بافر» → the buffer
+    # is the standard price allowance, never an ATR multiple.
+    from analysis.trade_management import structural_buffer
+    buffer = structural_buffer(live)
     stop = None
     if opp is not None:
         cands = []
@@ -678,7 +685,8 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         entry = live
         final_target = float(ev["measured"]["to"])
         if stop is None:
-            stop = (line_now - 1.5 * atr_p) if direction == "LONG" else (line_now + 1.5 * atr_p)
+            # no validated opposite touch → behind the broken line itself
+            stop = (line_now - buffer) if direction == "LONG" else (line_now + buffer)
     else:
         entry = float(fade.get("entry") or live)
         final_target = float(fade.get("target") or line_now)
@@ -687,12 +695,10 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
             return None
     risk = (entry - stop) if direction == "LONG" else (stop - entry)
     reward = (final_target - entry) if direction == "LONG" else (entry - final_target)
-    if risk <= 0.2 * atr_p or reward <= 0:
-        return None
-    if risk > (2.2 * max(atr_p, abs(final_target - entry)) if is_break else 3.0 * atr_p):
-        return None
-    min_rr = 1.5 if is_break else 1.3
-    if reward / risk < min_rr:
+    # Viva 09-20 round 11: no ATR limits and NO R:R gate on the stop/targets
+    # («بدون atr», «فرمول ریسک به ریوارد … اصلا اهمیت نداره») — only the
+    # geometry must make sense.
+    if risk <= 0 or reward <= 0:
         return None
     poi = {"bottom": line_now - 0.15 * atr_t, "top": line_now + 0.15 * atr_t,
            "touches": int(ev.get("touches") or 0),
@@ -729,7 +735,8 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         pass
     candidate.sl = float(stop)
     tp2 = float(final_target)
-    tp1 = entry + (tp2 - entry) * 0.40 if direction == "LONG" else entry - (entry - tp2) * 0.40
+    # five-part path split (round 11): TP1 = 1/5 of the way, exits 40/30/30
+    tp1 = entry + (tp2 - entry) / 5.0 if direction == "LONG" else entry - (entry - tp2) / 5.0
     candidate.tp1 = float(tp1)
     candidate.tp2 = tp2
     rr1 = abs(tp1 - entry) / max(risk, 1e-12)

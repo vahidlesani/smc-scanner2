@@ -397,7 +397,10 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         # replaced only for this isolated strategy.
         viva_score = structure_score(line) + breakout.score + confluence.total + failed_penalty
         refine_atr = float((refine_df["high"] - refine_df["low"]).tail(14).mean())
-        buffer = max(0.35 * refine_atr, abs(candidate.planned_entry) * 0.0005)
+        # Viva 09-20 round 11: «بدون atr … پشت آخرین سویینگ با بافر» — the
+        # buffer is the standard price allowance (5 ticks / 0.10%), no ATR.
+        from analysis.trade_management import structural_buffer
+        buffer = structural_buffer(candidate.planned_entry, candidate.market)
         pattern_sl = plan.stop_anchor - buffer if direction == "LONG" else plan.stop_anchor + buffer
         # Never move a structural stop inside the generic liquidity protected stop.
         candidate.sl = min(candidate.sl, pattern_sl) if direction == "LONG" else max(candidate.sl, pattern_sl)
@@ -421,10 +424,22 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             continue
         risk = abs(candidate.planned_entry - candidate.sl)
         rr_final = abs(final_target - candidate.planned_entry) / max(risk, 1e-12)
-        if rr_final < 1.5:
-            continue
+        # Viva 09-20: the R:R floor no longer gates this setup (round 11:
+        # «فرمول ریسک به ریوارد … اصلا اهمیت نداره»); only geometry must hold.
+        # The path is the structural/measured level, clamped by the TF ceiling,
+        # and TP1 sits one fifth of the way (five-part split).
+        try:
+            from analysis.trade_management import doctrine_path
+            _path, _src = doctrine_path(candidate.planned_entry, trigger_tf,
+                                        level=float(final_target or 0.0))
+            if _path > 0:
+                final_target = candidate.planned_entry + (
+                    _path if direction == "LONG" else -_path)
+        except Exception:
+            pass
         candidate.tp2 = float(final_target)
-        candidate.tp1 = float(candidate.planned_entry + (final_target - candidate.planned_entry) * 0.40)
+        candidate.tp1 = float(candidate.planned_entry
+                              + (final_target - candidate.planned_entry) / 5.0)
         candidate.rr_tp1 = abs(candidate.tp1 - candidate.planned_entry) / max(risk, 1e-12)
         candidate.rr_tp2 = rr_final
         candidate.score = min(10, max(0, round(viva_score)))
@@ -803,7 +818,10 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         # stop must sit BEYOND the signal (pin) bar's extreme plus a standard
         # buffer; a liquidity anchor landing INSIDE the pin bar is simply
         # wrong. The farther of (liquidity anchor, pin-extreme+buffer) wins.
-        _sbuf = max(0.25 * atr_v, float(invalidation.get("buffer") or 0.0))
+        # round 11: the buffer is price-based (already computed by the shared
+        # invalidation helper) — no ATR term is added on top.
+        _sbuf = max(float(invalidation.get("buffer") or 0.0),
+                    abs(entry) * 0.0010)
         if direction == "LONG":
             sl = min(sl, l - _sbuf)
         else:
@@ -831,14 +849,20 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         # real opposing context pivots, otherwise this is an alert-only chart
         # with no executable trade and must not be published.
         ctx_df = bundle.get(ctx_tf)
+        # Round 11: the shared doctrine builds the targets (valid level of the
+        # trigger TF / higher TF, else the 3–5% band) — the pinbar setup gets
+        # exactly the same treatment as every other setup.
         targets = (_structural_targets(ctx_df, direction, entry, sl,
-                                       require_real_levels=True) if ctx_df is not None else None)
+                                       trigger_tf=str(tf),
+                                       extra_df=df,
+                                       require_real_levels=False) if ctx_df is not None else None)
         if not targets:
             continue
         tp1, tp2 = float(targets["tp1"]), float(targets["tp2"])
         rr1, rr2 = float(targets["rr1"]), float(targets["rr2"])
-        if rr1 < float(getattr(settings, "pinv_rr1_floor", 1.30)) or rr2 < float(getattr(settings, "pinv_rr2_floor", 2.0)):
-            continue
+        # Viva 09-20 round 11: «فرمول ریسک به ریوارد … اصلا اهمیت نداره» and
+        # «همه این تغییرات روی همه ستاپها» → the PINVAL R:R floors are gone
+        # (the ratios are reported on the message only).
         tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}.get(str(tf), 300)
         # Legacy one-direction / one-zone band-aid filters. When the polarity
         # gate is active it already decides correct direction + zone polarity
@@ -961,7 +985,7 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                 f"ابطال: {sl:g} (پشت نقدشوندگی واقعی + بافر {float(invalidation.get('buffer', 0) or 0):g})؛ "
                 f"TP1 = {tp1:g} با RR {rr1:.2f} و TP2 = {tp2:g} با RR {rr2:.2f} — "
                 "هر دو هدف پیوتِ واقعیِ سمت مقابل در تایم کانتکست هستند، نه ضریب R ثابت.",
-                rr1 >= float(getattr(settings, "pinv_rr1_floor", 1.30)), 1),
+                True, 1),     # round 11: R:R never gates PINVAL (reported only)
         ]
         # FORMAT-3: the pin IS the active sign on the zone — carry its
         # two-line analysis like every other setup's zone_trigger.
@@ -1130,8 +1154,11 @@ def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]
         candidate = _base_candidate(bundle, style, "ALBROX", direction, structure_tf, trigger_tf, context, poi, impulse, special, "albrox_spike_base", True)
         if candidate is None:
             continue
-        # Albrox owns its structural stop: base distal plus 0.5 ATR.
-        candidate.sl = base_low - .5*base_atr if direction=="LONG" else base_high + .5*base_atr
+        # Albrox owns its structural stop: behind the base distal + the
+        # standard buffer (Viva 09-20 round 11: no ATR term).
+        from analysis.trade_management import structural_buffer as _sb
+        _sbf = _sb(base_low if direction == "LONG" else base_high, candidate.market)
+        candidate.sl = base_low - _sbf if direction == "LONG" else base_high + _sbf
         pin = detect_pinbar_zone(bundle, style)
         pinwall_confirm = bool(pin and pin.direction == direction)
         candidate.score = min(10, candidate.score + (1 if pinwall_confirm else 0))
