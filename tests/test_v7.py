@@ -1,7 +1,7 @@
 import os
 import tempfile
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pandas as pd
@@ -77,21 +77,44 @@ class V7ModelTests(unittest.TestCase):
         self.assertIn("مدیریت سرمایه بهینه", text)
         self.assertIn("viva-", text)
 
-    def test_lifecycle_chart_escalates_only_when_fixed_tool_would_leave_frame(self):
+    def test_lifecycle_chart_stays_on_trigger_tf_while_tool_is_young(self):
         from unittest.mock import patch
         from bot.messages_v7 import _lifecycle_chart_frame
         candidate = make_candidate("CONFIRMED", 8)
         candidate.trigger_timeframe = "15m"
+        candidate.confirmed_at = iso_now()
+        candidate.metadata["tool_anchor_ts"] = iso_now()
+        candidate.metadata["tool_entry_ts"] = iso_now()
         narrow = pd.DataFrame({"timestamp": pd.date_range("2026-01-01", periods=3, freq="15min"), "open":[100]*3,"high":[102]*3,"low":[99]*3,"close":[100]*3,"volume":[1]*3})
         wide = pd.DataFrame({"timestamp": pd.date_range("2026-01-01", periods=3, freq="30min"), "open":[100]*3,"high":[112]*3,"low":[97]*3,"close":[100]*3,"volume":[1]*3})
-        # Viva 2026-09-14 law (supersedes escalation): «چارت ۱ ساعته میذاری
-        # پوزیشن رو ۱۵ دقیقه؟!» is banned on every setup — the lifecycle tape
-        # is the position's OWN trigger TF even when the ladder runs off-frame;
-        # off-screen prices are tagged at the edge, never by zooming out.
+        # Viva 09-20 time-axis law: while fewer than 40 candles have printed
+        # past the tool, the tape stays on the position's own trigger TF.
         with patch("data.fetcher.get_klines", side_effect=lambda _s, tf, *_a, **_k: narrow if tf == "15m" else wide):
             frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, candidate.tp1, candidate.tp2])
         self.assertIs(frame, narrow)
         self.assertEqual(candidate.metadata["chart_view_tf"], "15m")
+        self.assertEqual(candidate.metadata["chart_view_note"], "")
+
+    def test_lifecycle_chart_escalates_once_40_candles_left_the_tool(self):
+        from unittest.mock import patch
+        from bot.messages_v7 import _lifecycle_chart_frame
+        candidate = make_candidate("CONFIRMED", 8)
+        candidate.trigger_timeframe = "15m"
+        # tool drawn 95 fifteen-minute bars ago, entry 41 bars ago (his exact
+        # example: 40+ escaped candles → the same tool on 1h ≈ 10 bars).
+        _now = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+        candidate.confirmed_at = _now.isoformat(sep=" ")
+        candidate.metadata["tool_anchor_ts"] = str(_now - pd.Timedelta(minutes=95 * 15))
+        candidate.metadata["tool_entry_ts"] = str(_now - pd.Timedelta(minutes=41 * 15))
+        narrow = pd.DataFrame({"timestamp": pd.date_range("2026-01-01", periods=3, freq="15min"), "open":[100]*3,"high":[102]*3,"low":[99]*3,"close":[100]*3,"volume":[1]*3})
+        hourly = pd.DataFrame({"timestamp": pd.date_range("2026-01-01", periods=3, freq="1h"), "open":[100]*3,"high":[112]*3,"low":[97]*3,"close":[100]*3,"volume":[1]*3})
+        with patch("data.fetcher.get_klines", side_effect=lambda _s, tf, *_a, **_k: hourly if tf == "1h" else narrow):
+            frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, candidate.tp1, candidate.tp2])
+        self.assertIs(frame, hourly)
+        self.assertEqual(candidate.metadata["chart_view_tf"], "1h")
+        self.assertEqual(candidate.metadata["chart_tf_scale"], 0.25)
+        self.assertIn("نمایش داده شده است", candidate.metadata["chart_view_note"])
+        self.assertIn("۱ ساعته", candidate.metadata["chart_view_note"])
 
     def test_branded_confirmed_chart_is_exact_1440_by_900_png(self):
         from bot.messages_v7 import generate_chart

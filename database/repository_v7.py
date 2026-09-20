@@ -1247,9 +1247,11 @@ def monitor_confirmed_trades() -> List[Dict]:
                 # spec §4/§5/§7/§9): after the first target prints, the stop
                 # follows the formula-based protection floor between targets
                 # (ratcheting, once per CLOSED candle — never per tick), and
-                # the monitor TF scores reversal pressure. ORANGE = warning
-                # only; RED (≥3 concurrent signs) = close ALL remainder at
-                # this candle's close, with an explainable reason list.
+                # the monitor TF scores reversal pressure. ONE sign = ORANGE
+                # short warning; TWO+ concurrent signs = RED = close ALL
+                # remainder at this candle's close (Viva 09-19/20: signs must
+                # never stay warn-only in the protection phase), with an
+                # explainable reason list.
                 if (not ladder.get("closed") and int(ladder.get("version") or 1) >= 2
                         and int(ladder.get("hit_index") or 0) >= 1):
                     wcandles = []
@@ -1301,6 +1303,9 @@ def monitor_confirmed_trades() -> List[Dict]:
                         "signal_id": signal_id, "symbol": symbol, "direction": direction,
                         "style": style, "source": source, "strategy_fa": strategy_fa,
                         "strategy_version": strategy_version, "confirmed_at": str(confirmed_at),
+                        # 09-20 time-axis law: the chart needs the REAL fill
+                        # candle so the position tool anchors there.
+                        "entry_filled_at": str(entry_filled_at or confirmed_at or ""),
                         "confirmation_sent": True, "pro_message_id": int(pro_message_id or 0), "public_code": public_code,
                         "entry": float(entry), "sl": float(ladder["current_sl"]), "original_sl": float(original_sl),
                         "leverage": int(leverage or 1), "margin": float(margin or 0), "live_price": float(candle["close"]),
@@ -1352,6 +1357,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                         "strategy_version":strategy_version,"confirmed_at":str(confirmed_at),"confirmation_sent":True,
                         "pro_message_id":int(pro_message_id or 0),"public_code":public_code,
                         "result":result,"pnl":net_pnl,"gross_pnl":gross_pnl,"profit_usd":profit_usd,
+                        "entry_filled_at": str(entry_filled_at or confirmed_at or ""),
                         "margin":float(margin or 0),"leverage":int(leverage or 1),
                         "margin_roi_pct":profit_usd / max(float(margin or 0),1e-12)*100,
                         "entry":float(entry),"original_sl":float(original_sl),"sl":float(ladder["current_sl"]),
@@ -1421,6 +1427,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                     "style": style, "source": source, "strategy_fa": strategy_fa,
                     "strategy_version": strategy_version,
                     "confirmed_at": str(confirmed_at),
+                    "entry_filled_at": str(entry_filled_at or confirmed_at or ""),
                     "confirmation_sent": True,
                     "pro_message_id": int(pro_message_id or 0),
                 }
@@ -1467,6 +1474,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                     "profit_usd": profit_usd,
                     "strategy_version": strategy_version,
                     "confirmed_at": str(confirmed_at),
+                    "entry_filled_at": str(entry_filled_at or confirmed_at or ""),
                     "confirmation_sent": True,
                     "pro_message_id": int(pro_message_id or 0), "public_code": public_code,
                     "trigger_timeframe": str(trigger_timeframe or ""), "original_sl": float(original_sl),

@@ -8,7 +8,7 @@ import os
 import threading
 import time
 from typing import List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import matplotlib
@@ -199,7 +199,30 @@ def _candidate_send_latency(candidate: SignalCandidate) -> str:
         return "—"
 
 
-_TF_FA = {"1d": "روزانه", "4h": "۴ ساعته", "1h": "۱ ساعته", "15m": "۱۵ دقیقه", "5m": "۵ دقیقه", "1m": "۱ دقیقه"}
+_TF_FA = {"1d": "روزانه", "4h": "۴ ساعته", "2h": "۲ ساعته", "1h": "۱ ساعته",
+          "30m": "۳۰ دقیقه", "15m": "۱۵ دقیقه", "5m": "۵ دقیقه",
+          "3m": "۳ دقیقه", "1m": "۱ دقیقه"}
+
+# ── Viva 09-20 time-axis law (verbatim ruling) ───────────────────────────
+# «اگر قیمت و کندل‌ها قبل از تی‌پی یا استاپ از ابزار خارج شدند، در زمان
+# تی‌پی‌ها و چارت‌های لایو اجازه دارند حرکت قیمت را در تایم‌فریم‌های بالاتر
+# نشان بدهند و در یکی دو خط توضیح بدهند.» — the SAME anchored tool (entry,
+# stop, TP ladder, trendline) is re-rendered on a higher TF; nothing slides
+# on the time axis; the chart keeps the trigger TF until the candles outrun
+# the tool by more than LIFECYCLE_SWITCH_AFTER_BARS bars.
+LIFECYCLE_VIEW_LADDER = {
+    "1m": ["3m", "5m", "15m", "1h", "4h"],
+    "3m": ["5m", "15m", "1h", "4h"],
+    "5m": ["15m", "1h", "4h"],
+    "15m": ["1h", "4h", "1d"],
+    "30m": ["1h", "4h", "1d"],
+    "1h": ["4h", "1d"],
+    "2h": ["4h", "1d"],
+    "4h": ["1d"],
+    "1d": [],
+}
+LIFECYCLE_SWITCH_AFTER_BARS = 40   # his example: 40 escaped 15m bars → 1h = 10
+LIFECYCLE_MAX_VIEW_BARS = 110      # tool origin must stay on the 150-bar canvas
 
 
 def _htf_context_bits(candidate: SignalCandidate) -> List[str]:
@@ -1043,7 +1066,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     # Viva 09-17 cost ruling: one render per (alert, frame, state) — retries,
     # mirrors and cross-channel posts reuse the bytes from this cache.
     _ck = (str(getattr(candidate, "signal_id", "")), bool(confirmed),
-           str(df["timestamp"].iloc[-1]), len(df))
+           str(df["timestamp"].iloc[-1]), len(df),
+           str((candidate.metadata or {}).get("chart_view_tf") or ""))
     _hit = _chart_cache_get(_ck)
     if _hit is not None:
         return _hit
@@ -1163,6 +1187,26 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         for chart_ax in axes:
             chart_ax.set_xlim(-1, count + future)
 
+        # ── Viva 09-20 time-axis law ─────────────────────────────────────
+        # Every drawing command that carried a timestamp is re-anchored to
+        # THAT time on the current frame, so a tool drawn yesterday keeps the
+        # same x-position today (no sliding). When a lifecycle render steps
+        # up to a higher TF, `chart_tf_scale` converts trigger-TF slopes into
+        # view-TF bars (price per bar is 4× larger on 1h than on 15m).
+        _tfscale = float((candidate.metadata or {}).get("chart_tf_scale") or 1.0)
+        if not math.isfinite(_tfscale) or _tfscale <= 0:
+            _tfscale = 1.0
+
+        def _anchored_x(ts_value, fallback: float) -> float:
+            if not ts_value:
+                return float(fallback)
+            try:
+                _x = float(np.searchsorted(frame.index,
+                                           pd.Timestamp(str(ts_value))))
+            except Exception:
+                return float(fallback)
+            return float(min(max(_x, 0.0), float(count)))
+
         # higher-context charts (TLBREAK 4h/1h or any 1d frame) render on a
         # log price axis so long-term trendline touches/breaks stay visible.
         notes = []
@@ -1185,7 +1229,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception:
                 use_log = False
 
-        zone_start = max(0, count - 55)
+        # The POI / entry box keeps its ORIGINAL time origin (stamped once at
+        # alert time) and still extends into the candle-free margin — the
+        # origin never slides right as candles print.
+        zone_start = int(_anchored_x((candidate.metadata or {}).get("tool_anchor_ts"),
+                                     max(0, count - 55)))
         zone_end = count + future - 0.5  # box extends into the candle-free margin
         _dir_key = "LONG" if candidate.direction == "LONG" else "SHORT"
         _poi = str((candidate.metadata or {}).get("poi_type") or "").upper()
@@ -1234,7 +1282,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception:
                 _rz = []
         for _z in (_rz or [])[:6]:
-            _x0 = max(zone_start, int(_z.get("x0", zone_start)) - 2)
+            # timestamp-anchored when the zone carries its origin time (every
+            # zone detected since 09-20 does); legacy rows keep the old rule.
+            if _z.get("ts0"):
+                _x0 = max(0, int(_anchored_x(_z.get("ts0"), zone_start)) - 2)
+            else:
+                _x0 = max(zone_start, int(_z.get("x0", zone_start)) - 2)
             _bias8 = _z.get("bias") or ("DEMAND" if _dir_key == "LONG" else "SUPPLY")
             _f8, _t8 = ZONE_PALETTE[("SR", _bias8 if _bias8 in ("SUPPLY", "DEMAND")
                                      else ("DEMAND" if _dir_key == "LONG" else "SUPPLY"))]
@@ -1305,21 +1358,23 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # pattern render commands: wedge / triangle / channel / flag / range
         for _pat in ((candidate.metadata or {}).get("render_patterns") or []):
             if _pat.get("type") == "RANGE":
-                ax.fill_between([zone_start, zone_end], float(_pat["lo"]),
+                # anchored to its oldest tested pivot when it carries a time
+                _range_start = int(_anchored_x(_pat.get("ts0"), zone_start))
+                ax.fill_between([_range_start, zone_end], float(_pat["lo"]),
                                 float(_pat["hi"]), color=CHART_THEME["muted"],
                                 alpha=0.07, linewidth=0, zorder=1)
                 # CryptoCove reference (his 08-14 green-bg charts): a range
                 # box carries a thin solid border AND a dashed midline.
-                ax.plot([zone_start, zone_start, zone_end, zone_end, zone_start],
+                ax.plot([_range_start, _range_start, zone_end, zone_end, _range_start],
                         [float(_pat["lo"]), float(_pat["hi"]), float(_pat["hi"]),
                          float(_pat["lo"]), float(_pat["lo"])],
                         color=CHART_THEME["muted"], linewidth=0.7, alpha=0.5,
                         zorder=2)
                 _mid8 = (float(_pat["lo"]) + float(_pat["hi"])) / 2
-                ax.hlines(_mid8, zone_start, zone_end,
+                ax.hlines(_mid8, _range_start, zone_end,
                           colors=CHART_THEME["muted"], linestyles="--",
                           linewidth=0.7, alpha=0.55, zorder=2)
-                _rg = _place_in_box({"x0": float(zone_start),
+                _rg = _place_in_box({"x0": float(_range_start),
                                      "x1": float(zone_end),
                                      "bottom": float(_pat["lo"]),
                                      "top": float(_pat["hi"]),
@@ -1348,15 +1403,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # every touch pivot.
             _lns = []
             for _ln0 in (_pat.get("lines") or []):
-                _sl8 = float(_ln0["slope"])
+                # the stored slope is price per TRIGGER-TF bar; on a stepped-up
+                # display TF a bar spans more time, so the slope rescales by
+                # 1/scale (15m→1h: ×4) — the line keeps its true angle.
+                _sl8 = float(_ln0["slope"]) / _tfscale
                 _pt8 = _ln0.get("points") or []
                 if _pt8:
                     _x0f = float(np.searchsorted(
                         frame.index, pd.Timestamp(str(_pt8[0].get("ts")))))
                     _ic8 = float(_pt8[0].get("price")) - _sl8 * _x0f
                 else:
-                    _x0f = max(0.0, float(_ln0.get("x0", 0))
-                               - max(0, len(df) - len(frame)))
+                    _x0f = max(0.0, (float(_ln0.get("x0", 0))
+                                     - max(0, len(df) - len(frame))) * _tfscale)
                     _ic8 = float(_ln0["intercept"])
                 _lns.append({**_ln0, "slope": _sl8, "intercept": _ic8,
                              "x0": _x0f})
@@ -1388,7 +1446,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # a BROKEN leg-trend paints only UP TO its break bar (his
                 # AAVE blue ends where price crossed it); a live trend runs
                 # solid to LIVE and dashed to the canvas edge.
-                _bx8 = _ln.get("break_x")
+                # the break bar is anchored by TIME when known (a bare index
+                # would land on the wrong candle after a TF step-up)
+                if _ln.get("break_ts"):
+                    _bx8 = _anchored_x(_ln.get("break_ts"), 0.0) or None
+                elif _ln.get("break_x") is not None and _tfscale != 1.0:
+                    _bx8 = float(_ln.get("break_x")) * _tfscale
+                else:
+                    _bx8 = _ln.get("break_x")
                 _brk8.append(_bx8 is not None)
                 _xend8 = min(float(count), float(_bx8)) \
                     if _bx8 is not None else float(count)
@@ -1569,11 +1634,19 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # the TP1-vs-entry-label collision he flagged on ATOM/XLM/BCH.)
 
         if confirmed:
-            tool_start = max(0, count - 20)
+            # Viva 09-20 time-axis law: the LONG/SHORT position tool starts at
+            # the REAL fill candle (fallback: the confirmation candle) and
+            # extends to the live edge. It is never re-anchored to «the last
+            # candle» on every render — that was the sliding he rejected.
+            _entry_ts = ((candidate.metadata or {}).get("tool_entry_ts")
+                         or getattr(candidate, "confirmed_at", "")
+                         or (candidate.metadata or {}).get("tool_anchor_ts"))
+            tool_start = int(_anchored_x(_entry_ts, max(0, count - 20)))
+            tool_start = max(0, min(tool_start, count - 1))
             tool_end = count + 4.5
-            # TradingView-style Long/Short position marker at the last candle.
+            # TradingView-style Long/Short position marker AT THE ENTRY CANDLE.
             marker_price = candidate.planned_entry
-            marker_x = count - 1
+            marker_x = tool_start
             if candidate.direction == "LONG":
                 ax.scatter([marker_x], [marker_price], marker="^", s=130,
                            color=CHART_THEME["tp1"], zorder=16,
@@ -3276,21 +3349,119 @@ def send_no_fill_event(event: dict) -> bool:
     ))
 
 
-def _lifecycle_chart_frame(candidate: SignalCandidate, levels: list[float]) -> Optional[pd.DataFrame]:
-    """Viva 2026-09-14 chart law: the trade tape is ALWAYS the position's own
-    trigger timeframe. An off-screen target stays off-screen and is tagged at
-    the edge; the chart NEVER escalates 15m→1h→4h to make numbers fit —
-    «چارت ۱ ساعته میذاری پوزیشن رو ۱۵ دقیقه؟!» on any setup is illegal,
-    and a 4h picture under a 1h trade was exactly what he forbade."""
-    from data.fetcher import get_klines
-    tf = str(candidate.trigger_timeframe or "15m").lower()
+def _event_ts(value) -> Optional[pd.Timestamp]:
+    """Parse a stored event/candidate timestamp into naive UTC."""
+    if not value:
+        return None
     try:
-        frame = get_klines(candidate.symbol, tf, 180, closed_only=False, use_cache=True)
+        _t = pd.Timestamp(str(value))
     except Exception:
         return None
+    try:
+        if _t.tzinfo is not None:
+            _t = _t.tz_convert("UTC").tz_localize(None)
+    except Exception:
+        pass
+    return _t
+
+
+def _lifecycle_view_plan(candidate: SignalCandidate,
+                         now: Optional[pd.Timestamp] = None) -> tuple[str, int, str]:
+    """Viva 09-20 time-axis ruling: pick the display TF for a LIFECYCLE render.
+
+    The trade tape starts on the position's own trigger TF. The tool is
+    anchored at `tool_anchor_ts` (55-bar origin, stamped once) and the entry
+    sits at `tool_entry_ts` (the real fill candle). Once more than
+    LIFECYCLE_SWITCH_AFTER_BARS candles have printed PAST the tool's right
+    edge (his example: 40 bars on 15m), TP charts and live charts step the
+    SAME tool up 15m→1h→4h→1d until the whole tool + price movement still
+    fits the canvas (≤ LIFECYCLE_MAX_VIEW_BARS bars back). Returns
+    (view_tf, escaped_bars, note_fa). The note is the one/two-line Persian
+    explanation he demanded — it goes in the MESSAGE, never painted on the
+    chart. Returns (trigger_tf, 0, "") while the tool is still young, which
+    includes every alert/confirmation render (their own pin law is separate).
+    """
+    from database.repository_v7 import TF_MINUTES
+    base = str(candidate.trigger_timeframe or "15m").lower()
+    if base not in TF_MINUTES:
+        return str(candidate.trigger_timeframe or "15m"), 0, ""
+    md = candidate.metadata or {}
+    created = _event_ts(md.get("tool_anchor_ts")) \
+        or _event_ts(getattr(candidate, "confirmed_at", "")) \
+        or _event_ts(getattr(candidate, "created_at", ""))
+    entry = _event_ts(md.get("tool_entry_ts")) \
+        or _event_ts(getattr(candidate, "confirmed_at", "")) \
+        or _event_ts(getattr(candidate, "created_at", ""))
+    if created is None or entry is None:
+        return base, 0, ""
+    _now = now if now is not None else pd.Timestamp(
+        datetime.now(timezone.utc)).tz_localize(None)
+    m_base = float(TF_MINUTES[base])
+    # candles printed AFTER the tool was drawn = the tool's right edge
+    outside = (_now - entry).total_seconds() / 60.0 / m_base
+    if outside <= LIFECYCLE_SWITCH_AFTER_BARS:
+        return base, int(max(0.0, outside)), ""
+    age_min = max(0.0, (_now - created).total_seconds() / 60.0)
+    view = base
+    for _tf in LIFECYCLE_VIEW_LADDER.get(base, []):
+        _m = float(TF_MINUTES.get(_tf, 0) or 0)
+        if _m > 0 and age_min / _m <= LIFECYCLE_MAX_VIEW_BARS:
+            view = _tf
+            break
+    else:
+        _ladder = LIFECYCLE_VIEW_LADDER.get(base, [])
+        view = _ladder[-1] if _ladder else base
+    if view == base:
+        return base, int(outside), ""
+    note = (
+        f"🕒 پس از خروج {_fa_num(int(outside))} کندل "
+        f"{_TF_FA.get(base, base.upper())} "
+        f"از ابزار، این پوزیشن در تایم فریم {_TF_FA.get(view, view.upper())} "
+        "نمایش داده شده است.\n"
+        "ابزار روی محور زمان جابه‌جا نشده؛ ورود، استاپ و TPها سر جای اول‌اند "
+        "و حرکت قیمت روی همان ابزار دیده می‌شود."
+    )
+    return view, int(outside), note
+
+
+def _lifecycle_chart_frame(candidate: SignalCandidate, levels: list[float],
+                           now: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
+    """Lifecycle (post-confirmation) chart frame under the 09-20 time-axis law.
+
+    The 09-14 pin («tape = trigger TF, never escalate to make numbers fit»)
+    still governs ALERT and CONFIRMATION charts. Lifecycle renders — TP hits,
+    live updates, final results — obey the newer ruling instead: when the
+    candles have left the tool behind, the SAME anchored tool is re-rendered
+    on a higher TF with a one/two-line Persian note, because sliding the tool
+    along the time axis is exactly what he forbade. A venue that cannot serve
+    the higher frame falls back to the trigger TF WITHOUT a note (honest
+    degradation, never a stall).
+    """
+    from data.fetcher import get_klines
+    from database.repository_v7 import TF_MINUTES
+    base = str(candidate.trigger_timeframe or "15m").lower()
+    view, escaped, note = _lifecycle_view_plan(candidate, now=now)
+    frame = None
+    try:
+        frame = get_klines(candidate.symbol, view, 180, closed_only=False, use_cache=True)
+    except Exception:
+        frame = None
     if frame is None or getattr(frame, "empty", True):
-        return None
-    candidate.metadata["chart_view_tf"] = tf
+        if view == base:
+            return None
+        try:
+            frame = get_klines(candidate.symbol, base, 180, closed_only=False, use_cache=True)
+        except Exception:
+            frame = None
+        if frame is None or getattr(frame, "empty", True):
+            return None
+        view, escaped, note = base, 0, ""
+    candidate.metadata["chart_view_tf"] = view
+    candidate.metadata["chart_view_escaped"] = int(escaped)
+    candidate.metadata["chart_view_note"] = note
+    m_base = float(TF_MINUTES.get(base, 15) or 15)
+    m_view = float(TF_MINUTES.get(view, m_base) or m_base)
+    candidate.metadata["chart_tf_scale"] = (m_base / m_view) if m_view else 1.0
     return frame
 
 
@@ -3340,13 +3511,18 @@ def send_trade_close_event(event: dict) -> bool:
         f"━━━━━━━━━━━━━━━━━━\n📍 نتیجه: <b>{result_fa}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>"
     )
+    _view_note = ""
     try:
         candidate = _event_chart_candidate(event)
         ladder = (candidate.metadata or {}).get("target_ladder") or {}
         frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, *(ladder.get("targets") or []), (candidate.metadata or {}).get("current_trailing_sl", 0)])
         chart = generate_chart(frame, candidate, confirmed=True) if frame is not None else None
+        _view_note = str((candidate.metadata or {}).get("chart_view_note") or "")
     except Exception:
         chart = None
+    if _view_note:
+        text = text.replace("📌 <b>VIVAMON-Labs-Pro</b>",
+                            f"{_view_note}\n📌 <b>VIVAMON-Labs-Pro</b>")
     _ph, _tm = _post_chart_then_text(
         chart, text, target, reply_to=reply_id,
         label=_chart_label(symbol=str(event.get("symbol") or ""),
@@ -3537,8 +3713,16 @@ def _event_chart_candidate(event: dict) -> SignalCandidate:
         },
         "current_trailing_sl": float(event.get("sl") or event.get("new_sl") or 0),
         "hit_index": int(event.get("hit_index") or 0),
+        # the tool's real time anchors: where the entry candle was and when
+        # the tool was drawn — the renderer keeps both fixed (09-20 law).
+        "tool_entry_ts": str(event.get("entry_filled_at")
+                             or event.get("confirmed_at") or ""),
     })
-    # The lifecycle chart stays on the position's own trigger timeframe.
+    if not cand.metadata.get("tool_anchor_ts"):
+        cand.metadata["tool_anchor_ts"] = str(event.get("confirmed_at")
+                                              or event.get("entry_filled_at") or "")
+    # The trade tape starts on the position's own trigger timeframe; the
+    # 09-20 law may step the DISPLAY TF up from here when candles outrun it.
     if str(event.get("trigger_timeframe") or ""):
         cand.trigger_timeframe = str(event["trigger_timeframe"])
     return cand
@@ -3615,14 +3799,21 @@ def send_ladder_event(event: dict) -> bool:
             f"• اثر نهایی بر کل مارجین: <b>{float(event.get('realized_margin_roi_pct', 0)):+.2f}%</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>"
         )
+    _view_note = ""
     try:
         candidate = _event_chart_candidate(event)
         ladder = (candidate.metadata or {}).get("target_ladder") or {}
         frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, *(ladder.get("targets") or []), (candidate.metadata or {}).get("current_trailing_sl", 0)])
         chart = generate_chart(frame, candidate, confirmed=True) if frame is not None else None
+        # Viva 09-20 (verbatim): TP charts may show the move on a higher TF
+        # and explain it in one or two lines. Tool never slides.
+        _view_note = str((candidate.metadata or {}).get("chart_view_note") or "")
     except Exception as exc:
         print(f"Live target chart warning {event.get('signal_id')}: {exc}")
         chart = None
+    if _view_note:
+        text = text.replace("📌 <b>VIVAMON-Labs-Pro</b>",
+                            f"{_view_note}\n📌 <b>VIVAMON-Labs-Pro</b>")
     _ttl = f"هدف {kind[2:]} زده شد" if kind.startswith("TP") else "استاپ / تریل"
     _ph, _tm = _post_chart_then_text(
         chart, text, target, reply_to=reply_id,

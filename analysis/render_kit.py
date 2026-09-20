@@ -43,6 +43,23 @@ def detect_zones(df: pd.DataFrame, direction: str,
     hi = df["high"].to_numpy(float)
     lo = df["low"].to_numpy(float)
     cl = df["close"].to_numpy(float)
+    # Viva 09-20 time-axis law: every drawing command carries the TIMESTAMP of
+    # its origin bar, never only a bar index. The renderer anchors zones by
+    # time — an old tool must not slide along the time axis when candles
+    # outrun it («ابزار روی محور تاریخ و زمان حرکت میکنه»).
+    try:
+        _ts_col = [str(x) for x in df["timestamp"].tolist()] \
+            if "timestamp" in df.columns else [str(x) for x in df.index]
+    except Exception:
+        _ts_col = [""] * n
+
+    def _ts_at(idx: int) -> str:
+        if not _ts_col:
+            return ""
+        try:
+            return _ts_col[max(0, min(int(idx), len(_ts_col) - 1))]
+        except Exception:
+            return ""
 
     def _overlaps_entry(b: float, t: float) -> bool:
         return not (t < entry_bottom - 0.3 * atr or b > entry_top + 0.3 * atr)
@@ -58,7 +75,8 @@ def detect_zones(df: pd.DataFrame, direction: str,
                for z in zones):
             return
         zones.append({"kind": kind, "bottom": float(bottom),
-                      "top": float(top), "x0": int(x0), "bias": bias})
+                      "top": float(top), "x0": int(x0), "bias": bias,
+                      "ts0": _ts_at(x0)})
 
     # ── FVG / IFVG: three-candle imbalances, fresh first ─────────────────
     start = max(2, n - 90)
@@ -308,7 +326,18 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
             rhi = min((float(p["price"]) for p in ph[-8:]), default=None)
             rlo = max((float(p["price"]) for p in pl[-8:]), default=None)
             if rhi and rlo and rhi - rlo >= 2.2 * atr and rlo <= last <= rhi:
-                out.append({"type": "RANGE", "hi": rhi, "lo": rlo})
+                # Viva 09-20 time-axis law: the range box is anchored to the
+                # oldest tested pivot's timestamp, never to the live candle.
+                _rx = min([int(p.get("index", 0)) for p in ph[-8:]]
+                          + [int(p.get("index", 0)) for p in pl[-8:]],
+                          default=0)
+                try:
+                    _rts = (str(df["timestamp"].iloc[max(0, min(_rx, len(df) - 1))])
+                            if "timestamp" in df.columns else "")
+                except Exception:
+                    _rts = ""
+                out.append({"type": "RANGE", "hi": rhi, "lo": rlo,
+                            "x0": int(max(0, _rx)), "ts0": _rts})
     except Exception:
         pass
     return out[:3]
@@ -320,12 +349,40 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
     trigger TF, plus higher-TF zones so a 15m setup knows it stands under a
     4h supply («اینجوری ستاپ اشتباه نمیکنه»)."""
     md = candidate.metadata
+    # Viva 09-20 time-axis law: the tool's origin timestamp is stamped ONCE,
+    # at the moment the tool is drawn (the same 55-bar window the renderer
+    # paints), and never re-stamped later — so every re-render puts the tool
+    # back on the exact same time coordinate instead of sliding it right.
+    try:
+        if not md.get("tool_anchor_ts") and "timestamp" in trigger_df.columns \
+                and len(trigger_df):
+            md["tool_anchor_ts"] = str(
+                trigger_df["timestamp"].iloc[max(0, len(trigger_df) - 55)])
+    except Exception:
+        pass
     md["render_zones"] = detect_zones(
         trigger_df, getattr(candidate, "direction", ""),
         float(getattr(candidate, "entry_zone_bottom", 0) or 0),
         float(getattr(candidate, "entry_zone_top", 0) or 0))
     pats = detect_patterns(trigger_df.tail(170))
     md["render_patterns"] = pats
+    # broken legs need a TIME for their break bar too: on a higher display TF
+    # a bare bar index would land the break marker on the wrong candle.
+    try:
+        _slice = trigger_df.tail(170).reset_index(drop=True)
+        _sts = [str(x) for x in _slice["timestamp"].tolist()] \
+            if "timestamp" in _slice.columns else []
+        if _sts:
+            for _pp in pats:
+                for _ln in (_pp.get("lines") or []):
+                    _bx = _ln.get("break_x")
+                    if _bx is not None and not _ln.get("break_ts"):
+                        try:
+                            _ln["break_ts"] = _sts[max(0, min(int(_bx), len(_sts) - 1))]
+                        except Exception:
+                            pass
+    except Exception:
+        pass
     md["render_line_watch"] = [
         {"side": l.get("side"), "slope": l.get("slope"),
          "intercept": l.get("intercept"),
@@ -353,6 +410,9 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
                 "bottom": _ye - _band, "top": _ye + _band,
                 "x0": max(0, int(_xe) - 6),
                 "bias": "DEMAND" if _p["type"] == "FLAG_BULL" else "SUPPLY",
+                "ts0": str(trigger_df["timestamp"].iloc[
+                    max(0, min(int(_xe) - 6, len(trigger_df) - 1))])
+                if "timestamp" in trigger_df.columns and len(trigger_df) else "",
             }] + list(md["render_zones"])
     base = detect_base(trigger_df)
     if base:

@@ -35,8 +35,12 @@ BAND_K_FIRST = 0.40          # legacy default kept for v1 readers / tests
 BAND_K_NEXT = 0.50
 VOL_STOP_ATR_N = 1.0         # base volatility stop = recent swing ∓ n×ATR
 SWING_BARS = 5
-SMART_EXIT_RED = 3           # ≥3 concurrent reversal signs → close ALL remainder
-SMART_EXIT_ORANGE = 2        # 2 signs → warning only, never a close (spec §7/§9)
+# Viva 09-19/20 protection ruling (verbatim): signs must never «رد بشه و فقط
+# هشدار بمونه» — TWO concurrent signs close ALL remainder at that closed
+# candle's close; ONE sign is a short warning. Runtime (repository monitor)
+# always closed on score ≥ 2; these level constants now say the same thing.
+SMART_EXIT_RED = 2           # ≥2 concurrent reversal signs → close ALL remainder
+SMART_EXIT_ORANGE = 1        # 1 sign → short warning only, never a close
 
 
 def entry_touched(entry: float, candle_high: float, candle_low: float) -> bool:
@@ -233,10 +237,11 @@ def smart_exit_scan(direction: str, candles: List[Dict], state: Optional[Dict] =
     """Reversal-pressure score on the monitor TF (spec §7/§9, Viva 09-19).
 
     Armed only AFTER the first target prints (profit-protection phase). Each
-    independent sign scores +1; two signs = ORANGE (warning only, no close),
-    three or more = RED (close ALL remaining size at that closed candle's
-    close, with the explainable reason list). A lone doji/pin never closes a
-    position — the small TF is noisy (spec §15.3). Exchange klines carry no
+    independent sign scores +1; ONE sign = ORANGE (short warning, no close),
+    TWO or more = RED (close ALL remaining size at that closed candle's
+    close, with the explainable reason list) — Viva 09-19/20 ruling: in the
+    protection phase signs never stay warn-only. A lone doji/pin never closes
+    a position — the small TF is noisy (spec §15.3). Exchange klines carry no
     taker-side split, so selling/buying pressure is proxied by directional
     candles + volume surge + consecutive closes (spec §8 composite, subset).
     """

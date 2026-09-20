@@ -166,7 +166,7 @@ def test_smart_exit_disarmed_before_tp1():
     assert scan["level"] == "" and scan["score"] == 0
 
 
-def test_smart_exit_red_needs_three_concurrent_signs():
+def test_smart_exit_red_closes_on_two_or_more_signs():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
     armed = advance_ladder(p, 102.1, 100.1)["state"]
     win = _flat_window()
@@ -180,7 +180,9 @@ def test_smart_exit_red_needs_three_concurrent_signs():
     assert len(scan["reasons"]) >= 3
 
 
-def test_smart_exit_orange_warns_but_never_closes():
+def test_smart_exit_two_signs_close_not_warn():
+    """Viva 09-19/20 (verbatim): in the protection phase two concurrent
+    reversal signs must CLOSE the remainder — never «فقط هشدار»."""
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
     armed = advance_ladder(p, 102.1, 100.1)["state"]
     win = _flat_window()
@@ -189,7 +191,28 @@ def test_smart_exit_orange_warns_but_never_closes():
     win[-1] = {"open": 100.6, "high": 100.7, "low": 99.3,
                "close": 99.9, "volume": 400.0}
     scan = smart_exit_scan("LONG", win, armed)
-    assert scan["level"] == "ORANGE" and scan["score"] == 2
+    assert scan["score"] == 2
+    assert scan["level"] == "RED"
+
+
+def test_smart_exit_single_sign_only_warns():
+    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110)
+    armed = advance_ladder(p, 102.1, 100.1)["state"]
+    win = _flat_window()
+    win[-1] = {"open": 100.1, "high": 100.15, "low": 99.9,
+               "close": 99.95, "volume": 400.0}
+    scan = smart_exit_scan("LONG", win, armed)
+    assert scan["level"] == "ORANGE" and scan["score"] == 1
+
+
+def test_smart_exit_single_sign_short_mirror():
+    p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01}, 90)
+    armed = advance_ladder(p, 98.1, 97.5)["state"]
+    win = _flat_window()
+    win[-1] = {"open": 99.9, "high": 100.1, "low": 99.85,
+               "close": 100.05, "volume": 400.0}
+    scan = smart_exit_scan("SHORT", win, armed)
+    assert scan["level"] == "ORANGE" and scan["score"] == 1
 
 
 def test_smart_exit_short_mirror_red():
