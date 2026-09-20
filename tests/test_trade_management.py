@@ -7,6 +7,26 @@ from analysis.trade_management import (
 )
 
 
+
+def _forced_profile(value: bool):
+    """Viva 09-20: «مدیریت ویوا» is the live default, so tests that exercise
+    «مدیریت سرمایه استاندارد» must pin the flag explicitly."""
+    import contextlib, config, analysis.risk as _risk
+
+    @contextlib.contextmanager
+    def _cm():
+        _targets = [config.get_settings(), _risk.SETTINGS]
+        _saved = [(t, getattr(t, "viva_management_profile", False)) for t in _targets]
+        try:
+            for t in _targets:
+                object.__setattr__(t, "viva_management_profile", value)
+            yield
+        finally:
+            for t, v in _saved:
+                object.__setattr__(t, "viva_management_profile", v)
+
+    return _cm()
+
 def test_entry_fill_requires_a_real_ohlc_touch():
     assert entry_touched(100.0, 101.0, 99.9)
     assert not entry_touched(100.0, 101.0, 100.01)
@@ -266,21 +286,24 @@ def test_smart_exit_short_mirror_red():
 def test_money_management_refine_cost_inside_risk_and_wide_stop_penalty():
     # Viva 09-19/20 refine: fees+slippage live inside effective risk, wide
     # stops shrink the risk budget, degraded RR trims leverage.
+    # (This is «مدیریت سرمایه استاندارد» math → pin the profile flag off;
+    #  «مدیریت ویوا» is the live default since 09-20.)
     from analysis.risk import calculate_position
     acc = 10_000.0
-    tight = calculate_position(100.0, 98.0, "LONG", 8, acc, "SWING", 20, 102.0, 106.0)
-    assert tight is not None
-    # effective risk (stop + round-trip cost) must exceed the bare stop risk
-    assert tight["eff_risk_pct"] > tight["risk_pct"]
-    assert abs(tight["cost_pct"] - 0.18) < 1e-9
-    wide = calculate_position(100.0, 78.0, "LONG", 8, acc, "SWING", 20, 104.0, 110.0)
-    assert wide is not None
-    assert wide["position_size"] < tight["position_size"] / 3.0   # 22% stop → ×0.35
-    absurd = calculate_position(100.0, 55.0, "LONG", 8, acc, "SWING", 20, 104.0, 110.0)
-    assert absurd is None                                          # >30% = unsizeable
-    degraded = calculate_position(100.0, 98.0, "LONG", 8, acc, "SWING", 20, 100.5, 106.0)
-    assert degraded is not None
-    assert degraded["leverage"] <= 2                               # rr1 < 1 trim
+    with _forced_profile(False):
+        tight = calculate_position(100.0, 98.0, "LONG", 8, acc, "SWING", 20, 102.0, 106.0)
+        assert tight is not None
+        # effective risk (stop + round-trip cost) must exceed the bare stop risk
+        assert tight["eff_risk_pct"] > tight["risk_pct"]
+        assert abs(tight["cost_pct"] - 0.18) < 1e-9
+        wide = calculate_position(100.0, 78.0, "LONG", 8, acc, "SWING", 20, 104.0, 110.0)
+        assert wide is not None
+        assert wide["position_size"] < tight["position_size"] / 3.0   # 22% stop → ×0.35
+        absurd = calculate_position(100.0, 55.0, "LONG", 8, acc, "SWING", 20, 104.0, 110.0)
+        assert absurd is None                                          # >30% = unsizeable
+        degraded = calculate_position(100.0, 98.0, "LONG", 8, acc, "SWING", 20, 100.5, 106.0)
+        assert degraded is not None
+        assert degraded["leverage"] <= 2                               # rr1 < 1 trim
 
 
 def test_protection_phase_two_signs_close_semantics():
@@ -314,9 +337,19 @@ def test_viva_management_profile_is_separate_and_matches_the_table():
     assert viva_position(50.0, "LONG")["margin"] == 50.0
     assert viva_position(2500.0, "LONG")["margin"] == 50.0
     assert {viva_position(p, "LONG")["leverage"] for p in (1.0, 20.0, 500.0)} == {20}
-    # the standard engine is untouched while the profile flag is off
-    std = calculate_position(1.381, 1.462, "SHORT", 8, 1000, "DAYTRADE", 20, 1.34, 1.31)
-    assert std and std.get("profile") != "VIVA"
+    # Viva 09-20: «مدیریت سرمایه جدید ویوا اعمال بشه» → the profile is the
+    # LIVE default and calculate_position routes through it…
+    from analysis.risk import viva_management_profile_enabled
+    assert viva_management_profile_enabled() is True
+    routed = calculate_position(1.381, 1.462, "SHORT", 8, 1000, "DAYTRADE", 20, 1.34, 1.31)
+    assert routed and routed.get("profile") == "VIVA" and routed["margin"] == 30.0
+    assert routed["leverage"] == 20
+    # …and the STANDARD engine («مدیریت سرمایه استاندارد») stays intact behind
+    # the switch — same inputs, flag off, score/quality sizing comes back.
+    with _forced_profile(False):
+        std = calculate_position(1.381, 1.462, "SHORT", 8, 1000, "DAYTRADE", 20, 1.34, 1.31)
+        assert std and std.get("profile") != "VIVA" and "eff_risk_pct" in std
+    assert viva_management_profile_enabled() is True
     # and the hazard of a 20× table against a wide stop is REPORTED
     v = viva_position(1.381, "SHORT", 1.462)
     assert v["liq_distance_pct"] == 5.0 and "لیکوئید" in v["liq_warning_fa"]

@@ -41,6 +41,7 @@ from bot.messages_v7 import (
     purge_pro_watch_post,
     send_tp1_event,
     send_ladder_event,
+    send_reentry_note,
     send_trailing_note,
     send_trade_result,
     send_trade_close_event,
@@ -1077,6 +1078,10 @@ def _publish_trade_events(events) -> int:
             # Viva 09-19: short trailing lifecycle notes (main + journal
             # mirror, no chart) — never spam per-candle micro-moves.
             send_trailing_note(event)
+        elif kind == "REENTRY_SIGNAL":
+            # Viva 09-20 (round 9): the pullback after a protected exit is a
+            # fresh entry on the same code (banked TP1 stays locked).
+            send_reentry_note(event)
         elif kind == "NO_FILL":
             send_no_fill_event(event)
         elif kind == "CLOSED":
@@ -1089,7 +1094,15 @@ def _publish_trade_events(events) -> int:
 
 def monitor_confirmed_results() -> int:
     with _EXECUTION_PUBLISH_LOCK:
-        return _publish_trade_events(monitor_confirmed_trades())
+        events = list(monitor_confirmed_trades())
+        # Viva 09-20: one bounded pass for re-entry signals on ladders whose
+        # remainder was closed by the protection phase (pullback entries).
+        try:
+            from database.repository_v7 import reentry_scan_events
+            events.extend(reentry_scan_events())
+        except Exception as exc:
+            print(f"reentry scan skipped: {exc}")
+        return _publish_trade_events(events)
 
 
 def run_realtime_execution_cycle() -> int:

@@ -16,7 +16,8 @@ import pandas as pd
 
 from analysis.models import SignalCandidate, generate_viva_public_code
 from analysis.risk import build_money_management
-from analysis.trade_management import build_ladder, advance_ladder, entry_touched, band_trailing, smart_exit_scan
+from analysis.trade_management import (build_ladder, advance_ladder, entry_touched,
+                                       band_trailing, smart_exit_scan, reentry_setup)
 from config import get_settings
 from data.fetcher import get_klines
 from database import db as legacy_db
@@ -1106,6 +1107,98 @@ def repair_legacy_tp1_misclassified_results() -> int:
     return repaired
 
 
+
+def reentry_scan_events(hours: int = 24) -> List[Dict]:
+    """Viva 09-20 (round 9) — fresh entry signal on the pullback.
+
+    A position closed by the protection phase (SMART_EXIT) keeps its TP1
+    profit locked; if price then merely pulls back to the first-target area
+    and a closed candle confirms, the ladder emits ONE re-entry signal for
+    the same code. Bounded: only ladders armed in the last ``hours`` and not
+    yet signalled are inspected, so a closed trade can never spam.
+    """
+    events: List[Dict] = []
+    p = legacy_db._ph()
+    try:
+        with legacy_db.db_cursor() as cursor:
+            cursor.execute(f"""
+                SELECT signal_id, symbol, direction, entry, sl_original, leverage, margin_usd,
+                       trade_style, source, strategy_fa, strategy_version, pro_message_id,
+                       target_state_json, public_code, trigger_timeframe, closed_at
+                FROM signals
+                WHERE status='CLOSED'
+                  AND closed_at IS NOT NULL
+                  AND target_state_json LIKE '%"reentry_armed": true%'
+                  AND target_state_json NOT LIKE '%"reentry_signaled": true%'
+                  AND strategy_version={p}
+                ORDER BY closed_at DESC LIMIT 40
+            """, (SETTINGS.strategy_version,))
+            rows = cursor.fetchall()
+        if not rows:
+            return events
+        cutoff = _now() - timedelta(hours=int(hours or 24))
+        for row in rows:
+            (signal_id, symbol, direction, entry, original_sl, leverage, margin, style,
+             source, strategy_fa, strategy_version, pro_message_id, ladder_json,
+             public_code, trigger_timeframe, closed_at) = row
+            try:
+                closed_dt = pd.to_datetime(closed_at).to_pydatetime() if closed_at is not None else None
+            except Exception:
+                closed_dt = None
+            if closed_dt is None or closed_dt < cutoff:
+                continue
+            try:
+                ladder = json.loads(ladder_json or "{}")
+            except Exception:
+                continue
+            trade_tf = str(trigger_timeframe or "15m").lower()
+            timeframe = monitor_tf_for(trade_tf)
+            frame = get_klines(symbol, timeframe, 200, closed_only=True, use_cache=True)
+            if frame is None or frame.empty:
+                continue
+            ts = pd.to_datetime(frame["timestamp"])
+            if getattr(ts.dt, "tz", None) is not None:
+                ts = ts.dt.tz_convert("UTC").dt.tz_localize(None)
+            window = frame.loc[ts > (_naive_timestamp(closed_at) or ts.iloc[0])]
+            if len(window) < 3:
+                continue
+            candles = [{"open": float(r["open"]), "high": float(r["high"]),
+                        "low": float(r["low"]), "close": float(r["close"]),
+                        "volume": float(r["volume"] or 0.0)} for _, r in window.iterrows()]
+            atr = 0.0
+            try:
+                atr = float((frame["high"].tail(14) - frame["low"].tail(14)).mean() or 0.0)
+            except Exception:
+                atr = 0.0
+            setup = reentry_setup(direction, candles, ladder, atr=atr)
+            if not setup:
+                continue
+            ladder["reentry_signaled"] = True
+            ladder["reentry_levels"] = {k: float(setup[k]) for k in ("entry", "sl", "tp1", "tp2")}
+            with legacy_db.db_cursor() as cursor:
+                cursor.execute(f"UPDATE signals SET target_state_json={p} WHERE signal_id={p}",
+                               (json.dumps(ladder, ensure_ascii=False), signal_id))
+                cursor.execute(f"UPDATE active_signals SET target_state_json={p} WHERE signal_id={p}",
+                               (json.dumps(ladder, ensure_ascii=False), signal_id))
+            events.append({
+                "event": "REENTRY_SIGNAL", "signal_id": signal_id, "symbol": symbol,
+                "direction": direction, "style": style, "source": source,
+                "strategy_fa": strategy_fa, "strategy_version": strategy_version,
+                "pro_message_id": int(pro_message_id or 0), "public_code": public_code,
+                "trigger_timeframe": trade_tf, "monitor_tf": timeframe,
+                "entry": float(setup["entry"]), "sl": float(setup["sl"]),
+                "tp1": float(setup["tp1"]), "tp2": float(setup["tp2"]),
+                "entry_filled_at": "", "confirmation_sent": True,
+                "reason_fa": str(setup.get("note_fa") or ""),
+                "banked_tp1": (ladder.get("targets") or [None])[max(0, int(ladder.get("hit_index") or 1) - 1)],
+                "hit_index": int(ladder.get("hit_index") or 0),
+                "live_price": float(candles[-1]["close"]),
+                "event_at": str(window.iloc[-1].get("timestamp") or ""),
+            })
+    except Exception as exc:  # fail-open: re-entry is an opportunity, not a gate
+        print(f"reentry scan error: {exc}")
+    return events
+
 def monitor_confirmed_trades() -> List[Dict]:
     """Process each closed candle chronologically; no historical `.any()` shortcuts."""
     truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
@@ -1287,6 +1380,8 @@ def monitor_confirmed_trades() -> List[Dict]:
                         # the monitor frame's confirmed close.
                         _fast_tf = ""
                         _fast_reason = ""
+                        _fast_pin_tf = ""
+                        _fast_pin_reason = ""
                         try:
                             _fast_tf = fast_watch_tf_for(trade_tf)
                             _fast_reason = ""
@@ -1306,6 +1401,15 @@ def monitor_confirmed_trades() -> List[Dict]:
                                     if int(_fscan.get("score") or 0) >= 1:
                                         _fast_reason = "; ".join(
                                             list(_fscan.get("reasons") or [])[:2])
+                                    # Viva 09-20 (round 9, verbatim): «اولین
+                                    # پین‌بارِ بسته‌شدهٔ معکوس روی ۵ دقیقه در
+                                    # رنج TP1 تا TP2 = خروج فوری باقی‌مانده» —
+                                    # the closure of the fast frame is the exit
+                                    # itself (not just the orange preview).
+                                    if _fscan.get("reverse_pin"):
+                                        _fast_pin_tf = _fast_tf
+                                        _fast_pin_reason = "; ".join(
+                                            list(_fscan.get("reasons") or [])[:2])
                             if _fast_reason:
                                 ladder["fast_watch_tf"] = _fast_tf
                                 ladder["fast_watch_reason_fa"] = _fast_reason
@@ -1318,8 +1422,9 @@ def monitor_confirmed_trades() -> List[Dict]:
                         # close ALL remainder at this monitor candle's close,
                         # even before price returns to TP1. One sign = short
                         # warning only; before TP1 the structural stop rules.
-                        _pin_closed = any("پین‌بار" in str(_r)
-                                          for _r in (scan.get("reasons") or []))
+                        _pin_closed = (any("پین‌بار" in str(_r)
+                                           for _r in (scan.get("reasons") or []))
+                                       or bool(_fast_pin_reason))
                         if int(scan.get("score") or 0) >= 2 or _pin_closed:
                             _hit = int(ladder.get("hit_index") or 0)
                             _wts = [float(w) for w in (ladder.get("weights") or [])]
@@ -1334,10 +1439,18 @@ def monitor_confirmed_trades() -> List[Dict]:
                             ladder["closed"] = True
                             ladder["close_reason"] = "SMART_EXIT"
                             _reasons = list(scan.get("reasons") or [])
+                            if _fast_pin_reason and not any(
+                                    "پین‌بار" in str(_r) for _r in _reasons):
+                                _reasons.insert(0, "پین‌بار معکوس بسته‌شده در تایم سریع "
+                                                   f"{_fast_pin_tf} (رنج TP1→TP2): "
+                                                   f"{_fast_pin_reason}")
                             if _pin_closed and len(_reasons) < 2:
                                 _reasons.insert(0, "پین‌بار معکوس تأییدشده در تایم مانیتور "
                                                    "(«مدیریت ویوا» §۶٫۱: خروج باقی‌مانده)")
                             ladder["exit_reasons_fa"] = _reasons
+                            # Viva 09-20: the banked TP1 profit stays locked;
+                            # a pullback afterwards is a fresh entry signal.
+                            ladder["reentry_armed"] = True
                         elif ((int(scan.get("score") or 0) == 1 or _fast_reason)
                                 and int(ladder.get("warned_band") or 0) != int(ladder.get("hit_index") or 0)):
                             # «مدیریت ویوا» §6.1: the orange warning precedes the

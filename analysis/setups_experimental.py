@@ -560,7 +560,9 @@ def detect_trendline_breakout(bundle: MarketBundle, style: str) -> Optional[Sign
             return None
         # structural targets (first opposing supply/demand) from the engine;
         # relax only the CREATION gate; confirm-time floors still apply.
-        candidate.mandatory_gates["rr"] = candidate.rr_tp1 >= 1.0 and candidate.rr_tp2 >= 1.5
+        # Viva 09-20: R:R never gates an entry (reported only) — the TF
+        # distance ceiling and structure own the targets.
+        candidate.mandatory_gates["rr"] = True
         # For a validated trend/triangle/channel event, HTF bias is context and
         # not a veto: the break itself may be the reversal. The symbol already
         # passed the dynamic-liquidity universe, so venue-day turnover is not
@@ -829,7 +831,8 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         # real opposing context pivots, otherwise this is an alert-only chart
         # with no executable trade and must not be published.
         ctx_df = bundle.get(ctx_tf)
-        targets = _structural_targets(ctx_df, direction, entry, sl, require_real_levels=True) if ctx_df is not None else None
+        targets = (_structural_targets(ctx_df, direction, entry, sl,
+                                       require_real_levels=True) if ctx_df is not None else None)
         if not targets:
             continue
         tp1, tp2 = float(targets["tp1"]), float(targets["tp2"])

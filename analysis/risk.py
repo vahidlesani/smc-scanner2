@@ -67,9 +67,18 @@ VIVA_MARGIN_TABLE = ((5.0, 30.0, 20), (50.0, 40.0, 20), (float("inf"), 50.0, 20)
 
 
 def viva_management_profile_enabled() -> bool:
+    """True while «مدیریت ویوا» is the active profile (Viva 09-20: ON).
+
+    Reads the live settings object; falls back to re-reading config so a
+    runtime env flag (VIVA_MANAGEMENT_PROFILE) is always honoured.
+    """
     try:
-        from config import SETTINGS
         return bool(getattr(SETTINGS, "viva_management_profile", False))
+    except Exception:
+        pass
+    try:
+        from config import get_settings
+        return bool(getattr(get_settings(), "viva_management_profile", False))
     except Exception:
         return False
 

@@ -247,6 +247,126 @@ def evaluate_confirmation(
                 & (after["high"] >= candidate.entry_zone_bottom)
             ).any()
         )
+    # ── Viva 09-20: pattern containment + deep-pullback law ───────────────
+    # «الان همه سیگنال‌هایی که استاپ شدند قیمت هنوز داخل وج یا کانال یا مثلث
+    # قرار داره اما سیگنال تایید شده .. این اشتباهه» → a BREAKOUT confirmation
+    # must have a close OUTSIDE the pattern's own edges (projected to this bar).
+    # «درصورتی که پولبک فقط روی ترندلاین/ضلع/ناحیه انجام بشه یا حتی با شدو داخل
+    # بره و کلوزش دوباره بیرون باشه، دیگر منتظر شکست نباید باشیم» → a close back
+    # outside the pattern keeps the candle-confirmation lane alive with no new
+    # break. But «اگر قیمت به زیر/بالای ناحیهٔ شکست وارد شده باشد دوباره باید
+    # بریک و کلوز بدهد» → a DEEP re-entry (close >0.5×ATR inside) demands a fresh
+    # break+close and never a bare pin at the zone. Internal entries (entering
+    # from inside the channel/side-range on candle confirmation) are exempt by
+    # design and carry their own structural stop.
+    _md20 = candidate.metadata or {}
+    _is_internal = str(_md20.get("viva_entry_type") or "BREAKOUT").upper() == "INTERNAL"
+    _row20 = closed_df.iloc[-1]
+    _close20 = float(_row20["close"])
+    _atr20 = float((closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0) or _atr
+    _band20 = _md20.get("pattern_band") or {}
+    _band_lo20 = _band_hi20 = None
+    if _band20 and float(_band20.get("tf_minutes") or 0) > 0:
+        try:
+            _ts_last20 = pd.Timestamp(str(_band20.get("ts_last")))
+            _ts_now20 = pd.Timestamp(str(_row20["timestamp"]))
+            _bars20 = max(0.0, (_ts_now20 - _ts_last20).total_seconds() / 60.0
+                          / float(_band20["tf_minutes"]))
+            _band_lo20 = float(_band20["lo"]) + float(_band20.get("slope_lo") or 0.0) * _bars20
+            _band_hi20 = float(_band20["hi"]) + float(_band20.get("slope_hi") or 0.0) * _bars20
+        except Exception:
+            _band_lo20 = _band_hi20 = None
+    # ── Viva 09-20 (round 9) — INTERNAL-ENTRY lane ───────────────────────
+    # Verbatim: «داخل کانال یا رنجِ جانبی فقط از کف مجاز به لانگ هستیم با
+    # تأیید کندل و استاپ پشت کانال با بافر، و اهداف زیر سقف کانال؛ شورت هم
+    # آینهٔ همین.» So an entry that happens INSIDE a channel/side-range is a
+    # legitimately different trade: it is taken only from the correct edge,
+    # it needs a closed confirmation candle, its stop lives behind the
+    # channel edge (with buffer) and its targets stay UNDER the channel
+    # ceiling (LONG) / ABOVE the channel floor (SHORT). Marked INTERNAL so the
+    # breakout-containment gate exempts it by design.
+    _internal_plan = None
+    if (_band_lo20 is not None and _band_hi20 is not None
+            and str(_md20.get("viva_entry_type") or "").upper() != "INTERNAL"):
+        try:
+            _w20 = max(_band_hi20 - _band_lo20, 1e-12)
+            _o20 = float(_row20["open"])
+            _h20 = float(_row20["high"])
+            _l20 = float(_row20["low"])
+            _body20 = abs(_close20 - _o20)
+            _rng20 = max(_h20 - _l20, 1e-12)
+            _prev_o20 = float(closed_df.iloc[-2]["open"])
+            _prev_c20 = float(closed_df.iloc[-2]["close"])
+            _buf20i = max(0.35 * _atr20, 0.0015 * _close20)
+            if candidate.direction == "LONG" and _close20 <= _band_lo20 + 0.30 * _w20:
+                _bull_pin = ((min(_o20, _close20) - _l20) >= 2.0 * max(_body20, 1e-12)
+                             and (_h20 - _close20) <= 0.35 * _rng20)
+                _bull_engulf = (_prev_c20 < _prev_o20 and _close20 > _o20
+                                and _o20 <= _prev_c20 and _close20 >= _prev_o20)
+                _bull_close = _close20 > _o20 and _close20 > _prev_c20
+                if _bull_pin or _bull_engulf or _bull_close:
+                    _internal_plan = {
+                        "direction": "LONG", "entry": _close20,
+                        "sl": _band_lo20 - _buf20i,
+                        "tp1": _band_lo20 + 0.55 * _w20,
+                        "tp2": _band_hi20 - _buf20i,
+                        "pattern": str(_band20.get("kind") or "RANGE"),
+                    }
+            elif candidate.direction == "SHORT" and _close20 >= _band_hi20 - 0.30 * _w20:
+                _bear_pin = ((_h20 - max(_o20, _close20)) >= 2.0 * max(_body20, 1e-12)
+                             and (_close20 - _l20) <= 0.35 * _rng20)
+                _bear_engulf = (_prev_c20 > _prev_o20 and _close20 < _o20
+                                and _o20 >= _prev_c20 and _close20 <= _prev_o20)
+                _bear_close = _close20 < _o20 and _close20 < _prev_c20
+                if _bear_pin or _bear_engulf or _bear_close:
+                    _internal_plan = {
+                        "direction": "SHORT", "entry": _close20,
+                        "sl": _band_hi20 + _buf20i,
+                        "tp1": _band_hi20 - 0.55 * _w20,
+                        "tp2": _band_lo20 + _buf20i,
+                        "pattern": str(_band20.get("kind") or "RANGE"),
+                    }
+        except Exception:
+            _internal_plan = None
+    if _internal_plan:
+        _md20["viva_entry_type"] = "INTERNAL"
+        _md20["internal_entry"] = {k: (round(v, 10) if isinstance(v, float) else v)
+                                   for k, v in _internal_plan.items()}
+        _md20["internal_entry_note_fa"] = (
+            f"ورود از کف {_internal_plan['pattern']} با تأیید کندل بسته‌شده؛ استاپ پشت "
+            "کانال با بافر و اهداف زیر سقف کانال." if _internal_plan["direction"] == "LONG" else
+            f"ورود از سقف {_internal_plan['pattern']} با تأیید کندل بسته‌شده؛ استاپ بالای "
+            "کانال با بافر و اهداف بالای کف کانال.")
+        candidate.planned_entry = float(_internal_plan["entry"])
+        candidate.sl = float(_internal_plan["sl"])
+        candidate.tp1 = float(_internal_plan["tp1"])
+        candidate.tp2 = float(_internal_plan["tp2"])
+        _is_internal = True
+    if (_band_lo20 is not None and _band_hi20 is not None and not _is_internal):
+        _dir20 = 1.0 if candidate.direction == "LONG" else -1.0
+        _buf20 = 0.10 * _atr20
+        _outside20 = (_close20 >= _band_hi20 + _buf20) if _dir20 > 0 \
+            else (_close20 <= _band_lo20 - _buf20)
+        if not _outside20:
+            return reject("INSIDE_PATTERN_NO_BREAK", (
+                f"قیمت هنوز داخل الگو ({_band20.get('kind')}) است — کلوز "
+                f"{_close20:.8g} داخل باند {_band_lo20:.8g}–{_band_hi20:.8g}؛ "
+                "تأیید فقط با کلوزِ بیرونِ ضلع پایین/بالای الگو (شکست + کلوز) معتبر است."))
+        _md20["pattern_cleared"] = True
+    # deep re-entry: close back beyond the broken line/zone by >0.5×ATR inside
+    _edge20 = _edge if _edge > 0 else _zone_edge
+    _deep20 = False
+    if not _is_internal:
+        _deep20 = (_close20 < _edge20 - 0.5 * _atr20) if candidate.direction == "LONG" \
+            else (_close20 > _edge20 + 0.5 * _atr20)
+    if _deep20:
+        _md20["deep_pullback"] = True
+        _md20["deep_pullback_at"] = str(_row20["timestamp"])[:16]
+    elif _close20 != 0:
+        # price is back on the correct side of the broken edge → the touch/
+        # near-touch pullback lane is open again (no new break required)
+        _md20.pop("deep_pullback", None)
+    candidate.metadata = _md20
     candidate.metadata["touched"] = touched
     if not touched:
         return reject("NO_TOUCH", "قیمت هنوز به لبهٔ ناحیه/خط نرسیده؛ با یک کلوزِ معتبرِ فراتر از لبه تأیید می‌شود.")
@@ -366,6 +486,16 @@ def evaluate_confirmation(
             "Retest انجام شده، اما هنوز نه کندل تکی تأییدی و نه بیس چندکندلی/تایم‌بالاتری "
             "شدنِ Rejection را نساخته‌اند."
         ))
+    # Viva 09-20 (his own OR): after a deep re-entry into the broken zone the
+    # confirmation must come EITHER from a fresh break+close (the fast lane) OR
+    # from a valid closed price-action pattern (Brooks pin/engulf at the zone) —
+    # a bare touch is never enough (that is enforced by trigger_valid below).
+    if candidate.metadata.get("deep_pullback"):
+        candidate.metadata["deep_pullback_note"] = (
+            "پولبک عمیق به ناحیهٔ شکسته — تأیید با کلوزِ معتبرِ کندلی (پرایس‌اکشن) "
+            "یا شکست و کلوز تازه صادر شده است."
+            if (trigger_valid or fast_lane) else
+            "پولبک عمیق به ناحیهٔ شکسته؛ هنوز نه کندل تأییدی و نه شکست تازه.")
 
     # The executable entry is the confirmation close, not the historical POI
     # midpoint. Reject a late confirmation if its real risk/reward has degraded.
@@ -411,25 +541,33 @@ def evaluate_confirmation(
         if candidate.direction == "LONG"
         else (executable_entry - candidate.tp2) / risk
     )
-    # Viva 09-19/20 (SUI 1D case: R:R 0.02/0.03 with a 64%-away stop): a tool
-    # whose targets are a rounding error versus its stop is not a trade.
-    # Hard GEOMETRY sanity — distinct from the RR-veto law, which protects
-    # valid first closes with *degraded but real* ratios.
-    if rr1 < 0.25 or rr2 < 0.50:
-        return reject("DEGENERATE_GEOMETRY", (
-            f"هندسهٔ ابزار بی‌معنی است: TP1={rr1:.2f}R و TP2={rr2:.2f}R نسبت به استاپ؛ "
-            "سناریو فقط به‌صورت هشدار/تحلیل باقی می‌ماند."))
-    if rr1 < SETTINGS.confirm_rr1_floor or rr2 < SETTINGS.confirm_rr2_floor:
-        # Viva 2026-09-14: «اولین کلوز معتبر پشت خط = تأیید؛ مدیریت با خودم»
-        # — an RR floor may never veto a first valid close beyond the line.
-        # The degraded ratio is REPORTED (it rides the confirmed message) and
-        # the chain confirms; retest-lane entries keep the old floor as is.
-        if not candidate.metadata.get("tl_fast_break"):
-            return reject("RR_DEGRADED", (
-                f"تأیید دیر صادر شده و R/R واقعی به {rr1:.2f}R و {rr2:.2f}R کاهش یافته است."
-            ))
-        candidate.metadata["rr_degraded_note"] = (
-            f"R/R پس از کلوزِ تأیید: {rr1:.2f}R و {rr2:.2f}R (تأیید با قانون یک‌کلوز صادر شد؛ مدیریت پوزیشن با معامله‌گر)")
+    # ── Viva 09-20 (verbatim, third time): «هیچ ارتباطی بین اندازه فاصله قیمت
+    # تا استاپ یا تارگت‌ها قرار نده ... من نمی‌خوام فرمول ریسک به ریوارد ...
+    # اصلا اهمیت نداره» → R:R NEVER gates an entry. It is REPORTED only.
+    # The old degraded-ratio rejection is gone; the ratio rides the message.
+    candidate.metadata["rr_readout"] = f"R/R (فقط گزارش): {rr1:.2f}R / {rr2:.2f}R — مبنای تصمیم نیست"
+    # Hard geometry sanity stays, but it no longer speaks the language of R:R
+    # (his stop distance must not define the tool). Two absolute defects are
+    # still rejected: a tool whose whole target span is a rounding error
+    # («ابزار بی‌معنی»), and a stop absurdly far for this timeframe (the SUI
+    # 1D case: a 64%-away invalidation against a 10% daily ceiling).
+    try:
+        from analysis.trade_management import target_distance_cap_pct
+        _cap_abs = executable_entry * target_distance_cap_pct(
+            str(candidate.trigger_timeframe or "15m")) / 100.0
+        _span_frac = abs(float(candidate.tp2) - executable_entry) / max(executable_entry, 1e-12)
+        _sl_frac = risk / max(executable_entry, 1e-12)
+        _atr_abs = float(candidate.metadata.get("atr", 0) or 0) or \
+            float((closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
+        _span_floor = max(0.6 * _atr_abs / max(executable_entry, 1e-12), 0.003)
+        if _span_frac < _span_floor or (_cap_abs > 0 and risk > 3.0 * _cap_abs):
+            return reject("DEGENERATE_GEOMETRY", (
+                f"هندسهٔ ابزار بی‌معنی است: کل مسیر هدف {_span_frac * 100:.2f}% قیمت و "
+                f"استاپ {_sl_frac * 100:.1f}% دورتر از حد معقول این تایم‌فریم "
+                f"(سقف {target_distance_cap_pct(str(candidate.trigger_timeframe or '15m')):.0f}%)؛ "
+                "سناریو فقط به‌صورت هشدار/تحلیل باقی می‌ماند."))
+    except Exception:
+        pass
     candidate.planned_entry = executable_entry
     candidate.rr_tp1 = rr1
     candidate.rr_tp2 = rr2

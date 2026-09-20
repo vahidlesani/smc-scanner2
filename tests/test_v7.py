@@ -149,13 +149,22 @@ class V7ModelTests(unittest.TestCase):
         self.assertEqual(int.from_bytes(image[20:24], "big"), 1530)
 
     def test_money_management_caps_margin(self):
+        # «مدیریت سرمایه استاندارد» math → pin the profile flag off
+        # («مدیریت ویوا» is the live default since 09-20).
         candidate = make_candidate("CONFIRMED", 8)
-        plan = build_money_management(candidate, account=1000)
-        self.assertLessEqual(plan["margin_pct"], 5.0001)
-        self.assertLessEqual(plan["margin_limit_pct"], 5.0)
-        self.assertGreater(plan["leverage"], 0)
-        self.assertLessEqual(plan["leverage"], 20)
-        self.assertLessEqual(plan["risk_pct"], 1.01)
+        from tests.test_trade_management import _forced_profile
+        with _forced_profile(False):
+            plan = build_money_management(candidate, account=1000)
+            self.assertLessEqual(plan["margin_pct"], 5.0001)
+            self.assertLessEqual(plan["margin_limit_pct"], 5.0)
+            self.assertGreater(plan["leverage"], 0)
+            self.assertLessEqual(plan["leverage"], 20)
+            self.assertLessEqual(plan["risk_pct"], 1.01)
+        # and under «مدیریت ویوا» the same candidate sizes from his table
+        v = build_money_management(candidate, account=1000)
+        self.assertEqual(v.get("profile"), "VIVA")
+        self.assertEqual(v["margin"], 50.0)
+        self.assertEqual(v["leverage"], 20)
 
     def test_quality_controls_three_to_five_percent_margin_and_leverage(self):
         from analysis.risk import quality_plan, suggested_leverage

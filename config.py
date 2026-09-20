@@ -190,9 +190,11 @@ class Settings:
     range_fraction_symbols: str = ""        # empty = all symbols
 
     # «مدیریت ویوا» (Viva-management spec §8/§14): a SEPARATE management
-    # profile — fixed margin by symbol price + flat 20× leverage. OFF by
-    # default: standard management stays the reference until Viva switches it.
-    viva_management_profile: bool = False
+    # profile — fixed margin by symbol price + flat 20× leverage.
+    # Viva 09-20: «مدیریت سرمایه جدید ویوا اعمال بشه» → ON. The standard
+    # engine stays intact behind this switch (set VIVA_MANAGEMENT_PROFILE=0
+    # to fall back to «مدیریت سرمایه استاندارد»).
+    viva_management_profile: bool = True
 
     account_size: float = 1000.0
     base_risk_percent: float = 1.0

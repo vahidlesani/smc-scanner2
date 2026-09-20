@@ -142,11 +142,51 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
     if _was_capped and (abs(_capped_final - entry) > 1e-12):
         final_price = _capped_final
     dist = abs(final_price - entry)
-    # Viva 09-19/20: five equal segments entry→final — the ORIGINAL approved
-    # tool shape; TP1 distance exactly as before (structural share of the
-    # path, no forced 1R). TP4/TP5 carry zero exit weight (INFO pills).
-    targets = [entry + (final_price - entry) * i / 5.0 for i in range(1, 6)]
+    # ── Viva 09-20 (round 9) — the TP1→TP2 oversized-gap BUG fix ─────────
+    # Doctrine: «تی‌پی‌ها منطقی نسبت به تایم‌فریم» — TP1 is the FIRST
+    # meaningful level of the trigger TF (هزینهٔ نزدیک), the LAST pill is the
+    # next ceiling/floor (clamped by the TF ceiling above), and the distance
+    # between them is «به ۵ قسمت» split. Spacing is therefore UNIFORM: a
+    # structural TP1 that sits very close to the entry can no longer be
+    # followed by a 2–3× larger jump to TP2 (his chart complaint).
+    step = dist / 5.0                      # the five-part split of the path
+    _struct_tp1 = float(structural_tp1 or 0.0)
+    _valid_tp1 = (
+        _struct_tp1 > 0
+        and ((sign > 0 and entry < _struct_tp1 < final_price)
+             or (sign < 0 and final_price < _struct_tp1 < entry))
+    )
+    if _valid_tp1:
+        tp1 = _struct_tp1
+    else:
+        tp1 = entry + sign * step
+    # UNIFORM spacing between the pills, bounded so that no gap can ever
+    # balloon past 1.3× the five-part step (the bug Viva flagged). When the
+    # structural TP1 sits deep in the path, the four remaining pills compress
+    # uniformly instead of leaving an oversized TP1→TP2 jump.
+    _need = abs(final_price - tp1) / 4.0 if dist > 1e-12 else 0.0
+    _space = min(_need, 1.3 * step) if dist > 1e-12 else 0.0
+    targets = []
+    for i in range(5):
+        _lv = tp1 + sign * _space * i
+        if sign > 0:
+            _lv = min(_lv, final_price)
+        else:
+            _lv = max(_lv, final_price)
+        targets.append(float(_lv))
+    targets[-1] = float(final_price)
+    # strictly monotonic pills (duplicates would print the same price twice)
+    _dedup = []
+    for _lv in targets:
+        if not _dedup or abs(_lv - _dedup[-1]) > 1e-12:
+            _dedup.append(_lv)
+    targets = _dedup
+    if len(targets) == 1:
+        targets = [float(final_price)]
     weights = list(DEFAULT_WEIGHTS)
+    if len(targets) < len(weights):
+        # a collapsed ladder keeps the FIRST exit weight on its single pill
+        weights = weights[:len(targets)]
     if dist <= 1e-12:
         targets = [final_price]
         weights = [100.0]
@@ -200,6 +240,10 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
         "target_capped": bool(_was_capped),
         "raw_final_target": float(proposed_final or 0.0),
         "trigger_tf": str(_cap_tf),
+        # round-9 ladder audit: uniform spacing proof (no TP1→TP2 balloon)
+        "seg_step": float(step),
+        "tp_gap": float(_space),
+        "tp1_source": "STRUCTURE" if _valid_tp1 else "GRID",
     }
 
 
@@ -362,10 +406,90 @@ def smart_exit_scan(direction: str, candles: List[Dict], state: Optional[Dict] =
                 reasons.append("سه بستهٔ صعودی پیاپی با حجم رو به افزایش")
         out["score"] = score
         out["reasons"] = reasons
+        # Viva 09-20 (round 9): «اولین پین‌بارِ بسته‌شدهٔ معکوس ... = خروج
+        # فوری باقی‌مانده» — the flag lets the monitor treat ONE closed
+        # reverse pin as a red exit on its own, not merely an orange sign.
+        out["reverse_pin"] = any("پین‌بار" in str(_r) for _r in reasons)
         out["level"] = "RED" if score >= SMART_EXIT_RED else ("ORANGE" if score >= SMART_EXIT_ORANGE else "")
     except Exception:
         pass
     return out
+
+
+def reentry_setup(direction: str, candles: List[Dict], state: Dict,
+                  atr: float = 0.0) -> Optional[Dict]:
+    """Viva 09-20 (round 9) — re-entry after a protected profit exit.
+
+    Verbatim: «اگر قیمت فقط یک پول‌بک بود، سیگنال ورود مجدد روی همان
+    پول‌بک داده بشه؛ سود اولیه باید گرفته بشه و قفل بشه.» So after TP1 was
+    banked (stop already at net-BE) and the remainder was closed by the
+    protection rules, a PULLBACK back to the first-target area that holds
+    with a confirmation candle is a fresh entry — the banked profit stays
+    locked (the re-entry never risks below the original protected stop).
+
+    Returns None unless: the position was closed by SMART_EXIT during the
+    TP1→TP2 range, price pulled back to TP1's area, and the closed candle in
+    the trade's direction confirms (pin/engulf or a clean directional close).
+    """
+    try:
+        st = state or {}
+        if not st.get("closed") or str(st.get("close_reason") or "") != "SMART_EXIT":
+            return None
+        if int(st.get("hit_index") or 0) < 1 or st.get("reentry_signaled"):
+            return None
+        if not candles or len(candles) < 6:
+            return None
+        targets = [float(t) for t in (st.get("targets") or [])]
+        hit = int(st.get("hit_index") or 0)
+        if hit >= len(targets):
+            return None
+        tp1 = targets[hit - 1]
+        band_lo, band_hi = sorted((tp1, targets[hit]))     # TP1 → next pill band
+        span = max(band_hi - band_lo, 1e-12)
+        c = candles
+        last = c[-1]
+        close = float(last["close"] or 0)
+        long_side = str(direction).upper() == "LONG"
+        # price must be back at the banked first target's area (a pullback),
+        # not far beyond the exit and not crashed through the original stop
+        if long_side:
+            if not (tp1 - 0.5 * span <= close <= tp1 + 0.35 * span):
+                return None
+        else:
+            if not (tp1 - 0.35 * span <= close <= tp1 + 0.5 * span):
+                return None
+        o, h, l = float(last["open"] or 0), float(last["high"] or 0), float(last["low"] or 0)
+        body = abs(close - o)
+        rng = max(h - l, 1e-12)
+        o2, c2 = float(c[-2]["open"] or 0), float(c[-2]["close"] or 0)
+        _pin = ((min(o, close) - l) >= 2.0 * max(body, 1e-12) and (h - close) <= 0.35 * rng) \
+            if long_side else \
+            ((h - max(o, close)) >= 2.0 * max(body, 1e-12) and (close - l) <= 0.35 * rng)
+        _engulf = (c2 < o2 and close > o and o <= c2 and close >= o2) if long_side else \
+            (c2 > o2 and close < o and o >= c2 and close <= o2)
+        _clean = (close > o and close > c2) if long_side else (close < o and close < c2)
+        if not (_pin or _engulf or _clean):
+            return None
+        _buf = max(0.35 * float(atr or 0), 0.0015 * close)
+        if long_side:
+            swing = min(float(x["low"] or 0) for x in c[-6:])
+            sl = swing - _buf
+            later = [t for t in targets[hit:] if t > close + 0.25 * span]
+        else:
+            swing = max(float(x["high"] or 0) for x in c[-6:])
+            sl = swing + _buf
+            later = [t for t in targets[hit:] if t < close - 0.25 * span]
+        return {
+            "entry": close,
+            "sl": float(sl),
+            "tp1": float(later[0]) if later else float(band_hi if long_side else band_lo),
+            "tp2": float(later[-1]) if later else float(band_hi if long_side else band_lo),
+            "kind": "REENTRY_PULLBACK",
+            "note_fa": ("پول‌بک به ناحیهٔ هدف اول با تأیید کندل بسته‌شده؛ ورود مجدد "
+                        "با استاپ پشت سوینگ پول‌بک — سود اولیه در حساب قفل می‌ماند."),
+        }
+    except Exception:
+        return None
 
 
 def advance_ladder(state: Dict, high: float, low: float) -> Dict:

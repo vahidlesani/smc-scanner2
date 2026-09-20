@@ -3092,6 +3092,7 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
         candidate.planned_entry, candidate.sl, candidate.direction, candidate.market,
         candidate.tp2, structural_tp1=candidate.tp1,
         fee_pct=(SETTINGS.fee_rate_percent + SETTINGS.slippage_percent) * 2.0 / 100.0,
+        trigger_tf=str(candidate.trigger_timeframe or "15m"),
     )
     if chart_df is not None and not chart_df.empty and "close" in chart_df.columns:
         candidate.metadata["live_price"] = float(chart_df["close"].iloc[-1])
@@ -4001,6 +4002,52 @@ def send_trailing_note(event: dict) -> int:
                     link=_lnk, link_text="🔗 همین پیام در کانال اصلی")
     return mid
 
+
+
+def send_reentry_note(event: dict) -> int:
+    """Viva 09-20 (round 9) — «سیگنال ورود مجدد روی همان پول‌بک».
+
+    After TP1 was banked and the protection phase closed the remainder, a
+    pullback that holds with a confirmed candle is a fresh entry on the SAME
+    code. The note replies to the last TP receipt of that code so the chain
+    shows: TP1 receipt → protected exit → this re-entry.
+    """
+    if str(event.get("event") or "") != "REENTRY_SIGNAL":
+        return 0
+    target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    code = _e(event.get("public_code") or event.get("signal_id"))
+    setup = _setup_display(event.get("source") or event.get("strategy_fa"))
+    hit = int(event.get("hit_index") or 0)
+    reply_id = 0
+    for _n in range(max(hit, 1), 0, -1):
+        reply_id = int(_exact_event_message_id(str(event.get("signal_id") or ""), f"TP{_n}") or 0)
+        if reply_id:
+            break
+    reply_id = reply_id or int(event.get("pro_message_id") or 0) or None
+    text = (
+        f"🔁 <b>سیگنال ورود مجدد روی پول‌بک</b>\n\n"
+        f"🏷 <b>{_e(setup)}</b>\n"
+        f"🏦 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style'))} • {_e(event.get('direction'))}\n"
+        f"🆔 <code>{code}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"ورود: <b>{_price(float(event.get('entry') or 0))}</b>\n"
+        f"استاپ: <b>{_price(float(event.get('sl') or 0))}</b>\n"
+        f"هدف اول: <b>{_price(float(event.get('tp1') or 0))}</b> • هدف بعدی: <b>{_price(float(event.get('tp2') or 0))}</b>\n"
+        f"{_e(event.get('reason_fa') or '')}\n"
+        f"🔒 سود هدف اول قبلاً گرفته و قفل شده است؛ این ورود فقط روی پول‌بک همان سناریو است.\n"
+        f"📌 <b>VIVAMON-Labs-Pro</b>"
+    )
+    _ph, mid = _post_chart_then_text(
+        None, text, target, reply_to=reply_id,
+        label=_chart_label(symbol=str(event.get("symbol") or ""),
+                           code=str(event.get("public_code") or ""), title_fa="ورود مجدد"))
+    mid = int(mid or 0)
+    if mid:
+        _lnk = _telegram_message_link(str(target), mid)
+        _sig_mirror(str(event.get("public_code") or ""), "stop", text, None,
+                    reply_kind=(f"tp{hit}" if hit else "confirmed"),
+                    link=_lnk, link_text="🔗 همین پیام در کانال اصلی")
+    return mid
 
 def _technoclassic_preview_candidate(ev: dict):
     """Lightweight, never-saved SignalCandidate used ONLY to render a

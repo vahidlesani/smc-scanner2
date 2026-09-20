@@ -1071,7 +1071,10 @@ def test_gate_demotion_and_tolerant_liquidity():
     assert 'gates.pop("fresh_poi", None)' in sv
     assert 'gates.pop("rr", None)' in sv
     qe0 = _io.open("analysis/quality_engine.py", encoding="utf-8").read()
-    assert 'if not candidate.metadata.get("tl_fast_break"):\n            return reject("RR_DEGRADED"' in qe0
+    # Viva 09-20 (verbatim, third time): «فرمول ریسک به ریوارد ... اصلا اهمیت
+    # نداره» → R:R never vetoes an entry any more; it is reported only.
+    assert "RR_DEGRADED" not in qe0
+    assert 'rr_readout' in qe0
     assert "_has_turn" in sv and "_has_spread" in sv
     from analysis.setups_v7 import _market_quality
     class _B:  # ticker-less bundle: unknown != veto

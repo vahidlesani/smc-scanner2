@@ -626,35 +626,77 @@ def _liquidity_protected_invalidation(
 
 
 def _structural_targets(
-    context_df: pd.DataFrame, direction: str, entry: float, sl: float, *, require_real_levels: bool = False
+    df: pd.DataFrame, direction: str, entry: float, sl: float, *,
+    extra_df: Optional[pd.DataFrame] = None, atr_value: float = 0.0,
+    trigger_tf: str = "", require_real_levels: bool = False,
+    min_gap_atr: float = 0.6,
 ) -> Optional[Dict]:
-    risk = abs(entry - sl)
-    ph, pl = pivots(context_df, 3, 3)
-    levels = sorted({float(point["price"]) for point in (ph if direction == "LONG" else pl)})
-    if direction == "LONG":
-        valid = [level for level in levels if level >= entry + 1.5 * risk]
+    """Targets from STRUCTURE — never from the stop distance.
+
+    Viva 09-20 (verbatim): «هیچ ارتباطی بین اندازه فاصله قیمت تا استاپ یا
+    تارگت‌ها قرار نده» + «تی‌پی‌ها هم در پوزیشن صعودی تا سقف بعدی آن تایم
+    تریگر یا در پوزیشن شورت تا کف قبل» + «نواحی مهم در همان تایم و نواحی مهم
+    در تایم‌های بالاتر رو در نظر بگیره» → the primary levels are the TRIGGER
+    timeframe's own pivots, and the higher timeframe(s) contribute their
+    important zones as multi-TF context. The nearest meaningful level beyond
+    the entry is TP1; the next one is the final target. The TF distance
+    ceiling (doc §4) is clamped afterwards. When a frame shows no level, the
+    fallback is a share of that TF ceiling (a price-distance rule) — NOT a
+    multiple of the stop (this is what produced the 19%-away XRP target).
+    """
+    try:
+        entry = float(entry)
+        risk = abs(entry - float(sl))
+        if entry <= 0:
+            return None
+        _atr = float(atr_value or 0)
+        if _atr <= 0 and df is not None and len(df):
+            try:
+                _atr = float((df["high"] - df["low"]).tail(14).mean() or 0.0)
+            except Exception:
+                _atr = 0.0
+        gap = max(min_gap_atr * _atr, 0.0015 * entry)
+        levels = []
+        for _frame in (df, extra_df):
+            if _frame is None or len(_frame) < 20:
+                continue
+            try:
+                _ph, _pl = pivots(_frame, 3, 3)
+            except Exception:
+                continue
+            for _pt in (_ph if direction == "LONG" else _pl):
+                try:
+                    _lv = float(_pt["price"])
+                except Exception:
+                    continue
+                if levels and any(abs(_lv - _e) <= 0.35 * _atr for _e in levels):
+                    continue
+                levels.append(_lv)
+        from analysis.trade_management import target_distance_cap_pct
+        cap_dist = entry * target_distance_cap_pct(trigger_tf or "15m") / 100.0
+        if direction == "LONG":
+            valid = sorted(level for level in levels if level >= entry + gap)
+            tp1 = valid[0] if valid else entry + 0.20 * cap_dist
+            later = [level for level in valid if level >= tp1 + max(0.35 * _atr, 0.002 * entry)]
+            tp2 = later[0] if later else max(tp1, entry + cap_dist)
+        else:
+            valid = sorted((level for level in levels if level <= entry - gap), reverse=True)
+            tp1 = valid[0] if valid else entry - 0.20 * cap_dist
+            later = [level for level in valid
+                     if level <= tp1 - max(0.35 * _atr, 0.002 * entry)]
+            tp2 = later[0] if later else min(tp1, entry - cap_dist)
         if require_real_levels and not valid:
             return None
-        tp1 = valid[0] if valid else entry + 2.0 * risk
-        tp2_options = [level for level in valid if level >= tp1 + 0.5 * risk]
-        if require_real_levels and not tp2_options:
-            return None
-        tp2 = tp2_options[0] if tp2_options else max(entry + 3.0 * risk, tp1 + risk)
-    else:
-        valid = sorted([level for level in levels if level <= entry - 1.5 * risk], reverse=True)
-        if require_real_levels and not valid:
-            return None
-        tp1 = valid[0] if valid else entry - 2.0 * risk
-        tp2_options = [level for level in valid if level <= tp1 - 0.5 * risk]
-        if require_real_levels and not tp2_options:
-            return None
-        tp2 = tp2_options[0] if tp2_options else min(entry - 3.0 * risk, tp1 - risk)
-    return {
-        "tp1": float(tp1),
-        "tp2": float(tp2),
-        "rr1": abs(tp1 - entry) / risk if risk else 0,
-        "rr2": abs(tp2 - entry) / risk if risk else 0,
-    }
+        return {
+            "tp1": float(tp1),
+            "tp2": float(tp2),
+            # R/R is REPORTED, never a criterion (Viva 09-20, verbatim)
+            "rr1": abs(tp1 - entry) / risk if risk else 0,
+            "rr2": abs(tp2 - entry) / risk if risk else 0,
+            "source": "STRUCTURE_TRIGGER_TF" if valid else "TF_CEILING_FALLBACK",
+        }
+    except Exception:
+        return None
 
 
 def _market_quality(bundle: MarketBundle, style: str) -> Tuple[bool, str, int]:
@@ -729,7 +771,13 @@ def _base_candidate(
     sl = float(invalidation["price"])
     if entry <= 0 or abs(entry - sl) / entry < 0.0008:
         return None
-    targets = _structural_targets(context_df, direction, entry, sl)
+    # Viva 09-20: the TRIGGER timeframe's own next high/low is the primary
+    # target; the higher (context) TF only contributes its important zones.
+    targets = _structural_targets(
+        trigger_df, direction, entry, sl, extra_df=context_df,
+        atr_value=atr_value, trigger_tf=trigger_tf)
+    if targets is None:
+        return None
     # Optional Viva range-fraction targets (his rule for the previous system):
     # when aligned with the range EDGE (LONG in DISCOUNT / SHORT in PREMIUM),
     # aim for 40%/70% of the dealing-range height measured from the boundary
@@ -761,7 +809,12 @@ def _base_candidate(
                     "rr1": (abs(_tp1 - entry) / _risk) if _risk > 0 else 0.0,
                     "rr2": (abs(_tp2 - entry) / _risk) if _risk > 0 else 0.0,
                 }
-    rr_ok = targets["rr1"] >= 1.5 and targets["rr2"] >= 2.2
+    # Viva 09-20 (third time, verbatim): «فرمول ریسک به ریوارد ... اصلا اهمیت
+    # نداره» → R:R never gates an entry; the TF distance ceiling + structure
+    # decide the targets. Kept as a REPORTED value only.
+    rr_ok = True
+    _rr_report = (f"R/R (فقط گزارش): {targets['rr1']:.2f}R / {targets['rr2']:.2f}R — "
+                  "مبنای انتخاب هدف یا تصمیم ورود نیست")
     market_ok, market_detail, market_points = _market_quality(bundle, style)
 
     htf_detail = (
@@ -783,8 +836,9 @@ def _base_candidate(
     rr_detail = (
         f"قیمت ابطال تحلیل در {_fmt(sl)}، آن‌سوی مرجع نقدینگی {_fmt(invalidation['liquidity_anchor'])} "
         f"و با بافر پویا {_fmt(invalidation['buffer'])} قرار گرفته است؛ بنابراین مستقیماً روی Pivot/نقدینگی آشکار نیست. "
-        f"هدف اول {_fmt(targets['tp1'])} و هدف دوم {_fmt(targets['tp2'])} بر اساس نقدینگی و ساختار مقابل انتخاب شده‌اند. "
-        f"نسبت سود به زیان تقریبی اهداف به‌ترتیب {targets['rr1']:.2f}R و {targets['rr2']:.2f}R است."
+        f"هدف اول {_fmt(targets['tp1'])} و هدف دوم {_fmt(targets['tp2'])} از ساختار همان تایم تریگر و نواحی مهم "
+        f"تایم‌های بالاتر انتخاب شده‌اند (منبع: {targets.get('source', '')}). "
+        f"{_rr_report}."
     )
 
     evidence = [
@@ -792,7 +846,7 @@ def _base_candidate(
         special_evidence,
         EvidenceItem("displacement", "شکست ساختار و Displacement", displacement_detail, bool(impulse.get("valid")), 2),
         EvidenceItem("poi", "ناحیه ورود و Freshness", poi_detail, poi.get("touches", 0) <= 1, 2),
-        EvidenceItem("rr", "اهداف ساختاری و نسبت سود به زیان", rr_detail, rr_ok, 1),
+        EvidenceItem("rr", "اهداف ساختاری (مستقل از استاپ)", rr_detail, rr_ok, 1),
         EvidenceItem("market", "نقدشوندگی و شرایط بازار", market_detail, market_ok, market_points),
     ]
 

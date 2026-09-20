@@ -438,6 +438,47 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
                             pass
     except Exception:
         pass
+    # Viva 09-20 «قیمت هنوز داخل وج یا کانال یا مثلث قرار داره اما سیگنال
+    # تایید شده .. چرا؟ این اشتباهه»: the confirmation gate needs the pattern's
+    # OWN edges at the alert bar — stored once here (value at the newest window
+    # bar + slope per trigger bar + that bar's timestamp and TF duration), so
+    # evaluate_confirmation can project them onto a later confirm candle and
+    # reject a close that never actually left the pattern.
+    try:
+        _closed_types = ("WEDGE_RISING", "WEDGE_FALLING", "TRIANGLE", "CHANNEL",
+                         "CHANNEL_RISING", "CHANNEL_FALLING", "CHANNEL_DESCENDING",
+                         "CHANNEL_ASCENDING", "FLAG_BULL", "FLAG_BEAR")
+        _band = None
+        _win_len = len(trigger_df.tail(170))
+        for _p in pats:
+            _lns = _p.get("lines") or []
+            if _p.get("type") == "RANGE" and _p.get("hi") and _p.get("lo"):
+                _band = {"kind": "RANGE", "lo": float(_p["lo"]), "hi": float(_p["hi"]),
+                         "slope_lo": 0.0, "slope_hi": 0.0}
+                break
+            if str(_p.get("type") or "").upper() in _closed_types and len(_lns) == 2:
+                _x_last = float(max(0, _win_len - 1))
+                _y1 = float(_lns[0]["slope"]) * _x_last + float(_lns[0]["intercept"])
+                _y2 = float(_lns[1]["slope"]) * _x_last + float(_lns[1]["intercept"])
+                _band = {
+                    "kind": str(_p.get("type")),
+                    "lo": float(min(_y1, _y2)), "hi": float(max(_y1, _y2)),
+                    "slope_lo": float(_lns[0]["slope"]) if _y1 <= _y2 else float(_lns[1]["slope"]),
+                    "slope_hi": float(_lns[1]["slope"]) if _y1 <= _y2 else float(_lns[0]["slope"]),
+                }
+                break
+        if _band:
+            try:
+                _ts_series = pd.to_datetime(trigger_df["timestamp"])
+                _band["ts_last"] = str(_ts_series.iloc[-1])
+                _deltas = _ts_series.diff().dt.total_seconds().dropna()
+                _band["tf_minutes"] = float(_deltas.median() / 60.0) if len(_deltas) else 15.0
+            except Exception:
+                _band["ts_last"] = ""
+                _band["tf_minutes"] = 0.0
+            md["pattern_band"] = _band
+    except Exception:
+        pass
     md["render_line_watch"] = [
         {"side": l.get("side"), "slope": l.get("slope"),
          "intercept": l.get("intercept"),
