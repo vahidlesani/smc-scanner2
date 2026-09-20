@@ -1062,8 +1062,9 @@ _CHART_CACHE: Dict[tuple, bytes] = {}
 #   2. a delay past 15 minutes is printed as a warning, and past TWO trigger
 #      candles the alert is no longer published as an entry (analysis note only) —
 #      a past-market trade is not a trade;
-#   3. the chart draws the FORMING candle («FORMING») and the LIVE pill carries
-#      the live price + clock, so the picture is the market of this minute.
+#   3. the chart draws the forming candle as a NORMAL candle (round 13: «خط چین
+#      نمی‌خوام … همون شکل کندل باید عادی باشه») and the LIVE pill carries the
+#      live price + clock, so the picture is the market of this minute.
 _TF_MINUTES: Dict[str, int] = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
                                "1h": 60, "2h": 120, "4h": 240, "6h": 360, "12h": 720,
                                "1d": 1440}
@@ -1195,10 +1196,67 @@ def _live_candle(candidate: SignalCandidate, chart_df) -> Optional[Dict[str, flo
             last_closed = last_closed.tz_localize("UTC")
         if ts <= last_closed:
             return None  # the tape has already closed; nothing is forming
+        _vol = float(row["volume"]) if "volume" in getattr(live, "columns", []) else 0.0
         return {"timestamp": ts, "open": float(row["open"]), "high": float(row["high"]),
-                "low": float(row["low"]), "close": float(row["close"])}
+                "low": float(row["low"]), "close": float(row["close"]), "volume": _vol}
     except Exception:
         return None
+
+
+def _frame_with_live_candle(df: pd.DataFrame, candidate: SignalCandidate) -> tuple:
+    """(frame, live_row): the forming candle rides as a NORMAL candle.
+
+    Viva 09-21 (round 13), verbatim: «این رو درست کن با خط چین نمی‌خوام .. خط چین
+    کندل لایو اصلا نه دیده میشه برای تصمیم گیری خوب نیست همون شکل کندل باید عادی
+    باشه». The live bucket is no longer a dashed ghost floating past the tape — it
+    is APPENDED to the frame, so mplfinance draws it with the very same body/wick
+    colours, width and volume bar as every closed candle. Nothing else changes:
+    the tape below stays the closed candles the analysis used.
+    """
+    if df is None or df.empty:
+        return df, None
+    live = _live_candle(candidate, df)
+    if live is None:
+        return df, None
+    try:
+        row = {c: live[c] for c in ("open", "high", "low", "close") if c in live}
+        # the tape's own tz-awareness wins: never mix naive and aware stamps
+        _ts_live = pd.Timestamp(live["timestamp"])
+        try:
+            _ts_last = pd.Timestamp(df["timestamp"].iloc[-1])
+            if _ts_last.tzinfo is None and _ts_live.tzinfo is not None:
+                _ts_live = _ts_live.tz_convert("UTC").tz_localize(None)
+            elif _ts_last.tzinfo is not None and _ts_live.tzinfo is None:
+                _ts_live = _ts_live.tz_localize("UTC")
+        except Exception:
+            pass
+        row["timestamp"] = _ts_live
+        row["volume"] = float(live.get("volume") or 0.0)
+        if "volume" not in df.columns:
+            row.pop("volume", None)
+        frame = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+        return frame, row
+    except Exception as exc:
+        print(f"live-candle append skipped: {exc}")
+        return df, None
+
+
+def _chart_cache_key(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool) -> tuple:
+    """Cache identity of a render — the LIVE close is part of it.
+
+    Round 13 (his report): the key used to stop at the newest TIMESTAMP, and the
+    forming candle keeps one timestamp for a whole hour/four hours/day — so the
+    rendered picture froze for the length of the candle and every later update
+    re-posted «گذشته مارکت». The live price now rides in the key, so a chart is
+    only reused while the market on it is genuinely unchanged.
+    """
+    try:
+        _last_px = round(float(df["close"].iloc[-1]), 10)
+    except Exception:
+        _last_px = 0.0
+    return (str(getattr(candidate, "signal_id", "")), bool(confirmed),
+            str(df["timestamp"].iloc[-1]), len(df),
+            str((candidate.metadata or {}).get("chart_view_tf") or ""), _last_px)
 
 
 def _chart_cache_get(key: tuple):
@@ -1218,11 +1276,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     """Render a branded TradingView-inspired 1440×900 chart."""
     if df is None or df.empty:
         return None
+    # ── the forming candle joins the tape as one more NORMAL candle (round 13)
+    df, _live_row = _frame_with_live_candle(df, candidate)
     # Viva 09-17 cost ruling: one render per (alert, frame, state) — retries,
-    # mirrors and cross-channel posts reuse the bytes from this cache.
-    _ck = (str(getattr(candidate, "signal_id", "")), bool(confirmed),
-           str(df["timestamp"].iloc[-1]), len(df),
-           str((candidate.metadata or {}).get("chart_view_tf") or ""))
+    # mirrors and cross-channel posts reuse the bytes from this cache. Round 13:
+    # the state now includes the live price (see _chart_cache_key).
+    _ck = _chart_cache_key(df, candidate, confirmed)
     _hit = _chart_cache_get(_ck)
     if _hit is not None:
         return _hit
@@ -1755,32 +1814,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         )
         notes.append((f"FIRST STOP  {_price(candidate.sl)}", CHART_THEME["invalidation"]))
         live_price = float(frame["close"].iloc[-1])
-        # ── Viva 09-21 (round 12): the alert tape is CLOSED candles only, so on a
-        # 1h trigger the newest bar could be an hour old and the reader saw «گذشته
-        # مارکت». The forming candle now rides along as a dashed ghost, and the LIVE
-        # pill carries the live price with its clock (UTC, like the candle axis).
-        _ghost = _live_candle(candidate, df)
-        if _ghost is not None:
-            _gx = float(count)
-            _gcol = CHART_THEME.get("muted", "#8a8a8a")
-            try:
-                ax.vlines(_gx, _ghost["low"], _ghost["high"], colors=_gcol,
-                          linestyles="dashed", linewidth=0.95, alpha=0.75, zorder=6)
-                _lo, _hi = sorted((_ghost["open"], _ghost["close"]))
-                if _hi - _lo < 1e-12:
-                    _hi = _lo + max(abs(_lo) * 1e-6, 1e-9)
-                ax.add_patch(Rectangle((_gx - 0.30, _lo), 0.60, _hi - _lo,
-                                       facecolor="none", edgecolor=_gcol,
-                                       linestyle="dashed", linewidth=0.95,
-                                       alpha=0.85, zorder=6))
-                ax.text(_gx, _ghost["low"], "FORMING", color=_gcol, fontsize=6.8,
-                        style="italic", va="top", ha="center", zorder=6)
-                live_price = float(_ghost["close"])
-            except Exception as _gexc:
-                print(f"forming-candle draw skipped: {_gexc}")
+        # ── Round 13: the forming candle is part of `frame` now (appended above),
+        # so it is drawn by the candle painter itself — same body, same wicks,
+        # same width. No dashed ghost, no «FORMING» label. The LIVE pill keeps
+        # carrying the live price with its clock (UTC, like the candle axis).
         _live_clock = ""
         try:
-            _lt = _ghost["timestamp"] if _ghost is not None else pd.Timestamp(frame.index[-1])
+            _lt = pd.Timestamp(frame.index[-1])
             _lt = pd.Timestamp(_lt)
             if _lt.tzinfo is None:
                 _lt = _lt.tz_localize("UTC")

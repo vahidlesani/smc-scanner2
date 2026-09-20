@@ -611,6 +611,8 @@ def _pinv_done(candidate: SignalCandidate, ok: bool, why: str) -> None:
 
 
 _TF_SECONDS_LIVE = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
+_TF_MINUTES_LIVE = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60,
+                    "2h": 120, "4h": 240, "1d": 1440}
 _TF_FA_LIVE = {"5m": "۵دقیقه‌ای", "15m": "۱۵دقیقه‌ای", "30m": "۳۰دقیقه‌ای",
                "1h": "یک‌ساعته", "4h": "۴ساعته", "1d": "روزانه"}
 
@@ -734,24 +736,103 @@ def _live_break_watch(candidate, live_frame) -> Tuple[str, str]:
 
 
 def _tf_fetch_window(tf: str) -> bool:
-    """Railway cost guard (Viva 09-17): a TF frame is fetched live only in the
-    minutes right after its candle close — 3m always (monitor cadence), 15m in
-    the first 4 min of each quarter-hour, 1h/4h/1d in the first 4 min of their
-    close.  Between windows nothing can confirm, so nothing is fetched."""
+    """Railway cost guard (Viva 09-17), WIDENED 09-21 (round 13).
+
+    His report, verbatim: «من هنوز سیگنال روزانه ندیدم که تأیید بشه یا واسش آپدیت
+    بیاد .. ۴ ساعته هم زیاد ندیدم .. حالا دقیق بررسی کن اگر کندل‌ها فقط در تایم
+    خودشون آپدیت میشن کلا ول معطل هستیم».
+
+    The old windows were 4 minutes once per candle: a 4h chain was looked at ~6% of
+    the day and a daily chain ~1% — and ANY restart inside those four minutes ate
+    the whole candle (no confirmation, no update, no heartbeat, forever). Windows
+    now span several 3-minute monitor cycles, so a candle close can never be missed,
+    while the duty cycle stays small and the cost bounded.
+    """
     now = datetime.now(timezone.utc)
     m = now.minute
     tf = str(tf or "").lower()
-    if tf == "3m":
+    if tf in ("1m", "3m", "5m"):
         return True
     if tf == "15m":
-        return m % 15 < 4
+        return m % 15 < 6
+    if tf == "30m":
+        return m % 30 < 10
     if tf == "1h":
-        return m < 4
+        return m < 12
+    if tf == "2h":
+        return m < 12 and now.hour % 2 == 0
     if tf == "4h":
-        return m < 4 and now.hour % 4 == 0
+        return m < 20 and now.hour % 4 == 0
     if tf == "1d":
-        return m < 4 and now.hour == 0
+        return now.hour == 0 and m < 45
     return True
+
+
+_PRICE_MAP: Dict[str, float] = {}
+_PRICE_MAP_AT: float = 0.0
+
+
+def _live_price_map() -> Dict[str, float]:
+    """One venue ticker call per cycle: {SYMBOL: live price} for every chain.
+
+    Round 13: a chain's liveness (invalidation, approach watch, «از ناحیه دور شد»)
+    must NOT depend on whether a kline window happens to be open — that dependency
+    is exactly why 4h/1d chains looked dead. The ticker is cached by the venue
+    layer, so this costs nothing per candidate.
+    """
+    global _PRICE_MAP, _PRICE_MAP_AT
+    now = time.monotonic()
+    if _PRICE_MAP and now - _PRICE_MAP_AT < 40:
+        return _PRICE_MAP
+    prices: Dict[str, float] = {}
+    try:
+        from data.ourbit import get_ourbit_tickers
+        for row in get_ourbit_tickers(use_cache=True):
+            _px = float(row.get("last_price") or 0)
+            if _px > 0:
+                prices[str(row.get("symbol") or "").upper()] = _px
+    except Exception as exc:
+        print(f"live price map (ourbit) warning: {exc}")
+    if not prices:
+        try:
+            from data.fetcher import get_tickers
+            for row in get_tickers():
+                _px = float(row.get("last_price") or 0)
+                if _px > 0:
+                    prices[str(row.get("symbol") or "").upper()] = _px
+        except Exception as exc:
+            print(f"live price map warning: {exc}")
+    if prices:
+        _PRICE_MAP, _PRICE_MAP_AT = prices, now
+    return _PRICE_MAP or prices
+
+
+def _confirmation_stale_minutes(candidate, closed_df) -> Optional[int]:
+    """Minutes between the confirming candle and now (None while it is fresh).
+
+    The confirming bar is the one that satisfied the one-close law
+    (`fast_break_bar` when the pattern lane fired), else the newest closed bar of
+    the confirm timeframe. Past two candles of that timeframe the entry is a
+    market of the past — his 09-21 rule, applied to confirmations too.
+    """
+    try:
+        md = getattr(candidate, "metadata", None) or {}
+        tf = str(md.get("confirm_tf") or getattr(candidate, "trigger_timeframe", "") or "15m").lower()
+        mins = float(_TF_MINUTES_LIVE.get(tf, 15) or 15)
+        stamp = md.get("fast_break_bar") or md.get("confirm_bar")
+        if not stamp and closed_df is not None and len(closed_df):
+            stamp = closed_df["timestamp"].iloc[-1]
+        if not stamp:
+            return None
+        ts = pd.Timestamp(stamp)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        age_min = (datetime.now(timezone.utc) - ts.to_pydatetime()).total_seconds() / 60.0
+        if age_min > 2 * mins:
+            return int(age_min)
+        return None
+    except Exception:
+        return None
 
 
 def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataFrame, pd.DataFrame, float]]:
@@ -794,6 +875,7 @@ def monitor_candidates() -> Dict[str, int]:
     if not candidates:
         return stats
     frames = _candidate_market_frames(candidates)
+    prices = _live_price_map()
     for candidate in candidates:
         key = (candidate.symbol, candidate.metadata.get("confirm_tf") or candidate.trigger_timeframe)
         market_data = frames.get(key)
@@ -816,9 +898,16 @@ def monitor_candidates() -> Dict[str, int]:
         )
         # Once one Confirmed component is public, finish the exact same
         # confirmation even if market data is temporarily unavailable.
-        if not market_data and not publication_in_progress:
-            continue
         live, closed, current_price = market_data if market_data else (None, None, None)
+        if (current_price is None or current_price <= 0) and prices:
+            # ── round 13: outside a candle window the chain is still ALIVE and
+            # still guarded — the venue ticker answers for its price. Only the
+            # closed-candle CONFIRMATION waits for the frame (by law it must be a
+            # closed candle); everything else runs every cycle for every TF.
+            current_price = prices.get(str(candidate.symbol or "").upper())
+        have_frames = market_data is not None
+        if current_price is None and not publication_in_progress:
+            continue
         try:
             if candidate.setup_code == "PINVAL":
                 # PINVAL now uses the same lower-timeframe confirmation engine
@@ -904,6 +993,11 @@ def monitor_candidates() -> Dict[str, int]:
                 # Entry/confirmed_at to a later candle or inflate its score.
                 candidate.status = "CONFIRMED"
                 confirmed, reason = True, "تلاش مجدد برای تکمیل انتشار"
+            elif not have_frames:
+                # window closed: no closed candle to judge — never a NO_DATA
+                # reject (it used to stamp the chain's last_reject_code and hide
+                # the real reason from the log/UI)
+                confirmed, reason = False, "پنجرهٔ کندلِ تأیید باز نیست؛ بررسی در کلوزِ بعدی"
             else:
                 _pat_frame = None
                 try:
@@ -1023,6 +1117,28 @@ def monitor_candidates() -> Dict[str, int]:
                         continue
                 except RuntimeError as exc:
                     print(f"geometry-dup gate skipped {candidate.signal_id}: {exc}")
+                # ── round 13, the same law extended to confirmations: the
+                # confirmed entry is born on ONE closed candle — if that candle is
+                # older than two candles of the confirm timeframe (restart, missed
+                # window, a chain frozen since the fetch-gate era), the entry is
+                # NOT tradeable any more. The family still speaks: an analysis note
+                # goes out, the ladder stays disarmed, the chain stays alive.
+                _stale_conf = _confirmation_stale_minutes(candidate, closed)
+                if _stale_conf is not None:
+                    try:
+                        send_setup_update(
+                            candidate, (frames.get((candidate.symbol, candidate.trigger_timeframe)) or (None, closed, None))[1],
+                            note_fa=(f"⏳ تأییدِ فنی روی کندلی ثبت شد که {_stale_conf} دقیقه از آن گذشته است "
+                                     f"(بیش از دو کندلِ {candidate.metadata.get('confirm_tf') or candidate.trigger_timeframe}). "
+                                     "طبق قانون، ورودِ گذشته‌بازار صادر نمی‌شود؛ این مورد به‌جای سیگنال ورود، فقط گزارش تحلیلی است. "
+                                     "زنجیره زیر نظر می‌ماند تا ناحیه یا تأییدِ تازه شکل بگیرد."),
+                            critical=True)
+                    except Exception as exc:
+                        print(f"stale-confirmation note failed {candidate.signal_id}: {exc}")
+                    candidate.metadata["stale_confirmation_minutes"] = int(_stale_conf)
+                    stats["stale_confirmation"] = stats.get("stale_confirmation", 0) + 1
+                    update_candidate(candidate)
+                    continue
                 was_staged = bool(candidate.metadata.get("persistence_staged"))
                 try:
                     # Stage first, but with AWAITING_PUBLICATION and a false gate.
