@@ -15,7 +15,7 @@ import pandas as pd
 from analysis.models import SignalCandidate, iso_now
 from analysis.render_kit import detect_zones, enrich_render
 from bot.messages_v7 import (_event_chart_candidate, _lifecycle_view_plan,
-                             LIFECYCLE_SWITCH_AFTER_BARS)
+                             TOOL_FORWARD_BARS)
 
 
 def _frame(periods=90, freq="15min", start="2026-01-01 00:00"):
@@ -49,48 +49,118 @@ def _candidate(tf="15m", anchor_min_ago=20.0, entry_min_ago=20.0):
     cand.metadata = {
         "tool_anchor_ts": str(now - pd.Timedelta(minutes=anchor_min_ago)),
         "tool_entry_ts": str(now - pd.Timedelta(minutes=entry_min_ago)),
+        "target_ladder": {"targets": [106.0, 110.0, 113.0, 116.0, 119.0],
+                          "weights": [40, 30, 30, 0, 0], "hit_index": 0},
     }
     return cand
 
 
 class ViewPlanTests(unittest.TestCase):
-    def test_young_tool_stays_on_trigger_tf(self):
+    """His clarified rule: the 40 bars were an example — ANY number of candles
+    that left the tool triggers the higher-TF live chart, and while price is
+    still inside the long/short tool the trigger TF stays."""
+
+    def _frame_after_entry(self, entry_ts, bars, price=None):
+        """Trigger-TF tape: `bars` closed candles after the entry candle."""
+        ts = [entry_ts - pd.Timedelta(minutes=15)]
+        base = float(price if price is not None else 99.5)
+        rows = [{"timestamp": ts[0], "open": base, "high": base + 0.2,
+                 "low": base - 0.2, "close": base, "volume": 1000}]
+        for i in range(bars):
+            _t = entry_ts + pd.Timedelta(minutes=15 * (i + 1))
+            _p = float(price if price is not None else 100.0)
+            rows.append({"timestamp": _t, "open": _p - 0.1, "high": _p + 0.3,
+                         "low": _p - 0.3, "close": _p, "volume": 1000})
+        return pd.DataFrame(rows)
+
+    def test_inside_tool_stays_on_trigger_tf(self):
+        cand = _candidate(anchor_min_ago=0.0, entry_min_ago=0.0)
+        cand.metadata["tool_entry_ts"] = str(_NOW_REF)
+        frame = self._frame_after_entry(_NOW_REF, bars=10, price=101.0)
         view, escaped, note = _lifecycle_view_plan(
-            _candidate(entry_min_ago=15 * 20), now=_NOW_REF)
+            cand, now=_NOW_REF + pd.Timedelta(minutes=150), frame=frame)
         self.assertEqual(view, "15m")
-        self.assertLessEqual(escaped, LIFECYCLE_SWITCH_AFTER_BARS)
+        self.assertEqual(escaped, 0)
         self.assertEqual(note, "")
 
-    def test_exactly_40_candles_is_still_the_trigger_tf(self):
+    def test_one_candle_past_the_tool_edge_is_enough(self):
+        cand = _candidate(anchor_min_ago=0.0, entry_min_ago=0.0)
+        cand.metadata["tool_entry_ts"] = str(_NOW_REF)
+        rows = []  # 45 candles after entry: the tool edge is 42 bars out
+        for i in range(45):
+            _t = _NOW_REF + pd.Timedelta(minutes=15 * (i + 1))
+            rows.append({"timestamp": _t, "open": 101.0, "high": 101.3,
+                         "low": 100.8, "close": 101.0, "volume": 1000})
+        frame = pd.DataFrame(rows)
         view, escaped, note = _lifecycle_view_plan(
-            _candidate(anchor_min_ago=95 * 15, entry_min_ago=40 * 15),
-            now=_NOW_REF)
-        self.assertEqual(view, "15m")
-        self.assertEqual(note, "")
-
-    def test_41_escaped_candles_step_up_to_1h_with_note(self):
-        view, escaped, note = _lifecycle_view_plan(
-            _candidate(anchor_min_ago=96 * 15, entry_min_ago=41 * 15),
-            now=_NOW_REF)
+            cand, now=_NOW_REF + pd.Timedelta(minutes=15 * 46), frame=frame)
         self.assertEqual(view, "1h")
-        self.assertEqual(escaped, 41)
-        self.assertIn("۴۱ کندل ۱۵ دقیقه", note)
+        self.assertGreaterEqual(escaped, 1)
+        self.assertIn("پس از خروج", note)
         self.assertIn("تایم فریم ۱ ساعته", note)
         self.assertIn("جابه‌جا نشده", note)
 
+    def test_exactly_42_candles_is_still_the_trigger_tf(self):
+        cand = _candidate(anchor_min_ago=0.0, entry_min_ago=0.0)
+        cand.metadata["tool_entry_ts"] = str(_NOW_REF)
+        rows = [{"timestamp": _NOW_REF + pd.Timedelta(minutes=15 * (i + 1)),
+                 "open": 101.0, "high": 101.3, "low": 100.8, "close": 101.0,
+                 "volume": 1000} for i in range(TOOL_FORWARD_BARS)]
+        frame = pd.DataFrame(rows)
+        view, escaped, _note = _lifecycle_view_plan(
+            cand, now=_NOW_REF + pd.Timedelta(minutes=15 * (TOOL_FORWARD_BARS + 1)),
+            frame=frame)
+        self.assertEqual((view, escaped), ("15m", 0))
+
+    def test_price_out_of_the_band_steps_up_even_early(self):
+        """A stop-out candle is OUTSIDE the tool price band → higher TF."""
+        cand = _candidate(anchor_min_ago=0.0, entry_min_ago=0.0)
+        cand.metadata["tool_entry_ts"] = str(_NOW_REF)
+        frame = self._frame_after_entry(_NOW_REF, bars=6, price=101.0)
+        frame.loc[frame.index[-1], "close"] = 97.4   # through the 98.0 stop
+        view, escaped, note = _lifecycle_view_plan(
+            cand, now=_NOW_REF + pd.Timedelta(minutes=15 * 7), frame=frame)
+        self.assertEqual(view, "1h")
+        self.assertGreaterEqual(escaped, 1)
+        self.assertTrue(note)
+
+    def test_above_the_top_pill_steps_up(self):
+        cand = _candidate(anchor_min_ago=0.0, entry_min_ago=0.0)
+        cand.metadata["tool_entry_ts"] = str(_NOW_REF)
+        frame = self._frame_after_entry(_NOW_REF, bars=5, price=120.0)  # > 119
+        view, _escaped, _note = _lifecycle_view_plan(
+            cand, now=_NOW_REF + pd.Timedelta(minutes=15 * 6), frame=frame)
+        self.assertEqual(view, "1h")
+
     def test_very_old_tool_steps_all_the_way_to_4h(self):
-        view, _escaped, note = _lifecycle_view_plan(
-            _candidate(anchor_min_ago=900 * 15, entry_min_ago=700 * 15),
-            now=_NOW_REF)
+        cand = _candidate(anchor_min_ago=0.0, entry_min_ago=0.0)
+        cand.metadata["tool_entry_ts"] = str(_NOW_REF)
+        frame = self._frame_after_entry(_NOW_REF, bars=900, price=101.0)
+        view, escaped, note = _lifecycle_view_plan(
+            cand, now=_NOW_REF + pd.Timedelta(minutes=15 * 901), frame=frame)
         self.assertEqual(view, "4h")
+        self.assertGreaterEqual(escaped, 1)
         self.assertIn("۴ ساعته", note)
 
     def test_1d_tool_has_nowhere_to_step(self):
+        cand = _candidate(tf="1d", anchor_min_ago=0.0, entry_min_ago=0.0)
+        cand.metadata["tool_entry_ts"] = str(_NOW_REF)
+        rows = [{"timestamp": _NOW_REF + pd.Timedelta(days=i + 1),
+                 "open": 101.0, "high": 101.3, "low": 100.8, "close": 101.0,
+                 "volume": 10} for i in range(60)]
         view, _escaped, note = _lifecycle_view_plan(
-            _candidate(tf="1d", anchor_min_ago=200 * 1440,
-                       entry_min_ago=120 * 1440), now=_NOW_REF)
+            cand, now=_NOW_REF + pd.Timedelta(days=61), frame=pd.DataFrame(rows))
         self.assertEqual(view, "1d")
         self.assertEqual(note, "")
+
+    def test_no_tape_falls_back_to_the_clock(self):
+        """No frame available: the clock alone decides (never stalls)."""
+        cand = _candidate(anchor_min_ago=0.0, entry_min_ago=0.0)
+        cand.metadata["tool_entry_ts"] = str(_NOW_REF)
+        view, escaped, _note = _lifecycle_view_plan(
+            cand, now=_NOW_REF + pd.Timedelta(minutes=15 * 50), frame=None)
+        self.assertEqual(view, "1h")
+        self.assertGreaterEqual(escaped, 1)
 
     def test_missing_anchors_fail_safe_to_trigger_tf(self):
         cand = _candidate()
@@ -159,28 +229,39 @@ class EventAnchorTests(unittest.TestCase):
 class LifecycleFrameFallbackTests(unittest.TestCase):
     def test_venue_without_higher_frame_falls_back_without_note(self):
         from bot.messages_v7 import _lifecycle_chart_frame
-        cand = _candidate(anchor_min_ago=200 * 15, entry_min_ago=120 * 15)
+        cand = _candidate(anchor_min_ago=0.0, entry_min_ago=0.0)
+        cand.metadata["tool_entry_ts"] = str(_NOW_REF)
         cand.confirmed_at = _NOW_REF.isoformat(sep=" ")
-        narrow = _frame(60, "15min")
+        # 60 bars after the entry → candles left the tool, but the venue has
+        # no 1h tape: the render stays on 15m and says nothing extra
+        rows = [{"timestamp": _NOW_REF + pd.Timedelta(minutes=15 * (i + 1)),
+                 "open": 101.0, "high": 101.3, "low": 100.8, "close": 101.0,
+                 "volume": 1000} for i in range(60)]
+        narrow = pd.DataFrame(rows)
         with patch("data.fetcher.get_klines",
                    side_effect=lambda _s, tf, *_a, **_k: narrow if tf == "15m" else None):
-            frame = _lifecycle_chart_frame(cand, [], now=_NOW_REF)
+            frame = _lifecycle_chart_frame(cand, [], now=_NOW_REF + pd.Timedelta(minutes=15 * 61))
         self.assertIs(frame, narrow)
         self.assertEqual(cand.metadata["chart_view_tf"], "15m")
         self.assertEqual(cand.metadata["chart_view_note"], "")
         self.assertEqual(cand.metadata["chart_tf_scale"], 1.0)
 
     def test_confirmed_chart_renders_on_the_stepped_up_frame(self):
-        from bot.messages_v7 import generate_chart
-        cand = _candidate(anchor_min_ago=300 * 15, entry_min_ago=120 * 15)
-        cand.metadata["target_ladder"] = {"targets": [106.0, 110.0, 113.0],
-                                          "weights": [40, 30, 30], "hit_index": 1}
-        cand.metadata["current_trailing_sl"] = 100.2
+        from bot.messages_v7 import generate_chart, _lifecycle_chart_frame
+        cand = _candidate(anchor_min_ago=0.0, entry_min_ago=0.0)
+        cand.metadata.update({
+            "tool_entry_ts": str(_NOW_REF),
+            "tool_anchor_ts": str(_NOW_REF - pd.Timedelta(minutes=55 * 15)),
+            "current_trailing_sl": 100.2,
+        })
+        rows = [{"timestamp": _NOW_REF + pd.Timedelta(minutes=15 * (i + 1)),
+                 "open": 101.0, "high": 101.3, "low": 100.8, "close": 101.0,
+                 "volume": 1000} for i in range(55)]
+        narrow = pd.DataFrame(rows)
         hourly = _frame(150, "1h")
         with patch("data.fetcher.get_klines",
-                   side_effect=lambda _s, tf, *_a, **_k: hourly if tf == "1h" else None):
-            from bot.messages_v7 import _lifecycle_chart_frame
-            frame = _lifecycle_chart_frame(cand, [], now=_NOW_REF)
+                   side_effect=lambda _s, tf, *_a, **_k: hourly if tf == "1h" else narrow):
+            frame = _lifecycle_chart_frame(cand, [], now=_NOW_REF + pd.Timedelta(minutes=15 * 56))
             image = generate_chart(frame, cand, confirmed=True)
         self.assertEqual(cand.metadata["chart_view_tf"], "1h")
         self.assertEqual(cand.metadata["chart_tf_scale"], 0.25)

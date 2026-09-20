@@ -95,21 +95,31 @@ class V7ModelTests(unittest.TestCase):
         self.assertEqual(candidate.metadata["chart_view_tf"], "15m")
         self.assertEqual(candidate.metadata["chart_view_note"], "")
 
-    def test_lifecycle_chart_escalates_once_40_candles_left_the_tool(self):
+    def test_lifecycle_chart_steps_up_once_candles_left_the_tool(self):
+        """Viva 09-20 (clarified): the 40 bars were an example — as soon as
+        ANY candle has left the tool, the live chart moves one TF up."""
         from unittest.mock import patch
         from bot.messages_v7 import _lifecycle_chart_frame
         candidate = make_candidate("CONFIRMED", 8)
         candidate.trigger_timeframe = "15m"
-        # tool drawn 95 fifteen-minute bars ago, entry 41 bars ago (his exact
-        # example: 40+ escaped candles → the same tool on 1h ≈ 10 bars).
-        _now = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
-        candidate.confirmed_at = _now.isoformat(sep=" ")
-        candidate.metadata["tool_anchor_ts"] = str(_now - pd.Timedelta(minutes=95 * 15))
-        candidate.metadata["tool_entry_ts"] = str(_now - pd.Timedelta(minutes=41 * 15))
-        narrow = pd.DataFrame({"timestamp": pd.date_range("2026-01-01", periods=3, freq="15min"), "open":[100]*3,"high":[102]*3,"low":[99]*3,"close":[100]*3,"volume":[1]*3})
-        hourly = pd.DataFrame({"timestamp": pd.date_range("2026-01-01", periods=3, freq="1h"), "open":[100]*3,"high":[112]*3,"low":[97]*3,"close":[100]*3,"volume":[1]*3})
-        with patch("data.fetcher.get_klines", side_effect=lambda _s, tf, *_a, **_k: hourly if tf == "1h" else narrow):
-            frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, candidate.tp1, candidate.tp2])
+        entry = datetime.now(timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
+        candidate.confirmed_at = entry.isoformat(sep=" ")
+        candidate.metadata["tool_anchor_ts"] = str(entry - timedelta(minutes=55 * 15))
+        candidate.metadata["tool_entry_ts"] = str(entry)
+        candidate.metadata["target_ladder"] = {
+            "targets": [106.0, 110.0, 113.0, 116.0, 119.0],
+            "weights": [40, 30, 30, 0, 0], "hit_index": 1}
+        rows = [{"timestamp": entry + timedelta(minutes=15 * (i + 1)),
+                 "open": 101.0, "high": 101.4, "low": 100.7, "close": 101.0,
+                 "volume": 1000} for i in range(55)]
+        narrow = pd.DataFrame(rows)
+        hourly = pd.DataFrame({
+            "timestamp": pd.date_range("2026-09-20 00:00", periods=40, freq="1h"),
+            "open": [101.0] * 40, "high": [101.4] * 40, "low": [100.7] * 40,
+            "close": [101.0] * 40, "volume": [4000] * 40})
+        with patch("data.fetcher.get_klines",
+                   side_effect=lambda _s, tf, *_a, **_k: hourly if tf == "1h" else narrow):
+            frame = _lifecycle_chart_frame(candidate, [], now=entry + timedelta(minutes=15 * 56))
         self.assertIs(frame, hourly)
         self.assertEqual(candidate.metadata["chart_view_tf"], "1h")
         self.assertEqual(candidate.metadata["chart_tf_scale"], 0.25)

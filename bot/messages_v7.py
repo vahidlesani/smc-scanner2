@@ -203,13 +203,16 @@ _TF_FA = {"1d": "روزانه", "4h": "۴ ساعته", "2h": "۲ ساعته", "1
           "30m": "۳۰ دقیقه", "15m": "۱۵ دقیقه", "5m": "۵ دقیقه",
           "3m": "۳ دقیقه", "1m": "۱ دقیقه"}
 
-# ── Viva 09-20 time-axis law (verbatim ruling) ───────────────────────────
+# ── Viva 09-20 time-axis law (verbatim ruling + his 09-20 clarification) ──
 # «اگر قیمت و کندل‌ها قبل از تی‌پی یا استاپ از ابزار خارج شدند، در زمان
 # تی‌پی‌ها و چارت‌های لایو اجازه دارند حرکت قیمت را در تایم‌فریم‌های بالاتر
-# نشان بدهند و در یکی دو خط توضیح بدهند.» — the SAME anchored tool (entry,
-# stop, TP ladder, trendline) is re-rendered on a higher TF; nothing slides
-# on the time axis; the chart keeps the trigger TF until the candles outrun
-# the tool by more than LIFECYCLE_SWITCH_AFTER_BARS bars.
+# نشان بدهند و در یکی دو خط توضیح بدهند» + «اون ۴۰ کندل رو بعنوان مثال
+# گفتم .. اگر تعداد کندل‌ها به هر تعدادی رسید که از ابزار خارج شد، با یک
+# تایم بالاتر …؛ تا وقتی قیمت داخل ابزار لانگ/شورت است در همان تایم تریگر».
+# So: NO magic count. The tool keeps its drawn region (its own right edge in
+# time + its own price band); the moment candles/price leave that region —
+# ANY number of them — every message that carries a LIVE chart shows the same
+# anchored tool on one higher TF with a short Persian note.
 LIFECYCLE_VIEW_LADDER = {
     "1m": ["3m", "5m", "15m", "1h", "4h"],
     "3m": ["5m", "15m", "1h", "4h"],
@@ -221,7 +224,9 @@ LIFECYCLE_VIEW_LADDER = {
     "4h": ["1d"],
     "1d": [],
 }
-LIFECYCLE_SWITCH_AFTER_BARS = 40   # his example: 40 escaped 15m bars → 1h = 10
+# The tool's own drawn right edge: the confirmed chart paints 42 blank bars
+# ahead of the entry candle, so that margin IS the edge candles walk out of.
+TOOL_FORWARD_BARS = 42
 LIFECYCLE_MAX_VIEW_BARS = 110      # tool origin must stay on the 150-bar canvas
 
 
@@ -2772,6 +2777,21 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     chain = _setup_chain_get(candidate)
     detail_mid = int(chain.get("edu") or candidate.metadata.get("education_message_id") or 0)
     chart = None
+    # Viva 09-20 time-axis law: updates carry a LIVE chart. While price is
+    # still inside the long/short tool (and in every pre-confirmation update)
+    # the tape is the trigger TF; once candles have left the tool, the same
+    # anchored tool is shown on one higher TF. An update must NEVER fall back
+    # to an empty chart just because the higher frame is unavailable.
+    # confirmed charts are the first that carry the drawn tool; before a fill
+    # the tool is anchored at the confirmation candle (tool_entry_ts fallback)
+    _chart_is_live = bool(getattr(candidate, "confirmed_at", ""))
+    if chart_df is not None and _chart_is_live:
+        try:
+            _live_frame = _lifecycle_chart_frame(candidate, [])
+            if _live_frame is not None:
+                chart_df = _live_frame
+        except Exception:
+            pass
     if chart_df is not None:
         try:
             chart = generate_chart(chart_df, candidate, confirmed=False)
@@ -2814,6 +2834,11 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     if chain.get("upd_sig") == sig:
         return False
     upd_n = int(chain.get("upd_n") or 0) + 1
+    # the ordered one/two-line explanation rides along whenever this update's
+    # chart was stepped up to a higher TF (09-20 time-axis law)
+    _view_note = str((candidate.metadata or {}).get("chart_view_note") or "")
+    if _view_note:
+        note_fa = f"{note_fa}\n\n{_view_note}" if str(note_fa or "").strip() else _view_note
     caption = _setup_update_caption(
         candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>", upd_n)
     link = _telegram_message_link(edu_chat, detail_mid) if detail_mid and edu_chat else ""
@@ -3365,97 +3390,172 @@ def _event_ts(value) -> Optional[pd.Timestamp]:
     return _t
 
 
-def _lifecycle_view_plan(candidate: SignalCandidate,
-                         now: Optional[pd.Timestamp] = None) -> tuple[str, int, str]:
-    """Viva 09-20 time-axis ruling: pick the display TF for a LIFECYCLE render.
+def _tool_band(candidate: SignalCandidate) -> tuple[float, float]:
+    """(bottom, top) of the DRAWN long/short tool — exactly what the chart
+    paints: the red box down to the stop, the green box up to the final
+    target, plus every drawn TP pill. Price inside this band = «داخل ابزار»."""
+    md = candidate.metadata or {}
+    ladder = md.get("target_ladder") or {}
+    targets = [float(t) for t in (ladder.get("targets") or []) if float(t or 0) > 0]
+    entry = float(getattr(candidate, "planned_entry", 0) or 0)
+    sl = float(getattr(candidate, "sl", 0) or 0)
+    tp2 = float(getattr(candidate, "tp2", 0) or 0)
+    levels = [x for x in [entry, tp2, *targets] if x > 0]
+    if not levels:
+        return 0.0, 0.0
+    if str(getattr(candidate, "direction", "LONG")).upper() == "LONG":
+        return (min([entry, sl] if sl > 0 else [entry]), max(levels))
+    return (min(levels), max([entry, sl] if sl > 0 else [entry]))
 
-    The trade tape starts on the position's own trigger TF. The tool is
-    anchored at `tool_anchor_ts` (55-bar origin, stamped once) and the entry
-    sits at `tool_entry_ts` (the real fill candle). Once more than
-    LIFECYCLE_SWITCH_AFTER_BARS candles have printed PAST the tool's right
-    edge (his example: 40 bars on 15m), TP charts and live charts step the
-    SAME tool up 15m→1h→4h→1d until the whole tool + price movement still
-    fits the canvas (≤ LIFECYCLE_MAX_VIEW_BARS bars back). Returns
-    (view_tf, escaped_bars, note_fa). The note is the one/two-line Persian
-    explanation he demanded — it goes in the MESSAGE, never painted on the
-    chart. Returns (trigger_tf, 0, "") while the tool is still young, which
-    includes every alert/confirmation render (their own pin law is separate).
+
+def _tool_escape(candidate: SignalCandidate, frame: Optional[pd.DataFrame],
+                 now: Optional[pd.Timestamp] = None) -> int:
+    """How many CLOSED candles have left the drawn tool region.
+
+    Viva 09-20 (clarified): the 40 bars were only an example — the count is
+    whatever the tool's own geometry produces. A candle is OUTSIDE when it
+    printed past the tool's right edge (TOOL_FORWARD_BARS forward bars from
+    the entry candle, the same margin the confirmed chart paints) or when its
+    close sits beyond the tool's price band (above the top pill for a long /
+    below it for a short, or through the stop on the other side). Zero = the
+    price is still inside the long/short tool → trigger TF everywhere.
+    """
+    md = candidate.metadata or {}
+    band_lo, band_hi = _tool_band(candidate)
+    entry = _event_ts(md.get("tool_entry_ts")) \
+        or _event_ts(getattr(candidate, "confirmed_at", "")) \
+        or _event_ts(getattr(candidate, "created_at", ""))
+    if entry is None:
+        return 0
+    right = _event_ts(md.get("tool_right_ts"))
+    if right is None:
+        try:
+            from database.repository_v7 import TF_MINUTES
+            _m = float(TF_MINUTES.get(str(candidate.trigger_timeframe or "15m").lower(),
+                                      TF_MINUTES.get("15m")) or 15)
+        except Exception:
+            _m = 15.0
+        right = entry + pd.Timedelta(minutes=_m * TOOL_FORWARD_BARS)
+    if frame is None or getattr(frame, "empty", True):
+        # no tape to measure: fall back to the clock alone (never stalls)
+        if now is None:
+            return 0
+        _m = max((right - entry).total_seconds() / 60.0 / TOOL_FORWARD_BARS, 1e-9)
+        bars = int(((now - entry).total_seconds() / 60.0) // _m)
+        return max(0, bars - TOOL_FORWARD_BARS)
+    _tol = 0.0005 * max(abs(band_hi), abs(band_lo), 1e-9)
+    out = 0
+    for _, row in frame.iterrows():
+        ts = _event_ts(row.get("timestamp"))
+        if ts is None or ts <= entry:
+            continue
+        if ts > right:
+            out += 1
+            continue
+        if band_hi <= 0:
+            continue
+        _close = float(row.get("close") or 0)
+        if _close > band_hi + _tol or _close < band_lo - _tol:
+            out += 1
+    return out
+
+
+def _pick_view_tf(candidate: SignalCandidate, now: Optional[pd.Timestamp] = None) -> str:
+    """ONE step up in the ladder (his «یک تایم بالاتر»), never more than the
+    canvas needs: the finest higher TF where the tool's origin still fits."""
+    from database.repository_v7 import TF_MINUTES
+    base = str(candidate.trigger_timeframe or "15m").lower()
+    ladder = LIFECYCLE_VIEW_LADDER.get(base) or []
+    if not ladder:
+        return base
+    md = candidate.metadata or {}
+    created = _event_ts(md.get("tool_anchor_ts")) \
+        or _event_ts(getattr(candidate, "confirmed_at", "")) \
+        or _event_ts(getattr(candidate, "created_at", ""))
+    if created is None:
+        return ladder[0]
+    _now = now if now is not None else pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+    age_min = max(0.0, (_now - created).total_seconds() / 60.0)
+    for _tf in ladder:
+        _m = float(TF_MINUTES.get(_tf, 0) or 0)
+        if _m > 0 and age_min / _m <= LIFECYCLE_MAX_VIEW_BARS:
+            return _tf
+    return ladder[-1]
+
+
+def _escape_note(base: str, view: str, escaped: int) -> str:
+    """His ordered one/two-line explanation — in the MESSAGE, never on the chart."""
+    return (
+        f"🕒 پس از خروج {_fa_num(int(escaped))} کندل از ابزار، این پوزیشن در "
+        f"تایم فریم {_TF_FA.get(view, view.upper())} نمایش داده شده است.\n"
+        "ابزار روی محور زمان جابه‌جا نشده؛ ورود، استاپ و TPها روی همان زمان و "
+        "قیمت اولیه‌اند و حرکت قیمت روی همان ابزار دیده می‌شود."
+    )
+
+
+def _lifecycle_view_plan(candidate: SignalCandidate,
+                         now: Optional[pd.Timestamp] = None,
+                         frame: Optional[pd.DataFrame] = None) -> tuple[str, int, str]:
+    """Pick the display TF for every render that carries a LIVE chart.
+
+    Viva 09-20 (final form): while the price is still INSIDE the long/short
+    tool — and in every analysis/update before confirmation — the tape stays
+    on the position's own trigger TF. The moment ANY candle has left the
+    tool, the same anchored tool is re-rendered one TF higher with the
+    ordered short note. Returns (view_tf, escaped_candles, note_fa).
     """
     from database.repository_v7 import TF_MINUTES
     base = str(candidate.trigger_timeframe or "15m").lower()
     if base not in TF_MINUTES:
         return str(candidate.trigger_timeframe or "15m"), 0, ""
-    md = candidate.metadata or {}
-    created = _event_ts(md.get("tool_anchor_ts")) \
-        or _event_ts(getattr(candidate, "confirmed_at", "")) \
-        or _event_ts(getattr(candidate, "created_at", ""))
-    entry = _event_ts(md.get("tool_entry_ts")) \
-        or _event_ts(getattr(candidate, "confirmed_at", "")) \
-        or _event_ts(getattr(candidate, "created_at", ""))
-    if created is None or entry is None:
+    try:
+        escaped = int(_tool_escape(candidate, frame, now=now))
+    except Exception:
+        escaped = 0
+    if escaped < 1:
         return base, 0, ""
-    _now = now if now is not None else pd.Timestamp(
-        datetime.now(timezone.utc)).tz_localize(None)
-    m_base = float(TF_MINUTES[base])
-    # candles printed AFTER the tool was drawn = the tool's right edge
-    outside = (_now - entry).total_seconds() / 60.0 / m_base
-    if outside <= LIFECYCLE_SWITCH_AFTER_BARS:
-        return base, int(max(0.0, outside)), ""
-    age_min = max(0.0, (_now - created).total_seconds() / 60.0)
-    view = base
-    for _tf in LIFECYCLE_VIEW_LADDER.get(base, []):
-        _m = float(TF_MINUTES.get(_tf, 0) or 0)
-        if _m > 0 and age_min / _m <= LIFECYCLE_MAX_VIEW_BARS:
-            view = _tf
-            break
-    else:
-        _ladder = LIFECYCLE_VIEW_LADDER.get(base, [])
-        view = _ladder[-1] if _ladder else base
+    view = _pick_view_tf(candidate, now=now)
     if view == base:
-        return base, int(outside), ""
-    note = (
-        f"🕒 پس از خروج {_fa_num(int(outside))} کندل "
-        f"{_TF_FA.get(base, base.upper())} "
-        f"از ابزار، این پوزیشن در تایم فریم {_TF_FA.get(view, view.upper())} "
-        "نمایش داده شده است.\n"
-        "ابزار روی محور زمان جابه‌جا نشده؛ ورود، استاپ و TPها سر جای اول‌اند "
-        "و حرکت قیمت روی همان ابزار دیده می‌شود."
-    )
-    return view, int(outside), note
+        return base, escaped, ""
+    return view, escaped, _escape_note(base, view, escaped)
 
 
 def _lifecycle_chart_frame(candidate: SignalCandidate, levels: list[float],
                            now: Optional[pd.Timestamp] = None) -> Optional[pd.DataFrame]:
-    """Lifecycle (post-confirmation) chart frame under the 09-20 time-axis law.
+    """Chart frame for every render that carries a LIVE chart.
 
-    The 09-14 pin («tape = trigger TF, never escalate to make numbers fit»)
-    still governs ALERT and CONFIRMATION charts. Lifecycle renders — TP hits,
-    live updates, final results — obey the newer ruling instead: when the
-    candles have left the tool behind, the SAME anchored tool is re-rendered
-    on a higher TF with a one/two-line Persian note, because sliding the tool
-    along the time axis is exactly what he forbade. A venue that cannot serve
-    the higher frame falls back to the trigger TF WITHOUT a note (honest
-    degradation, never a stall).
+    ALERT and CONFIRMATION charts keep the 09-14 pin (trigger TF). TP hits,
+    stop receipts, live updates and final results obey the 09-20 law: while
+    the price is still inside the drawn long/short tool they, too, stay on the
+    trigger TF — the moment ANY candle has left the tool, the SAME anchored
+    tool is re-rendered ONE TF higher with the ordered short note (never a
+    slide on the time axis). A venue that cannot serve the higher frame falls
+    back to the trigger TF WITHOUT a note — honest degradation, no stall.
     """
     from data.fetcher import get_klines
     from database.repository_v7 import TF_MINUTES
     base = str(candidate.trigger_timeframe or "15m").lower()
-    view, escaped, note = _lifecycle_view_plan(candidate, now=now)
-    frame = None
+    # the trigger tape is ALWAYS fetched: it is what tells us whether price
+    # is still inside the tool (the venue cache makes the second fetch cheap)
     try:
-        frame = get_klines(candidate.symbol, view, 180, closed_only=False, use_cache=True)
+        frame = get_klines(candidate.symbol, base, 180, closed_only=False, use_cache=True)
     except Exception:
         frame = None
     if frame is None or getattr(frame, "empty", True):
-        if view == base:
-            return None
+        return None
+    view, escaped, note = _lifecycle_view_plan(candidate, now=now, frame=frame)
+    if view != base:
+        _stepped = None
         try:
-            frame = get_klines(candidate.symbol, base, 180, closed_only=False, use_cache=True)
+            _stepped = get_klines(candidate.symbol, view, 180, closed_only=False, use_cache=True)
         except Exception:
-            frame = None
-        if frame is None or getattr(frame, "empty", True):
-            return None
-        view, escaped, note = base, 0, ""
+            _stepped = None
+        if _stepped is not None and not getattr(_stepped, "empty", True):
+            frame = _stepped
+        else:
+            # venue cannot serve that frame (or it has no tape yet): stay on
+            # the trigger TF WITHOUT the note — honest degradation, never a stall
+            view, escaped, note = base, 0, ""
     candidate.metadata["chart_view_tf"] = view
     candidate.metadata["chart_view_escaped"] = int(escaped)
     candidate.metadata["chart_view_note"] = note
