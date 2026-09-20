@@ -1304,6 +1304,22 @@ def main() -> None:
     print(f"⚡ Candidate monitor active • every {SETTINGS.candidate_monitor_seconds}s")
 
     now = datetime.now(timezone.utc)
+
+    def _write_heartbeat(payload: dict) -> None:
+        """Liveness proof (round-12 incident): the first discovery scan takes
+        ~11 minutes, so the heartbeat is written BEFORE it starts too — the bot
+        can never look silent-and-alive at the same time again."""
+        payload = dict(payload)
+        payload["when"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        payload["pid"] = os.getpid()
+        try:
+            from database.bot_kv import set_json as _hb_set
+            _hb_set("scanner_heartbeat", payload)
+        except Exception as _hb_exc:
+            print(f"heartbeat write skipped: {_hb_exc}")
+        print(f"♥ HEARTBEAT • {payload['when']} • {payload.get('stage', 'loop')} • "
+              f"scans={payload.get('scans', 0)} monitors={payload.get('monitors', 0)}")
+    _write_heartbeat({"stage": "boot", "scans": 0, "monitors": 0})
     if SETTINGS.run_scan_on_start:
         run_discovery_scan()
     next_scan = _next_aligned_scan(datetime.now(timezone.utc))
@@ -1343,20 +1359,14 @@ def main() -> None:
             next_scan = _next_aligned_scan(datetime.now(timezone.utc))
         if time.time() >= _hb["next"]:
             _hb["next"] = time.time() + 300
-            _hb_payload = {
-                "when": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            _write_heartbeat({
+                "stage": "loop",
                 "scans": _hb["scans"], "monitors": _hb["monitors"],
                 "last_scan": _hb["last_scan"], "last_monitor": _hb["last_monitor"],
                 "scan_stats": _hb["stats"], "monitor_stats": _hb["mon_stats"],
-            }
-            try:
-                from database.bot_kv import set_json as _hb_set
-                _hb_set("scanner_heartbeat", _hb_payload)
-            except Exception as _hb_exc:
-                print(f"heartbeat write skipped: {_hb_exc}")
-            print(f"♥ HEARTBEAT • scanner alive • scans={_hb['scans']} "
-                  f"monitors={_hb['monitors']} • last discovery={_hb['last_scan']} "
-                  f"{_hb['stats']} • last monitor={_hb['last_monitor']}")
+            })
+            print(f"   last discovery={_hb['last_scan']} {_hb['stats']} • "
+                  f"last monitor={_hb['last_monitor']}")
         report_key = now.strftime("%Y-%m-%d")
         if now.hour == 8 and now.minute < 2 and report_key != last_daily_report:
             _daily_report()
