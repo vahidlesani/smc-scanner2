@@ -593,6 +593,22 @@ def evaluate_confirmation(
     # midpoint. Reject a late confirmation if its real risk/reward has degraded.
     executable_entry = close
     risk = abs(executable_entry - candidate.sl)
+    # ── his 09-21 ruling, verbatim: «استاپ اصلا ساختاری اگر فاصله داشت حذف نشه و
+    # تا ۱.۲۵ قیمت نماد محاسبه بشه» — the confirmation uses a stop that is CUT at
+    # 1.25% of price instead of refusing the scenario (the VVV 1h chain sat
+    # «منتظر» for two days because DEGENERATE_GEOMETRY rejected every cycle).
+    try:
+        from analysis.trade_management import clamp_stop_price as _clamp_q
+        _q_sl, _q_clamped = _clamp_q(executable_entry, candidate.direction, candidate.sl)
+        if _q_clamped:
+            candidate.sl = float(_q_sl)
+            candidate.metadata["stop_clamped"] = True
+            candidate.metadata["stop_clamp_note"] = (
+                "استاپ ساختاری دورتر از ۱٫۲۵٪ قیمت بود؛ طبق قانون ۰۹-۲۱ استاپ روی "
+                "سقف ۱٫۲۵٪ تنظیم شد و سناریو حفظ شد.")
+            risk = abs(executable_entry - float(candidate.sl))
+    except Exception:
+        pass
     if risk <= 0:
         return reject("RISK_INVALID", "فاصله Entry تأییدشده تا حد ضرر معتبر نیست.")
     # ── «مدیریت ویوا» §4 (09-20): TF distance ceiling for the FINAL target ──
@@ -623,7 +639,11 @@ def evaluate_confirmation(
     if atr_value > 0:
         chase_atr = abs(executable_entry - zone_mid) / atr_value
         max_chase = float(getattr(SETTINGS, "confirm_max_chase_atr", 0.80))
-        if chase_atr > max_chase and not candidate.metadata.get("tl_fast_break"):
+        # the fast-break lane may confirm a little beyond the zone, never from
+        # a runaway price (his VVV case: 12.88 ATR away and still «in progress»).
+        _fb_max = float(getattr(SETTINGS, "fast_break_max_chase_atr", 1.5))
+        _fast_ok = bool(candidate.metadata.get("tl_fast_break")) and chase_atr <= _fb_max
+        if chase_atr > max_chase and not _fast_ok:
             return reject("ENTRY_TOO_FAR", f"کلوز تأیید {chase_atr:.2f} ATR از زون دور شده؛ Chase مجاز نیست.")
         if chase_atr > max_chase:
             # a fresh single-close break IS far from the zone by nature —
@@ -668,7 +688,8 @@ def evaluate_confirmation(
                 f"{'لانگ باید زیر ورود' if candidate.direction == 'LONG' else 'شورت باید بالای ورود'} "
                 f"باشد (ورود {executable_entry:.8g} · استاپ {float(candidate.sl):.8g})؛ "
                 "پیام صادر نمی‌شود تا هندسه تصحیح شود."))
-        if _span_frac < _span_floor or (_cap_abs > 0 and risk > _cap_abs):
+        _tol_cap_abs = _cap_abs * 1.20 if _cap_abs > 0 else 0.0   # ±20% tolerance
+        if _span_frac < _span_floor or (_tol_cap_abs > 0 and risk > _tol_cap_abs):
             return reject("DEGENERATE_GEOMETRY", (
                 f"هندسهٔ ابزار بی‌معنی است: استاپ {_sl_frac * 100:.1f}% از ورود دور است "
                 f"در حالی که افق همین تایم‌فریم "

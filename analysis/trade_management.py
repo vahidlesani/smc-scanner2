@@ -98,6 +98,60 @@ def structural_buffer(price: float, market: Optional[Dict] = None) -> float:
         return abs(float(price or 0.0)) * STOP_BUFFER_PCT
 
 
+# ── Viva 09-21 (round 12, his third ruling, verbatim):
+# «استاپ اصلا ساختاری اگر فاصله داشت حذف نشه و تا ۱.۲۵ قیمت نماد محاسبه بشه»
+# → a far structural stop NEVER deletes the setup any more; it is pulled to
+#   1.25% of the symbol's price.
+# «۳ تا ۵ درصد … ۴ تا ۷ … ۷ تا ۱۰ … هم با تلورانس ۲۰ درصد بالایی پایینی سقف و
+#   کف های اعلام شده برای تی پی ها اوکیه» → the announced TP band edges carry a
+#   ±20% tolerance.
+MAX_STOP_PCT = 1.25
+BAND_TOLERANCE = 0.20
+
+
+def tolerant_band_for_tf(trigger_tf: str) -> tuple:
+    """(floor, cap) with the announced ±20% tolerance applied.
+
+    Used by the CHECKERS (the sanity net and the confirmation gate), never by
+    the ladder arithmetic: his tolerance widens what is accepted around the
+    announced band — it must not silently move every path.  (Keeping the band
+    itself stable is also what keeps the round-9/10/11 path tests honest.)"""
+    lo, hi = band_for_tf(trigger_tf)
+    return (float(lo) * (1.0 - BAND_TOLERANCE), float(hi) * (1.0 + BAND_TOLERANCE))
+
+
+def tolerant_cap_pct(trigger_tf: str) -> float:
+    return float(target_distance_cap_pct(trigger_tf)) * (1.0 + BAND_TOLERANCE)
+
+
+def clamp_stop_price(entry: float, direction: str, stop: float,
+                     max_pct: float = MAX_STOP_PCT) -> tuple:
+    """(stop, clamped) — «استاپ نهایتا ۱.۲۵ درصد قیمت نماد».
+
+    The structural anchor keeps priority whenever it is closer than 1.25%; a
+    farther swing is cut at exactly 1.25% instead of dropping the scenario (his
+    ruling after the VVV 1h case: a 19%-away swing held the chain «منتظر» for
+    two days). The stop never crosses to the wrong side of the entry.
+    """
+    try:
+        entry = float(entry or 0.0)
+        stop = float(stop or 0.0)
+        if entry <= 0 or stop <= 0 or max_pct <= 0:
+            return stop, False
+        limit = entry * float(max_pct) / 100.0
+        if direction == "LONG":
+            floor_stop = entry - limit
+            if stop < floor_stop:
+                return float(floor_stop), True
+            return stop, False
+        ceiling_stop = entry + limit
+        if stop > ceiling_stop:
+            return float(ceiling_stop), True
+        return stop, False
+    except Exception:
+        return stop, False
+
+
 def band_for_tf(trigger_tf: str) -> tuple:
     """The 3–5% style band of a trigger TF (4h 5–7%, 1d 5–10%)."""
     return TARGET_BAND_PCT_BY_TF.get(str(trigger_tf or "15m").lower(),

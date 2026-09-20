@@ -614,6 +614,9 @@ def _liquidity_protected_invalidation(
     spread_buffer = abs(anchor) * max(0.0, float(spread_pct)) / 100 * 2.0
     buffer_value = max(buffer_value, spread_buffer, base_gap)
     invalidation = anchor - buffer_value if direction == "LONG" else anchor + buffer_value
+    # ── Viva 09-21: «استاپ اصلا ساختاری اگر فاصله داشت حذف نشه و تا ۱.۲۵ قیمت
+    # نماد محاسبه بشه» — the clamp itself runs where the ENTRY is known (the
+    # builder + the scan funnel); here the anchor keeps its structural value.
     return {
         "price": float(invalidation),
         "liquidity_anchor": float(anchor),
@@ -621,6 +624,7 @@ def _liquidity_protected_invalidation(
         "protected_pivots": int(picked),
         "base_gap": float(base_gap),
         "no_atr": True,
+        "stop_clamped": False,
     }
 
 
@@ -777,6 +781,10 @@ def _base_candidate(
         dict(bundle.ticker or {}),
     )
     sl = float(invalidation["price"])
+    if invalidation.get("stop_clamped"):
+        stop_clamped_note = True
+    else:
+        stop_clamped_note = False
     if entry <= 0 or abs(entry - sl) / entry < 0.0008:
         return None
     # Viva 09-20: the TRIGGER timeframe's own next high/low is the primary
@@ -919,16 +927,18 @@ def _base_candidate(
     # targets are allowed to travel («حدود ۱۲ درصد استاپ؟؟» — SEI 9.7%, LIT
     # 14% on 15m/1h). The TF distance ceiling (15m/1h 5% · 4h 7% · 1d 10%) is
     # the same horizon used for targets, so a farther invalidation means the
-    # premise is not in this timeframe's trade: the setup stays out instead of
-    # publishing an unfillable-risk alert.
+    # premise is not in this timeframe's trade: «حذف نشه» — the stop is CUT at
+    # 1.25% of price instead and the alert keeps its honest note.
     try:
-        from analysis.trade_management import target_distance_cap_pct as _cap_12
-        _stop_pct12 = abs(float(entry) - float(sl)) / max(float(entry), 1e-12) * 100.0
-        _cap12 = _cap_12(trigger_tf)
-        if _stop_pct12 > _cap12:
-            return None
+        from analysis.trade_management import (clamp_stop_price as _clamp_12,
+                                               MAX_STOP_PCT as _max_stop_12)
+        sl, _clamped12 = _clamp_12(entry, direction, sl)
+        if _clamped12 or stop_clamped_note:
+            candidate_stop_clamped = True
+        else:
+            candidate_stop_clamped = False
     except Exception:
-        pass
+        candidate_stop_clamped = False
     expiry_hours = expiry_hours_for(style, trigger_tf)
     expires = utc_now() + timedelta(hours=expiry_hours)
     signal_id = generate_viva_signal_id(bundle.symbol, style, setup_code)
@@ -981,6 +991,7 @@ def _base_candidate(
             # retest requirement. Only candles after created_at may set this.
             "touched": False,
             "historical_visit_count": int(poi.get("touches", 0)),
+            "stop_clamped": bool(candidate_stop_clamped),
             "confirm_tf": confirm_timeframe_for_pattern(context_tf, style, trigger_tf),
         },
         expires_at=expires.isoformat(timespec="seconds"),
@@ -1403,6 +1414,11 @@ def sanity_reject(candidate) -> Optional[str]:
         if entry <= 0 or sl <= 0 or tp1 <= 0 or tp2 <= 0:
             return "GEOMETRY_MISSING"
         cap = float(target_distance_cap_pct(tf)) or 5.0
+        try:
+            from analysis.trade_management import tolerant_cap_pct as _tcap
+            cap = float(_tcap(tf)) or cap
+        except Exception:
+            pass
         if direction == "LONG":
             if sl >= entry:
                 return "STOP_WRONG_SIDE"
@@ -1415,7 +1431,9 @@ def sanity_reject(candidate) -> Optional[str]:
                 return "TARGET_WRONG_SIDE"
         else:
             return "DIRECTION_MISSING"
-        if abs(entry - sl) / entry * 100.0 > cap:
+        # the stop is clamped to 1.25% upstream; anything still past the tolerant
+        # TF ceiling means the geometry is broken in some other way.
+        if abs(entry - sl) / entry * 100.0 > max(cap, 1.25 * 1.02):
             return "STOP_HORIZON"
         # 2% tolerance: rounding in the ladder must not kill a legitimate path.
         if abs(tp2 - entry) / entry * 100.0 > cap * 1.02:
@@ -1458,6 +1476,19 @@ def scan_setups(bundle: MarketBundle, style: str) -> List[SignalCandidate]:
     # ── the single net every lane must pass (see sanity_reject above).
     kept: List[SignalCandidate] = []
     for cand in candidates:
+        # ── his 09-21 ruling, applied once at the funnel: a structural stop
+        # farther than 1.25% of price is CUT there — never a dropped scenario.
+        try:
+            from analysis.trade_management import clamp_stop_price as _clamp_f
+            _new_sl, _was_clamped = _clamp_f(getattr(cand, "planned_entry", 0) or 0,
+                                             getattr(cand, "direction", ""), getattr(cand, "sl", 0) or 0)
+            if _was_clamped:
+                cand.sl = float(_new_sl)
+                _md_f = getattr(cand, "metadata", None)
+                if isinstance(_md_f, dict):
+                    _md_f["stop_clamped"] = True
+        except Exception:
+            pass
         why = sanity_reject(cand)
         if why:
             line = (f"🧱 SANITY_REJECT {why} • {bundle.symbol} {style} "

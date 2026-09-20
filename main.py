@@ -641,6 +641,33 @@ def _watch_edge_at(candidate, ts) -> float:
                  else candidate.entry_zone_bottom)
 
 
+def _scenario_out_of_reach(candidate, price) -> bool:
+    """Viva 09-21 («۵۱ آپدیت از ۱۸ دلار رفته ۲۸ دلار ربات هنوز منتظر مونده؟»).
+
+    An unconfirmed scenario whose zone is far behind the market is not
+    «waiting» — its premise is gone. Distance > `scenario_out_of_reach_atr`
+    (default 2.0) from the zone middle, in the scenario's own direction, closes
+    the chain with a clear message instead of an hourly heartbeat for days.
+    A fresh fast break (≤ fast_break_max_chase_atr) is unaffected.
+    """
+    try:
+        if price is None:
+            return False
+        md = candidate.metadata or {}
+        atr = float(md.get("atr") or 0) or 0.0
+        if atr <= 0:
+            return False
+        zone_mid = (float(candidate.entry_zone_bottom) + float(candidate.entry_zone_top)) / 2.0
+        px = float(price)
+        if candidate.direction == "LONG" and px < zone_mid:
+            return False
+        if candidate.direction == "SHORT" and px > zone_mid:
+            return False
+        return abs(px - zone_mid) / atr > float(getattr(SETTINGS, "scenario_out_of_reach_atr", 2.0))
+    except Exception:
+        return False
+
+
 def _live_break_watch(candidate, live_frame) -> Tuple[str, str]:
     """Viva 2026-09-14: an open pattern candle that has already thrust beyond
     the daily/wedge/triangle/channel side is REPORTED NOW, with the live chart
@@ -682,6 +709,20 @@ def _live_break_watch(candidate, live_frame) -> Tuple[str, str]:
         return "", ""
     if str(md.get("live_break_bar") or "") == _key:
         return "", ""
+    # ── round 12: «⚡ عبورِ در لحظه» must mean a CROSSING, not a price that has
+    # been far beyond the line for days (the VVV chain said «در لحظه» while the
+    # price sat 12.88 ATR above the edge). The previous closed candle has to be
+    # on the near side, or the price has to be within 2 ATR of the edge.
+    try:
+        _prev_close = float(live_frame.iloc[-2]["close"])
+        if candidate.direction == "LONG":
+            _crossed_now = _prev_close < edge <= px
+        else:
+            _crossed_now = _prev_close > edge >= px
+        if not (_crossed_now or abs(px - edge) <= 2.0 * atr):
+            return "", ""
+    except Exception:
+        pass
     # HOT-4 (audit 09-15): the dedup marker is persisted by the CALLER only
     # after the Telegram send succeeded — a failed send must never eat the
     # one-and-only ⚡ alert of this pattern candle.
@@ -887,6 +928,37 @@ def monitor_candidates() -> Dict[str, int]:
                             candidate, _lf[1], htf_closed_df=_pat_frame)
 
             if not confirmed:
+                # ── premise-dead closure (his 09-21 VVV report). Checked before
+                # every heartbeat/update so a runaway market can never keep a
+                # chain alive for days.
+                if not candidate.metadata.get("technical_confirmation_complete") \
+                        and _scenario_out_of_reach(candidate, current_price):
+                    _zone_mid = (float(candidate.entry_zone_bottom) + float(candidate.entry_zone_top)) / 2.0
+                    _atr_md = float((candidate.metadata or {}).get("atr") or 0) or 0.0
+                    _far = abs(float(current_price) - _zone_mid) / _atr_md if _atr_md else 0.0
+                    candidate.status = "CANCELLED"
+                    candidate.metadata["cancel_reason"] = "OUT_OF_REACH"
+                    update_candidate(candidate)
+                    try:
+                        cancel_staged_confirmation(candidate.signal_id)
+                    except Exception:
+                        pass
+                    send_candidate_cancelled(
+                        candidate,
+                        f"قیمت {_far:.2f} ATR از ناحیهٔ ورود دور شد و کندلِ تأییدِ معتبر "
+                        f"شکل نگرفت؛ سناریو از دست رفت و از پیگیری خارج می‌شود "
+                        f"(قیمت {float(current_price):g} در برابر ناحیه {_zone_mid:.6g}).",
+                    )
+                    try:
+                        from bot.messages_v7 import send_verdict_reply
+                        send_verdict_reply(candidate, False,
+                                           "ناحیه از دست رفت؛ به‌جای انتظار بی‌پایان، سناریو بسته شد.")
+                    except Exception:
+                        pass
+                    stats["cancelled"] = int(stats.get("cancelled", 0)) + 1
+                    print(f"⛔ OUT_OF_REACH {candidate.symbol} {candidate.setup_code}: "
+                          f"{_far:.2f} ATR from the zone — chain closed")
+                    continue
                 code = str(candidate.metadata.get("last_reject_code") or "UNKNOWN")
                 stats["rejects"] = stats.get("rejects", {})
                 stats["rejects"][code] = int(stats["rejects"].get(code, 0)) + 1
@@ -904,7 +976,10 @@ def monitor_candidates() -> Dict[str, int]:
                                                  if "timestamp" in _pfr.columns
                                                  else _pfr.index[-1])
                             _bts = _last.isoformat()[:16]
-                            if str(candidate.metadata.get("hb_bar") or "") != _bts:
+                            _hb_sent = int(candidate.metadata.get("hb_count") or 0)
+                            _hb_max = int(getattr(SETTINGS, "max_chain_heartbeats", 12))
+                            if str(candidate.metadata.get("hb_bar") or "") != _bts \
+                                    and _hb_sent < _hb_max:
                                 _dur = _TF_SECONDS_LIVE.get(_trg, 3600)
                                 _rem = max(1, int((_last.timestamp() + 2 * _dur
                                                     - pd.Timestamp.utcnow().tz_localize(None).timestamp()) // 60))
@@ -918,6 +993,7 @@ def monitor_candidates() -> Dict[str, int]:
                                     # a failed/throttled send retries next cycle
                                     # instead of losing this candle's heartbeat.
                                     candidate.metadata["hb_bar"] = _bts
+                                    candidate.metadata["hb_count"] = _hb_sent + 1
                                     try:
                                         update_candidate(candidate)
                                     except Exception:

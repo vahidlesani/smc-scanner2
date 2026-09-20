@@ -147,6 +147,12 @@ class Settings:
     pinv_rr1_floor: float = 1.30
     pinv_rr2_floor: float = 2.00
     confirm_max_chase_atr: float = 0.80
+    # ── Viva 09-21 (round 12, VVV report «۵۱ آپدیت … ربات هنوز منتظر مونده؟»):
+    # a fresh single-close break may confirm slightly beyond the zone, but a
+    # runaway price must not keep a chain «waiting» for days.
+    fast_break_max_chase_atr: float = 1.5      # exemption ceiling for fast breaks
+    scenario_out_of_reach_atr: float = 2.0     # beyond this the premise is gone → close
+    max_chain_heartbeats: int = 12             # per-candle updates per chain
     # Candidates born with a failing mandatory gate can never confirm. When
     # enabled, they are educational-only: they are not tracked for monitoring
     # and therefore never send Approaching messages or lock their symbol.
@@ -312,6 +318,9 @@ class Settings:
             pinv_rr1_floor=_float("PINVAL_RR1_FLOOR", cls.pinv_rr1_floor),
             pinv_rr2_floor=_float("PINVAL_RR2_FLOOR", cls.pinv_rr2_floor),
             confirm_max_chase_atr=_float("CONFIRM_MAX_CHASE_ATR", cls.confirm_max_chase_atr),
+            fast_break_max_chase_atr=_float("FAST_BREAK_MAX_CHASE_ATR", cls.fast_break_max_chase_atr),
+            scenario_out_of_reach_atr=_float("SCENARIO_OUT_OF_REACH_ATR", cls.scenario_out_of_reach_atr),
+            max_chain_heartbeats=_int("MAX_CHAIN_HEARTBEATS", cls.max_chain_heartbeats),
             skip_dead_gate_candidates=_bool("SKIP_DEAD_GATE_CANDIDATES", cls.skip_dead_gate_candidates),
             p1234_min_adx=_float("P1234_MIN_ADX", cls.p1234_min_adx),
             experimental_p1234_enabled=_bool("EXPERIMENTAL_P1234_ENABLED", cls.experimental_p1234_enabled),

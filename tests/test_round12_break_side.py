@@ -111,12 +111,25 @@ def test_tlbreak_stop_never_widens_with_the_generic_stop():
     assert "candidate.sl = pattern_sl if pattern_sl" in src
 
 
-def test_stop_beyond_the_tf_horizon_is_never_published():
+def test_a_far_structural_stop_is_clamped_not_deleted():
+    """His 09-21 ruling (verbatim): «استاپ اصلا ساختاری اگر فاصله داشت حذف نشه و
+    تا ۱.۲۵ قیمت نماد محاسبه بشه» — the VVV 1h case (stop 15.193 against an 18.795
+    entry) is now CUT at 1.25% instead of holding the chain «منتظر» for two days."""
+    from analysis.trade_management import clamp_stop_price, MAX_STOP_PCT
+    assert MAX_STOP_PCT == 1.25
+    stop, clamped = clamp_stop_price(18.795, "LONG", 15.193)
+    assert clamped is True
+    assert abs((18.795 - stop) / 18.795 * 100 - 1.25) < 1e-9
+    up, clamped_up = clamp_stop_price(18.795, "SHORT", 22.5)
+    assert clamped_up is True and abs((up - 18.795) / 18.795 * 100 - 1.25) < 1e-9
+    near, near_clamped = clamp_stop_price(18.795, "LONG", 18.60)   # ~1.04%
+    assert near_clamped is False and near == 18.60
+    # the alert lane records the clamp instead of dropping the setup, and the
+    # confirmation lane still checks the stop side (unchanged laws)
     src = io.open("analysis/setups_v7.py", encoding="utf-8").read()
-    assert "_stop_pct12 > _cap12" in src                  # alert lane
+    assert "clamp_stop_price as _clamp_f" in src and '"stop_clamped"' in src
     qe = io.open("analysis/quality_engine.py", encoding="utf-8").read()
-    assert "risk > _cap_abs" in qe                        # confirmation lane
-    # …and the horizon is the TF distance ceiling itself
+    assert "STOP_WRONG_SIDE" in qe
     assert target_distance_cap_pct("15m") == 5.0
     assert target_distance_cap_pct("4h") == 7.0
     assert target_distance_cap_pct("1d") == 10.0

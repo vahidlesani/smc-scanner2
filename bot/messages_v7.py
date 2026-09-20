@@ -1084,11 +1084,12 @@ def _parse_utc(value) -> Optional[datetime]:
         return None
 
 
-def _tehran_clock(dt: Optional[datetime]) -> str:
+def _tehran_clock(dt: Optional[datetime], with_date: bool = False) -> str:
     if dt is None:
         return "—"
     try:
-        return dt.astimezone(ZoneInfo("Asia/Tehran")).strftime("%H:%M:%S")
+        fmt = "%m-%d %H:%M:%S" if with_date else "%H:%M:%S"
+        return dt.astimezone(ZoneInfo("Asia/Tehran")).strftime(fmt)
     except Exception:
         return "—"
 
@@ -1108,6 +1109,9 @@ def _stamp_source_candle(candidate: SignalCandidate, chart_df=None) -> None:
             pass
     if not md.get("alert_stamped_at_utc"):
         md["alert_stamped_at_utc"] = datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds")
+    if not md.get("first_detected_at_utc"):
+        md["first_detected_at_utc"] = (str(getattr(candidate, "created_at", "") or "")
+                                       or md["alert_stamped_at_utc"])
     candidate.metadata = md
 
 
@@ -1127,14 +1131,25 @@ def _timing_lines(candidate: SignalCandidate) -> List[str]:
     md = getattr(candidate, "metadata", None) or {}
     tf_tag = str(getattr(candidate, "trigger_timeframe", "") or "").upper()
     close = _parse_utc(md.get("source_candle_close_utc"))
-    detected = _parse_utc(getattr(candidate, "created_at", "") or md.get("alert_stamped_at_utc"))
-    sent = _parse_utc(md.get("alert_stamped_at_utc")) or datetime.now(ZoneInfo("UTC"))
+    # ── round 12: «شناسایی» is the FIRST sighting. A chain's payload carries the
+    # latest re-stamp, so created_at alone printed a later clock than the send
+    # («شناسایی ۰۲:۳۵ • ارسال ۰۲:۳۰» on the VVV card). The earliest of the two
+    # known stamps wins, and dates ride along so a two-day-old chain is obvious.
+    _det_candidates = [d for d in (_parse_utc(getattr(candidate, "created_at", "")),
+                                   _parse_utc(md.get("alert_stamped_at_utc")),
+                                   _parse_utc(md.get("first_detected_at_utc"))) if d is not None]
+    detected = min(_det_candidates) if _det_candidates else None
+    sent = datetime.now(ZoneInfo("UTC"))
     rows = ["🕒 <b>ساعت‌ها (ایران)</b>"]
     if close is not None:
-        rows.append(f"• 🕯 کندل مبدا {_e(tf_tag)} — بسته‌شده در {_tehran_clock(close)}")
+        rows.append(f"• 🕯 کندل مبدا {_e(tf_tag)} — بسته‌شده در {_tehran_clock(close, True)}")
     if detected is not None:
-        rows.append(f"• 🔎 شناسایی: {_tehran_clock(detected)}")
-    rows.append(f"• 📤 ارسال به تلگرام: {_tehran_clock(sent)}")
+        rows.append(f"• 🔎 شناسایی: {_tehran_clock(detected, True)}")
+    rows.append(f"• 📤 ارسال به تلگرام: {_tehran_clock(sent, True)}")
+    _age_days = int((sent - detected).total_seconds() // 86400) if detected else 0
+    if _age_days >= 1:
+        rows.append(f"• 🗓 عمر این سناریو: {_fa_num(_age_days)} روز (قیمت‌های ورود/ابطال "
+                    "همان قیمت‌های روز اول‌اند و با بازار امروز جابه‌جا نشده‌اند)")
     if close is not None and detected is not None:
         _gap = max(0, int((detected - close).total_seconds() // 60))
         rows.append(f"• ⏱ فاصلهٔ بسته‌شدن کندل تا شناسایی: {_fa_num(_gap)} دقیقه")
@@ -2322,6 +2337,9 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         +        f"🔎 <b>ناحیه‌ای که زیر نظر داریم</b>\n\n"
         f"از <b>{_price(candidate.entry_zone_bottom)}</b> تا <b>{_price(candidate.entry_zone_top)}</b>\n"
         f"سطح ابطال سناریو: <b>{_price(candidate.sl)}</b>\n"
+        + ("🛑 استاپ ساختاری دورتر از ۱٫۲۵٪ قیمت بود؛ طبق قانون ۰۹-۲۱ استاپ روی سقف ۱٫۲۵٪ "
+           "تنظیم شد و سناریو حفظ شد.\n" if (candidate.metadata or {}).get("stop_clamped") else "")
+        +
         f"{VIVA_SEP}\n"
         + _confirm_rule_block(candidate) + "\n"
         f"{VIVA_SEP}\n"
@@ -2567,7 +2585,9 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
         VIVA_SEP,
         "🔎 <b>ناحیه‌ای که زیر نظر داریم</b>",
         f"از {_price(candidate.entry_zone_bottom)} تا {_price(candidate.entry_zone_top)}",
-        f"سطح ابطال سناریو: {_price(candidate.sl)}",
+        f"سطح ابطال سناریو: {_price(candidate.sl)}"
+        + (" • 🛑 استاپ ساختاری دورتر بود؛ طبق قانون ۰۹-۲۱ روی سقف ۱٫۲۵٪ قیمت تنظیم شد."
+           if (candidate.metadata or {}).get("stop_clamped") else ""),
         "",
     ]
     # The long rule paragraph lives in the DETAILED alert; the compact keeps

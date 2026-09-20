@@ -691,7 +691,7 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     # Viva 09-20 round 11: «بدون atr … پشت آخرین سویینگ با بافر» → the buffer
     # is the standard price allowance, never an ATR multiple.
     from analysis.trade_management import (structural_buffer, clamp_path_to_band,
-                                           target_distance_cap_pct)
+                                           clamp_stop_price, target_distance_cap_pct)
     buffer = structural_buffer(live)
     stop = None
     if opp is not None:
@@ -716,12 +716,10 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
                                                           trigger_tf, _measured_to)
         if final_target <= 0:
             return None
-        # the premise of a break is the broken line itself; a structural swing
-        # stop farther than the TF horizon is not this timeframe's trade, so the
-        # line (with the standard buffer) takes over instead of a 24% stop.
-        _cap_pct = float(target_distance_cap_pct(trigger_tf)) or 5.0
-        _stop_pct = abs(entry - stop) / max(entry, 1e-12) * 100.0 if stop else 1e9
-        if stop is None or _stop_pct > _cap_pct:
+        # ── his 09-21 ruling: a far structural swing never deletes the scenario;
+        # the stop is CUT at 1.25% of price (the VVV 1h case carried a 19%-away
+        # swing for two days because the old code refused to publish it at all).
+        if stop is None:
             stop = (line_now - buffer) if direction == "LONG" else (line_now + buffer)
     else:
         entry = float(fade.get("entry") or live)
@@ -744,12 +742,9 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         stop = float(fade.get("stop") or stop or 0.0)
         if stop <= 0:
             return None
+    stop, _stop_was_clamped = clamp_stop_price(entry, direction, stop)
     risk = (entry - stop) if direction == "LONG" else (stop - entry)
     reward = (final_target - entry) if direction == "LONG" else (entry - final_target)
-    # the stop must sit inside the same horizon the targets may travel
-    _cap_pct = float(target_distance_cap_pct(trigger_tf)) or 5.0
-    if entry > 0 and abs(entry - stop) / entry * 100.0 > _cap_pct:
-        return None
     # Viva 09-20 round 11: no ATR limits and NO R:R gate on the stop/targets
     # («بدون atr», «فرمول ریسک به ریوارد … اصلا اهمیت نداره») — only the
     # geometry must make sense.
@@ -804,6 +799,7 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         candidate.metadata["path_source"] = cand_path_source
         candidate.metadata["stop_source"] = ("STRUCTURE" if abs(entry - stop) > buffer * 1.5
                                             else "BROKEN_LINE")
+        candidate.metadata["stop_clamped"] = bool(_stop_was_clamped)
     except Exception:
         pass
     rr1 = abs(tp1 - entry) / max(risk, 1e-12)
