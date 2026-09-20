@@ -658,6 +658,16 @@ def evaluate_confirmation(
         _atr_abs = float(candidate.metadata.get("atr", 0) or 0) or \
             float((closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
         _span_floor = max(0.6 * _atr_abs / max(executable_entry, 1e-12), 0.003)
+        # ── round 12 (his «هنوز باگ داریم»): the stop must sit on the side of
+        # THIS scenario, measured from the price the confirmation trades from.
+        _wrong_side = ((candidate.direction == "LONG" and float(candidate.sl) >= executable_entry)
+                       or (candidate.direction == "SHORT" and float(candidate.sl) <= executable_entry))
+        if _wrong_side:
+            return reject("STOP_WRONG_SIDE", (
+                f"استاپ در سمت اشتباه سناریو است: برای "
+                f"{'لانگ باید زیر ورود' if candidate.direction == 'LONG' else 'شورت باید بالای ورود'} "
+                f"باشد (ورود {executable_entry:.8g} · استاپ {float(candidate.sl):.8g})؛ "
+                "پیام صادر نمی‌شود تا هندسه تصحیح شود."))
         if _span_frac < _span_floor or (_cap_abs > 0 and risk > _cap_abs):
             return reject("DEGENERATE_GEOMETRY", (
                 f"هندسهٔ ابزار بی‌معنی است: استاپ {_sl_frac * 100:.1f}% از ورود دور است "

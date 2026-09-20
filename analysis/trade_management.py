@@ -142,6 +142,31 @@ def doctrine_path(entry: float, trigger_tf: str, level: float = 0.0,
         return 0.0, "NONE"
 
 
+def clamp_path_to_band(entry: float, trigger_tf: str, distance: float) -> tuple:
+    """(path_distance, source) — a PROJECTED distance clamped into the TF band.
+
+    Viva 09-21 (round 12): the measured-move projection of a broken pattern is
+    not a live level, it is a projection. It keeps its own distance while it
+    sits inside the timeframe band, and is pulled to the nearest band edge when
+    it does not («هم سقف و هم کف ۳ تا ۵ درصد» — a projection may never drive the
+    ladder to a 34% target, DASH 15m).
+    """
+    try:
+        entry = float(entry or 0.0)
+        d = float(distance or 0.0)
+        if entry <= 0 or d <= 0:
+            return 0.0, "NONE"
+        lo_pct, hi_pct = band_for_tf(trigger_tf)
+        lo, hi = entry * lo_pct / 100.0, entry * hi_pct / 100.0
+        if d > hi:
+            return float(hi), "MEASURED_CAPPED"
+        if d < lo:
+            return float(lo), "MEASURED_FLOORED"
+        return float(d), "MEASURED"
+    except Exception:
+        return 0.0, "NONE"
+
+
 def tf_target_distance(entry: float, trigger_tf: str, structural_level: float = 0.0,
                        direction: str = "LONG", wall_level: float = 0.0) -> float:
     """The path the ladder splits in five (legacy signature, doctrine inside).

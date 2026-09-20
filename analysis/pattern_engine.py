@@ -643,6 +643,28 @@ def detect_technoclassic(bundle, style: str):
     return None
 
 
+
+def measured_target(entry: float, direction: str, trigger_tf: str,
+                    measured_to: float) -> tuple:
+    """(target_price, path_source) for a broken pattern's projection.
+
+    Viva 09-21 (round 12): the measured-move projection is clamped into the
+    timeframe band before the ladder is split, so a broken pattern can never
+    publish a 34% target on a 15m trigger (the DASH case). Side-correct by
+    construction: the target always lands on the scenario's own side.
+    """
+    from analysis.trade_management import clamp_path_to_band
+    try:
+        entry = float(entry or 0.0)
+        d = abs(float(measured_to) - entry) if measured_to else 0.0
+    except Exception:
+        d = 0.0
+    path, source = clamp_path_to_band(entry, trigger_tf, d)
+    if path <= 0:
+        return 0.0, "NONE"
+    target = entry + path if str(direction).upper() == "LONG" else entry - path
+    return float(target), source
+
 def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
                      trigger_tf: str, cfg):
     from analysis.indicators import structure_bias
@@ -668,7 +690,8 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     # that produced Viva's absurd 74%-away shorts).
     # Viva 09-20 round 11: «بدون atr … پشت آخرین سویینگ با بافر» → the buffer
     # is the standard price allowance, never an ATR multiple.
-    from analysis.trade_management import structural_buffer
+    from analysis.trade_management import (structural_buffer, clamp_path_to_band,
+                                           target_distance_cap_pct)
     buffer = structural_buffer(live)
     stop = None
     if opp is not None:
@@ -683,18 +706,50 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
             stop = (max(cands) if direction == "LONG" else min(cands)) + (-buffer if direction == "LONG" else buffer)
     if is_break:
         entry = live
-        final_target = float(ev["measured"]["to"])
-        if stop is None:
-            # no validated opposite touch → behind the broken line itself
+        # ── Viva 09-21 (round 12): the measured-move projection is NOT a live
+        # level — DASH 15m went out with a 34% target off it. The path now goes
+        # through the same doctrine funnel as every other setup: the measured
+        # distance is treated as a level and capped by the TF ceiling
+        # (15m/1h 5% · 4h 7% · 1d 10%) before the five-part split.
+        _measured_to = float((ev.get("measured") or {}).get("to") or 0.0)
+        final_target, cand_path_source = measured_target(entry, direction,
+                                                          trigger_tf, _measured_to)
+        if final_target <= 0:
+            return None
+        # the premise of a break is the broken line itself; a structural swing
+        # stop farther than the TF horizon is not this timeframe's trade, so the
+        # line (with the standard buffer) takes over instead of a 24% stop.
+        _cap_pct = float(target_distance_cap_pct(trigger_tf)) or 5.0
+        _stop_pct = abs(entry - stop) / max(entry, 1e-12) * 100.0 if stop else 1e9
+        if stop is None or _stop_pct > _cap_pct:
             stop = (line_now - buffer) if direction == "LONG" else (line_now + buffer)
     else:
         entry = float(fade.get("entry") or live)
-        final_target = float(fade.get("target") or line_now)
+        _wall = float(fade.get("target") or 0.0)
+        # ── round 12: a fade aims at the OPPOSITE side of the pattern (his law
+        # «هدف در شورت کف الگو و در صعودی زیر سقف الگو»), so the wall distance is
+        # the path — only the TF ceiling may shorten it. The wall must sit on the
+        # scenario's own side; a mirrored value is a collector bug, not a target.
+        _cap_pct = float(target_distance_cap_pct(trigger_tf)) or 5.0
+        _cap_abs = entry * _cap_pct / 100.0
+        _wall_ok = (_wall > entry) if direction == "LONG" else (0 < _wall < entry)
+        if _wall_ok and abs(_wall - entry) >= entry * 0.006:
+            _d = abs(_wall - entry)
+            _path = float(min(_d, _cap_abs))
+            cand_path_source = "WALL_FADE" if _d <= _cap_abs else "WALL_FADE_CAPPED"
+        else:
+            _path, cand_path_source = clamp_path_to_band(
+                entry, trigger_tf, abs(_wall - entry) if _wall > 0 else 0.0)
+        final_target = entry + _path if direction == "LONG" else entry - _path
         stop = float(fade.get("stop") or stop or 0.0)
         if stop <= 0:
             return None
     risk = (entry - stop) if direction == "LONG" else (stop - entry)
     reward = (final_target - entry) if direction == "LONG" else (entry - final_target)
+    # the stop must sit inside the same horizon the targets may travel
+    _cap_pct = float(target_distance_cap_pct(trigger_tf)) or 5.0
+    if entry > 0 and abs(entry - stop) / entry * 100.0 > _cap_pct:
+        return None
     # Viva 09-20 round 11: no ATR limits and NO R:R gate on the stop/targets
     # («بدون atr», «فرمول ریسک به ریوارد … اصلا اهمیت نداره») — only the
     # geometry must make sense.
@@ -739,6 +794,18 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     tp1 = entry + (tp2 - entry) / 5.0 if direction == "LONG" else entry - (entry - tp2) / 5.0
     candidate.tp1 = float(tp1)
     candidate.tp2 = tp2
+    # ── Viva 09-21 (round 12): the entry the geometry actually traded from must
+    # be the entry the message shows. DASH 15m LONG carried its stop ABOVE the
+    # POI-mid entry because only the stop had been rebuilt on the live price.
+    candidate.planned_entry = float(entry)
+    candidate.entry_zone_bottom = float(min(entry, line_now) - 0.15 * atr_t)
+    candidate.entry_zone_top = float(max(entry, line_now) + 0.15 * atr_t)
+    try:
+        candidate.metadata["path_source"] = cand_path_source
+        candidate.metadata["stop_source"] = ("STRUCTURE" if abs(entry - stop) > buffer * 1.5
+                                            else "BROKEN_LINE")
+    except Exception:
+        pass
     rr1 = abs(tp1 - entry) / max(risk, 1e-12)
     candidate.rr_tp1 = float(rr1)
     candidate.rr_tp2 = float(reward / risk)

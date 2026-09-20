@@ -1371,6 +1371,63 @@ def _experimental_symbol_allowed(detector_name: str, symbol: str) -> bool:
     return not allowed or symbol.upper() in allowed
 
 
+# ── Viva 09-21 (round 12, second pass) — «مطمئنم هنوز باگ داریم در برخی منطق
+# ها یا ستاپها»: the horizon gate lived INSIDE one builder, so a detector that
+# assembles its own candidate (TECHCLASSIC) could still override the stop and
+# the targets AFTER the gate and publish nonsense: DASH 15m went out with a 24%
+# stop and a 34% target, and a DASH LONG carried its stop ABOVE the entry.
+# Every lane now ends in ONE net: the stop must sit on the correct side of the
+# entry this candidate itself will trade from, the stop distance must fit the
+# timeframe horizon, and both targets must sit on the correct side inside that
+# same horizon. Nothing is published otherwise (and confirmations re-check it).
+_SANITY_REJECT_LOG: List[str] = []
+
+
+def drain_sanity_rejects() -> List[str]:
+    """Test/debug helper: reasons collected since the last drain."""
+    out = list(_SANITY_REJECT_LOG)
+    _SANITY_REJECT_LOG.clear()
+    return out
+
+
+def sanity_reject(candidate) -> Optional[str]:
+    """Round-12 hard geometry net — returns a reject code or None when clean."""
+    try:
+        from analysis.trade_management import target_distance_cap_pct
+        entry = float(getattr(candidate, "planned_entry", 0) or 0)
+        sl = float(getattr(candidate, "sl", 0) or 0)
+        tp1 = float(getattr(candidate, "tp1", 0) or 0)
+        tp2 = float(getattr(candidate, "tp2", 0) or 0)
+        direction = str(getattr(candidate, "direction", "") or "").upper()
+        tf = str(getattr(candidate, "trigger_timeframe", "") or "15m")
+        if entry <= 0 or sl <= 0 or tp1 <= 0 or tp2 <= 0:
+            return "GEOMETRY_MISSING"
+        cap = float(target_distance_cap_pct(tf)) or 5.0
+        if direction == "LONG":
+            if sl >= entry:
+                return "STOP_WRONG_SIDE"
+            if tp1 <= entry or tp2 <= entry:
+                return "TARGET_WRONG_SIDE"
+        elif direction == "SHORT":
+            if sl <= entry:
+                return "STOP_WRONG_SIDE"
+            if tp1 >= entry or tp2 >= entry:
+                return "TARGET_WRONG_SIDE"
+        else:
+            return "DIRECTION_MISSING"
+        if abs(entry - sl) / entry * 100.0 > cap:
+            return "STOP_HORIZON"
+        # 2% tolerance: rounding in the ladder must not kill a legitimate path.
+        if abs(tp2 - entry) / entry * 100.0 > cap * 1.02:
+            return "TARGET_HORIZON"
+        if abs(tp1 - entry) / entry * 100.0 > cap * 1.02:
+            return "TARGET_HORIZON"
+    except Exception:
+        # Fail-open on our own bug: a broken check must not silence the scanner.
+        return None
+    return None
+
+
 def scan_setups(bundle: MarketBundle, style: str) -> List[SignalCandidate]:
     candidates: List[SignalCandidate] = []
     for detector in _active_detectors():
@@ -1398,4 +1455,18 @@ def scan_setups(bundle: MarketBundle, style: str) -> List[SignalCandidate]:
     # The per-licence law (3 rotating per symbol/trigger-TF/setup) owns the
     # channel volume now — so four candidates per symbol×style may present.
     candidates.sort(key=lambda c: (c.execution_ready, c.score, c.rr_tp1), reverse=True)
-    return candidates[:4]
+    # ── the single net every lane must pass (see sanity_reject above).
+    kept: List[SignalCandidate] = []
+    for cand in candidates:
+        why = sanity_reject(cand)
+        if why:
+            line = (f"🧱 SANITY_REJECT {why} • {bundle.symbol} {style} "
+                    f"{getattr(cand, 'setup_code', '?')} {getattr(cand, 'direction', '?')} "
+                    f"entry={getattr(cand, 'planned_entry', 0)} sl={getattr(cand, 'sl', 0)} "
+                    f"tp1={getattr(cand, 'tp1', 0)} tp2={getattr(cand, 'tp2', 0)} "
+                    f"tf={getattr(cand, 'trigger_timeframe', '?')}")
+            _SANITY_REJECT_LOG.append(line)
+            print(line)
+            continue
+        kept.append(cand)
+    return kept[:4]

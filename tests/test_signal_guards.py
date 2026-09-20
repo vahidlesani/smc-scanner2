@@ -1097,7 +1097,8 @@ def test_gate_demotion_and_tolerant_liquidity():
                  "pinwall_quality_enabled: bool = True"):
         assert flag in cfg, flag
     assert "education_max_per_scan: int = 16" in cfg
-    assert "return candidates[:4]" in sv
+    # round 12: the per-symbol cap now sits behind the central geometry net
+    assert "return kept[:4]" in sv and "def sanity_reject(" in sv
     qe = _io.open("analysis/quality_engine.py", encoding="utf-8").read()
     assert '_f_atr = float((_frame["high"] - _frame["low"]).tail(14).mean()' in qe
     mn = _io.open("main.py", encoding="utf-8").read()
