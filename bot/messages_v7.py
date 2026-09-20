@@ -7,7 +7,7 @@ import re
 import os
 import threading
 import time
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -1051,6 +1051,141 @@ def _draw_visible_fvgs(ax, frame: pd.DataFrame, count: int) -> list:
 _CHART_CACHE: Dict[tuple, bytes] = {}
 
 
+# ── Viva 09-21 (round 12, second report): «وقتی حدود ۴۰ دقیقه اختلاف وجود داره …
+# عملا من دارم گذشته مارکت رو می‌بینم» — the alert chart is drawn from CLOSED
+# candles only (no repaint, no look-ahead), so on a 1h trigger the picture could
+# be up to one candle behind the venue's own chart, and the message carried no
+# clock at all: detection time, publication time and the source candle's close
+# were all invisible. Three rules now:
+#   1. every entry alert states the source candle's close, the detection time and
+#      the send time, with the delay;
+#   2. a delay past 15 minutes is printed as a warning, and past TWO trigger
+#      candles the alert is no longer published as an entry (analysis note only) —
+#      a past-market trade is not a trade;
+#   3. the chart draws the FORMING candle («FORMING») and the LIVE pill carries
+#      the live price + clock, so the picture is the market of this minute.
+_TF_MINUTES: Dict[str, int] = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
+                               "1h": 60, "2h": 120, "4h": 240, "6h": 360, "12h": 720,
+                               "1d": 1440}
+STALE_WARN_MINUTES = 15
+
+
+def _tf_minutes(tf) -> int:
+    return int(_TF_MINUTES.get(str(tf or "").strip().lower(), 15) or 15)
+
+
+def _parse_utc(value) -> Optional[datetime]:
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        return dt.astimezone(ZoneInfo("UTC"))
+    except Exception:
+        return None
+
+
+def _tehran_clock(dt: Optional[datetime]) -> str:
+    if dt is None:
+        return "—"
+    try:
+        return dt.astimezone(ZoneInfo("Asia/Tehran")).strftime("%H:%M:%S")
+    except Exception:
+        return "—"
+
+
+def _stamp_source_candle(candidate: SignalCandidate, chart_df=None) -> None:
+    """Remember the clock of the candle this alert was born from (once)."""
+    md = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+    if chart_df is not None and len(chart_df) and not md.get("source_candle_close_utc"):
+        try:
+            _last = pd.Timestamp(chart_df["timestamp"].iloc[-1])
+            if _last.tzinfo is None:
+                _last = _last.tz_localize("UTC")
+            _close = _last + pd.Timedelta(minutes=_tf_minutes(candidate.trigger_timeframe))
+            md["source_candle_close_utc"] = _close.tz_convert("UTC").isoformat()
+            md["source_candle_open_utc"] = _last.tz_convert("UTC").isoformat()
+        except Exception:
+            pass
+    if not md.get("alert_stamped_at_utc"):
+        md["alert_stamped_at_utc"] = datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds")
+    candidate.metadata = md
+
+
+def _alert_lateness_minutes(candidate: SignalCandidate) -> int:
+    """Minutes between the source candle's close and right now (0 when unknown)."""
+    md = getattr(candidate, "metadata", None) or {}
+    _close = _parse_utc(md.get("source_candle_close_utc"))
+    if _close is None:
+        return 0
+    delta = (datetime.now(ZoneInfo("UTC")) - _close).total_seconds() / 60.0
+    return max(0, int(round(delta)))
+
+
+def _timing_lines(candidate: SignalCandidate) -> List[str]:
+    """The clock block of every entry alert (his 09-21 request, verbatim:
+    «تاخیر در زمان شناسایی و زمان انتشار و ارسال به تلگرام رو در هشدار مفصل نداشتیم»)."""
+    md = getattr(candidate, "metadata", None) or {}
+    tf_tag = str(getattr(candidate, "trigger_timeframe", "") or "").upper()
+    close = _parse_utc(md.get("source_candle_close_utc"))
+    detected = _parse_utc(getattr(candidate, "created_at", "") or md.get("alert_stamped_at_utc"))
+    sent = _parse_utc(md.get("alert_stamped_at_utc")) or datetime.now(ZoneInfo("UTC"))
+    rows = ["🕒 <b>ساعت‌ها (ایران)</b>"]
+    if close is not None:
+        rows.append(f"• 🕯 کندل مبدا {_e(tf_tag)} — بسته‌شده در {_tehran_clock(close)}")
+    if detected is not None:
+        rows.append(f"• 🔎 شناسایی: {_tehran_clock(detected)}")
+    rows.append(f"• 📤 ارسال به تلگرام: {_tehran_clock(sent)}")
+    if close is not None and detected is not None:
+        _gap = max(0, int((detected - close).total_seconds() // 60))
+        rows.append(f"• ⏱ فاصلهٔ بسته‌شدن کندل تا شناسایی: {_fa_num(_gap)} دقیقه")
+    late = _alert_lateness_minutes(candidate)
+    if late >= STALE_WARN_MINUTES or md.get("stale_detection"):
+        _late = int(md.get("stale_detection") or late)
+        rows.append(f"• ⚠️ این هشدار {_fa_num(_late)} دقیقه بعد از بسته‌شدن کندل منتشر شد؛ "
+                    "قبل از هر تصمیم، وضعیت لحظه‌ای بازار را ببین.")
+    return rows
+
+
+def _stale_alert_verdict(candidate: SignalCandidate) -> tuple:
+    """(publish_as_entry, lateness_minutes): a market of the past is not tradeable.
+
+    Past TWO trigger candles the alert is no longer an entry alert at all — the
+    family still speaks (a short analysis note), but never as a position.
+    """
+    late = _alert_lateness_minutes(candidate)
+    if late <= 0:
+        md = getattr(candidate, "metadata", None) or {}
+        late = int(md.get("stale_detection") or 0)
+    limit = 2 * _tf_minutes(getattr(candidate, "trigger_timeframe", "15m"))
+    return (late <= limit), late
+
+
+def _live_candle(candidate: SignalCandidate, chart_df) -> Optional[Dict[str, float]]:
+    """The FORMING candle of the charted timeframe (None when the tape is closed)."""
+    try:
+        from data.fetcher import get_klines
+        _md = getattr(candidate, "metadata", None) or {}
+        tf = str(_md.get("chart_view_tf") or getattr(candidate, "trigger_timeframe", "15m") or "15m")
+        live = get_klines(getattr(candidate, "symbol", ""), tf, 3, closed_only=False, use_cache=True)
+        if live is None or getattr(live, "empty", True):
+            return None
+        row = live.iloc[-1]
+        ts = pd.Timestamp(row["timestamp"])
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        if chart_df is None or not len(chart_df):
+            return None
+        last_closed = pd.Timestamp(chart_df["timestamp"].iloc[-1])
+        if last_closed.tzinfo is None:
+            last_closed = last_closed.tz_localize("UTC")
+        if ts <= last_closed:
+            return None  # the tape has already closed; nothing is forming
+        return {"timestamp": ts, "open": float(row["open"]), "high": float(row["high"]),
+                "low": float(row["low"]), "close": float(row["close"])}
+    except Exception:
+        return None
+
+
 def _chart_cache_get(key: tuple):
     return _CHART_CACHE.get(key)
 
@@ -1605,12 +1740,46 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         )
         notes.append((f"FIRST STOP  {_price(candidate.sl)}", CHART_THEME["invalidation"]))
         live_price = float(frame["close"].iloc[-1])
+        # ── Viva 09-21 (round 12): the alert tape is CLOSED candles only, so on a
+        # 1h trigger the newest bar could be an hour old and the reader saw «گذشته
+        # مارکت». The forming candle now rides along as a dashed ghost, and the LIVE
+        # pill carries the live price with its clock (UTC, like the candle axis).
+        _ghost = _live_candle(candidate, df)
+        if _ghost is not None:
+            _gx = float(count)
+            _gcol = CHART_THEME.get("muted", "#8a8a8a")
+            try:
+                ax.vlines(_gx, _ghost["low"], _ghost["high"], colors=_gcol,
+                          linestyles="dashed", linewidth=0.95, alpha=0.75, zorder=6)
+                _lo, _hi = sorted((_ghost["open"], _ghost["close"]))
+                if _hi - _lo < 1e-12:
+                    _hi = _lo + max(abs(_lo) * 1e-6, 1e-9)
+                ax.add_patch(Rectangle((_gx - 0.30, _lo), 0.60, _hi - _lo,
+                                       facecolor="none", edgecolor=_gcol,
+                                       linestyle="dashed", linewidth=0.95,
+                                       alpha=0.85, zorder=6))
+                ax.text(_gx, _ghost["low"], "FORMING", color=_gcol, fontsize=6.8,
+                        style="italic", va="top", ha="center", zorder=6)
+                live_price = float(_ghost["close"])
+            except Exception as _gexc:
+                print(f"forming-candle draw skipped: {_gexc}")
+        _live_clock = ""
+        try:
+            _lt = _ghost["timestamp"] if _ghost is not None else pd.Timestamp(frame.index[-1])
+            _lt = pd.Timestamp(_lt)
+            if _lt.tzinfo is None:
+                _lt = _lt.tz_localize("UTC")
+            _live_clock = _lt.tz_convert("UTC").strftime("%H:%M UTC")
+        except Exception:
+            _live_clock = ""
         # Viva 2026-09-11: the live-price DASHED line was removed — only the
         # LIVE price pill remains (the line duplicated the pill and cluttered
         # the future margin around it). On CONFIRMED charts the LIVE pill joins
         # the merged right-hand tag column below instead.
         if not confirmed:
-            _level_tag(ax, count + 1.0, live_price, f"LIVE  {_price(live_price)}", CHART_THEME["muted"])
+            _level_tag(ax, count + 1.8, live_price,
+                       f"LIVE  {_price(live_price)}" + (f" • {_live_clock}" if _live_clock else ""),
+                       CHART_THEME["muted"])
 
         sweep_level = candidate.metadata.get("sweep_level")
         if sweep_level:
@@ -2091,6 +2260,7 @@ def _viva_tlbreak_sections(candidate: SignalCandidate) -> str:
 
 
 def build_educational_message(candidate: SignalCandidate) -> str:
+    _clock_block = "\n".join(_timing_lines(candidate))
     direction_fa = "سناریوی احتمالی خرید" if candidate.direction == "LONG" else "سناریوی احتمالی فروش"
     evidence_blocks = []
     for item in candidate.evidence:
@@ -2170,6 +2340,8 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         + f"⛔ ورود، اهرم و حجم پوزیشن هنوز پیشنهاد نمی‌شود\n"
         f"✅ در صورت تکمیل شرایط، ابتدا Approaching و سپس Confirmed ارسال می‌شود.\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
+        + _clock_block + "\n"
+        + f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📢 <b>{_e(SETTINGS.channel_name)}</b>"
     )
 
@@ -2412,6 +2584,7 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
         "🧭 <b>کانتکست تایم بالاتر</b>",
         f"• بایاس ساختاری: {_BIAS_FA.get(str(candidate.bias).upper(), _e(str(candidate.bias)))}",
     ]
+    rows += _timing_lines(candidate)
     for line in (extra_lines or []):
         rows.append(line)
     # FORMAT-3 + 09-16 NIGHT RULING (verbatim): «پیام مختصر رو بصورت کپشن
@@ -2647,6 +2820,16 @@ def _pro_slot_post(candidate, caption: str, chart=None, markup=None,
 
 def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame]) -> bool:
     target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
+    # ── round 12: the clock of the candle this alert was born from, plus the
+    # past-market guard. An alert older than TWO trigger candles is not an entry
+    # alert any more (his words: «عملا من دارم گذشته مارکت رو می‌بینم و اصلا به
+    # هیچ دردی نمی‌خوره») — it goes out as an analysis note, never as a position.
+    _stamp_source_candle(candidate, chart_df)
+    _as_entry, _late_min = _stale_alert_verdict(candidate)
+    if not _as_entry:
+        candidate.metadata["stale_detection"] = int(_late_min)
+        print(f"⏳ STALE_DETECTION {candidate.signal_id}: source candle closed "
+              f"{_late_min} minutes ago (> 2×{candidate.trigger_timeframe}) — analysis note only")
     if not candidate.metadata.get("education_separator_attempted"):
         send_signal_separator(target)
         candidate.metadata["education_separator_attempted"] = True
@@ -2773,6 +2956,7 @@ def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
         VIVA_SEP,
         f"🆔 <code>{_e(code)}</code>",
     ]
+    rows += _timing_lines(candidate)
     return "\n".join(rows)
 
 
@@ -3066,6 +3250,7 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         f"🕓 زمان تأیید — ایران: {_iran_time(candidate)}",
         f"📨 زمان ارسال — ایران: {_iran_now()}",
         f"📡 تأخیر ارسال: {_candidate_send_latency(candidate)}",
+        *_timing_lines(candidate),
         VIVA_SEP,
         f"🎯 Entry: <b>{_price(candidate.planned_entry)}</b>",
         f"🛑 First Stop: <b>{_price(candidate.sl)}</b>",
