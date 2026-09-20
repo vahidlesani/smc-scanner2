@@ -276,6 +276,61 @@ def evaluate_confirmation(
             _band_hi20 = float(_band20["hi"]) + float(_band20.get("slope_hi") or 0.0) * _bars20
         except Exception:
             _band_lo20 = _band_hi20 = None
+    # ── Viva 09-21 (round 12) — BREAK-SIDE LAW, enforced on every setup ───
+    # His verbatim question: «چرا بعد از شکست ترند رو به بالا پوزیشن شورت
+    # اعلان میشه توی برخی ستاپها؟» و «چرا بعد از شکست الگوها یا ترند به سمت
+    # پایین و کلوز بعدش … لانگ اعلام میکنه؟» → a trade may never be confirmed
+    # against the side the market just broke. Each validated line travels on
+    # the candidate (render_line_watch with its anchor points); projected onto
+    # THIS candle it tells which edge price closed through:
+    #   • a LONG closing clearly BELOW a low-side (support) line = the support
+    #     was broken down → the long premise is gone;
+    #   • a SHORT closing clearly ABOVE a high-side (resistance) line = the
+    #     resistance was broken up → the short premise is gone.
+    # Closing THROUGH a line in the trade's own direction stays allowed (that
+    # is the break/retest lane), and INTERNAL/fade lanes are exempt by design.
+    if not _is_internal and candidate.direction in ("LONG", "SHORT"):
+        try:
+            _lu = float(candidate.metadata.get("last_unconfirmed_at") or 0)
+        except Exception:
+            _lu = 0.0
+        _watch = (candidate.metadata or {}).get("render_line_watch") or []
+        _side_wrong = ""
+        for _ln in _watch:
+            try:
+                _p0 = _ln.get("p0") or {}
+                _p1 = _ln.get("p1") or {}
+                _t0 = pd.Timestamp(str(_p0.get("ts")))
+                _t1 = pd.Timestamp(str(_p1.get("ts")))
+                _y0, _y1 = float(_p0.get("price")), float(_p1.get("price"))
+                _dt = (_t1 - _t0).total_seconds()
+                if _dt <= 0 or not (_y0 > 0 and _y1 > 0):
+                    continue
+                _tnow = pd.Timestamp(str(_row20["timestamp"]))
+                _lvl = _y1 + (_y1 - _y0) / _dt * (_tnow - _t1).total_seconds()
+                # only lines that are still RELEVANT to the live price may veto
+                # (a dead line projected far away is history, not context)
+                # relevant = the line is still within a few ATR of the price
+                # (a genuinely broken line is a couple of ATR away, a dead one
+                # projected far off is history and must not veto anything)
+                if _atr20 > 0 and abs(_lvl - _close20) > 3.0 * _atr20:
+                    continue
+                _buf = 0.10 * _atr20
+                _side = str(_ln.get("side") or "").upper()
+                if candidate.direction == "LONG" and _side == "LOW" and _close20 < _lvl - _buf:
+                    _side_wrong = f"کف/خط حمایتی {_lvl:.8g}"
+                    break
+                if candidate.direction == "SHORT" and _side == "HIGH" and _close20 > _lvl + _buf:
+                    _side_wrong = f"سقف/خط مقاومتی {_lvl:.8g}"
+                    break
+            except Exception:
+                continue
+        if _side_wrong:
+            return reject("BREAK_SIDE_MISMATCH", (
+                f"جهت سیگنال با جهت شکست ناهمسو است: بازار {_side_wrong} را "
+                f"در جهت مخالف سناریو با کلوز شکسته است (کلوز {_close20:.8g}). "
+                "طبق قانون، پس از شکست و کلوزِ معتبر، پوزیشن فقط در جهت ضلعِ "
+                "شکسته معنا دارد؛ این سناریو باطل می‌شود."))
     # ── Viva 09-20 (round 9) — INTERNAL-ENTRY lane ───────────────────────
     # Verbatim: «داخل کانال یا رنجِ جانبی فقط از کف مجاز به لانگ هستیم با
     # تأیید کندل و استاپ پشت کانال با بافر، و اهداف زیر سقف کانال؛ شورت هم
@@ -377,6 +432,14 @@ def evaluate_confirmation(
         _outside20 = (_close20 >= _band_hi20 + _buf20) if _dir20 > 0 \
             else (_close20 <= _band_lo20 - _buf20)
         if not _outside20:
+            _opposite = (_close20 < _band_lo20 - _buf20) if _dir20 > 0 \
+                else (_close20 > _band_hi20 + _buf20)
+            if _opposite:
+                return reject("BREAK_SIDE_MISMATCH", (
+                    f"جهت شکست ناهمسو است: کلوز {_close20:.8g} بیرون ضلع "
+                    f"{'پایین' if _dir20 > 0 else 'بالای'} الگوی "
+                    f"{_band20.get('kind')} رفته، در حالی که سناریو "
+                    f"{'لانگ' if _dir20 > 0 else 'شورت'} است؛ تأیید صادر نمی‌شود."))
             return reject("INSIDE_PATTERN_NO_BREAK", (
                 f"قیمت هنوز داخل الگو ({_band20.get('kind')}) است — کلوز "
                 f"{_close20:.8g} داخل باند {_band_lo20:.8g}–{_band_hi20:.8g}؛ "
@@ -595,12 +658,13 @@ def evaluate_confirmation(
         _atr_abs = float(candidate.metadata.get("atr", 0) or 0) or \
             float((closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
         _span_floor = max(0.6 * _atr_abs / max(executable_entry, 1e-12), 0.003)
-        if _span_frac < _span_floor or (_cap_abs > 0 and risk > 3.0 * _cap_abs):
+        if _span_frac < _span_floor or (_cap_abs > 0 and risk > _cap_abs):
             return reject("DEGENERATE_GEOMETRY", (
-                f"هندسهٔ ابزار بی‌معنی است: کل مسیر هدف {_span_frac * 100:.2f}% قیمت و "
-                f"استاپ {_sl_frac * 100:.1f}% دورتر از حد معقول این تایم‌فریم "
-                f"(سقف {target_distance_cap_pct(str(candidate.trigger_timeframe or '15m')):.0f}%)؛ "
-                "سناریو فقط به‌صورت هشدار/تحلیل باقی می‌ماند."))
+                f"هندسهٔ ابزار بی‌معنی است: استاپ {_sl_frac * 100:.1f}% از ورود دور است "
+                f"در حالی که افق همین تایم‌فریم "
+                f"{target_distance_cap_pct(str(candidate.trigger_timeframe or '15m')):.0f}% است "
+                f"(مسیر هدف {_span_frac * 100:.2f}%)؛ سناریو فقط هشدار/تحلیل می‌ماند. "
+                "طبق قانون ۰۹-۲۱ استاپ باید پشت آخرین سویینگ با بافر و داخل همین افق باشد."))
     except Exception:
         pass
     candidate.planned_entry = executable_entry

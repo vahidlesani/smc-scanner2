@@ -915,6 +915,20 @@ def _base_candidate(
         # TechnoClassic (score 8) died there five cycles running. Ratios are
         # printed for the reader; the alert and its monitor life are unconditional.
         gates.pop("rr", None)
+    # ── Viva 09-21 (round 12): a stop may never live beyond the horizon the
+    # targets are allowed to travel («حدود ۱۲ درصد استاپ؟؟» — SEI 9.7%, LIT
+    # 14% on 15m/1h). The TF distance ceiling (15m/1h 5% · 4h 7% · 1d 10%) is
+    # the same horizon used for targets, so a farther invalidation means the
+    # premise is not in this timeframe's trade: the setup stays out instead of
+    # publishing an unfillable-risk alert.
+    try:
+        from analysis.trade_management import target_distance_cap_pct as _cap_12
+        _stop_pct12 = abs(float(entry) - float(sl)) / max(float(entry), 1e-12) * 100.0
+        _cap12 = _cap_12(trigger_tf)
+        if _stop_pct12 > _cap12:
+            return None
+    except Exception:
+        pass
     expiry_hours = expiry_hours_for(style, trigger_tf)
     expires = utc_now() + timedelta(hours=expiry_hours)
     signal_id = generate_viva_signal_id(bundle.symbol, style, setup_code)

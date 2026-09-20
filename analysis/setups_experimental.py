@@ -402,8 +402,15 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         from analysis.trade_management import structural_buffer
         buffer = structural_buffer(candidate.planned_entry, candidate.market)
         pattern_sl = plan.stop_anchor - buffer if direction == "LONG" else plan.stop_anchor + buffer
-        # Never move a structural stop inside the generic liquidity protected stop.
-        candidate.sl = min(candidate.sl, pattern_sl) if direction == "LONG" else max(candidate.sl, pattern_sl)
+        # Viva 09-21: the stop is the pattern's OWN last-swing anchor + buffer
+        # («پشت آخرین سویینگ با بافر»). The old min/max widening kept the
+        # FARTHER of the generic and pattern stops — that is how 10–14% stops
+        # were born. Only fall back to the generic stop when the anchor sits
+        # on the wrong side of the entry (then the premise is the entry itself).
+        if direction == "LONG":
+            candidate.sl = pattern_sl if pattern_sl < candidate.planned_entry else candidate.sl
+        else:
+            candidate.sl = pattern_sl if pattern_sl > candidate.planned_entry else candidate.sl
         final_target = plan.structural_target or plan.measured_target
         # Viva 09-17 (XRP complaint: 15m setup announced a 24%-away final
         # target): a target must stay believable inside the trigger TF's own
@@ -834,14 +841,27 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             _ph, _pl = _pv(df.reset_index(drop=True), 3, 3)
         except Exception:
             _ph, _pl = [], []
+        # Viva 09-21: «پشت آخرین سویینگ» = the LAST swing, not the highest /
+        # lowest of the recent six — picking the extreme produced the 10–14%
+        # stops he crossed out (SEI/LIT charts). The most recent pivot above
+        # the short's entry (or below the long's) is the premise.
+        _piv = None
         if direction == "SHORT":
-            _piv = max((float(pt["price"]) for pt in list(_ph)[-6:]), default=None)
+            _above = [pt for pt in list(_ph)[-8:] if float(pt["price"]) > entry]
+            if _above:
+                _piv = float(_above[-1]["price"])
             if _piv:
                 sl = max(sl, _piv + _sbuf)
+            elif sl < entry:
+                sl = entry + _sbuf
         else:
-            _piv = min((float(pt["price"]) for pt in list(_pl)[-6:]), default=None)
+            _below = [pt for pt in list(_pl)[-8:] if float(pt["price"]) < entry]
+            if _below:
+                _piv = float(_below[-1]["price"])
             if _piv:
                 sl = min(sl, _piv - _sbuf)
+            elif sl > entry:
+                sl = entry - _sbuf
         risk = abs(entry - sl)
         if risk <= 0:
             continue

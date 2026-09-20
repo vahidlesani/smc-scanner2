@@ -591,10 +591,16 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
             md["pattern_band"] = _band
     except Exception:
         pass
+    # Viva 09-21 (round 12: «چرا بعد از شکست ترند رو به بالا پوزیشن شورت
+    # اعلان میشه؟»): the confirmation layer must be able to project each
+    # validated line onto ANY later candle — so the watch carries the first
+    # and last anchor POINTS (timestamp + price), not just window indices.
     md["render_line_watch"] = [
         {"side": l.get("side"), "slope": l.get("slope"),
          "intercept": l.get("intercept"),
          "ts0": ((l.get("points") or [{}])[0].get("ts")),
+         "p0": ((l.get("points") or [{}])[0] if (l.get("points") or []) else {}),
+         "p1": ((l.get("points") or [{}])[-1] if (l.get("points") or []) else {}),
          "break_x": l.get("break_x")}
         for pp in pats for l in (pp.get("lines") or [])][:4]
     # Viva 09-18 (his CRV note): the higher-TF pattern must be ANNOUNCED on
