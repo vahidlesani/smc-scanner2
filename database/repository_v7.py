@@ -142,7 +142,21 @@ def _migrate_columns(cursor, table: str, definitions: Dict[str, str]) -> None:
     if legacy_db.USE_POSTGRES:
         # Atomic and safe when a web process and scanner start concurrently.
         # PostgreSQL takes the required schema lock and re-checks existence.
-        for name, definition in definitions.items():
+        #
+        # round-12 incident: *every* ALTER asks for an ACCESS EXCLUSIVE lock even
+        # with IF NOT EXISTS, so a single leaked idle-in-transaction reader made
+        # all of them queue and die on statement_timeout — and the scanner thread
+        # died with them («تعداد شناسایی‌ها قطع شد»). Check first, ALTER only what
+        # is really missing, and never wait forever for the lock.
+        existing = _table_columns(cursor, table)
+        missing = {k: v for k, v in definitions.items() if k not in existing}
+        if not missing:
+            return
+        try:
+            cursor.execute("SET LOCAL lock_timeout = '10000'")
+        except Exception:
+            pass
+        for name, definition in missing.items():
             cursor.execute(
                 f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {definition}"
             )

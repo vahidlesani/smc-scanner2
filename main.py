@@ -1247,8 +1247,23 @@ def main() -> None:
     if not os.getenv("TELEGRAM_TOKEN"):
         print("WARNING: TELEGRAM_TOKEN is not set")
 
-    init_candidate_store()
-    init_v7_schema()
+    # ── Viva 09-21 (round-12 incident): a schema hiccup at boot used to kill the
+    # scanner thread → the container restarted in a loop → detections, updates
+    # and monitors went silent while the dashboard still looked healthy. Boot
+    # steps now retry, and a failure is loud but never fatal.
+    for _label, _fn in (("candidate store", init_candidate_store),
+                        ("v7 schema", init_v7_schema)):
+        for _attempt in range(1, 4):
+            try:
+                _fn()
+                break
+            except Exception as _boot_exc:
+                print(f"⚠️ Boot step '{_label}' failed (attempt {_attempt}/3): {_boot_exc}")
+                if _attempt >= 3:
+                    print(f"❌ Boot step '{_label}' gave up — scanner continues, "
+                          f"schema problems will be retried next cycle.")
+                else:
+                    time.sleep(5 * _attempt)
     # Viva 2026-09-11: deploy heartbeat — the DB becomes proof-of-life, so we
     # never have to guess whether the NEW build is actually running.
     try:
@@ -1305,16 +1320,43 @@ def main() -> None:
         f"monitor every {SETTINGS.monitor_minutes} minutes"
     )
 
+    # ── Viva 09-21 (round-12 incident): the outage was invisible — the web part
+    # was healthy while the scanner thread was dead, and nothing on the outside
+    # proved silence. The scanner now writes a heartbeat every 5 minutes, to the
+    # log AND to the durable KV store, so liveness is checkable from outside.
+    _hb = {"next": 0.0, "loops": 0, "scans": 0, "monitors": 0,
+           "last_scan": None, "last_monitor": None, "stats": {}, "mon_stats": {}}
     while not _SHUTDOWN:
         now = datetime.now(timezone.utc)
+        _hb["loops"] += 1
         if now >= next_monitor:
-            run_monitor_cycle()
+            _hb["monitors"] += 1
+            _hb["last_monitor"] = now.strftime("%H:%M")
+            _hb["mon_stats"] = dict(run_monitor_cycle() or {})
             next_monitor = _next_aligned(
                 datetime.now(timezone.utc), SETTINGS.monitor_minutes, SETTINGS.monitor_offset_minute
             )
         if now >= next_scan:
-            run_discovery_scan()
+            _hb["scans"] += 1
+            _hb["last_scan"] = now.strftime("%H:%M")
+            _hb["stats"] = dict(run_discovery_scan() or {})
             next_scan = _next_aligned_scan(datetime.now(timezone.utc))
+        if time.time() >= _hb["next"]:
+            _hb["next"] = time.time() + 300
+            _hb_payload = {
+                "when": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "scans": _hb["scans"], "monitors": _hb["monitors"],
+                "last_scan": _hb["last_scan"], "last_monitor": _hb["last_monitor"],
+                "scan_stats": _hb["stats"], "monitor_stats": _hb["mon_stats"],
+            }
+            try:
+                from database.bot_kv import set_json as _hb_set
+                _hb_set("scanner_heartbeat", _hb_payload)
+            except Exception as _hb_exc:
+                print(f"heartbeat write skipped: {_hb_exc}")
+            print(f"♥ HEARTBEAT • scanner alive • scans={_hb['scans']} "
+                  f"monitors={_hb['monitors']} • last discovery={_hb['last_scan']} "
+                  f"{_hb['stats']} • last monitor={_hb['last_monitor']}")
         report_key = now.strftime("%Y-%m-%d")
         if now.hour == 8 and now.minute < 2 and report_key != last_daily_report:
             _daily_report()

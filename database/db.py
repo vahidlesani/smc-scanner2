@@ -78,12 +78,23 @@ def generate_signal_id(symbol: str, source: str) -> str:
     return f"viva-{clean}-{source}-{ts}-{rand}"
 
 
+# ── Viva 09-21 (round 12 incident): a connection that stayed "idle in
+# transaction" held ACCESS SHARE on signal_candidates/signals for 25 MINUTES;
+# the boot migrations (ALTER TABLE) queued behind it and were killed by the
+# database's 2-minute statement_timeout, so the scanner thread died at every
+# start («چرا تعداد شناسایی‌ها و آپدیت‌ها قطع شد؟»). Two guards:
+#   • idle_in_transaction_session_timeout — no transaction may hold locks while
+#     nobody is using it; PostgreSQL closes such a session itself.
+#   • application_name — our sessions are identifiable in pg_stat_activity.
+_PG_OPTIONS = "-c idle_in_transaction_session_timeout=120000 -c application_name=viva-signal-bot"
+
+
 def get_conn():
     if USE_POSTGRES:
         url = DATABASE_URL
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql://", 1)
-        return psycopg2.connect(url, sslmode="require")
+        return psycopg2.connect(url, sslmode="require", options=_PG_OPTIONS)
     return sqlite3.connect(DB_PATH)
 
 

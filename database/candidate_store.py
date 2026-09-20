@@ -69,7 +69,11 @@ def _pg_connect():
     url = DATABASE_URL
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
-    return psycopg2.connect(url, sslmode="require", cursor_factory=RealDictCursor)
+    # round-12 incident: an idle-in-transaction session is a lock bomb — the
+    # database closes it instead of letting it block every later migration.
+    options = "-c idle_in_transaction_session_timeout=120000 -c application_name=viva-candidates"
+    return psycopg2.connect(url, sslmode="require", options=options,
+                            cursor_factory=RealDictCursor)
 # Non-confirmed lifecycles are throwaway: once resolved they are removed fast.
 # Confirmed rows persist a bit longer (they are the only ones ALSO in Supabase).
 RESOLVED_RETENTION_HOURS = int(os.getenv("CANDIDATE_RESOLVED_RETENTION_HOURS", "6"))
@@ -101,6 +105,47 @@ def _connection():
         conn.close()
 
 
+def _pg_column_exists(conn, table: str, column: str) -> bool:
+    try:
+        row = conn.execute(
+            "SELECT 1 AS ok FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name=? AND column_name=?",
+            (table, column),
+        ).fetchone()
+        if row is None:
+            return False
+        return bool(row["ok"] if isinstance(row, dict) else row[0])
+    except Exception:
+        return False
+
+
+def _guarded_ddl(conn, sql: str, label: str, attempts: int = 3) -> bool:
+    """Run one migration step; NEVER let it kill the process.
+
+    Round-12 incident: `ALTER TABLE … ADD COLUMN IF NOT EXISTS` still asks for an
+    ACCESS EXCLUSIVE lock, queued behind any leaked idle-in-transaction session,
+    and the database's statement_timeout then cancelled it — the scanner thread
+    died on every boot and the bot went silent. Now: a short lock_timeout (fail
+    in seconds, not in two minutes), retries with backoff, and a loud log line
+    that is not fatal.
+    """
+    import time as _time
+    for attempt in range(1, attempts + 1):
+        try:
+            try:
+                conn.execute("SET LOCAL lock_timeout = '10000'")
+            except Exception:
+                pass
+            conn.execute(sql)
+            return True
+        except Exception as exc:
+            if attempt >= attempts:
+                print(f"⚠️ Migration step failed (non-fatal): {label}: {exc}")
+                return False
+            _time.sleep(2 * attempt)
+    return False
+
+
 def init_candidate_store() -> None:
     with _connection() as conn:
         conn.execute(
@@ -128,9 +173,18 @@ def init_candidate_store() -> None:
             if "trigger_tf" not in columns:
                 conn.execute("ALTER TABLE signal_candidates ADD COLUMN trigger_tf TEXT NOT NULL DEFAULT ''")
         else:
-            conn.execute("ALTER TABLE signal_candidates ADD COLUMN IF NOT EXISTS trigger_tf TEXT NOT NULL DEFAULT ''")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_active ON signal_candidates(status, expires_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_dedupe ON signal_candidates(dedupe_key, status)")
+            # check-first: in steady state the column exists and we never even
+            # ask for the ACCESS EXCLUSIVE lock that used to block the boot.
+            if not _pg_column_exists(conn, "signal_candidates", "trigger_tf"):
+                _guarded_ddl(conn, "ALTER TABLE signal_candidates ADD COLUMN "
+                                   "trigger_tf TEXT NOT NULL DEFAULT ''",
+                             "signal_candidates.trigger_tf")
+        _guarded_ddl(conn, "CREATE INDEX IF NOT EXISTS idx_candidates_active "
+                           "ON signal_candidates(status, expires_at)",
+                     "idx_candidates_active")
+        _guarded_ddl(conn, "CREATE INDEX IF NOT EXISTS idx_candidates_dedupe "
+                           "ON signal_candidates(dedupe_key, status)",
+                     "idx_candidates_dedupe")
 
 
 def _trigger_tf(candidate: SignalCandidate) -> str:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 
 from waitress import serve
 
@@ -20,13 +21,31 @@ LOGGER = logging.getLogger("viva-combined-service")
 
 
 def _run_scanner() -> None:
-    try:
-        scanner_main()
-    except BaseException:
-        LOGGER.exception("Scanner thread terminated unexpectedly")
-        # A dashboard-only process would look healthy while signals are dead.
-        # Exit hard so Railway restarts the full service.
-        os._exit(1)
+    """Supervised scanner loop.
+
+    Round-12 incident: one startup exception (a blocked schema migration) killed
+    the process on every boot — the dashboard stayed up, so the outage was
+    invisible except as silence. The scanner now restarts itself with backoff;
+    only a scanner that keeps dying within seconds is allowed to take the
+    container down for Railway to rebuild.
+    """
+    failures = 0
+    while True:
+        started = time.time()
+        try:
+            scanner_main()
+            return
+        except BaseException:
+            LOGGER.exception("Scanner loop terminated unexpectedly")
+            ran_for = time.time() - started
+            failures = failures + 1 if ran_for < 60 else 1
+            if failures >= 5:
+                LOGGER.error("Scanner failed %d times in a row right after start — "
+                             "restarting the container.", failures)
+                os._exit(1)
+            delay = min(60, 5 * failures)
+            LOGGER.warning("Restarting the scanner thread in %ds (failure %d).", delay, failures)
+            time.sleep(delay)
 
 
 def main() -> None:
