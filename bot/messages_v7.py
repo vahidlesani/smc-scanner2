@@ -3069,17 +3069,26 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         f"🛑 First Stop: <b>{_price(candidate.sl)}</b>",
         f"📈 Live Price: <b>{_price(float((candidate.metadata or {}).get('live_price') or candidate.planned_entry))}</b>",
         *[f"🏁 TP{i+1}: {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [50, 30, 20])))],
-        f"⚖️ R:R {candidate.rr_tp1:.2f} / {candidate.rr_tp2:.2f} • ⭐ {candidate.score}/10",
+        # Viva 09-20 (third time, verbatim): «فرمول ریسک به ریوارد ... اصلا
+        # اهمیت نداره» → shown as a read-out only, never as a criterion.
+        f"⚖️ R:R (فقط گزارش) {candidate.rr_tp1:.2f} / {candidate.rr_tp2:.2f} • ⭐ {candidate.score}/10",
     ]
     rows.append(f"🤖 <b>نظر AI:</b> {_e(advisory or _ai_rich_note(candidate))}")
     if mm:
+        # Viva 09-20: the ACTIVE management profile is named in the message so
+        # «مدیریت سرمایه استاندارد» and «مدیریت ویوا» can never be mixed up.
+        _prof = str(mm.get("profile") or "").upper()
+        _prof_fa = "«مدیریت ویوا»" if _prof == "VIVA" else "«مدیریت سرمایه استاندارد»"
         rows.extend([
             VIVA_SEP,
+            f"🏦 پروفایل مدیریت: <b>{_prof_fa}</b>",
             f"💼 حجم پوزیشن: <b>${mm['position_size']:,.0f}</b>",
             f"🧱 مارجین: <b>${mm['margin']:,.2f}</b>",
             f"⚙️ اهرم: <b>{mm['leverage']}x</b>",
             f"🛡 ریسک: <b>{mm['risk_pct']:.2f}%</b>",
         ])
+        if mm.get("liq_warning_fa"):
+            rows.append(f"⚠️ {_e(mm['liq_warning_fa'])}")
     rows.append(f"🆔 <code>{_e(candidate.metadata.get('public_code') or candidate.signal_id)}</code>")
     return "\n".join(rows)
 
