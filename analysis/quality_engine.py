@@ -373,6 +373,24 @@ def evaluate_confirmation(
     risk = abs(executable_entry - candidate.sl)
     if risk <= 0:
         return reject("RISK_INVALID", "فاصله Entry تأییدشده تا حد ضرر معتبر نیست.")
+    # ── «مدیریت ویوا» §4 (09-20): TF distance ceiling for the FINAL target ──
+    # A structural level 19% away on a 15m trade is a different trade; the
+    # ceiling (1d 10% · 4h 7% · 1h/15m 5%) clamps TP2 so the five-segment
+    # ladder stays inside a distance this timeframe can travel. Nothing here
+    # derives a target from stop distance or a fixed R:R ratio (§3.3/§11).
+    try:
+        from analysis.trade_management import cap_final_target
+        _capped_tp2, _was_capped, _cap_pct = cap_final_target(
+            executable_entry, candidate.tp2, candidate.direction,
+            str(candidate.trigger_timeframe or "15m"))
+        if _was_capped:
+            candidate.metadata["target_cap_note"] = (
+                f"هدف نهایی مطابق سقف فاصلهٔ تایم‌فریم ({_cap_pct:.0f}% قیمت) "
+                f"محدود شد؛ هدف ساختاری خام {candidate.tp2:.8g} بود.")
+            candidate.metadata["raw_structural_tp2"] = float(candidate.tp2)
+            candidate.tp2 = float(_capped_tp2)
+    except Exception:
+        pass
     atr_value = float(candidate.metadata.get("atr", 0) or 0)
     if atr_value > 0:
         chase_atr = abs(executable_entry - zone_mid) / atr_value

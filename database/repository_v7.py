@@ -32,6 +32,17 @@ TF_MINUTES = {"1m": 1.0, "3m": 3.0, "5m": 5.0, "15m": 15.0, "30m": 30.0,
               "1h": 60.0, "2h": 120.0, "4h": 240.0, "1d": 1440.0}
 
 
+# «مدیریت ویوا» §6.1/§7 (09-20): the reversal early-warning lives ONE step
+# finer than the monitor TF — for a 15m trade: orange on 3m, and the exit
+# trigger is the confirmed reverse pin bar close on the 5m monitor frame.
+FAST_WATCH_TF = {"1d": "15m", "4h": "5m", "2h": "5m", "1h": "5m", "30m": "3m",
+                 "15m": "3m", "5m": "1m", "3m": "1m", "1m": "1m"}
+
+
+def fast_watch_tf_for(trade_tf: str) -> str:
+    return FAST_WATCH_TF.get(str(trade_tf or "").lower(), "3m")
+
+
 def monitor_tf_for(tf: str) -> str:
     tf = str(tf or "").lower()
     return MONITOR_TF_FOR.get(tf, tf)
@@ -735,6 +746,7 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
         candidate.planned_entry, candidate.sl, candidate.direction, candidate.market,
         candidate.tp2, structural_tp1=candidate.tp1,
         fee_pct=(SETTINGS.fee_rate_percent + SETTINGS.slippage_percent) * 2.0 / 100.0,
+        trigger_tf=str(candidate.trigger_timeframe or "15m"),
     )
     ladder_json = json.dumps(ladder, ensure_ascii=False)
     with legacy_db.db_cursor() as cursor:
@@ -1269,6 +1281,36 @@ def monitor_confirmed_trades() -> List[Dict]:
                         ladder = tstep["state"]
                         raw_events.extend(tstep["events"])
                         scan = smart_exit_scan(direction, wcandles, ladder)
+                        # «مدیریت ویوا» §6.1 (09-20): the earliest reversal sign
+                        # is read on the FAST frame (15m trade → 3m) and only
+                        # raises the ORANGE warning; the exit itself stays on
+                        # the monitor frame's confirmed close.
+                        _fast_tf = ""
+                        _fast_reason = ""
+                        try:
+                            _fast_tf = fast_watch_tf_for(trade_tf)
+                            _fast_reason = ""
+                            if _fast_tf != timeframe and _fast_tf in TF_MINUTES:
+                                _fkey = (symbol, _fast_tf)
+                                if _fkey not in by_symbol_tf:
+                                    by_symbol_tf[_fkey] = get_klines(
+                                        symbol, _fast_tf, 120, closed_only=True,
+                                        use_cache=True)
+                                _fframe = by_symbol_tf.get(_fkey)
+                                if _fframe is not None and not _fframe.empty:
+                                    _fc = [{"open": float(r["open"]), "high": float(r["high"]),
+                                            "low": float(r["low"]), "close": float(r["close"]),
+                                            "volume": float(r["volume"] or 0.0)}
+                                           for _, r in _fframe.tail(30).iterrows()]
+                                    _fscan = smart_exit_scan(direction, _fc, ladder)
+                                    if int(_fscan.get("score") or 0) >= 1:
+                                        _fast_reason = "; ".join(
+                                            list(_fscan.get("reasons") or [])[:2])
+                            if _fast_reason:
+                                ladder["fast_watch_tf"] = _fast_tf
+                                ladder["fast_watch_reason_fa"] = _fast_reason
+                        except Exception:
+                            _fast_reason = ""
                         # Viva 09-19/20 ruling (verbatim): in the PROFIT
                         # PROTECTION phase (after TP1) reversal signs must
                         # never «رد بشه و فقط هشدار بمونه» — two concurrent
@@ -1276,7 +1318,9 @@ def monitor_confirmed_trades() -> List[Dict]:
                         # close ALL remainder at this monitor candle's close,
                         # even before price returns to TP1. One sign = short
                         # warning only; before TP1 the structural stop rules.
-                        if int(scan.get("score") or 0) >= 2:
+                        _pin_closed = any("پین‌بار" in str(_r)
+                                          for _r in (scan.get("reasons") or []))
+                        if int(scan.get("score") or 0) >= 2 or _pin_closed:
                             _hit = int(ladder.get("hit_index") or 0)
                             _wts = [float(w) for w in (ladder.get("weights") or [])]
                             _remaining = 100.0 - sum(_wts[:_hit])
@@ -1289,13 +1333,26 @@ def monitor_confirmed_trades() -> List[Dict]:
                             ladder["current_sl"] = _close_px
                             ladder["closed"] = True
                             ladder["close_reason"] = "SMART_EXIT"
-                            ladder["exit_reasons_fa"] = list(scan.get("reasons") or [])
-                        elif (int(scan.get("score") or 0) == 1
+                            _reasons = list(scan.get("reasons") or [])
+                            if _pin_closed and len(_reasons) < 2:
+                                _reasons.insert(0, "پین‌بار معکوس تأییدشده در تایم مانیتور "
+                                                   "(«مدیریت ویوا» §۶٫۱: خروج باقی‌مانده)")
+                            ladder["exit_reasons_fa"] = _reasons
+                        elif ((int(scan.get("score") or 0) == 1 or _fast_reason)
                                 and int(ladder.get("warned_band") or 0) != int(ladder.get("hit_index") or 0)):
+                            # «مدیریت ویوا» §6.1: the orange warning precedes the
+                            # red exit — a fast-frame (3m) sign or a single
+                            # monitor-frame sign raises it once per band.
                             ladder["warned_band"] = int(ladder.get("hit_index") or 0)
+                            _warn_reasons = list(scan.get("reasons") or [])
+                            if _fast_reason:
+                                _warn_reasons = [
+                                    f"نشانهٔ بازگشت در تایم سریع {_fast_tf}: {_fast_reason}"
+                                ] + _warn_reasons
                             raw_events.append({
                                 "event": "EXIT_WARNING", "score": int(scan.get("score") or 0),
-                                "reasons_fa": list(scan.get("reasons") or []),
+                                "reasons_fa": _warn_reasons,
+                                "fast_tf": str(_fast_tf or ""),
                                 "hit_index": int(ladder.get("hit_index") or 0),
                             })
                 for event in raw_events:

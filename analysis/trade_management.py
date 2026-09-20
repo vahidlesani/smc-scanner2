@@ -42,6 +42,47 @@ SWING_BARS = 5
 SMART_EXIT_RED = 2           # ≥2 concurrent reversal signs → close ALL remainder
 SMART_EXIT_ORANGE = 1        # 1 sign → short warning only, never a close
 
+# ── «مدیریت ویوا» spec §4 (09-20): TF distance ceiling for targets ────────
+# The final target may never sit further than this share of price away from
+# the entry: 1d 10% · 4h 7% · 1h 5% · 15m 5% (the doc puts 15m on the 1h
+# rule). Sub-15m frames follow the 15m ceiling until the owner rules
+# otherwise (§13 ambiguity #3 — flagged, never invented). The 3%–5% band of
+# the doc is a *choice range*; 5% is the hard ceiling we clamp to.
+TARGET_MAX_PCT_BY_TF = {
+    "1d": 10.0, "4h": 7.0, "2h": 5.0, "1h": 5.0, "30m": 5.0,
+    "15m": 5.0, "5m": 5.0, "3m": 5.0, "1m": 5.0,
+}
+
+
+def target_distance_cap_pct(trigger_tf: str) -> float:
+    """Hard distance ceiling (percent of price) for the FINAL target."""
+    return float(TARGET_MAX_PCT_BY_TF.get(str(trigger_tf or "15m").lower(),
+                                          TARGET_MAX_PCT_BY_TF["15m"]))
+
+
+def cap_final_target(entry: float, final_target: float, direction: str,
+                     trigger_tf: str) -> tuple[float, bool, float]:
+    """Clamp the final target to the TF ceiling — returns (price, capped, cap%).
+
+    «مدیریت ویوا» §4 + §11: targets come from structure, but a structural
+    level 19% away on a 15m trade is not a target — it is a different trade.
+    The cap keeps the five-segment ladder meaningful (15m: TP1≈1%, TP5=5%).
+    """
+    try:
+        entry = float(entry)
+        final = float(final_target or 0)
+        if entry <= 0 or final <= 0:
+            return float(final_target or 0), False, 0.0
+        cap_pct = target_distance_cap_pct(trigger_tf)
+        limit = abs(entry) * cap_pct / 100.0
+        dist = abs(final - entry)
+        if dist <= limit + 1e-12:
+            return final, False, cap_pct
+        sign = 1.0 if str(direction).upper() == "LONG" else -1.0
+        return entry + sign * limit, True, cap_pct
+    except Exception:
+        return final_target, False, 0.0
+
 
 def entry_touched(entry: float, candle_high: float, candle_low: float) -> bool:
     """True only when the confirmed limit entry was tradeable in this candle.
@@ -67,7 +108,7 @@ def venue_tick(price: float, market: Optional[Dict] = None) -> float:
 
 def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict] = None,
                  final_target: Optional[float] = None, structural_tp1: Optional[float] = None,
-                 fee_pct: float = 0.0) -> Dict:
+                 fee_pct: float = 0.0, trigger_tf: str = "") -> Dict:
     """Five-pill exit ladder — the ORIGINAL approved tool shape (Viva
     09-19/20 revisit): five equal price segments entry→final, TP1 distance
     exactly as before (no 1R floor), exits 40/30/30 on TP1..TP3, TP4/TP5
@@ -93,6 +134,13 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
     proposed_final = float(final_target or 0)
     valid_final = (proposed_final > entry if sign > 0 else proposed_final < entry)
     final_price = proposed_final if valid_final else entry + sign * risk * 3
+    # «مدیریت ویوا» §4: the TF distance ceiling clamps the FINAL target, so
+    # the five equal segments stay inside a distance this TF can actually
+    # travel (a 15m trade may not carry a 19% target).
+    _cap_tf = str(trigger_tf or (market or {}).get("trigger_timeframe") or "15m")
+    _capped_final, _was_capped, _cap_pct = cap_final_target(entry, final_price, direction, _cap_tf)
+    if _was_capped and (abs(_capped_final - entry) > 1e-12):
+        final_price = _capped_final
     dist = abs(final_price - entry)
     # Viva 09-19/20: five equal segments entry→final — the ORIGINAL approved
     # tool shape; TP1 distance exactly as before (structural share of the
@@ -146,6 +194,12 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
         "close_reason": "",
         "exit_reasons_fa": [],
         "structural_tp1": float(structural_tp1 or 0.0),
+        # «مدیریت ویوا» §4 audit trail: how far the raw structural target was
+        # and whether the TF ceiling clamped it
+        "cap_pct": float(_cap_pct),
+        "target_capped": bool(_was_capped),
+        "raw_final_target": float(proposed_final or 0.0),
+        "trigger_tf": str(_cap_tf),
     }
 
 
@@ -351,6 +405,13 @@ def advance_ladder(state: Dict, high: float, low: float) -> Dict:
         idx += 1
         out["hit_index"] = idx
         events.append({"event": f"TP{idx}", "target": target, "weight": weight, "new_sl": out["current_sl"]})
+        # Viva 09-19/20 + «مدیریت ویوا» §5: exits end at TP3 (40/30/30).
+        # A zero-weight INFO pill is not an exit level — once the weight is
+        # exhausted the position closes on this candle, even when the same
+        # candle also prints the later informational pills (with the 09-20
+        # TF ceiling the five pills sit close together, so this matters).
+        if (100.0 - sum(float(w) for w in out["weights"][:idx])) <= 1e-9:
+            break
     if idx >= len(out["targets"]):
         out["closed"] = True
         events.append({"event": "LADDER_COMPLETE", "realized_r": out["realized_r"]})

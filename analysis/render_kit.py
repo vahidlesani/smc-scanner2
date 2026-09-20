@@ -340,6 +340,61 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
                             "x0": int(max(0, _rx)), "ts0": _rts})
     except Exception:
         pass
+    # ── Viva 09-20 (his AAVE correction chart): three near-parallel descending
+    # «TRENDLINE» labels on one canvas. Validated lines are still allowed to
+    # differ — but a line that reads as the SAME line (same side, within
+    # 0.35×ATR at both ends) is drawn once, and each side keeps at most two
+    # parent lines plus one child. This trims stacked twins, never the geometry.
+    try:
+        _atr_d = _atr(df)
+        _n_d = len(df)
+        if _atr_d > 0 and _n_d > 10:
+            _mid_x = _n_d / 2.0
+            _end_x = float(_n_d)
+            _kept = {"HIGH": [], "LOW": []}   # (p_mid, p_end, child)
+            _limits = {"HIGH": [2, 1], "LOW": [2, 1]}  # [parents, children]
+            _counts = {"HIGH": [0, 0], "LOW": [0, 0]}
+
+            def _same_line(side, sl, ic, child):
+                pm, pe = sl * _mid_x + ic, sl * _end_x + ic
+                for qm, qe, _c in _kept.get(side, []):
+                    if abs(pm - qm) <= 0.35 * _atr_d and abs(pe - qe) <= 0.35 * _atr_d:
+                        return True
+                return False
+
+            def _admit(side, sl, ic, child):
+                if side not in _counts:
+                    return False
+                idx = 1 if child else 0
+                if _counts[side][idx] >= _limits[side][idx]:
+                    return False
+                if _same_line(side, sl, ic, child):
+                    return False
+                _counts[side][idx] += 1
+                _kept[side].append((sl * _mid_x + ic, sl * _end_x + ic, child))
+                return True
+
+            _trimmed = []
+            for _p in out:
+                if _p.get("type") == "RANGE":
+                    _trimmed.append(_p)
+                    continue
+                _survive = [ln for ln in (_p.get("lines") or [])
+                            if _admit(str(ln.get("side") or ""), float(ln["slope"]),
+                                      float(ln["intercept"]), bool(_p.get("child")))]
+                if not _survive:
+                    continue
+                if len(_survive) == len(_p.get("lines") or []):
+                    _trimmed.append(_p)
+                elif _p.get("type") == "TRENDLINE":
+                    _trimmed.append({**_p, "lines": _survive})
+                else:
+                    # a wedge/channel that lost a side is honestly just a line
+                    _trimmed.append({**_p, "type": "TRENDLINE", "lines": _survive})
+            if _trimmed:
+                out = _trimmed
+    except Exception:
+        pass
     return out[:3]
 
 

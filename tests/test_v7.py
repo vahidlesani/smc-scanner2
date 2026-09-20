@@ -458,10 +458,12 @@ class V7PersistenceTests(unittest.TestCase):
             events = repository_v7.monitor_confirmed_trades()
         finally:
             repository_v7.get_klines = original
-        # 09-19 aligned ladder (50/30/20 on 101/105/109): candle 2 banks
-        # TP1=101 (1R) and TP2=105, stop trails to TP1+ticks; candle 3's dip
-        # exits the remainder on the protected trail — still a WIN,
-        # processed strictly in chronological order.
+        # Ladder v3 under the 09-20 TF ceiling («مدیریت ویوا» §4): entry 100
+        # on 15m → final target capped at 5% = 105, five equal segments, so
+        # TP1/TP2/TP3 = 101/102/103 with weights 40/30/30. Candle 2 prints all
+        # three exits in order and the ladder completes (weight exhausted);
+        # candle 3's dip is already post-close — everything strictly
+        # chronological and the zero-weight TP4/TP5 pills emit NO receipts.
         self.assertEqual([event["event"] for event in events],
                          ["TP1", "TP2", "TP3", "LADDER_COMPLETE", "CLOSED"])
         self.assertEqual(events[-1]["result"], "WIN")

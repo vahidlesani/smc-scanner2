@@ -189,6 +189,11 @@ class Settings:
     range_fraction_targets: bool = False
     range_fraction_symbols: str = ""        # empty = all symbols
 
+    # «مدیریت ویوا» (Viva-management spec §8/§14): a SEPARATE management
+    # profile — fixed margin by symbol price + flat 20× leverage. OFF by
+    # default: standard management stays the reference until Viva switches it.
+    viva_management_profile: bool = False
+
     account_size: float = 1000.0
     base_risk_percent: float = 1.0
     max_risk_percent: float = 1.25
@@ -328,6 +333,7 @@ class Settings:
             tlbreak_context_tf=os.getenv("TLBREAK_CONTEXT_TF", cls.tlbreak_context_tf),
             range_fraction_targets=_bool("RANGE_FRACTION_TARGETS", cls.range_fraction_targets),
             range_fraction_symbols=os.getenv("RANGE_FRACTION_SYMBOLS", cls.range_fraction_symbols),
+            viva_management_profile=_bool("VIVA_MANAGEMENT_PROFILE", cls.viva_management_profile),
             account_size=_float("ACCOUNT_SIZE", cls.account_size),
             base_risk_percent=_float("RISK_PERCENT", cls.base_risk_percent),
             max_risk_percent=_float("MAX_RISK_PERCENT", cls.max_risk_percent),

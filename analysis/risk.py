@@ -59,6 +59,70 @@ def suggested_leverage(
     return max(1, min(quality_cap, max_safe_leverage(sl_fraction, style), venue_cap, 20))
 
 
+# ── «مدیریت ویوا» §8 (09-20): a SEPARATE management profile ──────────────
+# Fixed base size per position by symbol price, flat 20× leverage — kept
+# strictly apart from «مدیریت سرمایه استاندارد» (the score/quality engine
+# above). The doc's exact boundaries: <5 → 30$, 5 to <50 → 40$, ≥50 → 50$.
+VIVA_MARGIN_TABLE = ((5.0, 30.0, 20), (50.0, 40.0, 20), (float("inf"), 50.0, 20))
+
+
+def viva_management_profile_enabled() -> bool:
+    try:
+        from config import SETTINGS
+        return bool(getattr(SETTINGS, "viva_management_profile", False))
+    except Exception:
+        return False
+
+
+def viva_position(entry: float, direction: str, sl: Optional[float] = None,
+                  tp1: Optional[float] = None, tp2: Optional[float] = None,
+                  market: Optional[Dict] = None) -> Optional[Dict]:
+    """«مدیریت ویوا» sizing: fixed margin + flat leverage from the table.
+
+    Kept independent of the standard engine so the two profiles can be
+    compared and either one switched off without touching the other (§14).
+    Liquidation distance is reported, never silently capped: at 20× the
+    exchange liquidates roughly 5% away, so a wider invalidation means the
+    stop would be reached after liquidation — the caller surfaces a warning.
+    """
+    try:
+        entry = float(entry)
+        if entry <= 0:
+            return None
+        margin = leverage = None
+        for upper, m, lev in VIVA_MARGIN_TABLE:
+            if entry < upper:
+                margin, leverage = float(m), int(lev)
+                break
+        if not margin:
+            return None
+        notional = margin * leverage
+        sl_distance = abs(entry - float(sl)) if sl and float(sl) > 0 else 0.0
+        sl_pct = sl_distance / entry * 100.0 if sl_distance else 0.0
+        liq_pct = 100.0 / leverage
+        out = {
+            "profile": "VIVA",
+            "margin": margin,
+            "leverage": leverage,
+            "position_size": notional,
+            "quantity": notional / entry,
+            "sl_pct": sl_pct,
+            "liq_distance_pct": liq_pct,
+            "risk_amount": notional * sl_distance / entry if sl_distance else 0.0,
+        }
+        # ≥2.5× headroom is the standard engine's rule; in the Viva profile it
+        # is REPORTED as a warning instead of resizing (his table is explicit).
+        out["liq_headroom"] = (liq_pct / sl_pct) if sl_pct > 0 else None
+        if sl_pct > 0 and liq_pct < 1.5 * sl_pct:
+            out["liq_warning_fa"] = (
+                f"هشدار: با اهرم {leverage}× فاصلهٔ لیکوئید ≈{liq_pct:.1f}% است و "
+                f"استاپ در {sl_pct:.1f}% دورتر — لیکوئید قبل از استاپ می‌خورد؛ "
+                "مارجین این پوزیشن باید کمتر شود یا اهرم پایین‌تر بیاید.")
+        return out
+    except Exception:
+        return None
+
+
 def calculate_position(
     entry: float,
     sl: float,
@@ -77,6 +141,25 @@ def calculate_position(
     sl_fraction = sl_distance / entry if entry > 0 else 0
     if sl_fraction <= 0 or account <= 0:
         return None
+    # «مدیریت ویوا» profile: when switched on, sizing comes from his fixed
+    # table/leverage instead of the standard risk engine (never mixed).
+    if viva_management_profile_enabled():
+        _viva = viva_position(entry, direction, sl, tp1, tp2)
+        if _viva:
+            _viva.update({
+                "cost_pct": 2.0 * (SETTINGS.fee_rate_percent + SETTINGS.slippage_percent),
+                "quality": "VIVA-MANAGEMENT",
+                "grade": "VIVA",
+                "quality_leverage_cap": _viva["leverage"],
+                "margin_pct": _viva["margin"] / account * 100 if account else 0,
+                "margin_limit_pct": _viva["margin"] / account * 100 if account else 0,
+                "tp1": tp1 if tp1 is not None else entry + sl_fraction * entry * 2,
+                "tp2": tp2 if tp2 is not None else entry + sl_fraction * entry * 3,
+                "max_safe_leverage": max_safe_leverage(sl_fraction, style),
+                "margin_capped": False,
+                "risk_pct": (_viva["risk_amount"] / account * 100) if account else 0,
+            })
+            return _viva
 
     plan = quality_plan(score)
     risk_pct = plan["risk_pct"]

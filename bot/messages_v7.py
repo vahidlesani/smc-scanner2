@@ -1490,7 +1490,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 if _xs8:
                     ax.scatter(_xs8, _px8, s=30, color=CHART_THEME["panel"],
                                edgecolors=_col8, linewidths=1.4, zorder=9)
-            if len(_lns) == 2 and not any(_flat8) and not any(_brk8):
+            # Viva 09-20 (his XRP/ASTER/AAVE/RENDER correction charts): on a
+            # CONFIRMED chart the pattern's measured-move box was painted
+            # straight into the red risk zone of a short tool — two geometries
+            # fighting on one canvas. The trade tool owns a confirmed chart;
+            # the pattern projection stays on analysis/alerts charts only.
+            if len(_lns) == 2 and not any(_flat8) and not any(_brk8) and not confirmed:
                 # CryptoCove measured-move box: pattern height projected from
                 # the live price into the future panel — translucent green,
                 # double-arrow spine, small value label on top.
@@ -3807,7 +3812,9 @@ def _event_chart_candidate(event: dict) -> SignalCandidate:
         # Static Entry / First Stop / five TP geometry is carried into
         # every lifecycle chart. Only live price and the trailing line move.
         "target_ladder": {
-            "targets": targets or build_ladder(entry, sl, direction, {}, tp2).get("targets", []),
+            "targets": targets or build_ladder(
+                entry, sl, direction, {}, tp2,
+                trigger_tf=str(event.get("trigger_timeframe") or "15m")).get("targets", []),
             "weights": [35, 35, 20, 5, 5],
             "hit_index": int(event.get("hit_index") or 0),
         },
