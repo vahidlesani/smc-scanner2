@@ -54,10 +54,63 @@ TARGET_MAX_PCT_BY_TF = {
 }
 
 
+# Viva 09-20 (round 10, verbatim): «اگر کف و سقف معتبر نبود آن تایم یا تایم
+# بالاتر، طبق درصدهای اعلان‌شده مثلا در ۱۵ دقیقه ۳ تا ۵ درصد قیمت در سمت هدف
+# مشخص و از نقطه ورود تا آن‌جا به ۵ قسمت» → each trigger TF carries a NORM
+# band, not only a ceiling: 15m/1h 3–5% · 4h 5–7% · 1d up to 10% (below 15m
+# inherits the 15m band, flagged).
+TARGET_BAND_PCT_BY_TF = {
+    "1d": (5.0, 10.0), "4h": (5.0, 7.0), "2h": (3.0, 5.0), "1h": (3.0, 5.0),
+    "30m": (3.0, 5.0), "15m": (3.0, 5.0), "5m": (3.0, 5.0),
+    "3m": (3.0, 5.0), "1m": (3.0, 5.0),
+}
+
+
 def target_distance_cap_pct(trigger_tf: str) -> float:
     """Hard distance ceiling (percent of price) for the FINAL target."""
     return float(TARGET_MAX_PCT_BY_TF.get(str(trigger_tf or "15m").lower(),
                                           TARGET_MAX_PCT_BY_TF["15m"]))
+
+
+def target_distance_floor_pct(trigger_tf: str) -> float:
+    """Minimum distance at which a swing counts as the TF's «کف/سقف معتبر»."""
+    return float(TARGET_BAND_PCT_BY_TF.get(str(trigger_tf or "15m").lower(),
+                                           TARGET_BAND_PCT_BY_TF["15m"])[0])
+
+
+def tf_target_distance(entry: float, trigger_tf: str, structural_level: float = 0.0,
+                       direction: str = "LONG", wall_level: float = 0.0) -> float:
+    """The path length the ladder splits into five parts.
+
+    Order of precedence (his doctrine, round 10):
+      1. the OPPOSITE WALL of the pattern (internal/range entries) — the price
+         distance from the entry to that wall;
+      2. a VALID ceiling/floor of the trigger TF (or a higher TF): a level at
+         least the TF floor away (15m/1h 3%, 4h 5%) — closer pivots are noise,
+         not targets;
+      3. otherwise the TF norm distance (15m/1h 5%, 4h 7%, 1d 10%).
+    Everything is clamped into the TF band, never derived from the stop.
+    """
+    try:
+        entry = float(entry)
+        if entry <= 0:
+            return 0.0
+        lo = target_distance_floor_pct(trigger_tf) / 100.0 * entry
+        hi = target_distance_cap_pct(trigger_tf) / 100.0 * entry
+        for _lvl in (wall_level, structural_level):
+            try:
+                _lvl = float(_lvl or 0.0)
+            except Exception:
+                _lvl = 0.0
+            if _lvl <= 0:
+                continue
+            _d = abs(_lvl - entry)
+            if lo <= _d <= hi:
+                return float(_d)
+        # no valid structural level in-band → the TF norm distance
+        return float(hi if str(trigger_tf).lower() not in ("4h",) else 0.9 * hi)
+    except Exception:
+        return 0.0
 
 
 def cap_final_target(entry: float, final_target: float, direction: str,
@@ -108,7 +161,8 @@ def venue_tick(price: float, market: Optional[Dict] = None) -> float:
 
 def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict] = None,
                  final_target: Optional[float] = None, structural_tp1: Optional[float] = None,
-                 fee_pct: float = 0.0, trigger_tf: str = "") -> Dict:
+                 fee_pct: float = 0.0, trigger_tf: str = "",
+                 wall_level: Optional[float] = None) -> Dict:
     """Five-pill exit ladder — the ORIGINAL approved tool shape (Viva
     09-19/20 revisit): five equal price segments entry→final, TP1 distance
     exactly as before (no 1R floor), exits 40/30/30 on TP1..TP3, TP4/TP5
@@ -141,34 +195,38 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
     _capped_final, _was_capped, _cap_pct = cap_final_target(entry, final_price, direction, _cap_tf)
     if _was_capped and (abs(_capped_final - entry) > 1e-12):
         final_price = _capped_final
+    # ── Viva 09-20 (round 10) — his doctrine, restated verbatim ───────────
+    # «فاصله نقطه ورود تا آن‌جا [کف/سقف معتبر] به ۵ قسمت اما خروج در تی‌پی ۱
+    # تا ۳» + «اگر کف و سقف معتبر نبود … طبق درصدهای اعلان‌شده … از نقطه ورود
+    # تا آن‌جا به ۵ قسمت». So the PATH is a **price distance**, chosen in this
+    # order: the opposite wall of the pattern → a valid TF ceiling/floor →
+    # the TF norm distance — and it is split into five equal parts. TP1..TP3
+    # (40/30/30) exit at 20/40/60% of that path, always BEFORE the wall.
+    # The stop never enters this arithmetic (his repeated ruling).
+    _path = tf_target_distance(entry, _cap_tf, structural_level=final_price,
+                               direction=direction, wall_level=float(wall_level or 0.0))
+    if _path <= 0:
+        _path = dist
+    # hard TF ceiling on the path
+    _limit = abs(entry) * target_distance_cap_pct(_cap_tf) / 100.0
+    if _limit > 0 and _path > _limit:
+        _path = _limit
+    final_price = entry + sign * _path
     dist = abs(final_price - entry)
-    # ── Viva 09-20 (round 9) — the TP1→TP2 oversized-gap BUG fix ─────────
-    # Doctrine: «تی‌پی‌ها منطقی نسبت به تایم‌فریم» — TP1 is the FIRST
-    # meaningful level of the trigger TF (هزینهٔ نزدیک), the LAST pill is the
-    # next ceiling/floor (clamped by the TF ceiling above), and the distance
-    # between them is «به ۵ قسمت» split. Spacing is therefore UNIFORM: a
-    # structural TP1 that sits very close to the entry can no longer be
-    # followed by a 2–3× larger jump to TP2 (his chart complaint).
-    step = dist / 5.0                      # the five-part split of the path
+    step = _path / 5.0                      # the five-part split
+    tp1 = entry + sign * step
+    # a structural first level may SNAP the first pill, but only when it is
+    # within ±20% of the five-part step (a deeper level is a different trade,
+    # and forcing it produced the cramped ladders Viva crossed out).
     _struct_tp1 = float(structural_tp1 or 0.0)
-    _valid_tp1 = (
-        _struct_tp1 > 0
-        and ((sign > 0 and entry < _struct_tp1 < final_price)
-             or (sign < 0 and final_price < _struct_tp1 < entry))
-    )
-    if _valid_tp1:
-        tp1 = _struct_tp1
-    else:
-        tp1 = entry + sign * step
-    # UNIFORM spacing between the pills, bounded so that no gap can ever
-    # balloon past 1.3× the five-part step (the bug Viva flagged). When the
-    # structural TP1 sits deep in the path, the four remaining pills compress
-    # uniformly instead of leaving an oversized TP1→TP2 jump.
-    _need = abs(final_price - tp1) / 4.0 if dist > 1e-12 else 0.0
-    _space = min(_need, 1.3 * step) if dist > 1e-12 else 0.0
+    if _struct_tp1 > 0:
+        _before_final = (_struct_tp1 < final_price) if sign > 0 else (_struct_tp1 > final_price)
+        _ahead_of_entry = (_struct_tp1 > entry) if sign > 0 else (_struct_tp1 < entry)
+        if _before_final and _ahead_of_entry and abs(abs(_struct_tp1 - entry) - step) <= 0.20 * step:
+            tp1 = _struct_tp1
     targets = []
     for i in range(5):
-        _lv = tp1 + sign * _space * i
+        _lv = tp1 + sign * min(step, max(0.4 * step, abs(final_price - tp1) / 4.0)) * i
         if sign > 0:
             _lv = min(_lv, final_price)
         else:
@@ -183,6 +241,7 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
     targets = _dedup
     if len(targets) == 1:
         targets = [float(final_price)]
+    _space = min(step, max(0.4 * step, abs(final_price - tp1) / 4.0))
     weights = list(DEFAULT_WEIGHTS)
     if len(targets) < len(weights):
         # a collapsed ladder keeps the FIRST exit weight on its single pill
@@ -242,8 +301,10 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
         "trigger_tf": str(_cap_tf),
         # round-9 ladder audit: uniform spacing proof (no TP1→TP2 balloon)
         "seg_step": float(step),
+        "path_distance": float(_path),
+        "path_pct": float(_path / abs(entry) * 100.0),
         "tp_gap": float(_space),
-        "tp1_source": "STRUCTURE" if _valid_tp1 else "GRID",
+        "tp1_source": "STRUCTURE_SNAP" if _struct_tp1 and abs(tp1 - _struct_tp1) < 1e-12 else "FIVE_PART_SPLIT",
     }
 
 

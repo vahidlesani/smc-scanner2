@@ -305,11 +305,24 @@ def evaluate_confirmation(
                                 and _o20 <= _prev_c20 and _close20 >= _prev_o20)
                 _bull_close = _close20 > _o20 and _close20 > _prev_c20
                 if _bull_pin or _bull_engulf or _bull_close:
+                    # Viva 09-20 round 10 (verbatim): «هدف در شورت کف الگو و در
+                    # صعودی زیر سقف الگو» → the PATH is entry→opposite wall;
+                    # TP1 is one fifth of it and the exits (TP1..TP3) land at
+                    # 60% of the way, i.e. strictly UNDER the wall.
+                    _wall = _band_hi20 - _buf20i
+                    _path = max(_wall - _close20, 0.0)
+                    # his verbatim stop rule for the internal lane: «استاپ پشت
+                    # کانال و بافر از آخرین سویینگ طبق عکس چارت» → behind the
+                    # channel edge AND behind the last swing low that built
+                    # the floor, plus the buffer.
+                    _swing_lo20 = float(closed_df["low"].tail(20).min())
+                    _sl_base = min(_band_lo20, _swing_lo20)
                     _internal_plan = {
                         "direction": "LONG", "entry": _close20,
-                        "sl": _band_lo20 - _buf20i,
-                        "tp1": _band_lo20 + 0.55 * _w20,
-                        "tp2": _band_hi20 - _buf20i,
+                        "sl": _sl_base - _buf20i,
+                        "wall": float(_band_hi20),
+                        "tp1": _close20 + _path / 5.0 if _path > 0 else _wall,
+                        "tp2": _wall,
                         "pattern": str(_band20.get("kind") or "RANGE"),
                     }
             elif candidate.direction == "SHORT" and _close20 >= _band_hi20 - 0.30 * _w20:
@@ -319,11 +332,18 @@ def evaluate_confirmation(
                                 and _o20 >= _prev_c20 and _close20 <= _prev_o20)
                 _bear_close = _close20 < _o20 and _close20 < _prev_c20
                 if _bear_pin or _bear_engulf or _bear_close:
+                    _wall = _band_lo20 + _buf20i
+                    _path = max(_close20 - _wall, 0.0)
+                    # mirror: behind the channel ceiling AND the last swing
+                    # high that built it, plus the buffer.
+                    _swing_hi20 = float(closed_df["high"].tail(20).max())
+                    _sl_base = max(_band_hi20, _swing_hi20)
                     _internal_plan = {
                         "direction": "SHORT", "entry": _close20,
-                        "sl": _band_hi20 + _buf20i,
-                        "tp1": _band_hi20 - 0.55 * _w20,
-                        "tp2": _band_lo20 + _buf20i,
+                        "sl": _sl_base + _buf20i,
+                        "wall": float(_band_lo20),
+                        "tp1": _close20 - _path / 5.0 if _path > 0 else _wall,
+                        "tp2": _wall,
                         "pattern": str(_band20.get("kind") or "RANGE"),
                     }
         except Exception:
@@ -332,6 +352,12 @@ def evaluate_confirmation(
         _md20["viva_entry_type"] = "INTERNAL"
         _md20["internal_entry"] = {k: (round(v, 10) if isinstance(v, float) else v)
                                    for k, v in _internal_plan.items()}
+        _md20["internal_wall"] = float(_internal_plan.get("wall") or 0.0)
+        _md20["internal_path_fa"] = (
+            f"هدف: تا کف الگو ({_internal_plan['tp2']:.8g}) — خروج در TP1..TP3 یعنی "
+            f"۶۰٪ مسیر، پیش از رسیدن به ضلع مقابل." if _internal_plan["direction"] == "SHORT" else
+            f"هدف: تا سقف الگو ({_internal_plan['tp2']:.8g}) — خروج در TP1..TP3 یعنی "
+            f"۶۰٪ مسیر، پیش از رسیدن به ضلع مقابل.")
         _md20["internal_entry_note_fa"] = (
             f"ورود از کف {_internal_plan['pattern']} با تأیید کندل بسته‌شده؛ استاپ پشت "
             "کانال با بافر و اهداف زیر سقف کانال." if _internal_plan["direction"] == "LONG" else

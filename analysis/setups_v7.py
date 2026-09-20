@@ -631,18 +631,19 @@ def _structural_targets(
     trigger_tf: str = "", require_real_levels: bool = False,
     min_gap_atr: float = 0.6,
 ) -> Optional[Dict]:
-    """Targets from STRUCTURE — never from the stop distance.
+    """Targets per Viva's round-10 doctrine — a PRICE DISTANCE, never R:R.
 
-    Viva 09-20 (verbatim): «هیچ ارتباطی بین اندازه فاصله قیمت تا استاپ یا
-    تارگت‌ها قرار نده» + «تی‌پی‌ها هم در پوزیشن صعودی تا سقف بعدی آن تایم
-    تریگر یا در پوزیشن شورت تا کف قبل» + «نواحی مهم در همان تایم و نواحی مهم
-    در تایم‌های بالاتر رو در نظر بگیره» → the primary levels are the TRIGGER
-    timeframe's own pivots, and the higher timeframe(s) contribute their
-    important zones as multi-TF context. The nearest meaningful level beyond
-    the entry is TP1; the next one is the final target. The TF distance
-    ceiling (doc §4) is clamped afterwards. When a frame shows no level, the
-    fallback is a share of that TF ceiling (a price-distance rule) — NOT a
-    multiple of the stop (this is what produced the 19%-away XRP target).
+    Verbatim: «خارج از الگوها پس از بریک اگر در تایم سقف و کف معتبری داشتیم
+    فاصله نقطه ورود تا آن‌جا به ۵ قسمت اما خروج در تی‌پی ۱ تا ۳» و «اگر کف و
+    سقف معتبر نبود … طبق درصدهای اعلان‌شده مثلا در ۱۵ دقیقه ۳ تا ۵ درصد قیمت
+    در سمت هدف مشخص و از نقطه ورود تا آن‌جا به ۵ قسمت تقسیم».
+
+    So: pick the trigger TF's own next valid ceiling/floor (a level at least
+    the TF floor away — closer pivots are noise), else fall back to the TF's
+    norm distance (15m/1h 5%, 4h 7%, 1d 10%). TP1 is exactly one fifth of
+    that path, TP2 the far level; the ladder splits it in five and exits at
+    TP1..TP3. The stop distance is NOT part of this arithmetic (his ruling,
+    repeated three times).
     """
     try:
         entry = float(entry)
@@ -655,9 +656,14 @@ def _structural_targets(
                 _atr = float((df["high"] - df["low"]).tail(14).mean() or 0.0)
             except Exception:
                 _atr = 0.0
-        gap = max(min_gap_atr * _atr, 0.0015 * entry)
+        from analysis.trade_management import (tf_target_distance,
+                                               target_distance_floor_pct,
+                                               target_distance_cap_pct)
+        floor_dist = entry * target_distance_floor_pct(trigger_tf or "15m") / 100.0
+        cap_dist = entry * target_distance_cap_pct(trigger_tf or "15m") / 100.0
         levels = []
-        for _frame in (df, extra_df):
+        source = "TF_NORM"
+        for _frame, _tag in ((df, "TRIGGER"), (extra_df, "HTF")):
             if _frame is None or len(_frame) < 20:
                 continue
             try:
@@ -669,31 +675,44 @@ def _structural_targets(
                     _lv = float(_pt["price"])
                 except Exception:
                     continue
-                if levels and any(abs(_lv - _e) <= 0.35 * _atr for _e in levels):
+                if levels and any(abs(_lv - _e) <= 0.25 * _atr for _e in levels):
                     continue
-                levels.append(_lv)
-        from analysis.trade_management import target_distance_cap_pct
-        cap_dist = entry * target_distance_cap_pct(trigger_tf or "15m") / 100.0
+                levels.append((_lv, _tag))
         if direction == "LONG":
-            valid = sorted(level for level in levels if level >= entry + gap)
-            tp1 = valid[0] if valid else entry + 0.20 * cap_dist
-            later = [level for level in valid if level >= tp1 + max(0.35 * _atr, 0.002 * entry)]
-            tp2 = later[0] if later else max(tp1, entry + cap_dist)
+            valid = sorted((lv for lv in levels if lv >= entry + max(0.5 * _atr, floor_dist * 0.35)))
         else:
-            valid = sorted((level for level in levels if level <= entry - gap), reverse=True)
-            tp1 = valid[0] if valid else entry - 0.20 * cap_dist
-            later = [level for level in valid
-                     if level <= tp1 - max(0.35 * _atr, 0.002 * entry)]
-            tp2 = later[0] if later else min(tp1, entry - cap_dist)
-        if require_real_levels and not valid:
+            valid = sorted((lv for lv in levels if lv <= entry - max(0.5 * _atr, floor_dist * 0.35)),
+                           reverse=True)
+        # the nearest VALID level inside the TF band is the «سقف/کف معتبر»
+        far_level, far_tag = 0.0, ""
+        for _lv, _tag in valid:
+            _d = abs(_lv - entry)
+            if _d >= floor_dist:
+                far_level, far_tag = _lv, _tag
+                break
+        if far_level <= 0 and valid:
+            far_level, far_tag = valid[0]           # closer than the floor: clamp later
+        path = tf_target_distance(entry, trigger_tf or "15m",
+                                  structural_level=far_level, direction=direction)
+        if path <= 0:
+            path = cap_dist
+        path = min(path, cap_dist)
+        source = "STRUCTURE_TRIGGER_TF" if (far_level and far_tag == "TRIGGER") else (
+            "STRUCTURE_HIGHER_TF" if far_level else "TF_NORM")
+        step = path / 5.0
+        tp1 = entry + (step if direction == "LONG" else -step)
+        tp2 = entry + (path if direction == "LONG" else -path)
+        if require_real_levels and not far_level:
             return None
         return {
             "tp1": float(tp1),
             "tp2": float(tp2),
+            "far_level": float(far_level or 0.0),
+            "path_pct": float(path / entry * 100.0),
             # R/R is REPORTED, never a criterion (Viva 09-20, verbatim)
             "rr1": abs(tp1 - entry) / risk if risk else 0,
             "rr2": abs(tp2 - entry) / risk if risk else 0,
-            "source": "STRUCTURE_TRIGGER_TF" if valid else "TF_CEILING_FALLBACK",
+            "source": source,
         }
     except Exception:
         return None
@@ -836,8 +855,9 @@ def _base_candidate(
     rr_detail = (
         f"قیمت ابطال تحلیل در {_fmt(sl)}، آن‌سوی مرجع نقدینگی {_fmt(invalidation['liquidity_anchor'])} "
         f"و با بافر پویا {_fmt(invalidation['buffer'])} قرار گرفته است؛ بنابراین مستقیماً روی Pivot/نقدینگی آشکار نیست. "
-        f"هدف اول {_fmt(targets['tp1'])} و هدف دوم {_fmt(targets['tp2'])} از ساختار همان تایم تریگر و نواحی مهم "
-        f"تایم‌های بالاتر انتخاب شده‌اند (منبع: {targets.get('source', '')}). "
+        f"هدف اول {_fmt(targets['tp1'])} (یک‌پنجم مسیر) و هدف نهایی {_fmt(targets['tp2'])} "
+        f"از سطح معتبر تایم تریگر/تایم بالاتر یا نُرم همان تایم انتخاب شده‌اند "
+        f"(منبع: {targets.get('source', '')} • مسیر {float(targets.get('path_pct') or 0):.1f}٪). "
         f"{_rr_report}."
     )
 

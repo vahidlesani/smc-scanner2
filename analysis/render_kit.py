@@ -163,10 +163,64 @@ def detect_zones(df: pd.DataFrame, direction: str,
     return picked[:cap]
 
 
-def detect_patterns(df: pd.DataFrame) -> List[Dict]:
+
+def _line_contradicts(line, side: str, direction: str, df: pd.DataFrame,
+                      sub: bool = False) -> bool:
+    """True when a validated trendline contradicts the trade context.
+
+    Viva 09-20 round 10 (BNB: «این ترند قرمز لنگ در هوا چه اژه؟» crossed out):
+      • SHORT trade → a HIGH-side line that RISES with the price window is the
+        old up-leg's resistance-to-nothing; if the same side also has a
+        descending (or flat) line, the ascending one is noise.
+      • also drop a HIGH-side line price has clearly left (close more than
+        2×ATR ABOVE it and rising into it is fine; the dead case is price far
+        BELOW a rising support the market already broke).
+    LONG trades are mirrored. Sub-lines are exempt while they stay short.
+    """
+    try:
+        if line is None or str(direction or "").upper() not in ("LONG", "SHORT"):
+            return False
+        # accepts both the validated line OBJECT and its serialized dict
+        if isinstance(line, dict):
+            slope = float(line.get("slope") or 0.0)
+            inter = float(line.get("intercept") or 0.0)
+        else:
+            slope = float(getattr(line, "slope", 0.0) or 0.0)
+            inter = float(getattr(line, "intercept", 0.0) or 0.0)
+        n = len(df) - 1
+        y_last = slope * n + inter
+        close = float(df["close"].iloc[-1])
+        atr = 0.0
+        try:
+            atr = float((df["high"] - df["low"]).tail(14).mean() or 0.0)
+        except Exception:
+            atr = 0.0
+        if str(direction).upper() == "SHORT":
+            # an ascending line on the HIGH side of a short = «لنگ در هوا»
+            if side == "HIGH" and slope > 0 and (y_last - close) > 0.5 * atr:
+                return True
+            # a support line the market fell far below is history, not context
+            if side == "LOW" and (close - y_last) > 2.0 * atr and slope > 0:
+                return True
+        else:
+            if side == "LOW" and slope < 0 and (close - y_last) < -0.5 * atr:
+                return True
+            if side == "HIGH" and (y_last - close) > 2.0 * atr and slope < 0:
+                return True
+        return False
+    except Exception:
+        return False
+
+def detect_patterns(df: pd.DataFrame, direction: str = "") -> List[Dict]:
     """Validated edge geometry + honest shape classification (doctrine:
     Edwards & Magee / Brooks / E&M) as render commands; plus a trading-range
-    box when the window is flat between two tested horizontals."""
+    box when the window is flat between two tested horizontals.
+
+    Viva 09-20 (round 10, his crossed-out «این ترند قرمز لنگ در هوا چه اژه؟»
+    BNB chart): a line that contradicts the trade's own trend context is
+    noise — an ASCENDING high-side line on a SHORT, or a support line price
+    left long ago. When a slope-consistent line exists on the same side it
+    wins the slot; the contradicting twin is dropped instead of drawn."""
     out: List[Dict] = []
     if df is None or len(df) < 45:
         return out
@@ -186,11 +240,24 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
 
         def _score(ln) -> float:
             """Viva 09-17 (his option 1): validity = touches x fit x span —
-            the MOST valid line wins, never merely the nearest one."""
+            the MOST valid line wins, never merely the nearest one.
+            Viva 09-20 round 10 (BNB «ترند قرمز لنگ در هوا»): a validated line
+            whose right edge floats many ATR away from price (and keeps
+            leaving) is NOT the chart's trend — it gets a proximity penalty so
+            the line price actually respects wins the main slot."""
             span = max(1, int(getattr(ln, "last_index", n)) - int(ln.first_index))
             touch = max(1, int(getattr(ln, "touch_count", len(ln.points or ())) or 1))
             fit = 1.0 / (1.0 + float(getattr(ln, "fit_residual_atr", 0.0) or 0.0))
-            return touch * fit * (span ** 0.5)
+            prox = 1.0
+            try:
+                _a = float((df["high"] - df["low"]).tail(14).mean() or 0.0)
+                if _a > 0:
+                    _y = float(getattr(ln, "slope")) * n + float(getattr(ln, "intercept"))
+                    _d = abs(_y - float(df["close"].iloc[-1])) / _a
+                    prox = 1.0 / (1.0 + max(0.0, _d - 1.0))
+            except Exception:
+                prox = 1.0
+            return touch * fit * (span ** 0.5) * prox
 
         def _best(side: str):
             """Best-fitting validated line across lookback windows —
@@ -267,6 +334,17 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
 
         upper, sub_u = _scale("HIGH", _cfg_hi)
         lower, sub_l = _scale("LOW", _cfg_lo)
+        # Viva 09-20 round 10: when a side offers two validated lines and one
+        # of them contradicts the trade direction, the consistent one takes
+        # the MAIN slot (the other is demoted to the light child slot instead
+        # of painting as a solid line that «hangs in the air»).
+        _d = str(direction or "").upper()
+        if _d == "SHORT" and upper is not None and sub_u is not None:
+            if float(upper["slope"]) > 0 and float(sub_u["slope"]) <= 0:
+                upper, sub_u = sub_u, upper
+        elif _d == "LONG" and lower is not None and sub_l is not None:
+            if float(lower["slope"]) < 0 and float(sub_l["slope"]) >= 0:
+                lower, sub_l = sub_l, lower
         gu = upper
         gl = lower
 
@@ -306,8 +384,12 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
                 # No classified shape: BOTH lines still paint, each as its
                 # own TRENDLINE (CRV ruling 09-17: his two hand-drawn blue
                 # lines; FIL: the ascending support from the lows).
-                out.append({"type": "TRENDLINE", "lines": [gu]})
-                out.append({"type": "TRENDLINE", "lines": [gl]})
+                for _ln, _side in ((gu, "HIGH"), (gl, "LOW")):
+                    if _ln is None:
+                        continue
+                    if _line_contradicts(_ln, _side, direction, df, sub=bool(getattr(_ln, 'child', False))):
+                        continue
+                    out.append({"type": "TRENDLINE", "lines": [_ln]})
         elif gu is not None or gl is not None:
             out.append({"type": "TRENDLINE", "lines": [gu if gu is not None else gl]})
         for _sub in (sub_u, sub_l):
@@ -316,6 +398,33 @@ def detect_patterns(df: pd.DataFrame) -> List[Dict]:
                 out.append({"type": "TRENDLINE", "lines": [_sub], "child": True})
     except Exception as exc:
         print(f"render-kit pattern warning: {exc}")
+    # ── Viva 09-20 round 10 post-pass ────────────────────────────────────
+    # His BNB chart: an ASCENDING pattern/trend line on a SHORT was drawn
+    # solid while the honest descending line he hand-drew stayed subtle. Every
+    # emitted line now passes the context filter; a shape that loses one side
+    # is demoted to its surviving TRENDLINE, and a fully contradicted pattern
+    # is dropped instead of crowding the canvas.
+    try:
+        _dir10 = str(direction or "").upper()
+        if _dir10 in ("LONG", "SHORT"):
+            _filtered: List[Dict] = []
+            for _p in out:
+                _lns = list(_p.get("lines") or [])
+                if not _lns:
+                    _filtered.append(_p)
+                    continue
+                _keep = [ln for ln in _lns
+                         if not _line_contradicts(ln, str(ln.get("side") or "HIGH"),
+                                                  _dir10, df)]
+                if not _keep:
+                    continue
+                if len(_keep) != len(_lns) and _p.get("type") not in ("TRENDLINE",):
+                    _filtered.append({"type": "TRENDLINE", "lines": _keep})
+                else:
+                    _filtered.append({**_p, "lines": _keep})
+            out = _filtered
+    except Exception:
+        pass
     # trading range: two tested horizontals wide enough to matter
     try:
         from analysis.indicators import pivots as _piv
@@ -419,7 +528,8 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
         trigger_df, getattr(candidate, "direction", ""),
         float(getattr(candidate, "entry_zone_bottom", 0) or 0),
         float(getattr(candidate, "entry_zone_top", 0) or 0))
-    pats = detect_patterns(trigger_df.tail(170))
+    pats = detect_patterns(trigger_df.tail(170),
+                           getattr(candidate, "direction", ""))
     md["render_patterns"] = pats
     # broken legs need a TIME for their break bar too: on a higher display TF
     # a bare bar index would land the break marker on the wrong candle.
@@ -445,9 +555,11 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
     # evaluate_confirmation can project them onto a later confirm candle and
     # reject a close that never actually left the pattern.
     try:
-        _closed_types = ("WEDGE_RISING", "WEDGE_FALLING", "TRIANGLE", "CHANNEL",
-                         "CHANNEL_RISING", "CHANNEL_FALLING", "CHANNEL_DESCENDING",
-                         "CHANNEL_ASCENDING", "FLAG_BULL", "FLAG_BEAR")
+        # ANY two-line shape is a pattern band: wedge, triangle, channel,
+        # broadening (megaphone), flag — the round-9 containment gate must see
+        # them ALL (Viva's WLD ALBROX chart confirmed a short while price sat
+        # inside a BROADENING shape, which the first version of this list
+        # missed). RANGE keeps its own horizontal band.
         _band = None
         _win_len = len(trigger_df.tail(170))
         for _p in pats:
@@ -456,7 +568,7 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
                 _band = {"kind": "RANGE", "lo": float(_p["lo"]), "hi": float(_p["hi"]),
                          "slope_lo": 0.0, "slope_hi": 0.0}
                 break
-            if str(_p.get("type") or "").upper() in _closed_types and len(_lns) == 2:
+            if len(_lns) == 2 and str(_p.get("type") or "").upper() not in ("TRENDLINE", "RANGE"):
                 _x_last = float(max(0, _win_len - 1))
                 _y1 = float(_lns[0]["slope"]) * _x_last + float(_lns[0]["intercept"])
                 _y2 = float(_lns[1]["slope"]) * _x_last + float(_lns[1]["intercept"])
@@ -488,7 +600,8 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
     # Viva 09-18 (his CRV note): the higher-TF pattern must be ANNOUNCED on
     # the trigger chart — «وج باید در ۴ ساعته یا روزانه پیدا بشه و اعلام بشه».
     try:
-        _hp = detect_patterns(htf_df.tail(170)) if htf_df is not None \
+        _hp = detect_patterns(htf_df.tail(170),
+                              getattr(candidate, "direction", "")) if htf_df is not None \
             and len(htf_df) >= 60 else []
         md["render_htf_pattern"] = str(_hp[0]["type"]) if _hp else None
     except Exception:

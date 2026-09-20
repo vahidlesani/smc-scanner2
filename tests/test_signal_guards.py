@@ -1225,10 +1225,14 @@ def test_zec_protected_exit_settlement_is_win():
     """The K120563 case: SHORT banked 50% at TP1 (1R floor, 09-19 ladder)
     then the net-BE trail executed. That is NOT 'INITIAL STOP LOSS' / a loss."""
     from analysis.trade_management import build_ladder, advance_ladder
-    lad = build_ladder(1136.41, 1147.4419, "SHORT", {"tick_size": 0.01}, 1112.07)
-    assert abs(lad["targets"][0] - 1131.542) < 0.01          # v3: 5 segments, original TP1 distance
+    lad = build_ladder(1136.41, 1147.4419, "SHORT", {"tick_size": 0.01}, 1112.07,
+                       trigger_tf="15m")
+    # Round-10 doctrine: the only structural level (1112.07 = 2.1%) is closer
+    # than the 15m floor (3%), so the path is the 15m norm (5%) split in five
+    # parts → TP1 = entry − 1% = 1125.05.
+    assert abs(lad["targets"][0] - 1125.0459) < 0.01
     assert lad["weights"] == [40.0, 30.0, 30.0, 0.0, 0.0]
-    step = advance_ladder(lad, 1131.0, 1130.5)               # TP1 printed
+    step = advance_ladder(lad, 1131.0, 1124.8)               # TP1 printed (round-10 path)
     assert step["state"]["hit_index"] == 1
     assert abs(step["state"]["current_sl"] - 1136.36) < 1e-6  # entry −5 ticks (short)
     step2 = advance_ladder(step["state"], 1136.40, 1136.30)  # trail executes

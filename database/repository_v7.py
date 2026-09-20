@@ -748,6 +748,7 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
         candidate.tp2, structural_tp1=candidate.tp1,
         fee_pct=(SETTINGS.fee_rate_percent + SETTINGS.slippage_percent) * 2.0 / 100.0,
         trigger_tf=str(candidate.trigger_timeframe or "15m"),
+        wall_level=float((candidate.metadata or {}).get("internal_wall") or 0.0),
     )
     ladder_json = json.dumps(ladder, ensure_ascii=False)
     with legacy_db.db_cursor() as cursor:

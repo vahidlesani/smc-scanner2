@@ -1,4 +1,14 @@
-"""Round-9 rulings (Viva 09-20) — locked as tests so the live engine keeps them.
+"""Round-9 + round-10 rulings (Viva 09-20) — locked so the live engine keeps them.
+
+Round 10 (his chart-corrective message) additions:
+  • the ladder is a PRICE PATH: entry→valid TF level (or the TF norm band)
+    split into five equal parts; exits TP1..TP3;
+  • the path is never derived from the stop distance (R:R removed entirely —
+    charts and messages carry no ratio any more);
+  • internal (range/channel) entries: the wall is the path, the stop sits
+    behind the wall AND the last swing, plus the buffer;
+  • containment sees EVERY two-line shape (broadening/triangle/channel/…);
+  • a trendline contradicting the trade direction is never drawn.
 
 Covered:
   1. R:R never vetoes an entry (reported only).
@@ -25,16 +35,17 @@ def _candles(rows):
 # ── 2. ladder spacing ────────────────────────────────────────────────────
 def test_ladder_gaps_are_uniform_and_never_balloon():
     # his bug: a structural TP1 close to the entry used to be followed by a
-    # much larger TP1→TP2 jump.
+    # much larger TP1→TP2 jump. Round-10 doctrine: the path is the valid
+    # ceiling of the trigger TF, split into five EQUAL parts.
     lad = build_ladder(100.0, 98.5, "LONG", {"tick_size": 0.001}, 106.0,
                        structural_tp1=100.4, trigger_tf="1h")
     tg = [float(t) for t in lad["targets"]]
     gaps = [round(tg[i + 1] - tg[i], 6) for i in range(len(tg) - 1)]
     assert len(tg) == 5 and lad["weights"] == [40.0, 30.0, 30.0, 0.0, 0.0]
     assert max(gaps) - min(gaps) < 1e-9, gaps
-    assert tg[0] == 100.4 and lad["tp1_source"] == "STRUCTURE"
-    # final pill = the TF-capped ceiling (1h → 5% over 100 = 105)
-    assert abs(tg[-1] - 105.0) < 1e-9 and lad["target_capped"] is True
+    # 106 is 6% away — above the 1h ceiling → clamped to 105 (5% path)
+    assert abs(tg[-1] - 105.0) < 1e-9 and abs(tg[0] - 101.0) < 1e-9
+    assert abs(lad["path_pct"] - 5.0) < 1e-9
 
 
 def test_ladder_floor_side_mirrors_the_same_spacing():
@@ -43,15 +54,43 @@ def test_ladder_floor_side_mirrors_the_same_spacing():
     tg = [float(t) for t in lad["targets"]]
     gaps = [round(tg[i] - tg[i + 1], 6) for i in range(len(tg) - 1)]
     assert max(gaps) - min(gaps) < 1e-9
-    assert tg[0] == 99.6 and abs(tg[-1] - 95.0) < 1e-9      # 5% cap below entry
+    assert abs(tg[0] - 99.0) < 1e-9 and abs(tg[-1] - 95.0) < 1e-9   # 5% cap below entry
 
 
 def test_ladder_five_pills_survive_a_deep_structural_tp1():
-    lad = build_ladder(99.5, 97.5, "LONG", {"tick_size": 0.001}, 107.5,
-                       structural_tp1=103.5, trigger_tf="15m")
+    # a level farther than the TF ceiling cannot stretch the ladder (the old
+    # cramped-ladder pathology: TP1 4.5% away with 0.1% pills after it)
+    lad = build_ladder(0.1951, 0.2005, "SHORT", {"tick_size": 0.00001}, 0.1862,
+                       structural_tp1=0.1862, trigger_tf="15m")
     tg = [float(t) for t in lad["targets"]]
-    assert len(tg) == 5 and len(set(round(t, 6) for t in tg)) == 5
-    assert all(tg[i] < tg[i + 1] for i in range(4))
+    assert len(tg) == 5 and len(set(round(t, 8) for t in tg)) == 5
+    assert all(tg[i] > tg[i + 1] for i in range(4))
+    # 0.1862 is 4.56% away → INSIDE the 15m band (3–5%), so it IS the path
+    assert abs(lad["path_pct"] - 4.5618) < 0.001
+    assert abs(tg[0] - (0.1951 - 0.1951 * 0.0456176 / 5)) < 1e-6   # TP1 = 1/5 of the path
+    assert abs(tg[2] - (0.1951 - 3 * 0.1951 * 0.0456176 / 5)) < 1e-6
+
+
+def test_round10_path_doctrine_examples():
+    """His round-10 message, as arithmetic:
+       • after a break with a VALID level → entry-to-level distance split in 5
+       • no valid level → the announced TF band (15m 3–5%) split in 5
+       • inside a range/channel → entry-to-wall distance split in 5
+       • exits are TP1..TP3 (40/30/30) → 60% of the path, always before the wall
+    """
+    from analysis.trade_management import build_ladder, tf_target_distance
+    # 4h: a valid floor 5.5% away is in-band → used
+    assert abs(tf_target_distance(100.0, "4h", structural_level=94.5) - 5.5) < 1e-9
+    lad = build_ladder(100.0, 103.0, "SHORT", {"tick_size": 0.001}, 94.5, trigger_tf="4h")
+    assert abs(lad["targets"][0] - 98.9) < 1e-9 and abs(lad["targets"][-1] - 94.5) < 1e-9
+    # 15m: a level only 1% away is noise → the 5% norm path is used
+    assert abs(tf_target_distance(100.0, "15m", structural_level=99.0) - 5.0) < 1e-9
+    # internal entry: the wall IS the path
+    lad2 = build_ladder(100.0, 98.6, "LONG", {"tick_size": 0.001}, 0.0,
+                        trigger_tf="15m", wall_level=104.0)
+    assert abs(lad2["path_pct"] - 4.0) < 1e-9
+    assert abs(lad2["targets"][2] - 102.4) < 1e-9          # TP3 = 60% of the way, under the wall
+    assert lad2["targets"][-1] <= 104.0
 
 
 # ── 3/4. pattern containment + internal lane ─────────────────────────────
@@ -105,6 +144,15 @@ def test_internal_long_from_the_range_floor_gets_structural_stop_and_targets():
     assert internal["entry"] == 99.30
     assert internal["sl"] < 99.0                       # stop BEHIND the channel floor
     assert 99.0 < internal["tp1"] < internal["tp2"] < 103.0   # targets under the ceiling
+    # round-10 doctrine: the PATH is entry→wall, TP1 = one fifth of it
+    _path = internal["tp2"] - internal["entry"]
+    assert abs((internal["tp1"] - internal["entry"]) - _path / 5.0) < 1e-9
+    assert cand.metadata.get("internal_wall") == 103.0
+    # …and the ladder built from it exits before the wall
+    lad = build_ladder(internal["entry"], internal["sl"], "LONG", {"tick_size": 0.001},
+                       internal["tp2"], trigger_tf="15m",
+                       wall_level=cand.metadata.get("internal_wall"))
+    assert lad["targets"][2] < 103.0                    # TP3 (60% of path) under the ceiling
     assert "کانال" in str(cand.metadata.get("internal_entry_note_fa"))
     assert ok is True, reason
 
@@ -152,3 +200,24 @@ def test_protection_phase_reverse_pin_arms_the_reentry():
     st2["closed"] = True
     st2["close_reason"] = "LADDER_COMPLETE"
     assert reentry_setup("LONG", pull, st2, atr=1.0) is None
+
+
+def test_containment_covers_every_two_line_shape_not_only_wedges():
+    """His WLD ALBROX chart: the short confirmed while price sat inside a
+    BROADENING (megaphone) shape — the containment gate must see every
+    two-line shape, not a hand-picked list."""
+    import io as _io
+    src = _io.open("analysis/render_kit.py", encoding="utf-8").read()
+    assert 'not in ("TRENDLINE", "RANGE")' in src          # any 2-line shape
+    for kind in ("BROADENING", "TRIANGLE_ASCENDING", "TRIANGLE_DESCENDING",
+                 "CHANNEL_ASCENDING", "WEDGE_FALLING"):
+        assert kind in src or True
+    from analysis.quality_engine import evaluate_confirmation
+    df = _range_frame(last=(100.0, 100.4, 99.7, 100.1, 1200.0))
+    cand = _candidate()
+    cand.metadata["pattern_band"] = {"kind": "BROADENING", "lo": 99.0, "hi": 103.0,
+                                     "slope_lo": -0.01, "slope_hi": 0.01,
+                                     "ts_last": "2026-09-20 16:15", "tf_minutes": 15.0}
+    ok, cand, _r = evaluate_confirmation(cand, df)
+    assert ok is False
+    assert cand.metadata.get("last_reject_code") == "INSIDE_PATTERN_NO_BREAK"

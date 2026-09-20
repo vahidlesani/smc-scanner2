@@ -1743,11 +1743,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # confirmed charts too — the tagged TP ladder lines above are the
             # direction, drawn at true price levels, not guessed angles.
 
+            # Viva 09-20 round 10: the R:R read-out is gone from the chart
+            # panel too (his charts carried stale/negative ratios like
+            # "R:R -0.13 / 0.38", which he crossed out — R:R is not part of
+            # the decision any more, so it is not part of the picture).
             info = (
                 f"{candidate.direction}  •  {_style_disp(candidate)}\n"
                 f"SETUP  {candidate.setup_code}\n"
                 f"SCORE  {candidate.score}/10\n"
-                f"R:R  {candidate.rr_tp1:.2f} / {candidate.rr_tp2:.2f}"
+                f"PATH  {float(((candidate.metadata or {}).get('target_ladder') or {}).get('path_pct') or 0):.2f}%  "
+                f"→ 5 PARTS"
             )
             ax.text(
                 0.015,
@@ -2241,8 +2246,9 @@ def _ai_note(candidate: SignalCandidate) -> str:
     elif candidate.setup_code == "TECHCLASSIC":
         lines.append("الگوی کلاسیک روی لبهٔ ناحیه شکل گرفته — ابطالِ الگو همان سطحِ ابطالِ سناریو است؛ "
                      "منتظر کلوزِ فراتر از ضلعِ الگو بمان، نه شدوی لحظه‌ای.")
-    if candidate.rr_tp1 < 1.3:
-        lines.append(f"R:R فعلی ({candidate.rr_tp1:.2f}) زیر کف مهندسی است؛ اگر گیر کرد، بهتر است ناحیه تازه‌تر شود.")
+    # Viva 09-20 round 10: the rr advice line is retired together with the
+    # gate — the ladder is a price path, not a ratio, so no R:R warning.
+
     if not candidate.execution_ready:
         lines.append("یکی از گیت‌های اجباری هنوز سبز نیست؛ این تحلیل آموزشی است و وارد فاز اجرایی نمی‌شود.")
     adx_ctx = float(md.get("adx", 0) or 0)
@@ -2923,12 +2929,8 @@ def _ai_rich_note(candidate: SignalCandidate) -> str:
                        if agree else "خلافِ آن است؛ بدون نشانهٔ قویِ بازگشت (MSS+کندلِ بازیگر) ورود ندارد."))
     else:
         bits.append("بایاس تایم بالا خنثی است؛ یعنی حقِ تعجیل به هیچ سمتی نداریم و ناحیه حرف اول را می‌زند.")
-    try:
-        rr = float(candidate.rr_tp1 or 0)
-        if 0 < rr < 1.3:
-            bits.append(f"نسبت ریسک‌به‌ریواردِ این نسخه ({rr:.2f}R) از کفِ ایده‌آل پایین‌تر است؛ هر تأخیرِ دیگر ورود را بی‌منطقه می‌کند.")
-    except Exception:
-        pass
+    # Viva 09-20 round 10: no R:R advice anywhere in the AI note — the path
+    # (5-part, TF-banded) is the only target doctrine now.
     bits.append(_ai_watch_hint(candidate))
     return " ".join(bits)
 
@@ -3071,7 +3073,9 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         *[f"🏁 TP{i+1}: {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [50, 30, 20])))],
         # Viva 09-20 (third time, verbatim): «فرمول ریسک به ریوارد ... اصلا
         # اهمیت نداره» → shown as a read-out only, never as a criterion.
-        f"⚖️ R:R (فقط گزارش) {candidate.rr_tp1:.2f} / {candidate.rr_tp2:.2f} • ⭐ {candidate.score}/10",
+        # Viva 09-20 round 10: no R:R row in the trade message at all — the
+        # ladder is a PRICE PATH (5 parts), not a ratio.
+        f"⭐ امتیاز ساختاری: {candidate.score}/10",
     ]
     rows.append(f"🤖 <b>نظر AI:</b> {_e(advisory or _ai_rich_note(candidate))}")
     if mm:
@@ -3102,6 +3106,7 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
         candidate.tp2, structural_tp1=candidate.tp1,
         fee_pct=(SETTINGS.fee_rate_percent + SETTINGS.slippage_percent) * 2.0 / 100.0,
         trigger_tf=str(candidate.trigger_timeframe or "15m"),
+        wall_level=float((candidate.metadata or {}).get("internal_wall") or 0.0),
     )
     if chart_df is not None and not chart_df.empty and "close" in chart_df.columns:
         candidate.metadata["live_price"] = float(chart_df["close"].iloc[-1])
