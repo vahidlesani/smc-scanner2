@@ -1489,6 +1489,26 @@ def scan_setups(bundle: MarketBundle, style: str) -> List[SignalCandidate]:
                     _md_f["stop_clamped"] = True
         except Exception:
             pass
+        # ── a WATCH-stage candidate (the two-pivot TLBREAK preview) legitimately
+        # arrives without explicit targets: the doctrine fills them here instead
+        # of the net dropping a preview Viva asked for.
+        if not float(getattr(cand, "tp1", 0) or 0) or not float(getattr(cand, "tp2", 0) or 0):
+            try:
+                from analysis.trade_management import doctrine_path as _dp_f
+                _entry_f = float(getattr(cand, "planned_entry", 0) or 0)
+                _path_f, _src_f = _dp_f(_entry_f, str(getattr(cand, "trigger_timeframe", "") or "15m"))
+                if _entry_f > 0 and _path_f > 0:
+                    if str(getattr(cand, "direction", "")).upper() == "LONG":
+                        cand.tp2 = _entry_f + _path_f
+                        cand.tp1 = _entry_f + _path_f / 5.0
+                    else:
+                        cand.tp2 = _entry_f - _path_f
+                        cand.tp1 = _entry_f - _path_f / 5.0
+                    _md_f = getattr(cand, "metadata", None)
+                    if isinstance(_md_f, dict):
+                        _md_f["tp_source"] = _src_f
+            except Exception:
+                pass
         why = sanity_reject(cand)
         if why:
             line = (f"🧱 SANITY_REJECT {why} • {bundle.symbol} {style} "

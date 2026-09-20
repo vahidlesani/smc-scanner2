@@ -141,3 +141,16 @@ def test_the_clock_block_shows_dates_so_an_old_chain_is_obvious():
     # Tehran = UTC+3:30 → 09-18 22:00Z is 09-19 01:30 local, the send is 09-21
     assert "09-19 01:30" in text and "09-21" in text     # dates ride along
     assert "عمر این سناریو" in text
+
+
+def test_a_watch_stage_candidate_gets_doctrine_targets_instead_of_being_dropped():
+    """The two-pivot TLBREAK WATCH preview arrives with tp1=tp2=0; the funnel
+    fills the five-part path instead of rejecting it as GEOMETRY_MISSING."""
+    src = io.open("analysis/setups_v7.py", encoding="utf-8").read()
+    assert "a WATCH-stage candidate" in src and "doctrine_path as _dp_f" in src
+    from analysis.trade_management import doctrine_path
+    entry, tf = 93.658, "15m"
+    path, _src = doctrine_path(entry, tf)
+    assert path > 0
+    lo, hi = band_for_tf(tf)
+    assert entry * lo / 100 <= path <= entry * hi / 100
