@@ -179,6 +179,42 @@ def _suppressed_edu_throttled(candidate) -> bool:
 _QUIET_RUN = 0
 
 
+# ── Round-15 cost guard (Viva 09-21: «ببین استفاده الکی نداشته باشیم»).
+# A symbol whose four detection timeframes produced no new CLOSED candle cannot
+# yield a new detection — re-analysing it every 5 minutes was pure waste. The
+# guard keeps a 15-minute freshness window so a budget-deferred scenario is
+# still retried, and it never skips a symbol that has an open chain.
+_LAST_CLOSED_STAMPS: Dict[str, tuple] = {}
+_LAST_FULL_SCAN_AT: Dict[str, float] = {}
+_UNCHANGED_RETRY_SECONDS = 900
+
+
+def _closed_stamp(bundle) -> tuple:
+    out = []
+    for tf in ("15m", "1h", "4h", "1d"):
+        try:
+            df = bundle.get(tf)
+            out.append(str(df["timestamp"].iloc[-1]) if df is not None and len(df) else "-")
+        except Exception:
+            out.append("?")
+    return tuple(out)
+
+
+def _symbol_may_skip(symbol: str, bundle, open_symbols: set) -> bool:
+    """True when this symbol has no new closed candle and no open chain."""
+    try:
+        stamp = _closed_stamp(bundle)
+        prev = _LAST_CLOSED_STAMPS.get(symbol)
+        _LAST_CLOSED_STAMPS[symbol] = stamp
+        if prev is None or prev != stamp:
+            return False
+        if symbol in open_symbols:
+            return False
+        return (time.monotonic() - _LAST_FULL_SCAN_AT.get(symbol, 0.0)) < _UNCHANGED_RETRY_SECONDS
+    except Exception:
+        return False
+
+
 def run_discovery_scan() -> Dict[str, int]:
     """Find educational setups; never writes unconfirmed rows to Supabase."""
     started = time.monotonic()
@@ -198,6 +234,12 @@ def run_discovery_scan() -> Dict[str, int]:
     except Exception:
         pass
     stats = {"symbols": len(symbols), "detected": 0, "new": 0, "errors": 0}
+    _open_syms: set = set()
+    try:
+        for _c in get_active_candidates():
+            _open_syms.add(_c.symbol)
+    except Exception:
+        pass
     # Viva 2026-09-11 («یهو ۱۰۰۰ تا هشدار میاد»): one scan cycle may open only a
     # bounded number of NEW detailed alerts; everything beyond that defers to
     # the next scan instead of flooding the channels in a single burst.
@@ -237,6 +279,15 @@ def run_discovery_scan() -> Dict[str, int]:
             break
         try:
             bundle = get_market_bundle(symbol, ticker=metrics.get(symbol, {}))
+            # ── Round-15: no new closed candle on any detection timeframe and no
+            # open chain on this symbol ⇒ nothing can be detected that the last
+            # pass did not already see. (Guarded, fail-open, 15-min window.)
+            if _symbol_may_skip(symbol, bundle, _open_syms):
+                stats["skipped_unchanged"] = stats.get("skipped_unchanged", 0) + 1
+                if index % 10 == 0:
+                    print(f"  scanned {index}/{len(symbols)} • new educational setups: {stats['new']}")
+                continue
+            _LAST_FULL_SCAN_AT[symbol] = time.monotonic()
             candidates = scan_bundle(bundle)
             # TechnoClassic pre-break previews (4H/1D edges). Never a signal;
             # cooldown-guarded; silently unavailable on any error.
@@ -1557,6 +1608,15 @@ def main() -> None:
                 "last_scan": _hb["last_scan"], "last_monitor": _hb["last_monitor"],
                 "scan_stats": _hb["stats"], "monitor_stats": _hb["mon_stats"],
             })
+            try:
+                from data.fetcher import cost_counters as _cc
+                _c = _cc()
+                print(f"📉 COST · kline calls={_c['kline_calls']} "
+                      f"(cache hits={_c['kline_cache_hits']}) • "
+                      f"last scan skipped_unchanged={_hb['stats'].get('skipped_unchanged', 0)}"
+                      f"/{_hb['stats'].get('symbols', 0)}")
+            except Exception:
+                pass
             print(f"   last discovery={_hb['last_scan']} {_hb['stats']} • "
                   f"last monitor={_hb['last_monitor']}")
         report_key = now.strftime("%Y-%m-%d")

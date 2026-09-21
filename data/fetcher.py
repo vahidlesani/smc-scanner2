@@ -60,6 +60,31 @@ class MarketBundle:
         return self.frames.get(timeframe)
 
 
+# ── Round-15 (Viva 09-21): «برای صرفه‌جویی مصرف هم ببین استفاده الکی نداشته
+# باشیم» — a CLOSED candle cannot change until its own timeframe closes, yet the
+# old cache lived 45 seconds, so every 5-minute discovery pass re-downloaded and
+# re-analysed the very same closed candles for all 40–47 symbols. The cache now
+# lives exactly as long as the candle itself (capped at 30 minutes for safety).
+_TF_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+               "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400}
+
+_COST = {"kline_calls": 0, "kline_cache_hits": 0}
+
+
+def closed_candle_ttl(interval: str, cap: int = 1800) -> int:
+    """Seconds until this timeframe's next close (min 20s, max `cap`)."""
+    try:
+        sec = int(_TF_SECONDS.get(str(interval).lower(), 300))
+        remaining = int(sec - (time.time() % sec)) + 2
+        return int(max(20, min(remaining, cap)))
+    except Exception:
+        return 45
+
+
+def cost_counters() -> dict:
+    return dict(_COST)
+
+
 def _throttle() -> None:
     global _LAST_REQUEST_AT
     with _RATE_LOCK:
@@ -150,6 +175,15 @@ def get_klines(
     use_cache: bool = True,
     end_ms: Optional[int] = None,
 ) -> Optional[pd.DataFrame]:
+    global _COST
+    _route_key = ("route", str(symbol).upper(), str(interval).lower(),
+                  int(limit), bool(closed_only))
+    if use_cache and end_ms is None:
+        cached = _cache_get(_route_key)
+        if cached is not None and not cached.empty:
+            _COST["kline_cache_hits"] += 1
+            return cached
+    _COST["kline_calls"] += 1
     """Fetch candles for `symbol` — Ourbit first (Viva's execution venue),
     Bybit as fallback for symbols Ourbit doesn't list.
 
@@ -171,10 +205,19 @@ def get_klines(
                     end_s=int(end_ms / 1000) if end_ms else None,
                 )
                 if frame is not None and not frame.empty:
+                    if use_cache and end_ms is None:
+                        _cache_set(_route_key, frame,
+                                   closed_candle_ttl(interval) if closed_only
+                                   else _SETTINGS.bybit_cache_seconds)
                     return frame
         except Exception as exc:  # never let a venue hiccup kill a scan
             _log_error_once(f"ourbit-route:{symbol}:{interval}", f"Ourbit route failed {symbol} {interval}: {exc}")
-    return _get_klines_bybit(symbol, interval, limit, closed_only, use_cache, end_ms)
+    frame = _get_klines_bybit(symbol, interval, limit, closed_only, use_cache, end_ms)
+    if frame is not None and not frame.empty and use_cache and end_ms is None:
+        _cache_set(_route_key, frame,
+                   closed_candle_ttl(interval) if closed_only
+                   else _SETTINGS.bybit_cache_seconds)
+    return frame
 
 
 def _get_klines_bybit(

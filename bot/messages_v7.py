@@ -38,6 +38,16 @@ CHAT_ID_RESULTS = os.getenv("CHAT_ID_RESULTS", "")
 # with its own internal reply-ladder. Current channels keep everything.
 CHAT_ID_VIVA_SIGNALS = os.getenv("CHAT_ID_VIVA_SIGNALS", "")
 
+# ── Round 15 (Viva 09-21): «برای هر تایم‌فریم یک کانال جدا بزنیم … فقط سیگنال
+# تایید شده بیاد … کلا هر سیگنال تایید شده فقط به آخرین نتیجه لینک بشه».
+# Confirmed-only mirrors of the main channel, one per timeframe family, plus the
+# SPOT channel. Empty ids (the state until he creates them) make every path a
+# no-op — the feature cannot touch the live channels before it exists.
+CHAT_ID_SWING_SHORT = os.getenv("CHAT_ID_SWING_SHORT", "")   # 15m · 30m
+CHAT_ID_SWING_MID = os.getenv("CHAT_ID_SWING_MID", "")       # 1h  · 2h
+CHAT_ID_SWING_LONG = os.getenv("CHAT_ID_SWING_LONG", "")     # 4h  · 1d
+CHAT_ID_SPOT = os.getenv("CHAT_ID_SPOT", "")                 # spot engine
+
 # Viva 2026-09-11: ONE block template for every message in every channel —
 # bold section titles, related emoji, ━ rules between logical blocks.
 VIVA_SEP = "━" * 20
@@ -167,6 +177,12 @@ SIGNAL_SEPARATOR = os.getenv(
         # v7.6 chart overlays (Viva's chart-design references)
 _CHART_SCENARIO_ZIGZAG = os.getenv("CHART_SCENARIO_ZIGZAG", "off").strip().lower() in {"1", "on", "true", "yes"}
 _CHART_RANGE_OVERLAY = os.getenv("CHART_RANGE_OVERLAY", "on").strip().lower() in {"1", "on", "true", "yes"}
+# ── Round 15 (Viva 09-21, verbatim): «این باکس رو از چارت‌های پراپ فعلی مون در
+# ۵ ستاپ حذف بکن … این باکس‌ها برای معاملات اسپات هستن نه فیوچرز» — the vertical
+# green measured-move box leaves every futures chart (alert, update AND
+# confirmation). The long/short trade tool is untouched; the box returns only on
+# the SPOT charts, where it was asked for.
+_CHART_MEASURE_BOX = os.getenv("CHART_MEASURE_BOX", "off").strip().lower() in {"1", "on", "true", "yes"}
 _CHART_STRUCTURE_LINES = os.getenv("CHART_STRUCTURE_LINES", "on").strip().lower() in {"1", "on", "true", "yes"}
 
 
@@ -1704,7 +1720,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # straight into the red risk zone of a short tool — two geometries
             # fighting on one canvas. The trade tool owns a confirmed chart;
             # the pattern projection stays on analysis/alerts charts only.
-            if len(_lns) == 2 and not any(_flat8) and not any(_brk8) and not confirmed:
+            if (_CHART_MEASURE_BOX and len(_lns) == 2 and not any(_flat8)
+                    and not any(_brk8) and not confirmed):
                 # CryptoCove measured-move box: pattern height projected from
                 # the live price into the future panel — translucent green,
                 # double-arrow spine, small value label on top.
@@ -3288,6 +3305,145 @@ def _exact_event_message_id(signal_id: str, event_key: str, fallback: int = 0) -
     return int(fallback or 0)
 
 
+_TF_CHANNEL_BUCKETS = (
+    ("SWING_SHORT", {"15m", "30m"}, CHAT_ID_SWING_SHORT),
+    ("SWING_MID", {"1h", "2h"}, CHAT_ID_SWING_MID),
+    ("SWING_LONG", {"4h", "1d", "1w", "3d"}, CHAT_ID_SWING_LONG),
+)
+
+
+def tf_channel_bucket(trigger_tf: str) -> str:
+    """Which of the three swing families a trigger timeframe belongs to."""
+    tf = str(trigger_tf or "").strip().lower()
+    for name, tfs, _chat in _TF_CHANNEL_BUCKETS:
+        if tf in tfs:
+            return name
+    return ""
+
+
+def tf_channel_id(trigger_tf: str) -> str:
+    tf = str(trigger_tf or "").strip().lower()
+    for _name, tfs, chat in _TF_CHANNEL_BUCKETS:
+        if tf in tfs:
+            return chat or ""
+    return ""
+
+
+def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
+    """Self-contained confirmed message: no reply chain, no update history —
+    Viva intends to purge these channels periodically, so every message must
+    stand alone and carry its own latest-result link."""
+    md = candidate.metadata or {}
+    ladder = md.get("target_ladder") or {}
+    targets = list(ladder.get("targets") or [candidate.tp1, candidate.tp2])
+    weights = list(ladder.get("weights") or [40, 30, 30])
+    direction = str(candidate.direction or "").upper()
+    arrow = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
+    stops = md.get("stop_clamped") or md.get("stop_reanchored")
+    head = (f"✅ <b>سیگنال تأییدشده</b>   🆔 <code>{_e(_public_code(candidate))}</code>\n\n"
+            f"🏦 <b>{_e(candidate.symbol)}</b> • {_e(str(candidate.trigger_timeframe or ''))} • "
+            f"{_e(str(candidate.style or ''))} • {arrow}\n"
+            f"🏷 <b>{_e(_setup_display(candidate.setup_code))}</b>   ⭐ {candidate.score}/10\n\n"
+            f"🔰 ورود: <b>{_price(candidate.planned_entry)}</b>\n"
+            f"⛔️ استاپ: <b>{_price(candidate.sl)}</b>"
+            + ("\n<i>استاپ روی سقفِ همین تایم‌فریم تنظیم شده است.</i>" if stops else "")
+            + "\n\n🎯 <b>اهداف</b>\n")
+    rows = []
+    for i, tgt in enumerate(targets, start=1):
+        try:
+            dist = abs(float(tgt) - float(candidate.planned_entry)) / max(abs(float(candidate.planned_entry)), 1e-12) * 100.0
+        except Exception:
+            dist = 0.0
+        w = weights[i - 1] if i - 1 < len(weights) else 0
+        tag = "ℹ️" if i >= 4 else f"{w:.0f}%"
+        rows.append(f"• TP{i}: <b>{_price(tgt)}</b> · {dist:.2f}٪ فاصله · {tag}")
+    return head + "\n".join(rows) + "\n\n" + result_line + "\n\n📌 <b>VIVAMON-Labs-Pro</b>"
+
+
+def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None) -> int:
+    """Post the confirmed signal into its timeframe family's channel."""
+    code = _public_code(candidate)
+    chat = tf_channel_id(str(candidate.trigger_timeframe or ""))
+    if not chat or not code:
+        return 0
+    result_line = "🔗 آخرین نتیجه: <i>در انتظار نتیجه</i>"
+    text = _tf_channel_text(candidate, result_line)
+    try:
+        _ph, mid = _post_chart_then_text(
+            chart, text, chat,
+            label=_chart_label(symbol=candidate.symbol, code=code, title_fa="تأیید سیگنال"))
+        if not mid:
+            print(f"TF-channel publish failed {code} → {chat}")
+            return 0
+        chain = _chain_by_code_get(code)
+        chain["tfc_chat"] = str(chat)
+        chain["tfc_mid"] = int(mid)
+        chain["tfc_text"] = text
+        chain["tfc_result_label"] = ""
+        _setup_chain_set_by_code(code, chain)
+        return int(mid)
+    except Exception as exc:
+        print(f"TF-channel publish error {code}: {exc}")
+        return 0
+
+
+def _tf_channel_edit(chat: str, mid: int, text: str) -> bool:
+    if not TOKEN or not chat or not mid:
+        return False
+    url = f"https://api.telegram.org/bot{TOKEN}/editMessageText"
+    result = _tg_post(url, data={"chat_id": str(chat), "message_id": int(mid),
+                                 "text": text, "parse_mode": "HTML",
+                                 "disable_web_page_preview": True}, timeout=15)
+    return bool(result)
+
+
+def tf_channel_set_latest_result(code: str, results_chat: str, results_mid: int,
+                                 label: str) -> bool:
+    """«هر سیگنال تایید شده فقط به آخرین نتیجه لینک بشه» — rewrite the link line
+    of that signal's channel message on every result event. If the message was
+    purged (his stated workflow), fall back to a fresh self-contained post."""
+    code = str(code or "")
+    if not code or not results_mid:
+        return False
+    chain = _chain_by_code_get(code)
+    chat = str(chain.get("tfc_chat") or "")
+    mid = int(chain.get("tfc_mid") or 0)
+    if not chat or not mid:
+        return False
+    if str(chain.get("tfc_last_result") or "") == f"{results_mid}":
+        return True
+    link = _telegram_message_link(results_chat, int(results_mid))
+    line = (f'🔗 آخرین نتیجه: <a href="{link}">{_e(label)}</a>' if link
+            else f"🔗 آخرین نتیجه: {_e(label)}")
+    text = str(chain.get("tfc_text") or "")
+    if "🔗 آخرین نتیجه:" in text:
+        head = text.split("🔗 آخرین نتیجه:")[0].rstrip()
+        new_text = head + "\n" + line + "\n\n📌 <b>VIVAMON-Labs-Pro</b>"
+    else:
+        new_text = text
+    ok = _tf_channel_edit(chat, mid, new_text)
+    if ok:
+        chain["tfc_text"] = new_text
+    else:
+        # purged message → post a fresh standalone card with the live link
+        try:
+            fresh = send_message((text.split("📌 <b>VIVAMON")[0].rstrip() + "\n" + line
+                                  + "\n\n📌 <b>VIVAMON-Labs-Pro</b>"), chat)
+            if fresh:
+                chain["tfc_mid"] = int(fresh)
+                chain["tfc_text"] = text
+                ok = True
+        except Exception as exc:
+            print(f"TF-channel refresh fallback error {code}: {exc}")
+    if ok:
+        chain["tfc_last_result"] = f"{results_mid}"
+        try:
+            _setup_chain_set_by_code(code, chain)
+        except Exception:
+            pass
+    return bool(ok)
+
+
 def _telegram_message_link(chat_id: str, message_id: int) -> str:
     """Member-visible direct channel/supergroup permalink."""
     raw = str(chat_id or "")
@@ -3396,6 +3552,12 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
         _sig_mirror(_public_code(candidate), "confirmed",
                     _confirmed_chart_caption(candidate), chart, reply_kind="approach",
                     link=_lnk, link_text="🔗 پیام مختصر در کانال اصلی")
+    # ── Round 15: the confirmed-only mirror of this signal into its
+    # timeframe family's channel (no-op while those channel ids are unset).
+    try:
+        tf_channel_publish_confirmed(candidate, chart if candidate.metadata.get("confirmation_chart_sent") else None)
+    except Exception as exc:
+        print(f"TF-channel mirror skipped {candidate.signal_id}: {exc}")
     # Deliberately no second verbose message in VivaMon Labs Pro.
     candidate.metadata["confirmation_message_sent"] = True
     return True
@@ -3541,7 +3703,7 @@ def send_tp1_event(signal: dict) -> bool:
     code = _e(signal.get("public_code") or signal.get("signal_id"))
     code_line = f'<a href="{link}">🆔 <code>{code}</code></a>' if link else f"🆔 <code>{code}</code>"
     setup = _setup_display(signal.get("source") or signal.get("strategy_fa"))
-    return int(send_message(
+    _tp_mid = int(send_message(
         f"🎯 <b>{_e(signal.get('event') or 'TP')} HIT</b>   {code_line}\n\n"
         f"🏷 <b>{_e(setup)}</b>\n\n"
         f"🏦 <b>{_e(signal['symbol'])}</b> • {_e(signal.get('trigger_timeframe') or signal.get('style', ''))} • {_e(signal.get('style',''))} • {_e(signal.get('direction',''))}\n\n"
@@ -3560,6 +3722,12 @@ def send_tp1_event(signal: dict) -> bool:
         f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>",
         target,
     ) or 0)
+    try:
+        tf_channel_set_latest_result(str(signal.get("public_code") or ""), target,
+                                     _tp_mid, f"{event_key} HIT")
+    except Exception as exc:
+        print(f"TF-channel link refresh skipped ({event_key}): {exc}")
+    return _tp_mid
 
 
 def send_stop_event_to_results(event: dict, pro_mid: int) -> int:
@@ -3579,7 +3747,7 @@ def send_stop_event_to_results(event: dict, pro_mid: int) -> int:
         hit > 0 and abs(float(event.get("sl") or 0) - float(event.get("original_sl") or 0)) > 1e-9)
     title = (f"🔐 TP{hit} HIT • خروجِ محافظت‌شده باقی‌مانده" if trailed else "⛔ STOP LOSS HIT")
     send_signal_separator(target)
-    return int(send_message(
+    _stop_mid = int(send_message(
         f"{title}   {code_line}\n\n"
         f"🏷 <b>{_e(setup)}</b>\n\n"
         f"🏦 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style'))} • "
@@ -3594,6 +3762,12 @@ def send_stop_event_to_results(event: dict, pro_mid: int) -> int:
         f"• اثر نهایی بر کل مارجین: <b>{float(event.get('realized_margin_roi_pct', 0)):+.2f}%</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>",
         target) or 0)
+    try:
+        tf_channel_set_latest_result(str(event.get("public_code") or ""), target,
+                                     _stop_mid, "خروج با استاپ" if not trailed else f"خروج محافظت‌شده TP{hit}")
+    except Exception as exc:
+        print(f"TF-channel stop-link refresh skipped: {exc}")
+    return _stop_mid
 
 
 def _final_lifecycle_anchor(event: dict) -> int:
@@ -3978,6 +4152,8 @@ def send_weekly_results_digest() -> int:
 
 
 def send_trade_result(event: dict) -> bool:
+    """Viva 09-21: the final result is also the newest link target of this
+    signal's timeframe-channel card (see tf_channel_set_latest_result)."""
     result = event.get("result", "")
     if (
         event.get("event") != "CLOSED"
@@ -3993,7 +4169,7 @@ def send_trade_result(event: dict) -> bool:
     code = _e(event.get("public_code") or event.get("signal_id"))
     link_line = f'<a href="{link}">🆔 <code>{code}</code></a>\n' if link else f"🆔 <code>{code}</code>\n"
     setup = _setup_display(event.get("source") or event.get("strategy_fa"))
-    return int(send_message(
+    _res_mid = int(send_message(
         f"{emoji} <b>نتیجه نهایی پوزیشن</b>   {link_line}\n"
         f"🏷 <b>{_e(setup)}</b>\n\n"
         f"🏦 <b>{_e(event.get('symbol'))}</b> • {_e(event.get('trigger_timeframe') or event.get('style', ''))} • {_e(event.get('style', ''))} • {_e(event.get('direction',''))}\n\n"
@@ -4010,6 +4186,12 @@ def send_trade_result(event: dict) -> bool:
         f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>",
         target,
     ) or 0)
+    try:
+        tf_channel_set_latest_result(str(event.get("public_code") or ""), target,
+                                     _res_mid, f"نتیجه نهایی {result}")
+    except Exception as exc:
+        print(f"TF-channel final-link refresh skipped: {exc}")
+    return _res_mid
 
 
 def send_startup_message(symbol_count: int) -> bool:

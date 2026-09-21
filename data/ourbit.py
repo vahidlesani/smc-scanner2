@@ -71,6 +71,19 @@ def _throttle() -> None:
         _LAST_REQUEST_AT = time.monotonic()
 
 
+_TF_SECONDS_LOCAL = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+                     "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400}
+
+
+def _closed_ttl(interval: str, cap: int = 1800) -> int:
+    """A closed candle is immutable until its own timeframe closes (round 15)."""
+    try:
+        sec = int(_TF_SECONDS_LOCAL.get(str(interval).lower(), 300))
+        return int(max(20, min(int(sec - (time.time() % sec)) + 2, cap)))
+    except Exception:
+        return 45
+
+
 def _cache_get(key: Tuple):
     with _CACHE_LOCK:
         item = _CACHE.get(key)
@@ -199,7 +212,8 @@ def get_ourbit_klines(
     if len(df) > requested:
         df = df.iloc[-requested:].reset_index(drop=True)
     if end_s is None:
-        _cache_set(key, df, 45)
+        # Round 15: a closed candle is immutable until its own TF closes.
+        _cache_set(key, df, _closed_ttl(interval) if closed_only else 45)
     return df
 
 

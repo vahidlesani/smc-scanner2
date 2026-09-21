@@ -6,6 +6,7 @@ A provider outage can only omit the advisory, never delay or alter a signal.
 from __future__ import annotations
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 import requests
@@ -13,6 +14,21 @@ import requests
 _POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="viva-gemini")
 _LOCK = threading.Lock()
 _IN_FLIGHT: set[str] = set()
+# ── Round-15 cost guard: the provider answered nothing but HTTPError 107 times
+# in a row today, and each attempt still burned a thread, a timeout and log
+# noise. After 4 consecutive failures the advisor sleeps 30 minutes (fail-open:
+# the advisory is an extra, never part of the signal).
+_BREAKER = {"fails": 0, "until": 0.0}
+_BREAKER_COOLDOWN = 1800
+_BREAKER_THRESHOLD = 4
+
+
+def breaker_state() -> dict:
+    return dict(_BREAKER)
+
+
+def _breaker_open() -> bool:
+    return time.time() < float(_BREAKER["until"])
 
 
 def _prompt(candidate) -> str:
@@ -31,6 +47,8 @@ def _generate(candidate) -> Optional[str]:
     model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
     if not key:
         return None
+    if _breaker_open():
+        return None
     try:
         response = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
@@ -42,9 +60,16 @@ def _generate(candidate) -> Optional[str]:
         response.raise_for_status()
         data = response.json()
         text = str((((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [{}])[0].get("text") or "").strip()
+        _BREAKER["fails"] = 0
         return text[:1200] or None
     except Exception as exc:
-        print(f"Gemini advisory unavailable {candidate.signal_id}: {type(exc).__name__}")
+        _BREAKER["fails"] = int(_BREAKER["fails"]) + 1
+        if _BREAKER["fails"] >= _BREAKER_THRESHOLD and not _breaker_open():
+            _BREAKER["until"] = time.time() + _BREAKER_COOLDOWN
+            print(f"Gemini advisory circuit opened for {_BREAKER_COOLDOWN // 60} min "
+                  f"after {_BREAKER['fails']} consecutive failures")
+        else:
+            print(f"Gemini advisory unavailable {candidate.signal_id}: {type(exc).__name__}")
         return None
 
 
