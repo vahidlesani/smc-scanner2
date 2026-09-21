@@ -318,6 +318,12 @@ def absorb_update_into_chain(holder: SignalCandidate, fresh: SignalCandidate) ->
     move bigger than 0.30 ATR re-arms Approaching and returns a Persian note
     for the update slot («بگو الان در ناحیه جدید، فلان شود تأیید می‌شود»).
     """
+    # ── Viva 09-21/22: «استاپی که در زمان Confirmed ذخیره شد نباید با absorb
+    # جابه‌جا شود». A confirmed trade keeps its frozen entry/stop/ladder; only
+    # the market-side CONTEXT (zones, evidence, notes) may refresh.
+    from analysis.quality_engine import apply_confirmed_snapshot as _apply_snap
+    _frozen = str(getattr(holder, "status", "") or "").upper() == "CONFIRMED" \
+        and isinstance((holder.metadata or {}).get("confirmed_snapshot"), dict)
     atr = max(float((fresh.metadata or {}).get("atr", 0) or 0), 1e-9)
     old_mid = float(getattr(holder, "zone_mid", 0) or 0)
     new_mid = float(getattr(fresh, "zone_mid", 0) or 0)
@@ -355,6 +361,9 @@ def absorb_update_into_chain(holder: SignalCandidate, fresh: SignalCandidate) ->
     if moved_atr > 0.30:
         holder.metadata["last_absorb_note"] = note
     holder.metadata["absorbed_scans"] = int(holder.metadata.get("absorbed_scans") or 0) + 1
+    if _frozen:
+        _apply_snap(holder)          # the snapshot wins over the fresh scan
+        note = note or "نقشهٔ تأییدشده دست‌نخورده ماند (اسنپ‌شات تأیید)."
     update_candidate(holder)
     return note
 

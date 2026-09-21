@@ -1050,9 +1050,16 @@ def _setup_stickers(candidate: SignalCandidate, confirmed: bool) -> list:
     return chips
 
 
-def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool = False) -> None:
-    """Compact annotation stack in the emptier LEFT chart corner.
-    It keeps structural labels away from both live candles and the price ladder."""
+def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool = False,
+                         fig=None) -> None:
+    """Structural notes in a DEDICATED LEFT MARGIN, never over the candles.
+
+    Viva 09-22: «نوشته‌ها را روی کندل‌ها و ابزار لانگ و شورت ننویس … نمی‌خوام
+    محل کندل‌ها و قیمت‌ها روشون مخدوش بشه». The old stack floated inside the
+    axes and covered the tape on charts whose candles reach the left edge. The
+    margin is carved out of the figure (every wide axes shifts right by the
+    same amount), so notes, candles and the trade tool can never collide.
+    """
     if not notes or frame is None or frame.empty:
         return
     lo, hi = ax.get_ylim()
@@ -1065,19 +1072,26 @@ def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool =
     # Confirmed charts reserve upper-left for the Long/Short trade box.
     # Their structural notes therefore always use the lower-left empty corner.
     use_top = (top_empty >= bottom_empty) and not confirmed
-    y = 0.968 if use_top else 0.055
-    step = -0.043 if use_top else 0.043
-    shown = notes[:9]
-    for text, color in shown:
-        ax.text(
-            0.014, y, text,
-            transform=ax.transAxes,
-            ha="left", va="top" if use_top else "bottom",
-            color=color, fontsize=5.8, fontweight="bold", zorder=15,
-            bbox={"boxstyle": "round,pad=0.16", "facecolor": CHART_THEME["panel"],
-                  "edgecolor": "none", "alpha": 0.82},
-        )
-        y += step
+    if fig is None:
+        return
+    _MARGIN = 0.115
+    _wide = [a for a in fig.axes if a.get_position().width > 0.30]
+    _x_left = min((a.get_position().x0 for a in _wide), default=0.06)
+    for _a in _wide:
+        _pp = _a.get_position()
+        _a.set_position([_pp.x0 + _MARGIN, _pp.y0,
+                         max(0.05, _pp.width - _MARGIN), _pp.height])
+    _x_notes = _x_left + _MARGIN - 0.008      # the NEW left edge of the tape
+    _pos = ax.get_position()
+    _top = _pos.y0 + _pos.height * 0.965
+    _step = -(_pos.height * 0.037)
+    if not use_top:
+        _top = _pos.y0 + _pos.height * 0.055 + _step * (len(notes[:11]) - 1)
+        _step = -_step
+    for _i, (text, color) in enumerate(notes[:11]):
+        fig.text(_x_notes, _top + _step * _i, text,
+                 ha="right", va="center", color=color, fontsize=5.6,
+                 fontweight="bold", zorder=25)
 
 
 def _draw_visible_fvgs(ax, frame: pd.DataFrame, count: int) -> list:
@@ -1565,7 +1579,29 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                            float(candidate.entry_zone_top))
             except Exception:
                 _rz = []
-        for _z in (_rz or [])[:6]:
+        # Viva 09-22: «نواحی مهم، فقط مهم‌ترینهاش … باکس‌های عرضه و تقاضای مهم
+        # در سقف‌ها و کف‌های مشخص» — the clutter box-stack becomes a diet: at
+        # most two zones per side, chosen by importance = near the live price
+        # AND tall (a real base/ceiling), never every imbalance on the tape.
+        _rz_list = list(_rz or [])
+        if len(_rz_list) > 4:
+            _live8z = float(frame["close"].iloc[-1])
+
+            def _zone_importance(_z8: dict) -> float:
+                _lo8 = float(_z8.get("lo", _z8.get("bottom", 0)) or 0)
+                _hi8 = float(_z8.get("hi", _z8.get("top", 0)) or 0)
+                _mid8 = (_lo8 + _hi8) / 2.0
+                _h8 = abs(_hi8 - _lo8)
+                return abs(_mid8 - _live8z) - 0.9 * _h8
+
+            _by_side: dict = {}
+            for _zc in _rz_list:
+                _s8 = str(_zc.get("bias") or "").upper() or \
+                    ("DEMAND" if _dir_key == "LONG" else "SUPPLY")
+                _by_side.setdefault(_s8, []).append(_zc)
+            _rz_list = [z8 for _zs8 in _by_side.values()
+                        for z8 in sorted(_zs8, key=_zone_importance)[:2]]
+        for _z in _rz_list:
             # timestamp-anchored when the zone carries its origin time (every
             # zone detected since 09-20 does); legacy rows keep the old rule.
             if _z.get("ts0"):
@@ -1960,17 +1996,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # TradingView-style Long/Short position marker AT THE ENTRY CANDLE.
             marker_price = candidate.planned_entry
             marker_x = tool_start
+            # Viva 09-22: «اون فلش سبزِ کوچولو رو روی کندل‌ها و ابزار ننویس» —
+            # the entry triangle glyph is gone; the entry pill + the tool box
+            # already mark the trade, and the note now lives in the margin.
             if candidate.direction == "LONG":
-                ax.scatter([marker_x], [marker_price], marker="^", s=130,
-                           color=CHART_THEME["tp1"], zorder=16,
-                           edgecolors=CHART_THEME["figure"], linewidths=0.8)
-                pos_note = "▲ LONG POSITION"
+                pos_note = "LONG POSITION"
                 pos_color = CHART_THEME["tp1"]
             else:
-                ax.scatter([marker_x], [marker_price], marker="v", s=130,
-                           color=CHART_THEME["invalidation"], zorder=16,
-                           edgecolors=CHART_THEME["figure"], linewidths=0.8)
-                pos_note = "▼ SHORT POSITION"
+                pos_note = "SHORT POSITION"
                 pos_color = CHART_THEME["invalidation"]
             notes.append((pos_note, pos_color))
             ax.fill_between(
@@ -2061,17 +2094,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             )
             if _pathp8 >= 0.5:
                 info += f"\nPATH  {_pathp8:.2f}%  → 5 PARTS"
-            ax.text(
-                0.015,
-                0.965,
+            _posi = ax.get_position()
+            fig.text(
+                _posi.x0 + 0.012,
+                _posi.y0 + _posi.height - 0.028,
                 info,
-                transform=ax.transAxes,
                 ha="left",
                 va="top",
                 color=CHART_THEME["text"],
-                fontsize=7.8,
-                linespacing=1.45,
-                zorder=15,
+                fontsize=7.4,
+                linespacing=1.4,
+                zorder=25,
                 bbox={
                     "boxstyle": "round,pad=0.55",
                     "facecolor": CHART_THEME["figure"],
@@ -2336,7 +2369,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         _yr = max(_yhi - _ylo, 1e-9)
         ax.set_ylim(_ylo - 0.06 * _yr, _yhi + 0.06 * _yr)
 
-        _render_corner_notes(ax, notes, frame, confirmed=confirmed)
+        _render_corner_notes(ax, notes, frame, confirmed=confirmed, fig=fig)
 
         # Viva 2026-09-14 «تایم‌فریم پوزیشن یک‌ساعته‌ست، چارت ۴ ساعته میدی؟!» —
         # the title is ALWAYS the position's own trigger timeframe, on every
@@ -4032,8 +4065,41 @@ def _lifecycle_view_plan(candidate: SignalCandidate,
         escaped = int(_tool_escape(candidate, frame, now=now))
     except Exception:
         escaped = 0
-    if escaped < 1:
+    # Viva 09-22: the tool itself must not come out STRETCHED («مثل چارت لینک
+    # کش اومده»). Besides a candle leaving the tool, a tool that already spans
+    # more bars than a clean canvas allows is rendered ONE TF UP — his words:
+    # «به جاش یه تایم بالاتر بره یا دو تایم بالاتر … اگر باز کندل‌ها خارج می‌شد
+    # ۲ ساعته». Shape and place stay the tool's own; only the tape steps up.
+    _span_bars = 0
+    try:
+        _m8 = float(TF_MINUTES.get(base, 0) or 0)
+        _e8 = _event_ts((candidate.metadata or {}).get("tool_entry_ts")) \
+            or _event_ts(getattr(candidate, "confirmed_at", "")) \
+            or _event_ts(getattr(candidate, "created_at", ""))
+        _now8 = now if now is not None else pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+        if _m8 > 0 and _e8 is not None:
+            _span_bars = int(max(0.0, (pd.Timestamp(_now8) - _e8).total_seconds() / 60.0 / _m8))
+    except Exception:
+        _span_bars = 0
+    # …the trigger TF is only left when the tool is wider than the tool's OWN
+    # designed span (TOOL_FORWARD_BARS = the 42 forward bars the confirmed
+    # chart paints); anything inside that is the normal tape, not a stretch.
+    # …plus two bars of slack: the forming candle and the boundary rounding
+    # (the 09-20 ruling «the 42-bar tape is still the trigger TF» stays true).
+    _wide_limit = max(int(TOOL_FORWARD_BARS) + 2,
+                      int(os.getenv("TOOL_MAX_VIEW_BARS", TOOL_FORWARD_BARS + 2)
+                          or TOOL_FORWARD_BARS + 2))
+    if escaped < 1 and _span_bars <= _wide_limit:
         return base, 0, ""
+    if escaped < 1 and _span_bars > _wide_limit:
+        _ladder8 = LIFECYCLE_VIEW_LADDER.get(base) or []
+        _view8 = _ladder8[0] if _ladder8 else base
+        if _view8 == base:
+            return base, 0, ""
+        return _view8, 0, (
+            f"ابزار لانگ/شورت روی تایم {base.upper()} کش می‌آمد "
+            f"(حدود {_span_bars} کندل) — همان ابزار با همان شکل، "
+            f"روی تایم {_view8.upper()} نمایش داده شده است.")
     view = _pick_view_tf(candidate, now=now)
     if view == base:
         return base, escaped, ""

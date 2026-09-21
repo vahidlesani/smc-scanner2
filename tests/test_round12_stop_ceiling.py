@@ -138,8 +138,12 @@ def test_the_clock_block_shows_dates_so_an_old_chain_is_obvious():
     cand.created_at = "2026-09-18T23:05:01+00:00"
     cand.metadata["alert_stamped_at_utc"] = "2026-09-20T23:00:16+00:00"
     text = "\n".join(M._timing_lines(cand))
-    # Tehran = UTC+3:30 → 09-18 22:00Z is 09-19 01:30 local, the send is 09-21
-    assert "09-19 01:30" in text and "09-21" in text     # dates ride along
+    # Tehran = UTC+3:30 → 09-18 22:00Z is 09-19 01:30 local. The SEND stamp is
+    # a live clock, so the test asserts a full dd-mm hh:mm date rides along
+    # instead of pinning a calendar day (it used to fail at Tehran midnight).
+    import re as _re
+    assert "09-19 01:30" in text
+    assert _re.search(r"\d{2}-\d{2} \d{2}:\d{2}", text.split("ارسال به تلگرام")[-1])
     assert "عمر این سناریو" in text
 
 

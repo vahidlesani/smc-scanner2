@@ -927,6 +927,14 @@ def monitor_candidates() -> Dict[str, int]:
         return stats
     frames = _candidate_market_frames(candidates)
     prices = _live_price_map()
+    # ── Viva 09-21/22: every cycle, a confirmed plan is re-frozen/re-applied so
+    # no absorb, update or restart can slide its entry/stop/ladder.
+    try:
+        from analysis.quality_engine import enforce_confirmed_snapshot as _enforce_snap
+        for _c in candidates:
+            _enforce_snap(_c)
+    except Exception as _snap_exc:
+        print(f"snapshot enforcement skipped: {_snap_exc}")
     for candidate in candidates:
         key = (candidate.symbol, candidate.metadata.get("confirm_tf") or candidate.trigger_timeframe)
         market_data = frames.get(key)
@@ -1072,6 +1080,15 @@ def monitor_candidates() -> Dict[str, int]:
                         confirmed, candidate, reason = evaluate_confirmation(
                             candidate, _lf[1], htf_closed_df=_pat_frame)
 
+            if confirmed:
+                # ── Viva 09-21/22: the confirmation moment FROZENS the plan
+                # (entry/stop/ladder/lines) so no later update or absorb can
+                # slide the tool he photographed as «کش اومده».
+                try:
+                    from analysis.quality_engine import freeze_confirmed_snapshot
+                    freeze_confirmed_snapshot(candidate)
+                except Exception as _snap_exc:
+                    print(f"snapshot freeze skipped: {_snap_exc}")
             if not confirmed:
                 # ── premise-dead closure (his 09-21 VVV report). Checked before
                 # every heartbeat/update so a runaway market can never keep a

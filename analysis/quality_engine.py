@@ -180,6 +180,100 @@ def pattern_bias_of(kind: str) -> str:
     return "NEUTRAL"
 
 
+CONFIRMED_SNAPSHOT_KEYS = (
+    "pattern_band", "render_patterns", "render_zones", "tl_a_ts", "tl_a_price",
+    "tl_b_ts", "tl_b_price", "tool_entry_ts", "tool_anchor_ts", "pattern_type",
+    "pattern_bias", "break_edge", "break_direction", "pattern_state_label",
+)
+
+
+def freeze_confirmed_snapshot(candidate) -> dict:
+    """Viva 09-21/22 — «اون اسنپ‌شات که گفتی چی شد؟ انجام بده دیگه».
+
+    The moment a scenario is CONFIRMED, the whole decision is frozen: entry,
+    stop, the target ladder (targets + weights), the pattern/zone/line render
+    commands and the tool anchors. Later scans, absorbs or updates may move
+    nothing here — only the moving parts of the lifecycle (hit index, trailing
+    stop) are allowed to evolve. «استاپی که در زمان Confirmed ذخیره شد، نباید
+    توسط آپدیت بعدی یا absorb جابه‌جا شود؛ مگر صراحتاً trailing».
+    """
+    md = candidate.metadata if getattr(candidate, "metadata", None) is not None else {}
+    if isinstance(md.get("confirmed_snapshot"), dict):
+        return md["confirmed_snapshot"]
+    ladder = dict(md.get("target_ladder") or {})
+    snap = {
+        "entry": float(getattr(candidate, "planned_entry", 0) or 0.0),
+        "sl": float(getattr(candidate, "sl", 0) or 0.0),
+        "tp1": float(getattr(candidate, "tp1", 0) or 0.0),
+        "tp2": float(getattr(candidate, "tp2", 0) or 0.0),
+        "targets": [float(x) for x in (ladder.get("targets") or [])],
+        "weights": [float(x) for x in (ladder.get("weights") or [])],
+        "direction": str(getattr(candidate, "direction", "") or ""),
+        "setup_code": str(getattr(candidate, "setup_code", "") or ""),
+        "trigger_timeframe": str(getattr(candidate, "trigger_timeframe", "") or ""),
+        "confirmed_at": str(getattr(candidate, "confirmed_at", "") or ""),
+        "frozen_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    for key in CONFIRMED_SNAPSHOT_KEYS:
+        if key in md:
+            snap[key] = md[key]
+    md["confirmed_snapshot"] = snap
+    md["confirmed_snapshot_fa"] = (
+        "اسنپ‌شات تأیید قفل شد: ورود، استاپ، نردبان هدف و خطوط همان لحظهٔ تأیید "
+        "تثبیت شدند و آپدیت‌های بعدی آن‌ها را جابه‌جا نمی‌کنند (فقط تریلینگ و "
+        "تی‌پی‌های زده‌شده جلو می‌روند).")
+    return snap
+
+
+def apply_confirmed_snapshot(candidate) -> bool:
+    """Re-impose the frozen decision after any absorb/update. True when applied."""
+    md = candidate.metadata or {}
+    snap = md.get("confirmed_snapshot")
+    if not isinstance(snap, dict):
+        return False
+    try:
+        if float(snap.get("entry") or 0) > 0:
+            candidate.planned_entry = float(snap["entry"])
+        if float(snap.get("sl") or 0) > 0:
+            candidate.sl = float(snap["sl"])
+        if float(snap.get("tp1") or 0) > 0:
+            candidate.tp1 = float(snap["tp1"])
+        if float(snap.get("tp2") or 0) > 0:
+            candidate.tp2 = float(snap["tp2"])
+        ladder = dict(md.get("target_ladder") or {})
+        if snap.get("targets"):
+            ladder["targets"] = [float(x) for x in snap["targets"]]
+        if snap.get("weights"):
+            ladder["weights"] = [float(x) for x in snap["weights"]]
+        if ladder:
+            md["target_ladder"] = ladder
+        for key in CONFIRMED_SNAPSHOT_KEYS:
+            if key in snap:
+                md[key] = snap[key]
+        md["snapshot_reapplied_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return True
+    except Exception:
+        return False
+
+
+def enforce_confirmed_snapshot(candidate) -> str:
+    """Freeze on first sight of CONFIRMED; re-apply on every later sight.
+
+    One call per monitor cycle keeps a confirmed plan immutable no matter which
+    path (scan absorb, monitor update, restart rehydrate) touched it in between.
+    """
+    status = str(getattr(candidate, "status", "") or "").upper()
+    md = candidate.metadata or {}
+    has_snap = isinstance(md.get("confirmed_snapshot"), dict)
+    if status == "CONFIRMED" and not has_snap:
+        freeze_confirmed_snapshot(candidate)
+        return "frozen"
+    if has_snap:
+        apply_confirmed_snapshot(candidate)
+        return "applied"
+    return ""
+
+
 def evaluate_confirmation(
     candidate: SignalCandidate, closed_df: pd.DataFrame,
     htf_closed_df: Optional[pd.DataFrame] = None,
