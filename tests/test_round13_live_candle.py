@@ -181,3 +181,41 @@ def test_analysis_still_uses_closed_candles_only():
     assert "def get_klines(" in src and "closed_only: bool = True" in src
     setup_src = io.open("analysis/setups_v7.py", encoding="utf-8").read()
     assert "closed_only=False" not in setup_src
+
+
+# ── 5. the re-entry lane was dead: raw `%` wildcards in a parameterised query ──
+
+def test_reentry_scan_query_parameterises_its_like_patterns(monkeypatch):
+    """`%"reentry_armed": true%` inside an f-string query + a psycopg2 params tuple
+    made psycopg2 interpolate those wildcards and raise
+    `IndexError: tuple index out of range` on EVERY cycle — the round-9 re-entry
+    law never produced a single signal. The patterns are parameters now."""
+    import database.repository_v7 as R
+    from database import db as legacy_db
+
+    seen = {}
+
+    class _Cur:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def execute(self, sql, params=None):
+            seen["sql"], seen["params"] = sql, params
+            return self
+
+        def fetchall(self):
+            return []
+
+    monkeypatch.setattr(legacy_db, "db_cursor", lambda: _Cur())
+    events = R.reentry_scan_events()
+    assert events == []
+    sql, params = seen["sql"], seen["params"]
+    assert '"reentry_armed": true' not in sql          # no wildcard in the SQL itself
+    assert '"reentry_signaled": true' not in sql
+    assert len(params) == 3 and "reentry_armed" in params[0]
+    src = io.open("database/repository_v7.py", encoding="utf-8").read()
+    assert "def _reentry_event_from_row(" in src       # one bad row can't kill the lane
+    assert "reentry row skipped" in src

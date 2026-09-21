@@ -1123,6 +1123,76 @@ def repair_legacy_tp1_misclassified_results() -> int:
 
 
 
+def _reentry_event_from_row(row, cutoff) -> Optional[Dict]:
+    """One row → one REENTRY_SIGNAL event, or None. Isolated on purpose.
+
+    Round 13: this body used to run inline inside the scan, so a single bad row
+    silenced the whole lane — and a raw `%` inside the LIKE wildcards made
+    psycopg2 interpolate that string and raise `IndexError: tuple index out of
+    range` on EVERY cycle. Viva's round-9 re-entry law («سیگنال ورود مجدد روی
+    همان پول‌بک») therefore never produced one single signal; the patterns are
+    parameters now and each row stands on its own.
+    """
+    p = legacy_db._ph()
+    (signal_id, symbol, direction, entry, original_sl, leverage, margin, style,
+     source, strategy_fa, strategy_version, pro_message_id, ladder_json,
+     public_code, trigger_timeframe, closed_at) = row
+    try:
+        closed_dt = pd.to_datetime(closed_at).to_pydatetime() if closed_at is not None else None
+    except Exception:
+        closed_dt = None
+    if closed_dt is None or closed_dt < cutoff:
+        return None
+    try:
+        ladder = json.loads(ladder_json or "{}")
+    except Exception:
+        return None
+    trade_tf = str(trigger_timeframe or "15m").lower()
+    timeframe = monitor_tf_for(trade_tf)
+    frame = get_klines(symbol, timeframe, 200, closed_only=True, use_cache=True)
+    if frame is None or frame.empty:
+        return None
+    ts = pd.to_datetime(frame["timestamp"])
+    if getattr(ts.dt, "tz", None) is not None:
+        ts = ts.dt.tz_convert("UTC").dt.tz_localize(None)
+    window = frame.loc[ts > (_naive_timestamp(closed_at) or ts.iloc[0])]
+    if len(window) < 3:
+        return None
+    candles = [{"open": float(r["open"]), "high": float(r["high"]),
+                "low": float(r["low"]), "close": float(r["close"]),
+                "volume": float(r["volume"] or 0.0)} for _, r in window.iterrows()]
+    atr = 0.0
+    try:
+        atr = float((frame["high"].tail(14) - frame["low"].tail(14)).mean() or 0.0)
+    except Exception:
+        atr = 0.0
+    setup = reentry_setup(direction, candles, ladder, atr=atr)
+    if not setup:
+        return None
+    ladder["reentry_signaled"] = True
+    ladder["reentry_levels"] = {k: float(setup[k]) for k in ("entry", "sl", "tp1", "tp2")}
+    with legacy_db.db_cursor() as cursor:
+        cursor.execute(f"UPDATE signals SET target_state_json={p} WHERE signal_id={p}",
+                       (json.dumps(ladder, ensure_ascii=False), signal_id))
+        cursor.execute(f"UPDATE active_signals SET target_state_json={p} WHERE signal_id={p}",
+                       (json.dumps(ladder, ensure_ascii=False), signal_id))
+    return {
+        "event": "REENTRY_SIGNAL", "signal_id": signal_id, "symbol": symbol,
+        "direction": direction, "style": style, "source": source,
+        "strategy_fa": strategy_fa, "strategy_version": strategy_version,
+        "pro_message_id": int(pro_message_id or 0), "public_code": public_code,
+        "trigger_timeframe": trade_tf, "monitor_tf": timeframe,
+        "entry": float(setup["entry"]), "sl": float(setup["sl"]),
+        "tp1": float(setup["tp1"]), "tp2": float(setup["tp2"]),
+        "entry_filled_at": "", "confirmation_sent": True,
+        "reason_fa": str(setup.get("note_fa") or ""),
+        "banked_tp1": (ladder.get("targets") or [None])[max(0, int(ladder.get("hit_index") or 1) - 1)],
+        "hit_index": int(ladder.get("hit_index") or 0),
+        "live_price": float(candles[-1]["close"]),
+        "event_at": str(window.iloc[-1].get("timestamp") or ""),
+    }
+
+
 def reentry_scan_events(hours: int = 24) -> List[Dict]:
     """Viva 09-20 (round 9) — fresh entry signal on the pullback.
 
@@ -1143,76 +1213,29 @@ def reentry_scan_events(hours: int = 24) -> List[Dict]:
                 FROM signals
                 WHERE status='CLOSED'
                   AND closed_at IS NOT NULL
-                  AND target_state_json LIKE '%"reentry_armed": true%'
-                  AND target_state_json NOT LIKE '%"reentry_signaled": true%'
+                  AND target_state_json LIKE {p}
+                  AND target_state_json NOT LIKE {p}
                   AND strategy_version={p}
                 ORDER BY closed_at DESC LIMIT 40
-            """, (SETTINGS.strategy_version,))
+            """, ('%"reentry_armed": true%', '%"reentry_signaled": true%',
+                  SETTINGS.strategy_version))
             rows = cursor.fetchall()
         if not rows:
             return events
         cutoff = _now() - timedelta(hours=int(hours or 24))
         for row in rows:
-            (signal_id, symbol, direction, entry, original_sl, leverage, margin, style,
-             source, strategy_fa, strategy_version, pro_message_id, ladder_json,
-             public_code, trigger_timeframe, closed_at) = row
             try:
-                closed_dt = pd.to_datetime(closed_at).to_pydatetime() if closed_at is not None else None
-            except Exception:
-                closed_dt = None
-            if closed_dt is None or closed_dt < cutoff:
+                _ev = _reentry_event_from_row(row, cutoff)
+            except Exception as exc:
+                # one bad row must never silence the whole lane (round 13)
+                print(f"reentry row skipped ({row[0] if row else '?'}): {exc}")
                 continue
-            try:
-                ladder = json.loads(ladder_json or "{}")
-            except Exception:
-                continue
-            trade_tf = str(trigger_timeframe or "15m").lower()
-            timeframe = monitor_tf_for(trade_tf)
-            frame = get_klines(symbol, timeframe, 200, closed_only=True, use_cache=True)
-            if frame is None or frame.empty:
-                continue
-            ts = pd.to_datetime(frame["timestamp"])
-            if getattr(ts.dt, "tz", None) is not None:
-                ts = ts.dt.tz_convert("UTC").dt.tz_localize(None)
-            window = frame.loc[ts > (_naive_timestamp(closed_at) or ts.iloc[0])]
-            if len(window) < 3:
-                continue
-            candles = [{"open": float(r["open"]), "high": float(r["high"]),
-                        "low": float(r["low"]), "close": float(r["close"]),
-                        "volume": float(r["volume"] or 0.0)} for _, r in window.iterrows()]
-            atr = 0.0
-            try:
-                atr = float((frame["high"].tail(14) - frame["low"].tail(14)).mean() or 0.0)
-            except Exception:
-                atr = 0.0
-            setup = reentry_setup(direction, candles, ladder, atr=atr)
-            if not setup:
-                continue
-            ladder["reentry_signaled"] = True
-            ladder["reentry_levels"] = {k: float(setup[k]) for k in ("entry", "sl", "tp1", "tp2")}
-            with legacy_db.db_cursor() as cursor:
-                cursor.execute(f"UPDATE signals SET target_state_json={p} WHERE signal_id={p}",
-                               (json.dumps(ladder, ensure_ascii=False), signal_id))
-                cursor.execute(f"UPDATE active_signals SET target_state_json={p} WHERE signal_id={p}",
-                               (json.dumps(ladder, ensure_ascii=False), signal_id))
-            events.append({
-                "event": "REENTRY_SIGNAL", "signal_id": signal_id, "symbol": symbol,
-                "direction": direction, "style": style, "source": source,
-                "strategy_fa": strategy_fa, "strategy_version": strategy_version,
-                "pro_message_id": int(pro_message_id or 0), "public_code": public_code,
-                "trigger_timeframe": trade_tf, "monitor_tf": timeframe,
-                "entry": float(setup["entry"]), "sl": float(setup["sl"]),
-                "tp1": float(setup["tp1"]), "tp2": float(setup["tp2"]),
-                "entry_filled_at": "", "confirmation_sent": True,
-                "reason_fa": str(setup.get("note_fa") or ""),
-                "banked_tp1": (ladder.get("targets") or [None])[max(0, int(ladder.get("hit_index") or 1) - 1)],
-                "hit_index": int(ladder.get("hit_index") or 0),
-                "live_price": float(candles[-1]["close"]),
-                "event_at": str(window.iloc[-1].get("timestamp") or ""),
-            })
+            if _ev:
+                events.append(_ev)
     except Exception as exc:  # fail-open: re-entry is an opportunity, not a gate
         print(f"reentry scan error: {exc}")
     return events
+
 
 def monitor_confirmed_trades() -> List[Dict]:
     """Process each closed candle chronologically; no historical `.any()` shortcuts."""
