@@ -890,7 +890,7 @@ def _scenario_path(ax, start, end, color: str, alpha: float = 0.88) -> None:
 
 def _add_setup_sticker(fig, candidate: SignalCandidate) -> bool:
     """Draw the setup's own badge; True when one was drawn."""
-    path = os.path.join(SETUP_STICKER_DIR, f"{str(candidate.setup_code).lower()}.png")
+    path = _setup_identity(candidate)["sticker"]   # one source of truth
     if not os.path.isfile(path):
         return False
     try:
@@ -920,7 +920,8 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
     fig.text(
         0.055,
         0.024,
-        f"{_public_code(candidate)}  •  {_chart_market_label(candidate)}",
+        f"{_public_code(candidate)}  •  {_setup_identity(candidate)['brand']}"
+        f"  •  {_chart_market_label(candidate)}",
         color=CHART_THEME["muted"],
         fontsize=7.5,
         va="center",
@@ -978,10 +979,16 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
     )
 
 
-def _setup_badge(candidate: SignalCandidate) -> tuple[str, str]:
-    """Branded, setup-specific sticker used consistently on chart and caption."""
+def _setup_identity(candidate: SignalCandidate) -> dict:
+    """ONE source of truth for a setup's name — his 09-21 audit: «نام ستاپ در
+    هدر، نام استیکر و footer باید از یک setup_identity مشترک بیاید؛ نه اینکه
+    هر کدام از یک mapping جدا بخواند». Header word, corner sticker, chip badge
+    and footer all read this dict (and the sticker file is derived from the
+    same code), so a chart can never show one setup's sticker with another
+    setup's name — his «استیکر PINVAL روی چارت PINWALLQ» complaint.
+    """
     code = str(candidate.setup_code or "SETUP").upper()
-    labels = {
+    brands = {
         "PINVAL": "VIVA ✦ PINWALL LEGACY",
         "PINWALLQ": "VIVA ✦ PINWALL QUALITY",
         "TLBREAK": "VIVA ✦ TLBREAK",
@@ -994,8 +1001,33 @@ def _setup_badge(candidate: SignalCandidate) -> tuple[str, str]:
         "IFVG": "VIVA ✦ FVG FLIP",
         "TLR": "VIVA ✦ TREND RETEST",
     }
-    color = CHART_THEME["structure"] if code in {"P1234", "BOS1", "IFVG"} else (CHART_THEME["trend"] if code in {"TLBREAK", "TECHCLASSIC"} else CHART_THEME["demand"])
-    return labels.get(code, f"VIVA ✦ {code}"), color
+    persian = {
+        "PINVAL": "اعتبارسنجی پین‌بار",
+        "PINWALLQ": "پین‌وال کیفیت",
+        "TLBREAK": "شکست خط روند",
+        "TECHCLASSIC": "الگوی کلاسیک پیوتی",
+        "ALBROX": "بازپس‌گیری بیس",
+    }
+    color = (CHART_THEME["structure"] if code in {"P1234", "BOS1", "IFVG"}
+             else (CHART_THEME["trend"] if code in {"TLBREAK", "TECHCLASSIC"}
+                   else CHART_THEME["demand"]))
+    return {
+        "code": code,
+        "brand": brands.get(code, f"VIVA ✦ {code}"),
+        "name": code,
+        "fa": persian.get(code, ""),
+        "color": color,
+        "sticker": os.path.join(SETUP_STICKER_DIR, f"{code.lower()}.png"),
+    }
+
+
+def _setup_badge(candidate: SignalCandidate) -> tuple[str, str]:
+    """Branded, setup-specific sticker used consistently on chart and caption.
+
+    Round 15c: it no longer keeps its own mapping — it asks _setup_identity so
+    the chip, the header and the corner sticker can never disagree."""
+    _ident = _setup_identity(candidate)
+    return _ident["brand"], _ident["color"]
 
 
 def _setup_stickers(candidate: SignalCandidate, confirmed: bool) -> list:
@@ -2325,7 +2357,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             0.922,
             f"{candidate.setup_code}  ·  {_chart_market_label(candidate)}  ·  TRIG {candidate.trigger_timeframe.upper()}"
             f"{' · PAT ' + str(md.get('tl_context_tf')).upper() if md.get('tl_context_tf') else ''}"
-            f"  ·  {'VIVA SETUP ✦ CONFIRMED' if confirmed else 'VIVA SETUP ✦ ANALYSIS'}",
+            f"  ·  {_setup_identity(candidate)['brand']} ✦ "
+            f"{'CONFIRMED' if confirmed else 'ANALYSIS'}",
             color=CHART_THEME["muted"],
             fontsize=8,
             va="center",
