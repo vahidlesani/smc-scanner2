@@ -49,7 +49,7 @@ SMART_EXIT_ORANGE = 1        # 1 sign → short warning only, never a close
 # otherwise (§13 ambiguity #3 — flagged, never invented). The 3%–5% band of
 # the doc is a *choice range*; 5% is the hard ceiling we clamp to.
 TARGET_MAX_PCT_BY_TF = {
-    "1d": 10.0, "4h": 7.0, "2h": 5.0, "1h": 5.0, "30m": 5.0,
+    "1d": 15.0, "4h": 7.0, "2h": 5.0, "1h": 5.0, "30m": 5.0,
     "15m": 5.0, "5m": 5.0, "3m": 5.0, "1m": 5.0,
 }
 
@@ -60,7 +60,7 @@ TARGET_MAX_PCT_BY_TF = {
 # band, not only a ceiling: 15m/1h 3–5% · 4h 5–7% · 1d up to 10% (below 15m
 # inherits the 15m band, flagged).
 TARGET_BAND_PCT_BY_TF = {
-    "1d": (5.0, 10.0), "4h": (5.0, 7.0), "2h": (3.0, 5.0), "1h": (3.0, 5.0),
+    "1d": (5.0, 15.0), "4h": (5.0, 7.0), "2h": (3.0, 5.0), "1h": (3.0, 5.0),
     "30m": (3.0, 5.0), "15m": (3.0, 5.0), "5m": (3.0, 5.0),
     "3m": (3.0, 5.0), "1m": (3.0, 5.0),
 }
@@ -108,6 +108,25 @@ def structural_buffer(price: float, market: Optional[Dict] = None) -> float:
 MAX_STOP_PCT = 1.25
 BAND_TOLERANCE = 0.20
 
+# ── Viva 09-21 (round 14, verbatim): «اون ۱.۲۵ صدم استاپ برای ۱۵ دقیقه است /
+# ۱.۷۵ استاپ برای ۱ ساعته / استاپ ۲ تا ۲.۲۵ قیمت نماد در ۴ ساعته / استاپ ۲.۵ تا
+# ۲.۷۵ قیمت در سویینگ‌های روزانه. این در صورتی هست که سویینگ ساختاری در چارت
+# نداشته باشیم؛ اگر هم کف یا سقف داشته باشیم نباید از این اعداد استاپ با بافرش
+# بزرگ‌تر باشه» → the ceiling is PER TIMEFRAME now. A structural swing keeps its
+# own place as long as it stays inside the ceiling (+ its buffer); a farther
+# swing is CUT at the ceiling («حذف نشه») — never a dropped scenario.
+MAX_STOP_PCT_BY_TF = {
+    "1m": 1.25, "3m": 1.25, "5m": 1.25, "15m": 1.25,      # his 15m number
+    "30m": 1.50, "1h": 1.75, "2h": 2.00,                   # 1h = his 1.75
+    "4h": 2.25, "1d": 2.75,                                # his 4h/1d ceilings
+}
+
+
+def stop_ceiling_pct(trigger_tf: str) -> float:
+    """The stop's hard ceiling for this trigger TF (percent of price)."""
+    return float(MAX_STOP_PCT_BY_TF.get(str(trigger_tf or "15m").lower(),
+                                        MAX_STOP_PCT_BY_TF["15m"]))
+
 
 def tolerant_band_for_tf(trigger_tf: str) -> tuple:
     """(floor, cap) with the announced ±20% tolerance applied.
@@ -125,17 +144,21 @@ def tolerant_cap_pct(trigger_tf: str) -> float:
 
 
 def clamp_stop_price(entry: float, direction: str, stop: float,
-                     max_pct: float = MAX_STOP_PCT) -> tuple:
-    """(stop, clamped) — «استاپ نهایتا ۱.۲۵ درصد قیمت نماد».
+                     trigger_tf: Optional[str] = None,
+                     max_pct: Optional[float] = None) -> tuple:
+    """(stop, clamped) — «استاپ … نباید بزرگ‌تر از این اعداد با بافرش باشه».
 
-    The structural anchor keeps priority whenever it is closer than 1.25%; a
-    farther swing is cut at exactly 1.25% instead of dropping the scenario (his
-    ruling after the VVV 1h case: a 19%-away swing held the chain «منتظر» for
-    two days). The stop never crosses to the wrong side of the entry.
+    Round 14: the ceiling is the trigger TF's own number (15m 1.25% · 1h 1.75% ·
+    4h 2.25% · 1d 2.75%). The structural anchor keeps priority while it fits
+    inside the ceiling; a farther swing is cut exactly at the ceiling instead of
+    dropping the scenario (his VVV ruling). Callers pass the trigger TF; a bare
+    call falls back to the 15m number.
     """
     try:
         entry = float(entry or 0.0)
         stop = float(stop or 0.0)
+        if max_pct is None:
+            max_pct = stop_ceiling_pct(trigger_tf or "")
         if entry <= 0 or stop <= 0 or max_pct <= 0:
             return stop, False
         limit = entry * float(max_pct) / 100.0
@@ -393,16 +416,18 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
     trail_stops += [targets[n] + sign * tick_gap for n in range(len(targets) - 1)]
     # Protection floors (spec §4, Viva 09-19 adaptive ruling): while price
     # travels from targets[i] toward targets[i+1], the trailing stop may rise
-    # but never below this level. The ratio k adapts to the band's width in R
-    # (wider band = more profit at risk = larger protected share).
+    # but never below this level. Viva 09-21 round 14 (verbatim): «لطفا ارتباطی
+    # بین تی پی و استاپ نذار» — the adaptive ratio is measured in LADDER STEPS
+    # now (a pure price distance), never in R/risk: the TP path owes nothing to
+    # the stop.
     band_floors = []
     band_ks = []
     for i in range(len(targets) - 1):
         prev_lvl = entry if i == 0 else targets[i - 1]
-        width_r = abs(targets[i] - prev_lvl) / risk
-        # 0.5R band → 0.30 · 1R → 0.35 · 1.5R → 0.40 · ≥2.5R → 0.50
+        width_step = abs(targets[i] - prev_lvl) / max(step, 1e-12)
+        # half a step → 0.30 · a full step → 0.35 · 1.5 steps → 0.40 · ≥2.5 → 0.50
         k = min(BAND_K_MAX, max(BAND_K_MIN,
-                                BAND_K_MIN + BAND_K_SLOPE * (width_r - BAND_K_MID)))
+                                BAND_K_MIN + BAND_K_SLOPE * (width_step - BAND_K_MID)))
         band_ks.append(k)
         # (targets[i] − prev_lvl) already carries the direction sign.
         band_floors.append(prev_lvl + k * (targets[i] - prev_lvl))
@@ -418,6 +443,9 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
         "be_gap": be_gap,
         "targets": targets,
         "target_r": [abs(t - entry) / risk for t in targets],
+        # round 14 audit trail: the same distances as PERCENT of price — the way
+        # they are shown to Viva (no R read-out anywhere he can see)
+        "target_pct": [abs(t - entry) / max(abs(entry), 1e-12) * 100.0 for t in targets],
         "trail_stops": trail_stops,
         "band_floors": band_floors,
         "band_ks": band_ks,

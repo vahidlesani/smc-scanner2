@@ -932,7 +932,7 @@ def _base_candidate(
     try:
         from analysis.trade_management import (clamp_stop_price as _clamp_12,
                                                MAX_STOP_PCT as _max_stop_12)
-        sl, _clamped12 = _clamp_12(entry, direction, sl)
+        sl, _clamped12 = _clamp_12(entry, direction, sl, str(trigger_tf or ""))
         if _clamped12 or stop_clamped_note:
             candidate_stop_clamped = True
         else:
@@ -1431,9 +1431,16 @@ def sanity_reject(candidate) -> Optional[str]:
                 return "TARGET_WRONG_SIDE"
         else:
             return "DIRECTION_MISSING"
-        # the stop is clamped to 1.25% upstream; anything still past the tolerant
-        # TF ceiling means the geometry is broken in some other way.
-        if abs(entry - sl) / entry * 100.0 > max(cap, 1.25 * 1.02):
+        # Round 14: the stop's own ceiling for THIS timeframe (15m 1.25% ·
+        # 1h 1.75% · 4h 2.25% · 1d 2.75%), not the TP band. Upstream every lane
+        # already clamps to it; anything still past it (2% rounding slack) means
+        # the geometry is broken some other way.
+        try:
+            from analysis.trade_management import stop_ceiling_pct as _scp14
+            _stop_ceiling14 = float(_scp14(tf))
+        except Exception:
+            _stop_ceiling14 = 1.25
+        if abs(entry - sl) / entry * 100.0 > _stop_ceiling14 * 1.02:
             return "STOP_HORIZON"
         # 2% tolerance: rounding in the ladder must not kill a legitimate path.
         if abs(tp2 - entry) / entry * 100.0 > cap * 1.02:
@@ -1481,7 +1488,8 @@ def scan_setups(bundle: MarketBundle, style: str) -> List[SignalCandidate]:
         try:
             from analysis.trade_management import clamp_stop_price as _clamp_f
             _new_sl, _was_clamped = _clamp_f(getattr(cand, "planned_entry", 0) or 0,
-                                             getattr(cand, "direction", ""), getattr(cand, "sl", 0) or 0)
+                                             getattr(cand, "direction", ""), getattr(cand, "sl", 0) or 0,
+                                             str(getattr(cand, "trigger_timeframe", "") or ""))
             if _was_clamped:
                 cand.sl = float(_new_sl)
                 _md_f = getattr(cand, "metadata", None)

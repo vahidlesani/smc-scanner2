@@ -491,7 +491,15 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             if opp is not None and _line_alive(opp, n):
                 ftgt = float(opp.price_at(n))
             else:
-                ftgt = live - 1.8 * atr_p if fdir == "SHORT" else live + 1.8 * atr_p
+                # round 14: the fallback target is the doctrine path of this
+                # timeframe (percent of price) — never an ATR multiple, and
+                # never anything read off the stop.
+                try:
+                    from analysis.trade_management import doctrine_path as _dp14
+                    _p14, _s14 = _dp14(live, str(trigger_tf or "15m"))
+                    ftgt = live - _p14 if fdir == "SHORT" else live + _p14
+                except Exception:
+                    ftgt = live - 0.03 * live if fdir == "SHORT" else live + 0.03 * live
             # round 11: the fade stop sits behind the line and the last bar's
             # extreme with the STANDARD buffer (no ATR term).
             from analysis.trade_management import structural_buffer as _sbuf
@@ -502,7 +510,10 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             else:
                 stop = min(line_now, float(trigger_df["low"].iloc[-1])) - _bf
                 risk, rew = live - stop, ftgt - live
-            if 0.15 * atr_p <= risk <= 3.0 * atr_p and rew >= 1.3 * max(risk, 1e-9):
+            # round 14 (verbatim): «لطفا ارتباطی بین تی پی و استاپ نذار» — the old
+            # `rew >= 1.3 x risk` gate tied the target to the stop; only geometry
+            # (positive risk, positive reward) speaks now.
+            if risk > 0 and rew > 0:
                 ev["fade"] = {"direction": fdir, "entry": live, "stop": stop, "target": ftgt,
                               "tp_mid": round((live + ftgt) / 2.0, 6),
                               "rr": round(rew / max(risk, 1e-12), 2),
@@ -742,7 +753,8 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         stop = float(fade.get("stop") or stop or 0.0)
         if stop <= 0:
             return None
-    stop, _stop_was_clamped = clamp_stop_price(entry, direction, stop)
+    stop, _stop_was_clamped = clamp_stop_price(entry, direction, stop,
+                                               str(trigger_tf or ""))
     risk = (entry - stop) if direction == "LONG" else (stop - entry)
     reward = (final_target - entry) if direction == "LONG" else (entry - final_target)
     # Viva 09-20 round 11: no ATR limits and NO R:R gate on the stop/targets

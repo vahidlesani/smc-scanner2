@@ -70,7 +70,7 @@ def test_the_band_edges_carry_his_twenty_percent_tolerance():
     assert tlo == pytest.approx(lo * 0.8) and thi == pytest.approx(hi * 1.2)
     assert tolerant_cap_pct("15m") == pytest.approx(target_distance_cap_pct("15m") * 1.2)
     assert tolerant_cap_pct("4h") == pytest.approx(7.0 * 1.2)
-    assert tolerant_cap_pct("1d") == pytest.approx(10.0 * 1.2)
+    assert tolerant_cap_pct("1d") == pytest.approx(15.0 * 1.2)   # round 14: 15% cap
 
 
 def test_the_tolerance_widens_the_checks_not_the_ladder():
@@ -78,7 +78,7 @@ def test_the_tolerance_widens_the_checks_not_the_ladder():
     stay identical); only what is ACCEPTED around it grows."""
     assert band_for_tf("15m") == (3.0, 5.0)
     assert band_for_tf("4h") == (5.0, 7.0)
-    assert band_for_tf("1d") == (5.0, 10.0)
+    assert band_for_tf("1d") == (5.0, 15.0)
     src = io.open("analysis/trade_management.py", encoding="utf-8").read()
     assert "tolerant_band_for_tf" in src and "def doctrine_path" in src
     # doctrine_path still uses the announced band

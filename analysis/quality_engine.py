@@ -599,13 +599,14 @@ def evaluate_confirmation(
     # «منتظر» for two days because DEGENERATE_GEOMETRY rejected every cycle).
     try:
         from analysis.trade_management import clamp_stop_price as _clamp_q
-        _q_sl, _q_clamped = _clamp_q(executable_entry, candidate.direction, candidate.sl)
+        _q_sl, _q_clamped = _clamp_q(executable_entry, candidate.direction, candidate.sl,
+                                     str(candidate.trigger_timeframe or ""))
         if _q_clamped:
             candidate.sl = float(_q_sl)
             candidate.metadata["stop_clamped"] = True
             candidate.metadata["stop_clamp_note"] = (
-                "استاپ ساختاری دورتر از ۱٫۲۵٪ قیمت بود؛ طبق قانون ۰۹-۲۱ استاپ روی "
-                "سقف ۱٫۲۵٪ تنظیم شد و سناریو حفظ شد.")
+                "استاپ ساختاری دورتر از سقفِ این تایم‌فریم بود؛ طبق قانون ۰۹-۲۱ استاپ "
+                "روی همان سقف تنظیم شد و سناریو حفظ شد.")
             risk = abs(executable_entry - float(candidate.sl))
     except Exception:
         pass

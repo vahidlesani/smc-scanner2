@@ -2377,7 +2377,7 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         +        f"🔎 <b>ناحیه‌ای که زیر نظر داریم</b>\n\n"
         f"از <b>{_price(candidate.entry_zone_bottom)}</b> تا <b>{_price(candidate.entry_zone_top)}</b>\n"
         f"سطح ابطال سناریو: <b>{_price(candidate.sl)}</b>\n"
-        + ("🛑 استاپ ساختاری دورتر از ۱٫۲۵٪ قیمت بود؛ طبق قانون ۰۹-۲۱ استاپ روی سقف ۱٫۲۵٪ "
+        + ("🛑 استاپ ساختاری دورتر از سقفِ این تایم‌فریم بود؛ طبق قانون ۰۹-۲۱ استاپ روی سقف "
            "تنظیم شد و سناریو حفظ شد.\n" if (candidate.metadata or {}).get("stop_clamped") else "")
         +
         f"{VIVA_SEP}\n"
@@ -2532,14 +2532,13 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
     _lad = (candidate.metadata or {}).get("target_ladder") or {}
     _tgts = [float(t) for t in (_lad.get("targets") or [])] or [candidate.tp1, candidate.tp2]
     _wts = [float(w) for w in (_lad.get("weights") or [])] or [SETTINGS.partial_tp1_percent, SETTINGS.partial_tp2_percent]
-    _rrs = [float(r) for r in (_lad.get("target_r") or [])]
-    if len(_rrs) != len(_tgts):
-        _risk_px = max(abs(candidate.planned_entry - candidate.sl), 1e-12)
-        _rrs = [abs(float(t) - candidate.planned_entry) / _risk_px for t in _tgts]
+    # round 14: distances are shown as PERCENT of price — never as R multiples
+    _pcts = [abs(float(t) - float(candidate.planned_entry))
+             / max(abs(float(candidate.planned_entry)), 1e-12) * 100.0 for t in _tgts]
     _tp_rows = "\n".join(
-        f"{'└' if i == len(_tgts) - 1 else '├'} TP{i + 1}: <b>{_price(t)}</b> • {r:.2f}R • "
+        f"{'└' if i == len(_tgts) - 1 else '├'} TP{i + 1}: <b>{_price(t)}</b> • {r:.1f}٪ • "
         + (f"بستن {w:.0f}%" if w > 0 else "بدون خروج — سطح اطلاع‌رسانی")
-        for i, (t, r, w) in enumerate(zip(_tgts, _rrs, _wts)))
+        for i, (t, r, w) in enumerate(zip(_tgts, _pcts, _wts)))
     return (
         f"✅ <b>ENTRY CONFIRMED</b>\n"
         f"📊 <b>{_e(candidate.style)} • {_e(candidate.symbol)} • {_e(candidate.direction)}</b>\n"
@@ -2626,7 +2625,7 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
         "🔎 <b>ناحیه‌ای که زیر نظر داریم</b>",
         f"از {_price(candidate.entry_zone_bottom)} تا {_price(candidate.entry_zone_top)}",
         f"سطح ابطال سناریو: {_price(candidate.sl)}"
-        + (" • 🛑 استاپ ساختاری دورتر بود؛ طبق قانون ۰۹-۲۱ روی سقف ۱٫۲۵٪ قیمت تنظیم شد."
+        + (" • 🛑 استاپ ساختاری دورتر بود؛ طبق قانون ۰۹-۲۱ روی سقفِ همین تایم‌فریم تنظیم شد."
            if (candidate.metadata or {}).get("stop_clamped") else ""),
         "",
     ]
@@ -4467,7 +4466,7 @@ def send_technoclassic_preview(ev: dict) -> bool:
         if is_fade and fade:
             plan_line = (f"↩️ پلنِ بازگشت روی ضلع (کمک‌تأیید قانون آلفونسو): ورود {_price(fade.get('entry'))} • "
                          f"استاپ {_price(fade.get('stop'))} • TP میانه {_price(fade.get('tp_mid'))} • "
-                         f"TP ضلع مقابل {_price(fade.get('target'))} • R:R {fade.get('rr')}\n")
+                         f"TP ضلع مقابل {_price(fade.get('target'))}\n")
         dir_fa = ("سناریوی احتمالی فروش" if str(ev.get("direction")) == "SHORT"
                     else "سناریوی احتمالی خرید")
         plan_sec = (VIVA_SEP + "\n" + plan_line) if plan_line else ""

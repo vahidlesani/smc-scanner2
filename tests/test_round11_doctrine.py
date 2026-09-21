@@ -40,7 +40,8 @@ def test_no_level_path_is_the_band_driven_by_the_previous_extreme():
     assert doctrine_path(100.0, "15m", prev_extreme=100.6) == (3.0, "BAND_FROM_PREVIOUS_EXTREME")
     # nothing to lean on → the middle of the band
     assert doctrine_path(100.0, "15m") == (4.0, "BAND_MID")
-    assert band_for_tf("4h") == (5.0, 7.0) and band_for_tf("1d")[1] == 10.0
+    # round 14: the daily ceiling opened to 15% («در روزانه شاید باید تا ۱۵ درصد»)
+    assert band_for_tf("4h") == (5.0, 7.0) and band_for_tf("1d")[1] == 15.0
 
 
 def test_stop_buffer_is_price_based_no_atr():

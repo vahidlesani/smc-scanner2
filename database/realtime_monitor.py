@@ -73,8 +73,13 @@ def monitor_realtime_prices(prices: Dict[str, float]) -> List[Dict]:
             event = dict(common); event.update(raw)
             if kind.startswith("TP"):
                 idx = int(kind[2:])-1
-                target_r = float(ladder.get("target_r", [])[idx])
-                event["leg_price_move_pct"] = target_r * risk_pct
+                # round 14: the leg's move is a pure price distance to that TP —
+                # nothing here is derived from the stop.
+                _tg = list(ladder.get("targets") or [])
+                if entry and idx < len(_tg):
+                    event["leg_price_move_pct"] = abs(float(_tg[idx]) - float(entry)) / abs(float(entry)) * 100.0
+                else:
+                    event["leg_price_move_pct"] = float(ladder.get("target_r", [])[idx]) * risk_pct
                 event["leg_pnl_pct"] = event["leg_price_move_pct"] * float(event.get("weight",0)) / 100
                 event["leg_profit_usd"] = notional * event["leg_pnl_pct"] / 100
                 event["leg_margin_roi_pct"] = event["leg_profit_usd"] / max(float(margin or 0),1e-12)*100

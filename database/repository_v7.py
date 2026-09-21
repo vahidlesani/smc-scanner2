@@ -1523,8 +1523,14 @@ def monitor_confirmed_trades() -> List[Dict]:
                     risk_pct_move = abs(float(entry) - float(original_sl)) / float(entry) * 100
                     if str(event.get("event", "")).startswith("TP"):
                         target_index = int(event["event"][2:]) - 1
-                        leg_r = float(ladder.get("target_r", [])[target_index]) if target_index < len(ladder.get("target_r", [])) else 0.0
-                        event["leg_price_move_pct"] = leg_r * risk_pct_move
+                        # round 14: price distance to the TP, straight from prices
+                        _tgs = list(ladder.get("targets") or [])
+                        if _tgs and target_index < len(_tgs) and float(entry):
+                            event["leg_price_move_pct"] = (abs(float(_tgs[target_index]) - float(entry))
+                                                           / abs(float(entry)) * 100.0)
+                        else:
+                            leg_r = float(ladder.get("target_r", [])[target_index]) if target_index < len(ladder.get("target_r", [])) else 0.0
+                            event["leg_price_move_pct"] = leg_r * risk_pct_move
                         event["leg_pnl_pct"] = event["leg_price_move_pct"] * float(event.get("weight", 0)) / 100
                         event["leg_profit_usd"] = notional * event["leg_pnl_pct"] / 100
                         event["leg_margin_roi_pct"] = event["leg_profit_usd"] / max(float(margin or 0), 1e-12) * 100

@@ -134,23 +134,27 @@ def test_band_trailing_ignores_legacy_v1_ladders():
 
 
 def test_band_floor_ratios_adapt_to_band_width():
-    # k = clip(0.30 + 0.10×(width_R − 0.5), 0.30, 0.50)
-    # entry 100 · risk 2 (SL 98) · 1d ceiling 10% → target 110 is legal and
-    # the five segments are 2.0 wide = 1R bands … (2R bands → k = 0.45)
+    # Round 14 (his verbatim: «لطفا ارتباطی بین تی پی و استاپ نذار»): k is
+    # measured in LADDER STEPS — a pure price distance — never in R.
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
-    assert [round(k, 3) for k in p["band_ks"]] == [0.35] * 4   # 1R bands
+    assert [round(k, 3) for k in p["band_ks"]] == [0.35] * 4   # uniform 1-step bands
     assert abs(p["band_floors"][0] - 100.7) < 1e-9
     assert abs(p["band_floors"][1] - 102.7) < 1e-9
-    # 0.5R bands (five segments of 1.0 against a risk of 2) → k clamps at 0.30
+    # the 1h ceiling (5%) caps the same ladder; the ratio stays step-based
     r = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1h")
     assert r["target_capped"] is True and abs(r["final_target"] - 105) < 1e-9
-    assert [round(k, 3) for k in r["band_ks"]] == [0.30] * 4
+    assert [round(k, 3) for k in r["band_ks"]] == [0.35] * 4
+    # PROOF of decoupling: move the stop 1.0 and NOTHING in the TP path changes
+    r2 = build_ladder(100, 97, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1h")
+    assert r2["targets"] == r["targets"]
+    assert r2["band_floors"] == r["band_floors"]
+    assert r2["target_pct"] == r["target_pct"]
 
 
 def test_tf_target_ceiling_clamps_far_structural_targets():
-    """«مدیریت ویوا» §4: 1d 10% · 4h 7% · 1h/15m 5% hard distance ceiling."""
+    """«مدیریت ویوا» §4 ceilings; round 14: the daily one opened to 15%."""
     from analysis.trade_management import cap_final_target, target_distance_cap_pct
-    assert target_distance_cap_pct("1d") == 10.0
+    assert target_distance_cap_pct("1d") == 15.0
     assert target_distance_cap_pct("4h") == 7.0
     assert target_distance_cap_pct("1h") == 5.0
     assert target_distance_cap_pct("15m") == 5.0

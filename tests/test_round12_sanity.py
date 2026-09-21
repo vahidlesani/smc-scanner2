@@ -69,10 +69,14 @@ def test_target_on_the_wrong_side_is_rejected():
 
 
 def test_a_honest_candidate_passes_every_check():
-    assert sanity_reject(_Cand(direction="LONG", entry=100.0, sl=98.5,
+    # round 14: a 15m stop lives inside 1.25% of price («۱.۲۵ صدم استاپ برای ۱۵ دقیقه»)
+    assert sanity_reject(_Cand(direction="LONG", entry=100.0, sl=99.0,
                                tp1=101.3, tp2=104.0)) is None
-    assert sanity_reject(_Cand(direction="SHORT", entry=100.0, sl=101.5,
+    assert sanity_reject(_Cand(direction="SHORT", entry=100.0, sl=101.0,
                                tp1=98.7, tp2=96.0)) is None
+    # …and 1.5% on the same 15m is genuinely past its ceiling now
+    assert sanity_reject(_Cand(direction="LONG", entry=100.0, sl=98.5,
+                               tp1=101.3, tp2=104.0)) == "STOP_HORIZON"
 
 
 def test_the_net_runs_on_every_published_candidate():

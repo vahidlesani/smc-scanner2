@@ -414,7 +414,8 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         # Viva 09-21: «استاپ نهایتا ۱.۲۵ درصد قیمت نماد» — a far swing anchor is
         # CUT at 1.25%, the scenario stays alive with an honest note.
         from analysis.trade_management import clamp_stop_price as _clamp_sl
-        _sl_c, _sl_clamped = _clamp_sl(candidate.planned_entry, direction, candidate.sl)
+        _sl_c, _sl_clamped = _clamp_sl(candidate.planned_entry, direction, candidate.sl,
+                                        str(candidate.trigger_timeframe or ""))
         candidate.sl = float(_sl_c)
         candidate.metadata["stop_clamped"] = bool(_sl_clamped)
         final_target = plan.structural_target or plan.measured_target
@@ -1186,7 +1187,8 @@ def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]
         _sbf = _sb(base_low if direction == "LONG" else base_high, candidate.market)
         candidate.sl = base_low - _sbf if direction == "LONG" else base_high + _sbf
         from analysis.trade_management import clamp_stop_price as _clamp_ab
-        _ab_sl, _ab_clamped = _clamp_ab(candidate.planned_entry, direction, candidate.sl)
+        _ab_sl, _ab_clamped = _clamp_ab(candidate.planned_entry, direction, candidate.sl,
+                                        str(candidate.trigger_timeframe or ""))
         candidate.sl = float(_ab_sl)
         candidate.metadata["stop_clamped"] = bool(_ab_clamped)
         pin = detect_pinbar_zone(bundle, style)

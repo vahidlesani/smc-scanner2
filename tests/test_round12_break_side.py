@@ -132,4 +132,4 @@ def test_a_far_structural_stop_is_clamped_not_deleted():
     assert "STOP_WRONG_SIDE" in qe
     assert target_distance_cap_pct("15m") == 5.0
     assert target_distance_cap_pct("4h") == 7.0
-    assert target_distance_cap_pct("1d") == 10.0
+    assert target_distance_cap_pct("1d") == 15.0   # round 14: daily opened to 15%
