@@ -1453,6 +1453,31 @@ def sanity_reject(candidate) -> Optional[str]:
     return None
 
 
+def _fatal_side_stop(frame, direction: str, entry: float, buffer: float) -> Optional[float]:
+    """Round-14b: a structural invalidation level on the fatal side of `entry`.
+
+    Why this exists: a lane whose stop came from the last candle's own extreme
+    collapsed onto the entry whenever that candle closed ON its extreme
+    (TRXUSDT 09-21 00:16 SHORT: entry=sl=0.34352 → the sanity net dropped the
+    whole scenario). Viva's law is «حذف نشه» — the premise level is rebuilt
+    from the recent structural extreme of the fatal side plus the standard
+    buffer (5 venue ticks / 0.10%), never from the entry itself.
+    """
+    try:
+        if frame is None or not len(frame):
+            return None
+        entry = float(entry or 0.0)
+        win = frame.tail(8)
+        buf = float(buffer or 0.0)
+        if entry <= 0:
+            entry = float(win["close"].iloc[-1])
+        if str(direction).upper() == "LONG":
+            return float(min(float(win["low"].min()), entry) - buf)
+        return float(max(float(win["high"].max()), entry) + buf)
+    except Exception:
+        return None
+
+
 def scan_setups(bundle: MarketBundle, style: str) -> List[SignalCandidate]:
     candidates: List[SignalCandidate] = []
     for detector in _active_detectors():
@@ -1483,6 +1508,41 @@ def scan_setups(bundle: MarketBundle, style: str) -> List[SignalCandidate]:
     # ── the single net every lane must pass (see sanity_reject above).
     kept: List[SignalCandidate] = []
     for cand in candidates:
+        # ── Round-14b guard: a stop that ended up on the wrong side of its own
+        # entry — or closer to it than one standard buffer — is re-anchored on
+        # the trigger frame's fatal-side structure before anything else runs,
+        # so the geometry net never has to drop the scenario.
+        try:
+            from analysis.trade_management import structural_buffer as _sb_g
+            _e_g = float(getattr(cand, "planned_entry", 0) or 0)
+            _s_g = float(getattr(cand, "sl", 0) or 0)
+            _d_g = str(getattr(cand, "direction", "") or "").upper()
+            _tf_g = str(getattr(cand, "trigger_timeframe", "") or "15m")
+            _buf_g = _sb_g(_e_g)
+            _bad_g = _e_g > 0 and (
+                _s_g <= 0
+                or (_d_g == "LONG" and _s_g >= _e_g)
+                or (_d_g == "SHORT" and _s_g <= _e_g)
+                or abs(_e_g - _s_g) < _buf_g
+            )
+            if _bad_g:
+                _frame_g = None
+                for _key_g in (_tf_g, "15m", "5m", "1h", "4h"):
+                    try:
+                        _f_try = bundle.get(_key_g)
+                    except Exception:
+                        _f_try = None
+                    if _f_try is not None and len(_f_try):
+                        _frame_g = _f_try
+                        break
+                _new_g = _fatal_side_stop(_frame_g, _d_g, _e_g, _buf_g)
+                if _new_g:
+                    cand.sl = float(_new_g)
+                    _md_g = getattr(cand, "metadata", None)
+                    if isinstance(_md_g, dict):
+                        _md_g["stop_reanchored"] = True
+        except Exception:
+            pass
         # ── his 09-21 ruling, applied once at the funnel: a structural stop
         # farther than 1.25% of price is CUT there — never a dropped scenario.
         try:
