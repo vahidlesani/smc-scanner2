@@ -571,6 +571,128 @@ def run_discovery_scan() -> Dict[str, int]:
     return stats
 
 
+# ── SPOT lane (round 15, phase 5) ─────────────────────────────────────────
+# Viva 09-22: «هیچی از اسپات نگفتی، آماده است؟» + he handed over VIVA-MON-SPOT.
+# The lane runs the SPOT engine (LONG only · bullish shapes only · TLBREAK +
+# TECHCLASSIC · 4h/1d/3d/1w · LOG-scale chart · green measured box) on the same
+# liquidity watchlist, one full pass per hour, and publishes ONLY fully-formed
+# signals — at most SPOT_MAX_PER_DAY a day, each (symbol, tf, shape) once.
+def _spot_enabled() -> bool:
+    return str(os.getenv("SPOT_ENGINE_ENABLED", "1")).strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _spot_stamp(key: str, window_hours: float) -> bool:
+    """True when this exact spot signal was already published inside the window."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        now = time.time()
+        data = {k: float(v) for k, v in (_g("spot_published", {}) or {}).items()
+                if now - float(v) < 24 * 3600 * max(1.0, float(window_hours) / 24.0)}
+        if key in data:
+            return True
+        data[key] = now
+        _s("spot_published", data)
+        return False
+    except Exception:
+        return False
+
+
+def _spot_daily_left() -> int:
+    """Daily publication budget for the spot channel."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        cap = max(1, int(os.getenv("SPOT_MAX_PER_DAY", "2") or 2))
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        data = _g("spot_daily", {}) or {}
+        if str(data.get("date")) != today:
+            data = {"date": today, "count": 0}
+            _s("spot_daily", data)
+        return max(0, cap - int(data.get("count") or 0))
+    except Exception:
+        return 1
+
+
+def _spot_daily_count() -> None:
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        data = _g("spot_daily", {}) or {}
+        if str(data.get("date")) != today:
+            data = {"date": today, "count": 0}
+        data["count"] = int(data.get("count") or 0) + 1
+        _s("spot_daily", data)
+    except Exception:
+        pass
+
+
+def run_spot_scan() -> Dict[str, int]:
+    """One full spot pass: 4h · 1d · 3d · 1w over the liquidity watchlist."""
+    stats = {"symbols": 0, "found": 0, "published": 0, "errors": 0}
+    if not _spot_enabled():
+        return stats
+    try:
+        from analysis.spot_engine import spot_signals_for, SPOT_TRIGGERS
+        from bot.messages_v7 import (CHAT_ID_SPOT, generate_chart,
+                                     tf_channel_publish_confirmed)
+        from data.fetcher import get_market_bundle
+    except Exception as exc:
+        print(f"spot lane import failed: {exc}")
+        return stats
+    if not CHAT_ID_SPOT:
+        print("spot lane idle: CHAT_ID_SPOT is not set")
+        return stats
+    try:
+        symbols, _metrics = UNIVERSE.get()
+    except Exception:
+        symbols = []
+    limit = max(5, int(os.getenv("SPOT_SYMBOL_LIMIT", "24") or 24))
+    symbols = list(symbols)[:limit]
+    stats["symbols"] = len(symbols)
+    started = time.monotonic()
+    pending = []
+    for symbol in symbols:
+        try:
+            bundle = get_market_bundle(
+                symbol, tuple(SPOT_TRIGGERS),
+                limits={"4h": 170, "1d": 170, "3d": 120, "1w": 120})
+            for cand in spot_signals_for(symbol, bundle):
+                stats["found"] += 1
+                pending.append(cand)
+        except Exception as exc:
+            stats["errors"] += 1
+            print(f"spot scan warning {symbol}: {exc}")
+    # strongest path first — the daily budget only ever spends on the best
+    pending.sort(key=lambda c: float(((c.metadata or {}).get("target_ladder") or {})
+                                     .get("path_pct") or 0.0), reverse=True)
+    for cand in pending:
+        if _spot_daily_left() <= 0:
+            break
+        key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"
+               f"{(cand.metadata or {}).get('pattern_type')}")
+        window = 72.0 if str(cand.trigger_timeframe) in ("3d", "1w") else 36.0
+        if _spot_stamp(key, window):
+            continue
+        try:
+            frame = bundle_frame = None
+            try:
+                from data.fetcher import get_klines
+                frame = get_klines(cand.symbol, cand.trigger_timeframe, 170,
+                                   closed_only=False, use_cache=True)
+            except Exception:
+                frame = None
+            chart = generate_chart(frame, cand, confirmed=True) if frame is not None else None
+            if tf_channel_publish_confirmed(cand, chart=chart, chat_override=CHAT_ID_SPOT):
+                stats["published"] += 1
+                _spot_daily_count()
+        except Exception as exc:
+            stats["errors"] += 1
+            print(f"spot publish warning {cand.symbol}: {exc}")
+    print(f"🪙 SPOT pass finished in {time.monotonic() - started:.1f}s • "
+          f"symbols={stats['symbols']} found={stats['found']} "
+          f"published={stats['published']} budget_left={_spot_daily_left()}")
+    return stats
+
+
 def _pinv_window_expired(candidate: SignalCandidate, closed: Optional[pd.DataFrame]) -> bool:
     """Count only closed bars of the pin trigger timeframe after alert creation."""
     if closed is None or closed.empty:
@@ -1583,6 +1705,7 @@ def main() -> None:
     if SETTINGS.run_scan_on_start:
         run_discovery_scan()
     next_scan = _next_aligned_scan(datetime.now(timezone.utc))
+    next_spot = datetime.now(timezone.utc) + timedelta(minutes=2)
     # Monitor on a candle-close grid: each cycle sees the most decisive final
     # minute of the smallest trigger timeframe (5m), and every 12th/48th/288th
     # cycle coincides with the 1h/4h/1D close.
@@ -1617,6 +1740,12 @@ def main() -> None:
             _hb["last_scan"] = now.strftime("%H:%M")
             _hb["stats"] = dict(run_discovery_scan() or {})
             next_scan = _next_aligned_scan(datetime.now(timezone.utc))
+        # ── spot lane on its own cadence (never blocks the futures scan)
+        if now >= next_spot:
+            _hb["spot_runs"] = _hb.get("spot_runs", 0) + 1
+            _hb["spot_stats"] = dict(run_spot_scan() or {})
+            next_spot = now + timedelta(
+                minutes=max(15, int(os.getenv("SPOT_SCAN_MINUTES", "60") or 60)))
         if time.time() >= _hb["next"]:
             _hb["next"] = time.time() + 300
             _write_heartbeat({

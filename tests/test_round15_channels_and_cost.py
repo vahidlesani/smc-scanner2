@@ -171,13 +171,18 @@ def test_gemini_breaker_opens_after_consecutive_failures_and_recovers():
 # ── 4. the four channels: mapping + message shape ──────────────────────────
 
 def test_timeframe_channel_mapping():
-    from bot import messages_v7 as m
-    assert m.tf_channel_bucket("15m") == "SWING_SHORT"
-    assert m.tf_channel_bucket("30m") == "SWING_SHORT"
-    assert m.tf_channel_bucket("1h") == "SWING_MID"
-    assert m.tf_channel_bucket("2h") == "SWING_MID"
-    assert m.tf_channel_bucket("4h") == "SWING_LONG"
-    assert m.tf_channel_bucket("1d") == "SWING_LONG"
+    """Round 15 phase 5: the buckets follow HIS channel names — 15m/30m/1h in
+    VIVA-MON-15M-1H, 2h/4h in VIVA-MON-2H-4H, 1d/3d/1w in VIVA-MON-1D, and the
+    spot engine owns VIVA-MON-SPOT."""
+    import bot.messages_v7 as m
+    assert m.tf_channel_bucket("15m") == "15M_1H"
+    assert m.tf_channel_bucket("30m") == "15M_1H"
+    assert m.tf_channel_bucket("1h") == "15M_1H"
+    assert m.tf_channel_bucket("2h") == "2H_4H"
+    assert m.tf_channel_bucket("4h") == "2H_4H"
+    assert m.tf_channel_bucket("1d") == "1D"
+    assert m.tf_channel_bucket("3d") == "1D"
+    assert m.tf_channel_bucket("1w") == "1D"
     assert m.tf_channel_bucket("") == ""
 
 
@@ -275,8 +280,9 @@ def test_measure_box_defaults_to_off_for_futures():
     src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "bot", "messages_v7.py"), encoding="utf-8").read()
     assert 'os.getenv("CHART_MEASURE_BOX", "off")' in src
-    assert "_CHART_MEASURE_BOX and len(_lns) == 2" in src
-    # round 15b: the renderer itself refuses the box outside SPOT — a flag is
-    # not a guarantee (his words), so futures is hard-None by construction.
-    assert "not confirmed and _spot8" in src
-    assert '_mkt8 == "SPOT"' in src
+    assert "len(_lns) == 2 and not any(_flat8)" in src
+    # round 15b/15e: the renderer itself refuses the box outside SPOT — a flag
+    # is not a guarantee, so futures is hard-None by construction, and a SPOT
+    # chart carries the box even when it is already confirmed.
+    assert "_spot8" in src and '_mkt8 == "SPOT"' in src
+    assert "spot_measured_box" in src

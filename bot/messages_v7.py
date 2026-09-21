@@ -43,10 +43,18 @@ CHAT_ID_VIVA_SIGNALS = os.getenv("CHAT_ID_VIVA_SIGNALS", "")
 # Confirmed-only mirrors of the main channel, one per timeframe family, plus the
 # SPOT channel. Empty ids (the state until he creates them) make every path a
 # no-op — the feature cannot touch the live channels before it exists.
-CHAT_ID_SWING_SHORT = os.getenv("CHAT_ID_SWING_SHORT", "")   # 15m · 30m
-CHAT_ID_SWING_MID = os.getenv("CHAT_ID_SWING_MID", "")       # 1h  · 2h
-CHAT_ID_SWING_LONG = os.getenv("CHAT_ID_SWING_LONG", "")     # 4h  · 1d
-CHAT_ID_SPOT = os.getenv("CHAT_ID_SPOT", "")                 # spot engine
+# ── Viva 09-22: he handed over the real channels by NAME, so the buckets now
+# follow HIS names (not the phase-1 guess): 15m/30m/1h live together in
+# VIVA-MON-15M-1H, 2h+4h in VIVA-MON-2H-4H, the dailies in VIVA-MON-1D and the
+# spot engine has VIVA-MON-SPOT. Old SWING_* names stay as fallbacks so no
+# deploy can lose a channel by renaming.
+CHAT_ID_SWING_SHORT = os.getenv("CHAT_ID_TF_15M_1H",
+                                os.getenv("CHAT_ID_SWING_SHORT", ""))  # 15m · 30m · 1h
+CHAT_ID_SWING_MID = os.getenv("CHAT_ID_TF_2H_4H",
+                              os.getenv("CHAT_ID_SWING_MID", ""))      # 2h  · 4h
+CHAT_ID_SWING_LONG = os.getenv("CHAT_ID_TF_1D",
+                               os.getenv("CHAT_ID_SWING_LONG", ""))    # 1d  · 3d · 1w
+CHAT_ID_SPOT = os.getenv("CHAT_ID_SPOT", "")                           # spot engine
 
 # Viva 2026-09-11: ONE block template for every message in every channel —
 # bold section titles, related emoji, ━ rules between logical blocks.
@@ -1351,6 +1359,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     """Render a branded TradingView-inspired 1440×900 chart."""
     if df is None or df.empty:
         return None
+    candidate = _final_stop_guard(candidate)
     # Persian labels (setup notes, spot charts) must shape correctly; the font
     # is bundled in assets/fonts and registered once per process.
     try:
@@ -1426,6 +1435,20 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             ylabel_lower="VOLUME",
             warn_too_much_data=500,
         )
+        # ── SPOT charts are LOG-scale (Viva 09-22, verbatim: «اسپات لاگ‌اسکیل»).
+        # The scale is applied AFTER mplfinance draws, so candles, zones, lines,
+        # the ladder and the corner notes — all painted in DATA coordinates —
+        # are re-projected through the log transform in one go. Volume stays
+        # linear, and no futures chart is ever touched.
+        if bool((candidate.metadata or {}).get("log_scale")):
+            try:
+                for _a9 in axes:
+                    _pos9 = _a9.get_position()
+                    _yl9 = list(_a9.get_ylim())
+                    if _pos9.height > 0.30 and _yl9[0] > 0 and _yl9[1] > _yl9[0]:
+                        _a9.set_yscale("log")
+            except Exception as exc:
+                print(f"Chart log-scale warning: {exc}")
         # mplfinance creates manually positioned axes, so set the panel geometry
         # directly: wide price area, compact volume, and a small branded footer.
         # Wide candle-free future area: at 120dpi this is ~7cm from the last
@@ -1818,8 +1841,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _mkt8 = str((candidate.metadata or {}).get("market")
                         or getattr(candidate, "market", "") or "").upper()
             _spot8 = bool(_mkt8 == "SPOT" or (candidate.metadata or {}).get("is_spot"))
-            if (_CHART_MEASURE_BOX and len(_lns) == 2 and not any(_flat8)
-                    and not any(_brk8) and not confirmed and _spot8):
+            # ── Viva 09-22: the green measured-move box is a SPOT signature
+            # («باکس‌های عمودی برای معاملات اسپات هستن») — so on a spot chart it
+            # is always allowed (the feature flag is irrelevant, and spot cards
+            # are born confirmed), while futures can never reach this branch.
+            _spot8_box = bool(_spot8 and (not confirmed
+                                          or (candidate.metadata or {}).get("spot_measured_box")))
+            if _spot8_box and len(_lns) == 2 and not any(_flat8) and not any(_brk8):
                 # CryptoCove measured-move box: pattern height projected from
                 # the live price into the future panel — translucent green,
                 # double-arrow spine, small value label on top.
@@ -1865,6 +1893,38 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                 ha="center",
                                 va="top" if _clamp8 else "bottom",
                                 zorder=9)
+                except Exception:
+                    pass
+            elif _spot8_box and _lns and str((candidate.metadata or {}).get("engine") or "") == "SPOT":
+                # ── Viva 09-22: a spot signal built on ONE broken line (his
+                # «شکست خط روند نزولی») carries no wedge width, so the measured
+                # box is the trade's own path: live price → last ladder target,
+                # drawn the same way (upward, green, value + % label).
+                try:
+                    _lc9 = float(frame["close"].iloc[-1])
+                    _tg9 = [float(x) for x in ((candidate.metadata or {}).get("target_ladder") or {})
+                            .get("targets") or []]
+                    if _tg9 and _lc9 > 0:
+                        _tp9 = max(_tg9)
+                        _h9 = _tp9 - _lc9
+                        if _h9 > 0:
+                            _bx0, _bx1 = count + 2, count + 2 + max(8, int(future * 0.55))
+                            ax.fill_between([_bx0, _bx1], _lc9, _tp9,
+                                            color=CHART_THEME["demand"],
+                                            alpha=0.30, linewidth=0, zorder=2)
+                            ax.plot([_bx0, _bx0, _bx1, _bx1, _bx0],
+                                    [_lc9, _tp9, _tp9, _lc9, _lc9],
+                                    color=CHART_THEME["demand"], linewidth=0.7,
+                                    alpha=0.55, zorder=3)
+                            _mx9 = (_bx0 + _bx1) / 2
+                            ax.annotate("", xy=(_mx9, _tp9), xytext=(_mx9, _lc9),
+                                        arrowprops=dict(arrowstyle="<->",
+                                                        color=CHART_THEME["text"],
+                                                        lw=0.7, alpha=0.8),
+                                        zorder=8)
+                            ax.text(_mx9, _tp9, f"{_price(_h9)} ({_h9 / _lc9 * 100:.1f}%)",
+                                    color=CHART_THEME["muted"], fontsize=6.5,
+                                    ha="center", va="bottom", zorder=9)
                 except Exception:
                     pass
             if _lns:
@@ -2412,7 +2472,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         fig.savefig(
             buffer,
             format="png",
-            dpi=180,
+            dpi=int(os.getenv("CHART_DPI", "240") or 240),
             facecolor=CHART_THEME["figure"],
             edgecolor="none",
         )
@@ -2439,7 +2499,39 @@ def _viva_tlbreak_sections(candidate: SignalCandidate) -> str:
     )
 
 
+def _final_stop_guard(candidate: SignalCandidate) -> SignalCandidate:
+    """Viva 09-22 (his ADAUSDT 1h chart: entry 0.2197 / stop 0.2397 ≈ 9%):
+    «استاپ طبق سقف همان تایم‌فریم». Whatever path built the stop — pinbar,
+    structure, absorb, snapshot — the LAST touch before a chart or a message is
+    published clamps it onto the timeframe's own ceiling (R14 table), never
+    onto the entry, and reports the clamp so the message can say it.
+    """
+    try:
+        from analysis.trade_management import stop_ceiling_pct
+        tf = str(getattr(candidate, "trigger_timeframe", "15m") or "15m").lower()
+        entry = float(getattr(candidate, "planned_entry", 0) or 0)
+        sl = float(getattr(candidate, "sl", 0) or 0)
+        if entry <= 0 or sl <= 0:
+            return candidate
+        cap_pct = float(stop_ceiling_pct(tf)) / 100.0
+        dist = abs(sl - entry) / entry
+        if dist <= cap_pct + 1e-12:
+            return candidate
+        new_sl = entry * (1.0 - cap_pct) if str(candidate.direction).upper() == "LONG" \
+            else entry * (1.0 + cap_pct)
+        candidate.sl = float(new_sl)
+        md = candidate.metadata if candidate.metadata is not None else {}
+        md["stop_clamped"] = f"{cap_pct * 100:.2f}%"
+        md["stop_clamped_fa"] = (
+            f"استاپ ساختاری {dist * 100:.2f}٪ از ورود فاصله داشت؛ طبق سقف تایم "
+            f"{tf.upper()} روی {cap_pct * 100:.2f}٪ بریده شد (سناریو حذف نمی‌شود).")
+        return candidate
+    except Exception:
+        return candidate
+
+
 def build_educational_message(candidate: SignalCandidate) -> str:
+    candidate = _final_stop_guard(candidate)
     _clock_block = "\n".join(_timing_lines(candidate))
     direction_fa = "سناریوی احتمالی خرید" if candidate.direction == "LONG" else "سناریوی احتمالی فروش"
     evidence_blocks = []
@@ -2614,6 +2706,7 @@ def _ai_note(candidate: SignalCandidate) -> str:
 
 
 def build_approaching_message(candidate: SignalCandidate, current_price: float, distance_atr: float) -> str:
+    candidate = _final_stop_guard(candidate)
     waiting = "حفظ ناحیه و بسته‌شدن کندل تأییدی همراه با شکست Micro Structure"
     return (
         f"⚡ <b>APPROACHING ENTRY ZONE</b>\n"
@@ -2637,6 +2730,7 @@ def build_approaching_message(candidate: SignalCandidate, current_price: float, 
 
 
 def build_confirmed_message(candidate: SignalCandidate) -> str:
+    candidate = _final_stop_guard(candidate)
     mm = build_money_management(candidate)
     reasons = []
     for index, item in enumerate([item for item in candidate.evidence if item.confirmed], start=1):
@@ -3414,9 +3508,9 @@ def _exact_event_message_id(signal_id: str, event_key: str, fallback: int = 0) -
 
 
 _TF_CHANNEL_BUCKETS = (
-    ("SWING_SHORT", {"15m", "30m"}, CHAT_ID_SWING_SHORT),
-    ("SWING_MID", {"1h", "2h"}, CHAT_ID_SWING_MID),
-    ("SWING_LONG", {"4h", "1d", "1w", "3d"}, CHAT_ID_SWING_LONG),
+    ("15M_1H", {"15m", "30m", "1h"}, CHAT_ID_SWING_SHORT),
+    ("2H_4H", {"2h", "4h"}, CHAT_ID_SWING_MID),
+    ("1D", {"1d", "3d", "1w"}, CHAT_ID_SWING_LONG),
 )
 
 
@@ -3468,10 +3562,15 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
     return head + "\n".join(rows) + "\n\n" + result_line + "\n\n📌 <b>VIVAMON-Labs-Pro</b>"
 
 
-def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None) -> int:
-    """Post the confirmed signal into its timeframe family's channel."""
+def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
+                                 chat_override: str = "") -> int:
+    """Post the confirmed signal into its timeframe family's channel.
+
+    `chat_override` is how the SPOT lane reaches VIVA-MON-SPOT: the same
+    self-contained card, the same single latest-result link, no reply chain.
+    """
     code = _public_code(candidate)
-    chat = tf_channel_id(str(candidate.trigger_timeframe or ""))
+    chat = str(chat_override or "") or tf_channel_id(str(candidate.trigger_timeframe or ""))
     if not chat or not code:
         return 0
     result_line = "🔗 آخرین نتیجه: <i>در انتظار نتیجه</i>"

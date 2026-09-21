@@ -126,7 +126,10 @@ class V7ModelTests(unittest.TestCase):
         self.assertIn("نمایش داده شده است", candidate.metadata["chart_view_note"])
         self.assertIn("۱ ساعته", candidate.metadata["chart_view_note"])
 
-    def test_branded_confirmed_chart_is_exact_1440_by_900_png(self):
+    def test_branded_confirmed_chart_is_a_full_resolution_png(self):
+        """He asked for the SAME shape with a higher-quality canvas (09-22):
+        the aspect stays, the pixel grid doubles (1440×900 @180 → 2× grid at
+        the default CHART_DPI=240)."""
         from bot.messages_v7 import generate_chart
 
         candidate = make_candidate("CONFIRMED", 8)
@@ -145,8 +148,10 @@ class V7ModelTests(unittest.TestCase):
         image = generate_chart(frame, candidate, confirmed=True)
         self.assertIsNotNone(image)
         self.assertEqual(image[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertEqual(int.from_bytes(image[16:20], "big"), 2700)
-        self.assertEqual(int.from_bytes(image[20:24], "big"), 1530)
+        _w = int.from_bytes(image[16:20], "big")
+        _h = int.from_bytes(image[20:24], "big")
+        self.assertEqual((_w, _h), (3600, 2040))          # 15×8.5in @240dpi
+        self.assertAlmostEqual(_w / _h, 15 / 8.5, places=3)   # shape unchanged
 
     def test_money_management_caps_margin(self):
         # «مدیریت سرمایه استاندارد» math → pin the profile flag off

@@ -66,7 +66,53 @@ class MarketBundle:
 # re-analysed the very same closed candles for all 40–47 symbols. The cache now
 # lives exactly as long as the candle itself (capped at 30 minutes for safety).
 _TF_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
-               "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400}
+               "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400,
+               # ── round 15 (Viva 09-22): the SPOT engine scans 4h/1d/3d/1w and
+               # no venue serves 3d/1w, so those two are AGGREGATED locally
+               # from the daily tape (see _aggregate_daily).
+               "3d": 259200, "1w": 604800}
+_AGG_FROM_DAILY = {"3d": 3, "1w": 7}
+
+
+def _aggregate_daily(frame: pd.DataFrame, k: int) -> Optional[pd.DataFrame]:
+    """Fold k closed daily candles into one 3d/1w candle (no partial bucket).
+
+    Only COMPLETE buckets are emitted, so a 3d/1w candle is never a half-formed
+    bar pretending to be closed — the confirmation law («کلوز معتبر») stays
+    honest on the spot timeframes.
+    """
+    try:
+        if frame is None or frame.empty:
+            return None
+        d = frame.reset_index(drop=True).copy()
+        d["timestamp"] = pd.to_datetime(d["timestamp"])
+        d = d.sort_values("timestamp")
+        # ── buckets are EPOCH-ALIGNED (every calendar k-th day), never aligned
+        # to the fetch window: a window-aligned bucket would shift its open/
+        # close every time the lookback changed, which is exactly how a 3d bar
+        # can disagree with the daily tape it came from.
+        _day_index = (d["timestamp"].astype("int64") // 86_400_000_000_000)
+        d["_g"] = (_day_index // k).astype("int64")
+        if d.empty or len(d) < k * 2:
+            return None
+        rows = []
+        for _, g in d.groupby("_g"):
+            if len(g) < k:
+                continue
+            rows.append({
+                "timestamp": pd.Timestamp(g["timestamp"].iloc[0]),
+                "open": float(g["open"].iloc[0]),
+                "high": float(g["high"].max()),
+                "low": float(g["low"].min()),
+                "close": float(g["close"].iloc[-1]),
+                "volume": float(g["volume"].sum()) if "volume" in g else 0.0,
+            })
+        if not rows:
+            return None
+        return pd.DataFrame(rows)
+    except Exception as exc:
+        print(f"aggregate warning: {exc}")
+        return None
 
 _COST = {"kline_calls": 0, "kline_cache_hits": 0}
 
@@ -176,6 +222,16 @@ def get_klines(
     end_ms: Optional[int] = None,
 ) -> Optional[pd.DataFrame]:
     global _COST
+    # ── 3d / 1w exist only as AGGREGATES of the daily tape (round 15 spot)
+    _iv = str(interval).lower()
+    if _iv in _AGG_FROM_DAILY:
+        _k = int(_AGG_FROM_DAILY[_iv])
+        _base = get_klines(symbol, "1d", min(1000, int(limit) * _k + _k + 2),
+                           closed_only=closed_only, use_cache=use_cache)
+        _agg = _aggregate_daily(_base, _k)
+        if _agg is not None and int(limit) > 0:
+            _agg = _agg.tail(int(limit)).reset_index(drop=True)
+        return _agg
     _route_key = ("route", str(symbol).upper(), str(interval).lower(),
                   int(limit), bool(closed_only))
     if use_cache and end_ms is None:

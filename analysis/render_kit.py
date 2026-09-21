@@ -13,7 +13,7 @@ honest wedge/triangle/channel/flag classifier in analysis.pattern_engine.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -230,6 +230,7 @@ def detect_patterns(df: pd.DataFrame, direction: str = "") -> List[Dict]:
         from analysis.viva_tlbreak import fit_validated_line, load_config, \
             pivots as _pv8
         from analysis.pattern_engine import classify_shape
+        from analysis import patterns as _pats_lib
         # RENDER-ONLY clone (Viva 09-17): painting tolerates 2-touch lines and
         # a wider residual than TRADE detection ever may — doctrine lines are
         # drawn for the eye here; entries keep the strict fitter.
@@ -396,6 +397,66 @@ def detect_patterns(df: pd.DataFrame, direction: str = "") -> List[Dict]:
             if _sub is not None:
                 # spec §13: child patterns paint thinner & lighter
                 out.append({"type": "TRENDLINE", "lines": [_sub], "child": True})
+        # ── Viva 09-22: «ترندها و خطوط مهم بمونه … خطوط بی‌معنی و متناقض نه».
+        # Two rules on the finished list, applied in ONE place:
+        #   (a) NAME it: every command carries the library's own name, bias,
+        #       shape and rule — the chart chip and the message read this, so
+        #       «همه چیز کانال» or an unlabelled wedge can never happen again;
+        #   (b) DIET it: at most two patterns (one main + one child), at most
+        #       two lines each, no near-duplicate line, nothing farther than
+        #       4×ATR from the live price (that line is history, not context).
+        _live = float(df["close"].iloc[-1])
+        _atr_l = _atr(df)
+        _kept: List[Dict] = []
+        _seen: List[Tuple[str, float, float]] = []
+        for _item in out:
+            _lns = list(_item.get("lines") or [])
+            _good = []
+            for _ln in _lns:
+                _sl = float(_ln.get("slope") or 0.0)
+                _ic = float(_ln.get("intercept") or 0.0)
+                _side = str(_ln.get("side") or "")
+                if _atr_l > 0 and abs(_sl * n + _ic - _live) > 4.0 * _atr_l:
+                    continue                     # dead line projected far away
+                _dup = False
+                for _s2, _sl2, _ic2 in _seen:
+                    if _s2 == _side and abs(_ic - _ic2) <= 0.12 * max(_atr_l, 1e-12) \
+                            and abs(_sl - _sl2) <= 0.10 * max(abs(_sl2), 1e-12):
+                        _dup = True
+                        break
+                if _dup:
+                    continue
+                _seen.append((_side, _sl, _ic))
+                _good.append(_ln)
+            if not _good:
+                continue
+            _kind = str(_item.get("type") or "NONE").upper()
+            _bd = ""
+            if len(_good) == 2:
+                _u = float(_good[0]["slope"]) * n + float(_good[0]["intercept"])
+                _l = float(_good[1]["slope"]) * n + float(_good[1]["intercept"])
+                _hi, _lo = max(_u, _l), min(_u, _l)
+                if _atr_l > 0 and _live >= _hi + 0.30 * _atr_l:
+                    _bd = "UP"
+                elif _atr_l > 0 and _live <= _lo - 0.30 * _atr_l:
+                    _bd = "DOWN"
+            _info = _pats_lib.pattern_info(_kind)
+            _item.update({
+                "type": _kind,
+                "lines": _good[:2],
+                "name": _kind,
+                "name_fa": _info["fa"],
+                "bias": _info["bias"],
+                "shape": _info["shape"],
+                "rule_fa": _info["rule_fa"],
+                "break_direction": _bd,
+                "label": _pats_lib.state_label(_kind, _bd),
+            })
+            _kept.append(_item)
+        # main patterns before children; at most 2 main + 1 child
+        _mains = [x for x in _kept if not x.get("child")][:2]
+        _kids = [x for x in _kept if x.get("child")][:1]
+        out = _mains + _kids
     except Exception as exc:
         print(f"render-kit pattern warning: {exc}")
     # ── Viva 09-20 round 10 post-pass ────────────────────────────────────
@@ -565,10 +626,11 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
         for _p in pats:
             _lns = _p.get("lines") or []
             if _p.get("type") == "RANGE" and _p.get("hi") and _p.get("lo"):
-                _band = {"kind": "RANGE", "lo": float(_p["lo"]), "hi": float(_p["hi"]),
+                _band = {"kind": "RECTANGLE", "lo": float(_p["lo"]), "hi": float(_p["hi"]),
                          "slope_lo": 0.0, "slope_hi": 0.0}
                 break
-            if len(_lns) == 2 and str(_p.get("type") or "").upper() not in ("TRENDLINE", "RANGE"):
+            if len(_lns) == 2 and str(_p.get("type") or "").upper() not in ("TRENDLINE", "RANGE") \
+                    and not _p.get("child"):
                 _x_last = float(max(0, _win_len - 1))
                 _y1 = float(_lns[0]["slope"]) * _x_last + float(_lns[0]["intercept"])
                 _y2 = float(_lns[1]["slope"]) * _x_last + float(_lns[1]["intercept"])
