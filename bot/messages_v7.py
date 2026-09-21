@@ -1742,8 +1742,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # straight into the red risk zone of a short tool — two geometries
             # fighting on one canvas. The trade tool owns a confirmed chart;
             # the pattern projection stays on analysis/alerts charts only.
+            # Viva 09-21 (round 15 phase 2), repeated: «باکس سبز برای اسپات
+            # است، روی فیوچرز نه». A switch is not a guarantee — a second render
+            # path could still paint it. So the renderer itself refuses unless
+            # the candidate declares the SPOT market: for futures the box is
+            # hard-None, whatever CHART_MEASURE_BOX says.
+            _mkt8 = str((candidate.metadata or {}).get("market")
+                        or getattr(candidate, "market", "") or "").upper()
+            _spot8 = bool(_mkt8 == "SPOT" or (candidate.metadata or {}).get("is_spot"))
             if (_CHART_MEASURE_BOX and len(_lns) == 2 and not any(_flat8)
-                    and not any(_brk8) and not confirmed):
+                    and not any(_brk8) and not confirmed and _spot8):
                 # CryptoCove measured-move box: pattern height projected from
                 # the live price into the future panel — translucent green,
                 # double-arrow spine, small value label on top.
@@ -1801,7 +1809,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         _cy8 = _yy8 + 0.045 * _rng8
                 _chip_ys8.append(_cy8)
                 ax.text(count + 1.0, _cy8,
-                        str(_pat.get("type")), color=CHART_THEME["text"],
+                        str(_pat.get("label") or _pat.get("type")), color=CHART_THEME["text"],
                         fontsize=7, va="center", ha="left", fontweight="bold",
                         zorder=12,
                         bbox={"boxstyle": "round,pad=0.26",
@@ -2010,13 +2018,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # panel too (his charts carried stale/negative ratios like
             # "R:R -0.13 / 0.38", which he crossed out — R:R is not part of
             # the decision any more, so it is not part of the picture).
+            # Viva 09-21: «PATH 0.00%» on a confirmed chart was one of the
+            # broken read-outs — a path that does not exist is not printed.
+            _pathp8 = float(((candidate.metadata or {}).get("target_ladder") or {})
+                            .get("path_pct") or 0.0)
             info = (
                 f"{candidate.direction}  •  {_style_disp(candidate)}\n"
                 f"SETUP  {candidate.setup_code}\n"
-                f"SCORE  {candidate.score}/10\n"
-                f"PATH  {float(((candidate.metadata or {}).get('target_ladder') or {}).get('path_pct') or 0):.2f}%  "
-                f"→ 5 PARTS"
+                f"SCORE  {candidate.score}/10"
             )
+            if _pathp8 >= 0.5:
+                info += f"\nPATH  {_pathp8:.2f}%  → 5 PARTS"
             ax.text(
                 0.015,
                 0.965,

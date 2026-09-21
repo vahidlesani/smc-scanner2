@@ -276,3 +276,7 @@ def test_measure_box_defaults_to_off_for_futures():
                             "bot", "messages_v7.py"), encoding="utf-8").read()
     assert 'os.getenv("CHART_MEASURE_BOX", "off")' in src
     assert "_CHART_MEASURE_BOX and len(_lns) == 2" in src
+    # round 15b: the renderer itself refuses the box outside SPOT — a flag is
+    # not a guarantee (his words), so futures is hard-None by construction.
+    assert "not confirmed and _spot8" in src
+    assert '_mkt8 == "SPOT"' in src

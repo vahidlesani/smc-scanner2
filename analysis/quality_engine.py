@@ -145,6 +145,41 @@ def _bars_since_candidate(candidate: SignalCandidate, closed_df: pd.DataFrame) -
     return after if not after.empty else closed_df.tail(2).copy()
 
 
+# ── Viva 09-21 (round 15 phase 2): «هر الگویی اسم داره . قوانین خودش رو داره»
+# — one shared table that tells every setup which way its own pattern leans.
+# The trade direction is then checked against the side that ACTUALLY broke.
+_PATTERN_BIAS_MAP = {
+    "WEDGE_FALLING": "BULL",
+    "WEDGE_RISING": "BEAR",
+    "TRIANGLE_ASCENDING": "BULL",
+    "TRIANGLE_DESCENDING": "BEAR",
+    "TRIANGLE_SYMMETRICAL": "NEUTRAL",
+    "TRIANGLE": "NEUTRAL",
+    "CHANNEL_ASCENDING": "BULL",
+    "CHANNEL_DESCENDING": "BEAR",
+    "CHANNEL": "NEUTRAL",
+    "BULL_FLAG": "BULL",
+    "BEAR_FLAG": "BEAR",
+    "FLAG": "NEUTRAL",
+    "RECTANGLE": "NEUTRAL",
+    "RANGE": "NEUTRAL",
+    "TRENDLINE": "NEUTRAL",
+    "NONE": "NEUTRAL",
+}
+
+
+def pattern_bias_of(kind: str) -> str:
+    """BULL / BEAR / NEUTRAL for a validated pattern name (never raises)."""
+    k = str(kind or "").upper()
+    if k in _PATTERN_BIAS_MAP:
+        return _PATTERN_BIAS_MAP[k]
+    if "FALLING" in k or "ASCENDING" in k or "BULL" in k:
+        return "BULL"
+    if "RISING" in k or "DESCENDING" in k or "BEAR" in k:
+        return "BEAR"
+    return "NEUTRAL"
+
+
 def evaluate_confirmation(
     candidate: SignalCandidate, closed_df: pd.DataFrame,
     htf_closed_df: Optional[pd.DataFrame] = None,
@@ -494,6 +529,79 @@ def evaluate_confirmation(
                 f"{_close20:.8g} داخل باند {_band_lo20:.8g}–{_band_hi20:.8g}؛ "
                 "تأیید فقط با کلوزِ بیرونِ ضلع پایین/بالای الگو (شکست + کلوز) معتبر است."))
         _md20["pattern_cleared"] = True
+    # ── Viva 09-21 (round 15 phase 2) — ONE break-side law for ALL five setups.
+    # His verbatim: «شورت روی شکست خط روند صعودی» (an ascending/long trend line
+    # broken UP and the system still publishing SHORT) plus his own chart list
+    # where a FALLING WEDGE — a bullish compression — went out as SHORT although
+    # price had closed ABOVE that wedge. He asked for the metadata set
+    # (pattern_type · pattern_bias · break_edge · break_direction ·
+    # trade_direction · direction_reason) and for one shared law:
+    # «اگر pattern_bias با break_direction و trade_direction سازگار نیست:
+    # سیگنال تأیید نشود». So: whatever side actually broke must BE the trade
+    # direction; the opposite is void. A bias that conflicts with the broken
+    # side is not void — it is a BREAK of that pattern and must be published
+    # under a different STATE NAME (his words), never as the pattern's reversal.
+    if not _is_internal and _atr20 > 0:
+        try:
+            _mdg = candidate.metadata if candidate.metadata is not None else {}
+            _kind_g = str((_band20 or {}).get("kind") or "").upper()
+            _bias_g = pattern_bias_of(_kind_g)
+            _dir_g = str(candidate.direction or "").upper()
+            _buf_g = 0.10 * _atr20
+            _brk_up = _brk_dn = False
+            if _band_lo20 is not None and _band_hi20 is not None:
+                _brk_up = bool(_close20 >= float(_band_hi20) + _buf_g)
+                _brk_dn = bool(_close20 <= float(_band_lo20) - _buf_g)
+            _mdg["pattern_type"] = _kind_g or "NONE"
+            _mdg["pattern_bias"] = _bias_g
+            _mdg["trade_direction"] = _dir_g
+            if _brk_up and not _brk_dn:
+                _mdg["break_edge"] = "UPPER"
+                _mdg["break_direction"] = "UP"
+            elif _brk_dn and not _brk_up:
+                _mdg["break_edge"] = "LOWER"
+                _mdg["break_direction"] = "DOWN"
+            if _brk_up and not _brk_dn and _dir_g == "SHORT":
+                return reject("BREAK_SIDE_MISMATCH", (
+                    f"جهت شکست با جهت سناریو ناهمسو است: کلوز {_close20:.8g} از ضلع "
+                    f"بالای {_mdg['pattern_type']} (بالای {float(_band_hi20):.8g}) "
+                    "بیرون زده — یعنی شکست صعودی — اما سناریو شورت است. طبق قانون "
+                    "«جهت معامله = جهت ضلع شکسته»، این سناریو تأیید نمی‌شود؛ اگر "
+                    "شرایط لانگ کامل است، باید کاندیدای لانگِ تازه با شناسهٔ تازه "
+                    "ساخته شود، نه تبدیل همین شورت."))
+            if _brk_dn and not _brk_up and _dir_g == "LONG":
+                return reject("BREAK_SIDE_MISMATCH", (
+                    f"جهت شکست با جهت سناریو ناهمسو است: کلوز {_close20:.8g} از ضلع "
+                    f"پایین {_mdg['pattern_type']} (زیر {float(_band_lo20):.8g}) "
+                    "بیرون زده — یعنی شکست نزولی — اما سناریو لانگ است. طبق قانون "
+                    "«جهت معامله = جهت ضلع شکسته»، این سناریو تأیید نمی‌شود."))
+            if _bias_g == "BULL" and _brk_dn:
+                _mdg["pattern_state_label"] = f"{_mdg['pattern_type']} · BREAKDOWN"
+                _mdg["direction_reason"] = (
+                    "شکست نزولی از ضلع پایین الگو — این حالت «شکست» است، نه "
+                    "برگشتِ صعودیِ الگو؛ نام وضعیت روی چارت با همین برچسب می‌آید.")
+            elif _bias_g == "BEAR" and _brk_up:
+                _mdg["pattern_state_label"] = f"{_mdg['pattern_type']} · BREAKOUT_UP"
+                _mdg["direction_reason"] = (
+                    "شکست صعودی از ضلع بالای الگو — این حالت «شکست» است، نه "
+                    "برگشتِ نزولیِ الگو؛ نام وضعیت روی چارت با همین برچسب می‌آید.")
+            elif _bias_g == "BULL":
+                _mdg["direction_reason"] = "شکست صعودی در جهت الگوی صعودی"
+            elif _bias_g == "BEAR":
+                _mdg["direction_reason"] = "شکست نزولی در جهت الگوی نزولی"
+            elif _brk_up or _brk_dn:
+                _mdg["direction_reason"] = "شکست در جهت معامله (الگوی خنثی)"
+            # the state name must reach the canvas: the chart reads render_patterns
+            _lbl_g = _mdg.get("pattern_state_label")
+            if _lbl_g:
+                for _rp in (_mdg.get("render_patterns") or []):
+                    try:
+                        if str(_rp.get("type") or "").upper() == _mdg["pattern_type"]:
+                            _rp["label"] = _lbl_g
+                    except Exception:
+                        continue
+        except Exception:
+            pass
     # deep re-entry: close back beyond the broken line/zone by >0.5×ATR inside
     _edge20 = _edge if _edge > 0 else _zone_edge
     _deep20 = False
@@ -738,6 +846,23 @@ def evaluate_confirmation(
                 f"{'لانگ باید زیر ورود' if candidate.direction == 'LONG' else 'شورت باید بالای ورود'} "
                 f"باشد (ورود {executable_entry:.8g} · استاپ {float(candidate.sl):.8g})؛ "
                 "پیام صادر نمی‌شود تا هندسه تصحیح شود."))
+        # ── Viva 09-21 (round 15 phase 2): «R:R -0.07 / 0.42 و PATH 0.00%
+        # ولی سیگنال Confirmed» — a ladder whose first rung is not even on the
+        # trade's side of the entry, or whose whole path is a rounding error,
+        # is a broken tool and must never confirm.
+        _lad_g = (candidate.metadata or {}).get("target_ladder") or {}
+        _path_g = float(_lad_g.get("path_pct") or 0.0)
+        _tp1_bad = ((str(candidate.direction).upper() == "LONG" and float(candidate.tp1) <= executable_entry)
+                    or (str(candidate.direction).upper() == "SHORT" and float(candidate.tp1) >= executable_entry))
+        if _tp1_bad:
+            return reject("ENTRY_AFTER_TARGET", (
+                f"نردبان هدف معکوس است: ورود {executable_entry:.8g} ولی TP1 "
+                f"{float(candidate.tp1):.8g} در سمت اشتباه است؛ ابزار نامعتبر و "
+                "تأییدی صادر نمی‌شود."))
+        if 0.0 < _path_g < 0.5:
+            return reject("ZERO_TARGET_PATH", (
+                f"مسیر هدف تقریباً صفر است ({_path_g:.3f}٪ از ورود) — نردبانی که "
+                "حرکت ندارد ابزار نیست؛ سناریو فقط هشدار/تحلیل می‌ماند."))
         _tol_cap_abs = _cap_abs * 1.20 if _cap_abs > 0 else 0.0   # ±20% tolerance
         if _span_frac < _span_floor or (_tol_cap_abs > 0 and risk > _tol_cap_abs):
             return reject("DEGENERATE_GEOMETRY", (
