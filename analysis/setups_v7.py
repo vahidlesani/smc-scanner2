@@ -1577,6 +1577,38 @@ def scan_setups(bundle: MarketBundle, style: str) -> List[SignalCandidate]:
                         _md_f["tp_source"] = _src_f
             except Exception:
                 pass
+        # ── Viva 09-21 (round 15), his verbatim complaint: «تی پی ها خیلی نزدیک
+        # قیمت هستن چرا وقتی میگم یا پشت کف و یا سقف ساختاری با بافر یا درصد
+        # بهت دادم؟» — a target that sits a tick or two away from the entry is
+        # not a target: the five-pill ladder would take 0.1% legs and the
+        # "protection floors" would be meaningless. The path of every
+        # non-internal scenario now respects the LOW edge of its own timeframe
+        # band (15m–2h 3%, 4h 5%, 1d 5%): the structural edge still wins when it
+        # is INSIDE the band, a nearer edge is a step on the way, not the whole
+        # trade. INTERNAL entries are exempt by law («اهداف زیر سقف کانال»).
+        try:
+            _md_t = getattr(cand, "metadata", None)
+            _internal_t = str((_md_t or {}).get("viva_entry_type") or "").upper() == "INTERNAL"
+            _entry_t = float(getattr(cand, "planned_entry", 0) or 0)
+            _tp2_t = float(getattr(cand, "tp2", 0) or 0)
+            if _entry_t > 0 and _tp2_t > 0 and not _internal_t:
+                from analysis.trade_management import doctrine_path as _dp_t
+                _band_t = float(_dp_t(_entry_t, str(getattr(cand, "trigger_timeframe", "") or "15m"))[0] or 0.0)
+                _dir_t = 1.0 if str(getattr(cand, "direction", "")).upper() == "LONG" else -1.0
+                _path_t = abs(_tp2_t - _entry_t)
+                if _band_t > 0 and _path_t < _band_t - 1e-12:
+                    cand.tp2 = float(_entry_t + _dir_t * _band_t)
+                    cand.tp1 = float(_entry_t + _dir_t * _band_t / 5.0)
+                    if isinstance(_md_t, dict):
+                        _md_t["tp_min_band_applied"] = True
+                        _md_t["tp_path_before_band"] = float(_path_t)
+                elif getattr(cand, "tp1", 0):
+                    # keep TP1 on the five-part split of the FINAL path
+                    _p1_t = abs(float(cand.tp1) - _entry_t)
+                    if _p1_t <= 0 or abs(_p1_t - _path_t / 5.0) > 0.25 * _path_t:
+                        cand.tp1 = float(_entry_t + _dir_t * _path_t / 5.0)
+        except Exception:
+            pass
         why = sanity_reject(cand)
         if why:
             line = (f"🧱 SANITY_REJECT {why} • {bundle.symbol} {style} "

@@ -174,12 +174,27 @@ def evaluate_confirmation(
     # expiry, RR floor, mandatory gates) keeps full veto.
     fast_lane = ""
     _edge = 0.0
+    # ── Viva 09-21: the level the ENGINE waits for must be the exact level the
+    # MESSAGE names. For the pinbar family the alert prints the pin's own
+    # extreme («کلوز بالای ۰.۷۴۸۲»), so that is the edge — not the entry-zone
+    # edge, which sat 0.7% below it in the ETHFIUSDT case and would have
+    # confirmed at a price the member was never told about.
+    try:
+        _md_pin = candidate.metadata or {}
+        _setup_pin = str(getattr(candidate, "setup_code", "") or "").upper()
+        if _setup_pin in {"PINVAL", "PINWALLQ"}:
+            _pin_lvl = float(_md_pin.get("pin_high" if str(candidate.direction).upper() == "LONG"
+                                         else "pin_low") or 0.0)
+            if _pin_lvl > 0:
+                _edge = _pin_lvl
+    except Exception:
+        pass
     for _k in ("viva_breakout_line", "viva_break_line", "viva_watch_line"):
         try:
             _v = float(candidate.metadata.get(_k) or 0.0)
         except Exception:
             _v = 0.0
-        if _v > 0:
+        if _v > 0 and _edge <= 0:
             _edge = _v
             break
     _zone_edge = float(candidate.entry_zone_top if candidate.direction == "LONG"
@@ -222,7 +237,20 @@ def evaluate_confirmation(
             # valid FOR THAT CANDLE, so the buffer/body are scaled to the
             # scanned frame's own average range (14 bars, high-low).
             _f_atr = float((_frame["high"] - _frame["low"]).tail(14).mean() or 0.0) or _atr
-            _f_buf = 0.10 * _f_atr
+            # ── Viva 09-21 (round 15), his verbatim law, fourth time stated:
+            # «اولین کلوز بالای یا زیر هر نوع ناحیه‌های داخل ستاپ / کلوز بالا یا
+            # پایین هر تول ترند نزولی و صعودی / هر نوع الگو باید تایید بشه» and
+            # «چرا این ستاپ‌ها مثل احمق‌ها موقعیت رو می‌شناسن اما تایید نمی‌کنن؟»
+            # Root cause of that complaint: the fast lane added thresholds the
+            # message never mentioned — 0.10×ATR beyond the edge AND a body of
+            # 0.25×ATR. A banner 15m candle that closed cleanly above the named
+            # level could still fail both, so the channel kept sending updates
+            # while the level was demonstrably broken. The law now is what the
+            # message says: the FIRST closed candle of the confirm/pattern
+            # timeframe whose close lands beyond the level. The only remaining
+            # guard is a tick-scale epsilon (2% of the frame's own ATR) so a
+            # mathematically equal close is not treated as a break.
+            _f_buf = max(0.02 * _f_atr, 0.0)
             for _ts, _r in _scan.iterrows():
                 _edge_t = _edge_at(_ts, _edge if _edge > 0 else _zone_edge)
                 _out = bool(float(_r["close"]) >= _edge_t + _f_buf) if _is_long \
@@ -230,14 +258,13 @@ def evaluate_confirmation(
                 if not _out:
                     continue
                 _body = abs(float(_r["close"]) - float(_r["open"])) / _f_atr
-                _dir_ok = (float(_r["close"]) > float(_r["open"])) if _is_long \
-                    else (float(_r["close"]) < float(_r["open"]))
-                if _body >= 0.25 and _dir_ok:
-                    fast_lane = (f"اولین کلوزِ معتبر فراتر از خط/لبه ({_tag}، "
-                                 f"≥۰.۱۰ ATRِ همان تایم پشت لبه، Body {_body:.2f} ATR) — پولبک شرط نیست")
-                    candidate.metadata["fast_break_bar"] = str(_ts)[:16]
-                    candidate.metadata["tl_fast_break"] = fast_lane
-                    break
+                _dist = abs(float(_r["close"]) - _edge_t) / _f_atr
+                fast_lane = (f"اولین کلوزِ معتبر فراتر از خط/لبه ({_tag}، "
+                             f"{_dist:.2f} ATR پشت سطح، Body {_body:.2f} ATR) — پولبک شرط نیست")
+                candidate.metadata["fast_break_bar"] = str(_ts)[:16]
+                candidate.metadata["tl_fast_break"] = fast_lane
+                candidate.metadata["confirm_level_used"] = float(_edge_t)
+                break
             if fast_lane:
                 break
     if not touched:
@@ -426,7 +453,29 @@ def evaluate_confirmation(
         candidate.tp1 = float(_internal_plan["tp1"])
         candidate.tp2 = float(_internal_plan["tp2"])
         _is_internal = True
-    if (_band_lo20 is not None and _band_hi20 is not None and not _is_internal):
+    # ── Viva 09-21 (round 15), verbatim: «دقیقاً چرا این ستاپ‌ها مثل احمق‌ها
+    # موقعیت رو می‌شناسن اما تایید نمی‌کنن؟» — the live case was ETHFIUSDT 1h:
+    # the fast lane DID find the first valid close beyond the named pin level
+    # (0.7482), and then this containment gate vetoed it with
+    # INSIDE_PATTERN_NO_BREAK because a fitted wedge band still contained the
+    # price. Two corrections:
+    #   • a PINBAR premise (PINVAL/PINWALLQ) is a level, not a pattern, so a
+    #     pattern band may never veto it;
+    #   • once the engine has evidence of a valid close beyond the named level,
+    #     containment cannot contradict it — the level is the authority
+    #     («اولین کلوز بالا یا پایین هر ناحیه/ترند = تأیید»).
+    _pattern_premise = str(getattr(candidate, "setup_code", "") or "").upper() in {
+        "TLBREAK", "TECHCLASSIC", "ALBROX"}
+    _fast_lane_ok = bool((candidate.metadata or {}).get("tl_fast_break"))
+    # …and when the fast lane fired, containment only speaks if the level that
+    # was actually cleared sits INSIDE the pattern (a mirror-zone edge, not the
+    # pattern's own side). Clearing the pattern's own side is the breakout.
+    _lvl_used20 = float((candidate.metadata or {}).get("confirm_level_used") or 0.0)
+    _inside_band20 = False
+    if _fast_lane_ok and _lvl_used20 > 0 and _band_lo20 is not None and _band_hi20 is not None:
+        _inside_band20 = (float(_band_lo20) + 1e-12) < _lvl_used20 < (float(_band_hi20) - 1e-12)
+    if (_band_lo20 is not None and _band_hi20 is not None and not _is_internal
+            and _pattern_premise and (not _fast_lane_ok or _inside_band20)):
         _dir20 = 1.0 if candidate.direction == "LONG" else -1.0
         _buf20 = 0.10 * _atr20
         _outside20 = (_close20 >= _band_hi20 + _buf20) if _dir20 > 0 \
@@ -813,4 +862,12 @@ def evaluate_confirmation(
     except Exception as _gexc:
         candidate.metadata["mtf_gate_error"] = str(_gexc)[:120]
 
+    # a confirmed scenario must never keep a stale reject code (the ETHFIUSDT
+    # replay showed last_reject_code="INSIDE_PATTERN_NO_BREAK" on a CONFIRMED
+    # row — the log then blamed a gate that had already been overruled).
+    try:
+        candidate.metadata.pop("last_reject_code", None)
+        candidate.metadata.pop("last_reject_fa", None)
+    except Exception:
+        pass
     return True, candidate, "تأیید ورود با کندل بسته‌شده صادر شد."

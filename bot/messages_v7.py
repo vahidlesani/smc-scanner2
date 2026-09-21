@@ -170,6 +170,11 @@ CHART_LOGO_PATH = os.getenv(
     os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "vivasignals-logo.png"),
 )
 SETUP_STICKER_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "stickers")
+
+# ── Viva 09-21: «موتور تولید زبان فارسی در چارت خرابه» — Persian drawn into a
+# figure needs a font WITH Arabic glyphs and needs shaping + bidi. Both live in
+# analysis.fa_text; chart code must call fa_chart() for any Persian label.
+from analysis.fa_text import fa as fa_chart, use_persian_font as _fa_use_font
 SIGNAL_SEPARATOR = os.getenv(
     "SIGNAL_SEPARATOR_TEXT",
     "⬛⬛⬛",
@@ -328,7 +333,6 @@ def _confirm_rule_fa(candidate: SignalCandidate) -> str:
     md = candidate.metadata or {}
     if candidate.setup_code == "PINVAL":
         tf_fa = _TF_FA.get(str(md.get("pin_tf") or ""), candidate.trigger_timeframe)
-        n = int(md.get("pin_verdict_candles") or 3)
         hi, lo = float(md.get("pin_high") or 0), float(md.get("pin_low") or 0)
         if candidate.direction == "LONG":
             cond = f"کلوز {tf_fa} بالای {_price(hi)}"
@@ -336,7 +340,13 @@ def _confirm_rule_fa(candidate: SignalCandidate) -> str:
         else:
             cond = f"کلوز {tf_fa} زیر {_price(lo)}"
             kill = f"کلوز {tf_fa} بالای {_price(hi)}"
-        return f"⚖️ <b>شرط تأیید (تا {n} کندل {tf_fa} بعد):</b> {cond} • <b>ابطال:</b> {kill}"
+        # ── Viva 09-21 (round 15), verbatim: «چرا هنوز در توضیحات می‌گه تا ۳ کندل
+        # یک ساعته کلوز بالای فلان شرط تایید است؟؟» — there is no candle cap in the
+        # engine (his 09-17 rulilng removed it) and now the text says the same:
+        # the FIRST valid close beyond the named level is the confirmation, and
+        # it stays valid until the invalidation level is broken.
+        return (f"⚖️ <b>شرط تأیید:</b> اولین کلوزِ معتبرِ {tf_fa} بالای/زیر سطحِ نام‌برده — "
+                f"{cond} • <b>ابطال:</b> {kill}")
     ctf = str(md.get("confirm_tf") or "").upper()
     if not ctf:
         # never print a blank timeframe: fall back to the standard ladder
@@ -878,18 +888,21 @@ def _scenario_path(ax, start, end, color: str, alpha: float = 0.88) -> None:
     ))
 
 
-def _add_setup_sticker(fig, candidate: SignalCandidate) -> None:
+def _add_setup_sticker(fig, candidate: SignalCandidate) -> bool:
+    """Draw the setup's own badge; True when one was drawn."""
     path = os.path.join(SETUP_STICKER_DIR, f"{str(candidate.setup_code).lower()}.png")
     if not os.path.isfile(path):
-        return
+        return False
     try:
         # Header band keeps the branded setup sticker out of the candle area.
         # Separate high-resolution badge, kept in the empty upper-right margin.
         sticker_ax = fig.add_axes([0.685, 0.900, 0.070, 0.070], zorder=30)
         sticker_ax.imshow(mpimg.imread(path))
         sticker_ax.axis("off")
+        return True
     except Exception as exc:
         print(f"Setup sticker warning: {exc}")
+        return False
 
 
 def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
@@ -1292,6 +1305,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     """Render a branded TradingView-inspired 1440×900 chart."""
     if df is None or df.empty:
         return None
+    # Persian labels (setup notes, spot charts) must shape correctly; the font
+    # is bundled in assets/fonts and registered once per process.
+    try:
+        _fam = _fa_use_font()
+        if _fam:
+            import matplotlib as _mpl
+            _mpl.rcParams["font.family"] = [_fam, "DejaVu Sans"]
+    except Exception:
+        pass
     # ── the forming candle joins the tape as one more NORMAL candle (round 13)
     df, _live_row = _frame_with_live_candle(df, candidate)
     # Viva 09-17 cost ruling: one render per (alert, frame, state) — retries,
@@ -2296,8 +2318,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             fontsize=8,
             va="center",
         )
-        _add_setup_sticker(fig, candidate)
-        fig.text(0.762, 0.931, "VIVA SETUP ✳️", color=CHART_THEME["text"], fontsize=9.5, fontweight="bold", va="center")
+        # ── Viva 09-21: «چرا چارت پینوال کیو استیکر بنام خودش نداره و بنام viva
+        # setup درج میشه در جای استیکر هر ستاپ؟» — the header word is the FALLBACK
+        # only. When the setup's own badge exists it is the label; when it does
+        # not, the setup's own name stands there (never a generic brand word
+        # pretending to be a setup badge). Every setup in the live DB now has a
+        # badge file: PINVAL · PINWALLQ · TLBREAK · TECHCLASSIC · ALBROX.
+        _has_sticker = _add_setup_sticker(fig, candidate)
+        if not _has_sticker:
+            fig.text(0.762, 0.931, str(candidate.setup_code or "").upper(),
+                     color=CHART_THEME["text"], fontsize=9.5, fontweight="bold", va="center")
         _add_branding(fig, ax, candidate)
 
         buffer = io.BytesIO()
@@ -3646,10 +3676,17 @@ def _event_clock(event: dict) -> tuple[str, str, str]:
 
 def _setup_display(value: str) -> str:
     code = str(value or "").upper()
+    # ── Viva 09-21: «هر الگویی اسم داره» — every setup now carries BOTH its
+    # brand name (the sticker / channel language he asked for) and the Persian
+    # meaning of the pattern family, so a member and the owner read the same
+    # line without decoding an English slug.
     return {
-        "PINVAL": "PINWALL LEGACY", "PINWALLQ": "PINWALL QUALITY",
-        "PINWALL_QUALITY": "PINWALL QUALITY", "ALBROX": "ALBROX ORIGINAL",
-        "TLBREAK": "VIVA-TLBREAK",
+        "PINVAL": "PINWALL LEGACY · پین‌وال کلاسیک",
+        "PINWALLQ": "PINWALL QUALITY · پین‌وال کیفیت",
+        "PINWALL_QUALITY": "PINWALL QUALITY · پین‌وال کیفیت",
+        "ALBROX": "ALBROX ORIGINAL · بازپس‌گیری بیس",
+        "TLBREAK": "VIVA-TLBREAK · شکست خط روند",
+        "TECHCLASSIC": "TECHCLASSIC · الگوی کلاسیک پیوتی",
     }.get(code, code or "SETUP")
 
 
