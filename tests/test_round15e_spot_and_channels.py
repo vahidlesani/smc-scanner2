@@ -39,7 +39,7 @@ def test_his_channel_names_decide_the_buckets():
     assert 'os.getenv("CHAT_ID_TF_15M_1H",' in src
     assert 'os.getenv("CHAT_ID_SWING_SHORT", "")' in src
     assert '("15M_1H", {"15m", "30m", "1h"}' in src
-    assert '("2H_4H", {"2h", "4h"}' in src
+    assert '("2H_4H", {"2h", "4h", "8h", "12h"}' in src  # round 16: spot triggers
     assert '("1D", {"1d", "3d", "1w"}' in src
     assert M.tf_channel_bucket("15m") == "15M_1H"
     assert M.tf_channel_bucket("1h") == "15M_1H"

@@ -2555,7 +2555,15 @@ def _final_stop_guard(candidate: SignalCandidate) -> SignalCandidate:
         sl = float(getattr(candidate, "sl", 0) or 0)
         if entry <= 0 or sl <= 0:
             return candidate
-        cap_pct = float(stop_ceiling_pct(tf)) / 100.0
+        # ── round 16 (Viva 09-22, «هیچ ارتباطی بین ستاپ‌های فیوچرز و اسپات»):
+        # a SPOT card is clamped by SPOT's own 10% law — the futures per-TF
+        # table (2.75% on 1d …) must never touch the spot engine.
+        _mdg = candidate.metadata if candidate.metadata is not None else {}
+        if str(_mdg.get("market") or getattr(candidate, "market", "") or "").upper() == "SPOT":
+            from analysis.spot_engine import SPOT_STOP_CAP_PCT
+            cap_pct = float(SPOT_STOP_CAP_PCT) / 100.0
+        else:
+            cap_pct = float(stop_ceiling_pct(tf)) / 100.0
         dist = abs(sl - entry) / entry
         if dist <= cap_pct + 1e-12:
             return candidate
@@ -3551,7 +3559,8 @@ def _exact_event_message_id(signal_id: str, event_key: str, fallback: int = 0) -
 
 _TF_CHANNEL_BUCKETS = (
     ("15M_1H", {"15m", "30m", "1h"}, CHAT_ID_SWING_SHORT),
-    ("2H_4H", {"2h", "4h"}, CHAT_ID_SWING_MID),
+    # round 16: his spot triggers 8h/12h live with the mid family
+    ("2H_4H", {"2h", "4h", "8h", "12h"}, CHAT_ID_SWING_MID),
     ("1D", {"1d", "3d", "1w"}, CHAT_ID_SWING_LONG),
 )
 

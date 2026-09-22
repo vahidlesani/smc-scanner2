@@ -117,3 +117,45 @@ def test_volume_reason_line_honesty():
         "low": [99.0] * n, "close": [100.0] * n, "volume": [1.0] * n})
     # empty scan is fine — the contract is that no crash occurs without patterns
     assert scan_spot_alerts("TEST", {"1d": frame}) == []
+
+
+def test_final_stop_guard_never_binds_spot():
+    """Round 16: the futures stop-ceiling table must never touch a SPOT card —
+    spot obeys ONLY its own 10% law («هیچ ارتباطی بین ستاپ‌های فیوچرز و اسپات»)."""
+    from analysis.models import SignalCandidate
+    from bot.messages_v7 import _final_stop_guard
+    cand = SignalCandidate(
+        signal_id="g1", symbol="XUSDT", style="GRAND", setup_code="SPOTBREAK",
+        setup_name="s", strategy_fa="s", direction="LONG", score=8,
+        status="CONFIRMED", entry_zone_bottom=90.0, entry_zone_top=100.0,
+        planned_entry=100.0, sl=91.0,                      # 9% — legal for spot,
+        tp1=110.0, tp2=120.0, rr_tp1=0.0, rr_tp2=0.0, bias="BULL",
+        trigger_timeframe="1d",                            # illegal for futures (2.75%)
+        mandatory_gates={}, created_at="2026-09-22T00:00:00",
+        confirmed_at="2026-09-22T00:00:00", metadata={"market": "SPOT"})
+    out = _final_stop_guard(cand)
+    assert float(out.sl) == pytest.approx(91.0)            # untouched
+
+
+def test_final_stop_guard_still_binds_futures():
+    from analysis.models import SignalCandidate
+    from bot.messages_v7 import _final_stop_guard
+    cand = SignalCandidate(
+        signal_id="g2", symbol="XUSDT", style="GRAND", setup_code="TLBREAK",
+        setup_name="s", strategy_fa="s", direction="LONG", score=8,
+        status="CONFIRMED", entry_zone_bottom=90.0, entry_zone_top=100.0,
+        planned_entry=100.0, sl=91.0,                      # 9% on 1d futures → clamp
+        tp1=110.0, tp2=120.0, rr_tp1=0.0, rr_tp2=0.0, bias="BULL",
+        trigger_timeframe="1d", mandatory_gates={},
+        created_at="2026-09-22T00:00:00", confirmed_at="2026-09-22T00:00:00",
+        metadata={})
+    out = _final_stop_guard(cand)
+    assert float(out.sl) == pytest.approx(97.25)           # 1d ceiling 2.75%
+    assert out.metadata.get("stop_clamped")
+
+
+def test_8h_12h_belong_to_mid_bucket():
+    from bot.messages_v7 import tf_channel_bucket
+    assert tf_channel_bucket("8h") == "2H_4H"
+    assert tf_channel_bucket("12h") == "2H_4H"
+    assert tf_channel_bucket("3d") == "1D"
