@@ -14,7 +14,7 @@ from urllib3.util.retry import Retry
 
 from config import get_settings
 
-TF_MAP = {"1d": "D", "4h": "240", "2h": "120", "1h": "60", "30m": "30", "15m": "15", "5m": "5", "3m": "3", "1m": "1"}
+TF_MAP = {"1d": "D", "12h": "720", "8h": "360", "4h": "240", "2h": "120", "1h": "60", "30m": "30", "15m": "15", "5m": "5", "3m": "3", "1m": "1"}
 
 _SETTINGS = get_settings()
 _BASE_URLS = [
@@ -66,7 +66,8 @@ class MarketBundle:
 # re-analysed the very same closed candles for all 40–47 symbols. The cache now
 # lives exactly as long as the candle itself (capped at 30 minutes for safety).
 _TF_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
-               "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400,
+               "1h": 3600, "2h": 7200, "4h": 14400, "8h": 28800, "12h": 43200,
+               "1d": 86400,
                # ── round 15 (Viva 09-22): the SPOT engine scans 4h/1d/3d/1w and
                # no venue serves 3d/1w, so those two are AGGREGATED locally
                # from the daily tape (see _aggregate_daily).

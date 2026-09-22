@@ -105,6 +105,11 @@ class Settings:
     alert_verdict_candles: int = 3
     # Log-scale rendering for higher-context trendline charts
     chart_log_htf: bool = False
+    # Viva 09-22 ruling (his question, my answer YES with a guard): log scale
+    # for EVERY chart — pivots/trendlines/zones fit percent-logarithmic reality;
+    # when the visible span is tiny (<3%) log is indistinguishable and the
+    # renderer keeps linear so ticks stay clean.
+    chart_log_all: bool = True
     educational_min_score: int = 6
     execution_min_score: int = 7
     candidate_expiry_hours_swing: int = 168    # 4H stream: live until resolved (Viva 2026-09-14)
@@ -289,6 +294,7 @@ class Settings:
             pinv_polarity_bypass_legacy_filters=_bool("PINVAL_POLARITY_BYPASS_LEGACY_FILTERS", cls.pinv_polarity_bypass_legacy_filters),
             alert_verdict_candles=_int("ALERT_VERDICT_CANDLES", cls.alert_verdict_candles),
             chart_log_htf=_bool("CHART_LOG_HTF", cls.chart_log_htf),
+            chart_log_all=_bool("CHART_LOG_ALL", cls.chart_log_all),
             scan_offset_minute=_int("SCAN_OFFSET_MINUTE", cls.scan_offset_minute),
             educational_min_score=_int("EDUCATIONAL_MIN_SCORE", cls.educational_min_score),
             execution_min_score=_int("EXECUTION_MIN_SCORE", cls.execution_min_score),

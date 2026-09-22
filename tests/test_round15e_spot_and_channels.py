@@ -39,7 +39,7 @@ def test_his_channel_names_decide_the_buckets():
     assert 'os.getenv("CHAT_ID_TF_15M_1H",' in src
     assert 'os.getenv("CHAT_ID_SWING_SHORT", "")' in src
     assert '("15M_1H", {"15m", "30m", "1h"}' in src
-    assert '("2H_4H", {"2h", "4h"}' in src
+    assert '("2H_4H", {"2h", "4h", "8h", "12h"}' in src  # round 16: spot triggers
     assert '("1D", {"1d", "3d", "1w"}' in src
     assert M.tf_channel_bucket("15m") == "15M_1H"
     assert M.tf_channel_bucket("1h") == "15M_1H"
@@ -154,7 +154,7 @@ def test_a_spot_candidate_is_born_confirmed_long_with_log_chart_and_box(monkeypa
     assert items, "a bullish break of the shape's upper side must produce a signal"
     it = items[0]
     assert it["sl"] < it["entry"]                 # structurally LONG
-    assert it["tf"] in ("4h", "1d", "3d", "1w")
+    assert it["tf"] in ("4h", "8h", "12h", "1d", "3d")  # round 16: his trigger set
     assert it["path_pct"] >= 5.0 - 1e-9           # his band for 4h/1d
     cand = build_spot_candidate(it)
     assert cand.direction == "LONG" and cand.status == "CONFIRMED"
@@ -162,9 +162,10 @@ def test_a_spot_candidate_is_born_confirmed_long_with_log_chart_and_box(monkeypa
     assert (cand.metadata or {})["log_scale"] is True
     assert (cand.metadata or {})["spot_measured_box"] is True
     assert (cand.metadata or {})["target_ladder"]["targets"]
-    from analysis.trade_management import stop_ceiling_pct
+    # round 16 (Viva 09-22): spot's stop ceiling is HIS 10% law alone —
+    # the futures per-TF table must never bind the spot engine
     dist_pct = (cand.planned_entry - cand.sl) / cand.planned_entry * 100.0
-    assert dist_pct <= stop_ceiling_pct(cand.trigger_timeframe) + 1e-9
+    assert dist_pct <= 10.0 + 1e-9
 
 
 def test_spot_lane_is_wired_and_budgeted():

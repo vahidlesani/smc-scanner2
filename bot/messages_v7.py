@@ -1381,7 +1381,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     try:
         # Preserve enough history for real channel / wedge / range geometry;
         # the blank future panel is added separately, never by sacrificing bars.
-        frame = df.tail(150).copy().set_index("timestamp")
+        frame = df.tail(150).copy()
+        # ── Viva 09-22: leading rows with missing OHLC painted a BLANK left
+        # third («یک سوم انتهایی سمت چپ چارت کامل با کندلها بیاد مثل قبل») —
+        # drop them so the visible window is all candles, edge to edge.
+        frame = frame.dropna(subset=["open", "high", "low", "close"])
+        frame = frame.set_index("timestamp")
         frame.index = pd.DatetimeIndex(frame.index)
         # Viva 09-18 ruling (PINWALL/PINWALL-Q/ALBROX must paint trends too):
         # ABSOLUTE safety net — any candidate that reaches the chart without
@@ -1449,6 +1454,24 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         _a9.set_yscale("log")
             except Exception as exc:
                 print(f"Chart log-scale warning: {exc}")
+        elif bool(getattr(SETTINGS, "chart_log_all", False)):
+            # ── Viva 09-22 round 16 (his question, YES with a guard): log on
+            # EVERY price panel — pivots/trendlines/zones fit the percent
+            # reality better even on 1h–4h. When the visible span is tiny
+            # (<3%) log and linear are identical, so linear stays (cleaner
+            # ticks); anything non-positive (impossible for USDT pairs) also
+            # stays linear.
+            try:
+                for _a9 in axes:
+                    _pos9 = _a9.get_position()
+                    _yl9 = list(_a9.get_ylim())
+                    if (_pos9.height > 0.30 and _yl9[0] > 0
+                            and _yl9[1] > _yl9[0]
+                            and _yl9[1] / _yl9[0] > 1.03):
+                        _a9.set_yscale("log")
+                        _a9.yaxis.set_major_formatter(FuncFormatter(_axis_price))
+            except Exception as exc:
+                print(f"Chart log-all warning: {exc}")
         # mplfinance creates manually positioned axes, so set the panel geometry
         # directly: wide price area, compact volume, and a small branded footer.
         # Wide candle-free future area: at 120dpi this is ~7cm from the last
@@ -1489,7 +1512,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # TradingView-like readable price ladder: measured major intervals,
         # light minor guides, precise plain-number formatting on the right.
         ax.yaxis.set_major_locator(MaxNLocator(nbins=8, min_n_ticks=6))
-        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+        if ax.get_yscale() == "linear":   # AutoMinorLocator is linear-only
+            ax.yaxis.set_minor_locator(AutoMinorLocator(2))
         ax.grid(which="minor", axis="y", color=CHART_THEME["grid"], alpha=0.16, linewidth=0.45)
         ax.set_ylabel("")
         for label in ax.get_yticklabels():
@@ -1532,6 +1556,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # log price axis so long-term trendline touches/breaks stay visible.
         notes = []
         md0 = candidate.metadata or {}
+        # ── Viva 09-22: the SPOT signature on the canvas corner — «لیبل spot
+        # در چارت … و لیبل VIVA-SPOT-MON در پیام‌های اسپات فراموش نشه»
+        if str(md0.get("market") or "").upper() == "SPOT":
+            notes.append(("VIVA-SPOT-MON · SPOT", CHART_THEME["muted"]))
         ctx_for_log = md0.get("tl_context_tf")
         use_log = (
             getattr(SETTINGS, "chart_log_htf", True)
@@ -1859,8 +1887,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _h8 = abs(_ya8 - _yb8)
                     _lc8 = float(frame["close"].iloc[-1])
                     _mean_sl8 = (float(_a8["slope"]) + float(_b8["slope"])) / 2
+                    # ── Round 16 (Viva 09-22): from the FIRST warning onward
+                    # the green box rides UP to the NEXT STRUCTURAL HIGH (+1%)
+                    # — his CryptoCove reference («تا سقف بعدی ساختاری و کمی
+                    # بالاترش رسم بشه») — instead of the raw pattern height.
+                    _sbt8 = float((candidate.metadata or {}).get("spot_box_top") or 0.0)
+                    if _sbt8 > _lc8:
+                        _h8 = _sbt8 - _lc8
                     if _h8 > 0 and _lc8 > 0:
-                        if _mean_sl8 < 0:
+                        if _sbt8 > _lc8:
+                            _bt8, _tp8 = _lc8, _sbt8
+                        elif _mean_sl8 < 0:
                             _bt8, _tp8 = _lc8, _lc8 + _h8
                         else:
                             _bt8, _tp8 = _lc8 - _h8, _lc8
@@ -1906,6 +1943,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             .get("targets") or []]
                     if _tg9 and _lc9 > 0:
                         _tp9 = max(_tg9)
+                        # Round 16: the structural top outranks the ladder's own
+                        # last rung when the chart carries one (his CryptoCove law)
+                        _sbt9 = float((candidate.metadata or {}).get("spot_box_top") or 0.0)
+                        if _sbt9 > _lc9:
+                            _tp9 = _sbt9
                         _h9 = _tp9 - _lc9
                         if _h9 > 0:
                             _bx0, _bx1 = count + 2, count + 2 + max(8, int(future * 0.55))
@@ -2227,12 +2269,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         rhi = min(his, key=lambda v: abs(v - last_close))
                         rlo = min(los, key=lambda v: abs(v - last_close))
                         if rlo < rhi and (rhi - rlo) >= 2.2 * _atr_now:
-                            ax.hlines(rhi, 0, count - 0.5,
-                                      color=CHART_THEME["invalidation"],
-                                      linestyle=(0, (8, 5)), linewidth=1.0, alpha=0.55, zorder=3)
-                            ax.hlines(rlo, 0, count - 0.5,
-                                      color=CHART_THEME["demand"],
-                                      linestyle=(0, (8, 5)), linewidth=1.0, alpha=0.55, zorder=3)
+                            # ── Viva 09-22 (round 16): the full-width RANGE
+                            # hlines are GONE — «یک خط طوسی ادامه میده اونم
+                            # باز می‌افته روی کندل لایو و دید رو کور میکنه ..
+                            # اونم حذف بشه». The corner notes + the INSIDE/
+                            # OUTSIDE verdict keep the information; the candles
+                            # keep the view.
                             notes.append((f"RANGE HIGH  {_price(rhi)}", CHART_THEME["invalidation"]))
                             notes.append((f"RANGE LOW  {_price(rlo)}", CHART_THEME["demand"]))
                             if rlo <= last_close <= rhi:
@@ -2513,7 +2555,15 @@ def _final_stop_guard(candidate: SignalCandidate) -> SignalCandidate:
         sl = float(getattr(candidate, "sl", 0) or 0)
         if entry <= 0 or sl <= 0:
             return candidate
-        cap_pct = float(stop_ceiling_pct(tf)) / 100.0
+        # ── round 16 (Viva 09-22, «هیچ ارتباطی بین ستاپ‌های فیوچرز و اسپات»):
+        # a SPOT card is clamped by SPOT's own 10% law — the futures per-TF
+        # table (2.75% on 1d …) must never touch the spot engine.
+        _mdg = candidate.metadata if candidate.metadata is not None else {}
+        if str(_mdg.get("market") or getattr(candidate, "market", "") or "").upper() == "SPOT":
+            from analysis.spot_engine import SPOT_STOP_CAP_PCT
+            cap_pct = float(SPOT_STOP_CAP_PCT) / 100.0
+        else:
+            cap_pct = float(stop_ceiling_pct(tf)) / 100.0
         dist = abs(sl - entry) / entry
         if dist <= cap_pct + 1e-12:
             return candidate
@@ -3509,7 +3559,8 @@ def _exact_event_message_id(signal_id: str, event_key: str, fallback: int = 0) -
 
 _TF_CHANNEL_BUCKETS = (
     ("15M_1H", {"15m", "30m", "1h"}, CHAT_ID_SWING_SHORT),
-    ("2H_4H", {"2h", "4h"}, CHAT_ID_SWING_MID),
+    # round 16: his spot triggers 8h/12h live with the mid family
+    ("2H_4H", {"2h", "4h", "8h", "12h"}, CHAT_ID_SWING_MID),
     ("1D", {"1d", "3d", "1w"}, CHAT_ID_SWING_LONG),
 )
 
@@ -3542,12 +3593,26 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
     direction = str(candidate.direction or "").upper()
     arrow = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
     stops = md.get("stop_clamped") or md.get("stop_reanchored")
+    # ── Viva 09-22: the SPOT signature in the message («لیبل VIVA-SPOT-MON در
+    # پیام‌های اسپات فراموش نشه») + the written invalidation numbers
+    # («عدد ضرر و ابطال پوزیشن نوشتاری با پیام بیاد»)
+    _is_spot = str(md.get("market") or "").upper() == "SPOT"
+    _spot_tag = "🪙 <b>VIVA-SPOT-MON</b> · SPOT\n" if _is_spot else ""
+    try:
+        _kill_pct = abs(float(candidate.planned_entry) - float(candidate.sl)) \
+            / max(abs(float(candidate.planned_entry)), 1e-12) * 100.0
+    except Exception:
+        _kill_pct = 0.0
+    _spot_kill = (f"\n🧯 ابطال پوزیشن: <b>{_price(candidate.sl)}</b> "
+                  f"(حداکثر ضرر ≈ {_kill_pct:.1f}٪ · سقف اسپات ۱۰٪)"
+                  if _is_spot else "")
     head = (f"✅ <b>سیگنال تأییدشده</b>   🆔 <code>{_e(_public_code(candidate))}</code>\n\n"
+            f"{_spot_tag}"
             f"🏦 <b>{_e(candidate.symbol)}</b> • {_e(str(candidate.trigger_timeframe or ''))} • "
             f"{_e(str(candidate.style or ''))} • {arrow}\n"
             f"🏷 <b>{_e(_setup_display(candidate.setup_code))}</b>   ⭐ {candidate.score}/10\n\n"
             f"🔰 ورود: <b>{_price(candidate.planned_entry)}</b>\n"
-            f"⛔️ استاپ: <b>{_price(candidate.sl)}</b>"
+            f"⛔️ استاپ: <b>{_price(candidate.sl)}</b>{_spot_kill}"
             + ("\n<i>استاپ روی سقفِ همین تایم‌فریم تنظیم شده است.</i>" if stops else "")
             + "\n\n🎯 <b>اهداف</b>\n")
     rows = []
@@ -3560,6 +3625,85 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
         tag = "ℹ️" if i >= 4 else f"{w:.0f}%"
         rows.append(f"• TP{i}: <b>{_price(tgt)}</b> · {dist:.2f}٪ فاصله · {tag}")
     return head + "\n".join(rows) + "\n\n" + result_line + "\n\n📌 <b>VIVAMON-Labs-Pro</b>"
+
+
+_SPOT_ALERT_TITLE = {
+    "TOUCH": "🖐 برخورد اولیه به الگو",
+    "NEAR_BREAK": "⏳ نزدیک شدن به شکست",
+    "BREAK_DOWN": "💥 هشدار شکست نزولی",
+}
+
+
+def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
+    """Round 16 — the spot ladder's warning post: analysis only, never a trade
+    signal («بقیه فقط هشدار ها و تحلیل های مختصر بشه»). The ONE confirmation
+    stays the valid close above the shape's upper side, published through the
+    normal confirmed path."""
+    chat = str(CHAT_ID_SPOT or "")
+    if not chat:
+        return False
+    stage = str(item.get("stage") or "TOUCH")
+    side = str(item.get("side") or "HIGH")
+    dist = abs(float(item.get("distance_pct") or 0.0))
+    sym = str(item.get("symbol") or "")
+    tf = str(item.get("tf") or "").upper()
+    fa = str(item.get("pattern_fa") or "")
+    if stage == "BREAK_DOWN":
+        geometry = ("کلوز معتبر زیر ضلع پایین الگو ثبت شد — شرط صعودیِ الگو نقض شده؛ "
+                    "فقط هشدار تحلیلی است، سیگنال نیست.")
+    elif stage == "NEAR_BREAK":
+        side_fa = "بالا" if side == "HIGH" else "پایین"
+        geometry = (f"قیمت به ضلع {side_fa} الگو چسبیده (فاصله ≈ {dist:.2f}%) — "
+                    "آماده‌باش شکست؛ تأیید فقط با کلوز معتبر آن‌طرفِ ضلع.")
+    else:
+        side_fa = "بالا" if side == "HIGH" else "پایین"
+        geometry = (f"برخورد اولیه به ضلع {side_fa} الگو (فاصله تا ضلع ≈ {dist:.2f}%) — "
+                    "هشدار تماس؛ روند قیمت را از همین‌جا رصد کنید.")
+    # ── Viva 09-22: honest REASON lines in his own style («دلایل جهت لانگ
+    # اعلام بشه … مثلا بگه این الگو نشان‌دهنده حرکت صعودی ممکن است بزودی بریک
+    # شود … حجم معاملات …») — pattern meaning + the volume witness. Free data
+    # only, never a gate, never an order-book claim.
+    try:
+        vr = float(item.get("vol_ratio") or 0.0)
+    except Exception:
+        vr = 0.0
+    if stage == "NEAR_BREAK":
+        why = ("این الگو نشان‌دهندهٔ احتمال حرکت صعودی است و ممکن است بزودی بشکند؛ "
+               "تأیید فقط با کلوز معتبر آن‌طرفِ ضلع صادر می‌شود.")
+    elif stage == "BREAK_DOWN":
+        why = ("شرط صعودی الگو فعلاً نقض شده است؛ سیگنالی صادر نمی‌شود — "
+               "این پیام فقط هشدار تحلیلی برای پرهیز از ورود زودهنگام است.")
+    else:
+        why = ("این الگو نشان‌دهندهٔ حرکت صعودی بالقوه است؛ برخورد اولیه ثبت شده و "
+               "رصدِ فشردگی به سمت ضلع آغاز می‌شود.")
+    lines = [
+        f"🪙 <b>VIVA-SPOT-MON</b>",
+        f"<b>{_e(_SPOT_ALERT_TITLE.get(stage, '🪙 هشدار اسپات'))}</b>",
+        f"<code>{_e(sym)}/USDT · {_e(tf)} · {_e(fa)}</code>",
+        "",
+        _e(geometry),
+        "",
+        _e(why),
+    ]
+    if vr >= 1.2:
+        lines.append(f"📊 حجم کندل ≈ {vr:.1f}× میانگین ۲۰کندله — همسو با فشار خرید.")
+    elif 0 < vr < 0.8:
+        lines.append(f"📉 حجم کندل ≈ {vr:.1f}× میانگین ۲۰کندله — شکستِ بدون حجم کم‌اعتبارتر است.")
+    rule = str(item.get("rule_fa") or "").strip()
+    if rule:
+        lines += ["", f"📘 {_e(rule)}"]
+    lines += ["",
+              "⚠️ هشدار تحلیلی اسپات — تأیید معامله فقط صعودی است (کلوز معتبر بالای الگو).",
+              "📌 <b>VIVAMON-Labs-Pro</b>"]
+    text = "\n".join(lines)
+    try:
+        from bot.telegram_bot import send_message, send_photo
+        if chart:
+            return bool(send_photo(chart, text, chat))
+        return bool(send_message(text, chat))
+    except Exception as exc:
+        print(f"spot alert send error {sym}: {exc}")
+        return False
 
 
 def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
@@ -3717,6 +3861,14 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
     )
     if chart_df is not None and not chart_df.empty and "close" in chart_df.columns:
         candidate.metadata["live_price"] = float(chart_df["close"].iloc[-1])
+        # ── Viva 09-22 round 16: «زمان تایید ابتدای ابزار لانگ و شورت دقیقا از
+        # کندل لایو شروع بشه … نهایتا ۲ کندل آخر داخل ابزار» — the tool is
+        # anchored to the LIVE candle at the confirmation moment (the forming
+        # candle appended by the renderer makes it at most two bars inside).
+        # A real fill stamp from the ladder events always outranks this.
+        if not candidate.metadata.get("tool_entry_ts") \
+                and "timestamp" in chart_df.columns:
+            candidate.metadata["tool_entry_ts"] = str(chart_df["timestamp"].iloc[-1])
     if not candidate.metadata.get("confirmation_chart_sent"):
         chart = generate_chart(chart_df, candidate, confirmed=True) if chart_df is not None else None
         if not chart:
