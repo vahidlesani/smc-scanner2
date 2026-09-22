@@ -105,11 +105,11 @@ class Settings:
     alert_verdict_candles: int = 3
     # Log-scale rendering for higher-context trendline charts
     chart_log_htf: bool = False
-    # Viva 09-22 — REVISED after his live look («چرا کلا همه‌چی رو تغییر دادی؟»):
-    # the FUTURES five keep the EXACT previous look (linear); only SPOT charts
-    # are log-scale (their own log_scale metadata). This flag stays as an env
-    # escape hatch, default OFF.
-    chart_log_all: bool = False
+    # Viva 09-23 — FINAL ruling: log scale for EVERY price panel «در صورت
+    # نیاز» — the <3%-span guard keeps linear on short, flat windows (where
+    # log and linear are visually identical) and switches to log wherever the
+    # tape actually needs it. His problem was the canvas SIZE, never the scale.
+    chart_log_all: bool = True
     educational_min_score: int = 6
     execution_min_score: int = 7
     candidate_expiry_hours_swing: int = 168    # 4H stream: live until resolved (Viva 2026-09-14)
