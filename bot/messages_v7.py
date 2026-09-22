@@ -1355,6 +1355,27 @@ def _chart_cache_set(key: tuple, val: bytes) -> None:
             _CHART_CACHE.pop(_k, None)
 
 
+def _clean_render_frame(df: pd.DataFrame, window: int = 150) -> pd.DataFrame:
+    """Viva 09-22/23: «یک‌سوم سمت چپ چارت کامل با کندلها بیاد مثل قبل».
+
+    The left-third blank was EMPTY ROWS inside the render window: NaN rows
+    (aggregation/pagination padding) and all-zero placeholder rows render as
+    blank vertical strips in mplfinance — candles start mid-chart while every
+    overlay assumes a full window. This guard drops them so the visible window
+    is ALL candles, edge to edge (the designed blank stays on the RIGHT margin
+    only)."""
+    if df is None or df.empty:
+        return df
+    frame = df.tail(window).copy()
+    frame = frame.dropna(subset=["open", "high", "low", "close"])
+    for col in ("open", "high", "low", "close"):
+        frame = frame[pd.to_numeric(frame[col], errors="coerce") > 0]
+    # keep the renderer's contract: the frame is INDEXED by timestamp
+    frame = frame.set_index("timestamp")
+    frame.index = pd.DatetimeIndex(frame.index)
+    return frame
+
+
 def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool = False) -> Optional[bytes]:
     """Render a branded TradingView-inspired 1440×900 chart."""
     if df is None or df.empty:
@@ -1381,13 +1402,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     try:
         # Preserve enough history for real channel / wedge / range geometry;
         # the blank future panel is added separately, never by sacrificing bars.
-        frame = df.tail(150).copy()
-        # ── Viva 09-22: leading rows with missing OHLC painted a BLANK left
-        # third («یک سوم انتهایی سمت چپ چارت کامل با کندلها بیاد مثل قبل») —
-        # drop them so the visible window is all candles, edge to edge.
-        frame = frame.dropna(subset=["open", "high", "low", "close"])
-        frame = frame.set_index("timestamp")
-        frame.index = pd.DatetimeIndex(frame.index)
+        frame = _clean_render_frame(df, window=164)   # a few EXTRA candles fill the reclaimed margin
         # Viva 09-18 ruling (PINWALL/PINWALL-Q/ALBROX must paint trends too):
         # ABSOLUTE safety net — any candidate that reaches the chart without
         # render commands (old alert metadata, exotic path) gets enriched HERE.
@@ -1528,7 +1543,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         count = len(frame)
         # 30–34 bars of blank future space keeps the last candle roughly seven
         # centimetres from the price ladder / labels on the 12-inch render.
-        future = 42 if confirmed else 40
+        # ── Viva 09-23 (his marker on the probe chart): the huge reserved
+        # future margin read as «یک سوم خالی» — HALVE it and let real
+        # candles fill the reclaimed width (his reference charts keep
+        # only a slim right margin for the pills).
+        future = 24 if confirmed else 22
         for chart_ax in axes:
             chart_ax.set_xlim(-1, count + future)
 

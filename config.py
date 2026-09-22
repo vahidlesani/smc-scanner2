@@ -105,11 +105,11 @@ class Settings:
     alert_verdict_candles: int = 3
     # Log-scale rendering for higher-context trendline charts
     chart_log_htf: bool = False
-    # Viva 09-22 ruling (his question, my answer YES with a guard): log scale
-    # for EVERY chart — pivots/trendlines/zones fit percent-logarithmic reality;
-    # when the visible span is tiny (<3%) log is indistinguishable and the
-    # renderer keeps linear so ticks stay clean.
-    chart_log_all: bool = True
+    # Viva 09-22 — REVISED after his live look («چرا کلا همه‌چی رو تغییر دادی؟»):
+    # the FUTURES five keep the EXACT previous look (linear); only SPOT charts
+    # are log-scale (their own log_scale metadata). This flag stays as an env
+    # escape hatch, default OFF.
+    chart_log_all: bool = False
     educational_min_score: int = 6
     execution_min_score: int = 7
     candidate_expiry_hours_swing: int = 168    # 4H stream: live until resolved (Viva 2026-09-14)
