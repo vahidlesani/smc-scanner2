@@ -685,7 +685,7 @@ def run_spot_scan() -> Dict[str, int]:
         try:
             bundle = get_market_bundle(
                 symbol, tuple(SPOT_TRIGGERS),
-                limits={"4h": 170, "1d": 170, "3d": 120, "1w": 120})
+                limits={"4h": 170, "8h": 170, "12h": 170, "1d": 170, "3d": 120})
             for cand in spot_signals_for(symbol, bundle):
                 stats["found"] += 1
                 pending.append(cand)
@@ -706,7 +706,7 @@ def run_spot_scan() -> Dict[str, int]:
             break
         key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"
                f"{(cand.metadata or {}).get('pattern_type')}")
-        window = 72.0 if str(cand.trigger_timeframe) in ("3d", "1w") else 36.0
+        window = 72.0 if str(cand.trigger_timeframe) == "3d" else 36.0
         if _spot_stamp(key, window):
             continue
         try:

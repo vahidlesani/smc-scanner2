@@ -27,13 +27,33 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-SPOT_TRIGGERS = ("4h", "1d", "3d", "1w")
+SPOT_TRIGGERS = ("4h", "8h", "12h", "1d", "3d")
 SPOT_SETUPS = ("TLBREAK", "TECHCLASSIC")
+
+# ── ROUND 16 DECOUPLING (Viva 09-22, verbatim: «هیچ ارتباطی بین ستاپ‌های
+# فیوچرز و اسپات نباید وجود داشته باشه»): the spot engine must never share a
+# setup identity with the futures five — the previous phase wrongly stamped
+# spot rows as TLBREAK/TECHCLASSIC, which collides with the futures licence
+# keys on the same (symbol, tf). SPOTBREAK is spot's OWN setup code: its
+# licence, chains, dedupe and statistics live in their own namespace. The
+# engine only borrows the pattern-LIBRARY helpers (a shared vocabulary, not a
+# shared setup).
+SPOT_SETUP_CODE = "SPOTBREAK"
+
+# his trigger set for spot (09-22): «۴ساعته · ۸ساعته · ۱۲ساعته · ۱روزه · ۳روزه»
+# — the weekly is gone; 8h/12h come native from the venue (Bybit 360/720).
 
 # his band law for these timeframes (round 15): the ladder never sits closer
 # than this to the entry, whatever the structure says
-MIN_PATH_PCT_BY_TF = {"4h": 5.0, "1d": 5.0, "3d": 6.0, "1w": 8.0}
+MIN_PATH_PCT_BY_TF = {"4h": 5.0, "8h": 5.5, "12h": 6.0, "1d": 5.0, "3d": 6.0}
 SPOT_WEIGHTS = (40.0, 30.0, 30.0)
+
+# his stop law for spot (09-22): «استاپ هم ۱۰ درصد خوبه» — the structural stop
+# never stretches beyond 10% even on the daily/3-day tape
+SPOT_STOP_CAP_PCT = 10.0
+
+_SPOT_STYLE_BY_TF = {"4h": "SWING", "8h": "SWING", "12h": "SWING",
+                     "1d": "GRAND", "3d": "GRAND"}
 
 
 def _atr(df: pd.DataFrame, k: int = 14) -> float:
@@ -92,10 +112,11 @@ def _fresh(d: pd.DataFrame, tf: str) -> bool:
         _last = pd.Timestamp(d["timestamp"].iloc[-1])
         if _last.tzinfo is not None:
             _last = _last.tz_convert("UTC").tz_localize(None)
-        _tf_hours = {"4h": 4, "1d": 24, "3d": 72, "1w": 168}.get(tf, 24)
+        _tf_hours = {"4h": 4, "8h": 8, "12h": 12, "1d": 24, "3d": 72,
+                     "1w": 168}.get(tf, 24)
         _bucket_end = _last + pd.Timedelta(hours=_tf_hours)
         _age_h = (_now - _bucket_end).total_seconds() / 3600.0
-        _limit_h = 24.0 if tf in ("4h", "1d") else 30.0
+        _limit_h = 24.0 if tf in ("4h", "8h", "12h", "1d") else 30.0
         return _age_h <= _limit_h
     except Exception:
         return True
@@ -195,21 +216,38 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
     return list(best.values())
 
 
+def _next_spot_public_code() -> str:
+    """His ID format (09-22): VIVA-SPOT-E000000 — a monotonic counter in the
+    KV store; a timestamp fallback keeps IDs unique even if the KV hiccups."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        cur = int((_g("spot_code_seq", {}) or {}).get("n", 0) or 0) + 1
+        set_json("spot_code_seq", {"n": cur})
+        return f"VIVA-SPOT-E{cur:06d}"
+    except Exception:
+        return ("VIVA-SPOT-E"
+                + datetime.now(timezone.utc).strftime("%H%M%S"))
+
+
 def build_spot_candidate(item: dict):
     """Turn a scan_spot_symbol row into a CONFIRMED SignalCandidate (SPOT).
 
     The candidate is born confirmed (the break close already happened) and
     carries market=SPOT + log_scale, which is what switches on the LOG axis and
     the green measured-move box — and nothing of that appears on futures.
+    Round 16: the setup identity is SPOTBREAK (never the futures TLBREAK/
+    TECHCLASSIC codes) so licences, chains and stats stay fully decoupled, the
+    trade tool anchors at the confirming candle, and the stop keeps the 10%
+    spot ceiling («استاپ هم ۱۰ درصد خوبه»).
     """
     from analysis.models import SignalCandidate
-    from analysis.trade_management import stop_ceiling_pct
     tf = str(item.get("tf") or "4h").lower()
     entry = float(item["entry"])
     sl = float(item["sl"])
-    # the timeframe's own stop ceiling still governs (round 14 table), applied
-    # here as the spot engine's arithmetic so the message and the chart agree
-    cap = float(stop_ceiling_pct(tf)) / 100.0
+    # ── Viva 09-22: SPOT's ceiling is HIS 10% law alone («در اسپات تا ۱۰
+    # درصد هم باشه ایرادی نداره») — the futures per-TF table (2.75% on 1d …)
+    # must never bind the spot engine.
+    cap = float(SPOT_STOP_CAP_PCT) / 100.0
     if entry > 0 and sl > 0 and (entry - sl) / entry > cap:
         sl = entry * (1.0 - cap)
     targets = [float(x) for x in (item.get("targets") or [])]
@@ -217,12 +255,14 @@ def build_spot_candidate(item: dict):
     meta = {
         "market": "SPOT", "engine": "SPOT", "log_scale": True,
         "spot_measured_box": True,
+        "public_code": _next_spot_public_code(),
         "atr": float(item.get("atr") or 0.0),
         "pattern_type": str(item.get("pattern") or ""),
         "pattern_state_label": str(item.get("label") or ""),
         "pattern_rule_fa": str(item.get("rule_fa") or ""),
         "render_patterns": list(item.get("pattern_commands") or []),
         "spot_break_bar": str(item.get("break_bar_ts") or ""),
+        "tool_entry_ts": str(item.get("break_bar_ts") or ""),
         "spot_broken_level": float(item.get("broken_level") or 0.0),
         "target_ladder": {"targets": targets, "weights": weights,
                           "path_pct": float(item.get("path_pct") or 0.0)},
@@ -234,9 +274,8 @@ def build_spot_candidate(item: dict):
         signal_id=f"viva-spot-{str(item.get('symbol') or '').upper()}-{tf}-"
                   f"{str(item.get('break_bar_ts') or '')[:13].replace(' ', 'T')}",
         symbol=str(item.get("symbol") or "").upper(),
-        style={"4h": "SWING", "1d": "GRAND", "3d": "GRAND", "1w": "GRAND"}.get(tf, "SWING"),
-        setup_code="TLBREAK" if item.get("pattern") in ("TRENDLINE", "HORIZONTAL_SR")
-                    else "TECHCLASSIC",
+        style=_SPOT_STYLE_BY_TF.get(tf, "SWING"),
+        setup_code=SPOT_SETUP_CODE,
         setup_name=f"Spot {item.get('pattern_fa') or ''}".strip(),
         strategy_fa=str(item.get("rule_fa") or ""),
         direction="LONG", score=8, status="CONFIRMED",
@@ -389,6 +428,11 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                 box_top = _structural_high_above(d, close)
                 if box_top:
                     box_top = box_top * 1.01  # «کمی بالاترش»
+                try:
+                    _v20 = float(d["volume"].tail(20).mean() or 0.0)
+                    vol_ratio = (float(d["volume"].iloc[-1]) / _v20) if _v20 > 0 else 0.0
+                except Exception:
+                    vol_ratio = 0.0
                 sig = (f"{symbol.upper()}|{tf}|{kind}|"
                        f"{int(float(_lns[0].get('x0', 0) or 0))}|"
                        f"{int(float(_lns[-1].get('x0', 0) or 0))}")
@@ -400,7 +444,7 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                     "close": close, "edge": float(hit["edge"]),
                     "distance_pct": round((float(hit["edge"]) - close)
                                           / close * 100.0, 3),
-                    "atr": float(atr),
+                    "atr": float(atr), "vol_ratio": round(vol_ratio, 2),
                     "box_top": float(box_top) if box_top else 0.0,
                     "pattern_commands": [pat], "sig": sig,
                     "bar_ts": str(d["timestamp"].iloc[-1]),
@@ -505,10 +549,8 @@ def build_spot_alert_candidate(item: dict):
         signal_id=(f"viva-spotalert-{str(item.get('symbol') or '').upper()}-"
                    f"{tf}-{stage}-{str(item.get('bar_ts') or '')[:13].replace(' ', 'T')}"),
         symbol=str(item.get("symbol") or "").upper(),
-        style={"4h": "SWING", "1d": "GRAND", "3d": "GRAND",
-               "1w": "GRAND"}.get(tf, "SWING"),
-        setup_code=("TLBREAK" if kind in ("TRENDLINE", "HORIZONTAL_SR")
-                    else "TECHCLASSIC"),
+        style=_SPOT_STYLE_BY_TF.get(tf, "SWING"),
+        setup_code=SPOT_SETUP_CODE,
         setup_name=f"Spot {item.get('pattern_fa') or ''}".strip(),
         strategy_fa=str(item.get("rule_fa") or ""),
         direction="LONG", score=0, status="WATCH",
