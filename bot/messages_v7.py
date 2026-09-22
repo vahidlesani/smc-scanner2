@@ -1859,8 +1859,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _h8 = abs(_ya8 - _yb8)
                     _lc8 = float(frame["close"].iloc[-1])
                     _mean_sl8 = (float(_a8["slope"]) + float(_b8["slope"])) / 2
+                    # ── Round 16 (Viva 09-22): from the FIRST warning onward
+                    # the green box rides UP to the NEXT STRUCTURAL HIGH (+1%)
+                    # — his CryptoCove reference («تا سقف بعدی ساختاری و کمی
+                    # بالاترش رسم بشه») — instead of the raw pattern height.
+                    _sbt8 = float((candidate.metadata or {}).get("spot_box_top") or 0.0)
+                    if _sbt8 > _lc8:
+                        _h8 = _sbt8 - _lc8
                     if _h8 > 0 and _lc8 > 0:
-                        if _mean_sl8 < 0:
+                        if _sbt8 > _lc8:
+                            _bt8, _tp8 = _lc8, _sbt8
+                        elif _mean_sl8 < 0:
                             _bt8, _tp8 = _lc8, _lc8 + _h8
                         else:
                             _bt8, _tp8 = _lc8 - _h8, _lc8
@@ -1906,6 +1915,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             .get("targets") or []]
                     if _tg9 and _lc9 > 0:
                         _tp9 = max(_tg9)
+                        # Round 16: the structural top outranks the ladder's own
+                        # last rung when the chart carries one (his CryptoCove law)
+                        _sbt9 = float((candidate.metadata or {}).get("spot_box_top") or 0.0)
+                        if _sbt9 > _lc9:
+                            _tp9 = _sbt9
                         _h9 = _tp9 - _lc9
                         if _h9 > 0:
                             _bx0, _bx1 = count + 2, count + 2 + max(8, int(future * 0.55))
@@ -3560,6 +3574,61 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
         tag = "ℹ️" if i >= 4 else f"{w:.0f}%"
         rows.append(f"• TP{i}: <b>{_price(tgt)}</b> · {dist:.2f}٪ فاصله · {tag}")
     return head + "\n".join(rows) + "\n\n" + result_line + "\n\n📌 <b>VIVAMON-Labs-Pro</b>"
+
+
+_SPOT_ALERT_TITLE = {
+    "TOUCH": "🖐 برخورد اولیه به الگو",
+    "NEAR_BREAK": "⏳ نزدیک شدن به شکست",
+    "BREAK_DOWN": "💥 هشدار شکست نزولی",
+}
+
+
+def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
+    """Round 16 — the spot ladder's warning post: analysis only, never a trade
+    signal («بقیه فقط هشدار ها و تحلیل های مختصر بشه»). The ONE confirmation
+    stays the valid close above the shape's upper side, published through the
+    normal confirmed path."""
+    chat = str(CHAT_ID_SPOT or "")
+    if not chat:
+        return False
+    stage = str(item.get("stage") or "TOUCH")
+    side = str(item.get("side") or "HIGH")
+    dist = abs(float(item.get("distance_pct") or 0.0))
+    sym = str(item.get("symbol") or "")
+    tf = str(item.get("tf") or "").upper()
+    fa = str(item.get("pattern_fa") or "")
+    if stage == "BREAK_DOWN":
+        geometry = ("کلوز معتبر زیر ضلع پایین الگو ثبت شد — شرط صعودیِ الگو نقض شده؛ "
+                    "فقط هشدار تحلیلی است، سیگنال نیست.")
+    elif stage == "NEAR_BREAK":
+        side_fa = "بالا" if side == "HIGH" else "پایین"
+        geometry = (f"قیمت به ضلع {side_fa} الگو چسبیده (فاصله ≈ {dist:.2f}%) — "
+                    "آماده‌باش شکست؛ تأیید فقط با کلوز معتبر آن‌طرفِ ضلع.")
+    else:
+        side_fa = "بالا" if side == "HIGH" else "پایین"
+        geometry = (f"برخورد اولیه به ضلع {side_fa} الگو (فاصله تا ضلع ≈ {dist:.2f}%) — "
+                    "هشدار تماس؛ روند قیمت را از همین‌جا رصد کنید.")
+    lines = [
+        f"<b>{_e(_SPOT_ALERT_TITLE.get(stage, '🪙 هشدار اسپات'))}</b>",
+        f"<code>{_e(sym)}/USDT · {_e(tf)} · {_e(fa)}</code>",
+        "",
+        _e(geometry),
+    ]
+    rule = str(item.get("rule_fa") or "").strip()
+    if rule:
+        lines += ["", f"📘 {_e(rule)}"]
+    lines += ["",
+              "⚠️ هشدار تحلیلی اسپات — تأیید معامله فقط صعودی است (کلوز معتبر بالای الگو).",
+              "📌 <b>VIVAMON-Labs-Pro</b>"]
+    text = "\n".join(lines)
+    try:
+        from bot.telegram_bot import send_message, send_photo
+        if chart:
+            return bool(send_photo(chart, text, chat))
+        return bool(send_message(text, chat))
+    except Exception as exc:
+        print(f"spot alert send error {sym}: {exc}")
+        return False
 
 
 def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,

@@ -625,9 +625,39 @@ def _spot_daily_count() -> None:
         pass
 
 
+def _spot_alert_daily_left() -> int:
+    """Daily budget for the spot LADDER warnings — separate from the signal
+    budget («بقیه فقط هشدار ها و تحلیل های مختصر بشه», but never a spam faucet)."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        cap = max(0, int(os.getenv("SPOT_ALERT_MAX_PER_DAY", "8") or 8))
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        data = _g("spot_alert_daily", {}) or {}
+        if str(data.get("date")) != today:
+            data = {"date": today, "count": 0}
+            _s("spot_alert_daily", data)
+        return max(0, cap - int(data.get("count") or 0))
+    except Exception:
+        return 0
+
+
+def _spot_alert_daily_count() -> None:
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        data = _g("spot_alert_daily", {}) or {}
+        if str(data.get("date")) != today:
+            data = {"date": today, "count": 0}
+        data["count"] = int(data.get("count") or 0) + 1
+        _s("spot_alert_daily", data)
+    except Exception:
+        pass
+
+
 def run_spot_scan() -> Dict[str, int]:
     """One full spot pass: 4h · 1d · 3d · 1w over the liquidity watchlist."""
-    stats = {"symbols": 0, "found": 0, "published": 0, "errors": 0}
+    stats = {"symbols": 0, "found": 0, "published": 0,
+             "alerts": 0, "errors": 0}
     if not _spot_enabled():
         return stats
     try:
@@ -650,6 +680,7 @@ def run_spot_scan() -> Dict[str, int]:
     stats["symbols"] = len(symbols)
     started = time.monotonic()
     pending = []
+    ladder = []          # round 16: TOUCH / NEAR_BREAK / BREAK_DOWN warnings
     for symbol in symbols:
         try:
             bundle = get_market_bundle(
@@ -658,6 +689,12 @@ def run_spot_scan() -> Dict[str, int]:
             for cand in spot_signals_for(symbol, bundle):
                 stats["found"] += 1
                 pending.append(cand)
+            # the ladder rides the SAME fetched frames — zero extra downloads
+            try:
+                from analysis.spot_engine import scan_spot_alerts
+                ladder.extend(scan_spot_alerts(symbol, bundle))
+            except Exception as exc:
+                print(f"spot ladder scan warning {symbol}: {exc}")
         except Exception as exc:
             stats["errors"] += 1
             print(f"spot scan warning {symbol}: {exc}")
@@ -684,9 +721,56 @@ def run_spot_scan() -> Dict[str, int]:
             if tf_channel_publish_confirmed(cand, chart=chart, chat_override=CHAT_ID_SPOT):
                 stats["published"] += 1
                 _spot_daily_count()
+                # round 16: a published signal CLOSES the ladder for its shape
+                try:
+                    from analysis.spot_engine import spot_alert_mark_confirmed
+                    _kind8 = str((cand.metadata or {}).get("pattern_type") or "")
+                    for _it8 in ladder:
+                        if (_it8.get("symbol") == cand.symbol
+                                and _it8.get("tf") == cand.trigger_timeframe
+                                and str(_it8.get("pattern") or "") == _kind8):
+                            spot_alert_mark_confirmed(str(_it8.get("sig") or ""))
+                except Exception:
+                    pass
         except Exception as exc:
             stats["errors"] += 1
             print(f"spot publish warning {cand.symbol}: {exc}")
+    # ── round 16: the ladder — warnings are analysis, they never spend the
+    # signal budget, but they carry their own daily cap and their own dedup.
+    # Order: strongest stage first so the cap never eats a BREAK_DOWN to feed
+    # a TOUCH.
+    _stage_rank = {"BREAK_DOWN": 3, "NEAR_BREAK": 2, "TOUCH": 1}
+    ladder.sort(key=lambda it: _stage_rank.get(str(it.get("stage") or ""), 0),
+                reverse=True)
+    try:
+        from bot.messages_v7 import send_spot_alert as _send_spot_alert
+        from analysis.spot_engine import (spot_alert_check, spot_alert_commit,
+                                          build_spot_alert_candidate)
+        from data.fetcher import get_klines as _spot_klines
+        for aitem in ladder:
+            if _spot_alert_daily_left() <= 0:
+                break
+            try:
+                if not spot_alert_check(aitem):
+                    continue
+                cand = build_spot_alert_candidate(aitem)
+                frame = None
+                try:
+                    frame = _spot_klines(cand.symbol, cand.trigger_timeframe,
+                                         170, closed_only=False, use_cache=True)
+                except Exception:
+                    frame = None
+                chart = (generate_chart(frame, cand, confirmed=False)
+                         if frame is not None else None)
+                if _send_spot_alert(aitem, chart):
+                    spot_alert_commit(aitem)      # marker only AFTER the send
+                    stats["alerts"] = stats.get("alerts", 0) + 1
+                    _spot_alert_daily_count()
+            except Exception as exc:
+                stats["errors"] += 1
+                print(f"spot alert warning {aitem.get('symbol')}: {exc}")
+    except ImportError as exc:
+        print(f"spot ladder import failed: {exc}")
     print(f"🪙 SPOT pass finished in {time.monotonic() - started:.1f}s • "
           f"symbols={stats['symbols']} found={stats['found']} "
           f"published={stats['published']} budget_left={_spot_daily_left()}")
