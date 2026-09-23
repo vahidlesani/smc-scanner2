@@ -329,18 +329,27 @@ def absorb_update_into_chain(holder: SignalCandidate, fresh: SignalCandidate) ->
     new_mid = float(getattr(fresh, "zone_mid", 0) or 0)
     moved_atr = abs(new_mid - old_mid) / atr if old_mid else 0.0
     note = ""
+    # A public alert already has a chart identity, even before CONFIRMED. A
+    # later scan for the same symbol must not stretch its tool or overwrite its
+    # entry/SL/TP with another candidate's geometry. A different signal_id has
+    # its own holder and therefore gets its own snapshot naturally.
+    _published = bool(getattr(holder, "approaching_sent", False)) or _frozen or any(
+        k in (holder.metadata or {}) for k in (
+            "education_message_id", "education_chart_message_id",
+            "approaching_message_id", "pro_separator_message_id"))
     if moved_atr > 0.30:
         note = (f"ناحیه با اسکنِ تازه جابه‌جا شد: میانهٔ قبلی {old_mid:g} → جدید {new_mid:g} "
                 f"(≈{moved_atr:.2f} ATR)؛ شرط تأیید از این پس روی ناحیهٔ جدید بررسی می‌شود.")
         if holder.approaching_sent:
             holder.approaching_sent = False
             holder.status = "EDUCATIONAL"
-    holder.entry_zone_bottom = fresh.entry_zone_bottom
-    holder.entry_zone_top = fresh.entry_zone_top
-    holder.planned_entry = fresh.planned_entry
-    holder.sl = fresh.sl
-    holder.tp1 = fresh.tp1
-    holder.tp2 = fresh.tp2
+    if not _published:
+        holder.entry_zone_bottom = fresh.entry_zone_bottom
+        holder.entry_zone_top = fresh.entry_zone_top
+        holder.planned_entry = fresh.planned_entry
+        holder.sl = fresh.sl
+        holder.tp1 = fresh.tp1
+        holder.tp2 = fresh.tp2
     holder.score = fresh.score
     holder.evidence = fresh.evidence
     holder.confirmations = fresh.confirmations
@@ -361,10 +370,6 @@ def absorb_update_into_chain(holder: SignalCandidate, fresh: SignalCandidate) ->
     # different trendline under the same signal id (the «خط کش اومده باز»
     # bug: every absorb carried the fresh re-fit's anchor points). Geometry
     # keys keep their ALERT-TIME values for the chain's whole life.
-    _published = bool(getattr(holder, "approaching_sent", False)) or _frozen or any(
-        k in (holder.metadata or {}) for k in (
-            "education_message_id", "education_chart_message_id",
-            "approaching_message_id", "pro_separator_message_id"))
     if _published:
         keep |= {
             "tl_a_ts", "tl_a_price", "tl_b_ts", "tl_b_price", "tl_anchor_ts",

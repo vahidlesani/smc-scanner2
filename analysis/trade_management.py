@@ -462,7 +462,7 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
     _path = tf_target_distance(entry, _cap_tf, structural_level=final_price,
                                direction=direction, wall_level=float(wall_level or 0.0))
     if _path <= 0:
-        _path = dist
+        _path = abs(final_price - entry)
     # hard TF ceiling on the path
     _limit = abs(entry) * target_distance_cap_pct(_cap_tf) / 100.0
     if _limit > 0 and _path > _limit:

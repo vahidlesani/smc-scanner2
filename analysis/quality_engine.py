@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import pandas as pd
 
@@ -141,8 +141,20 @@ def _bars_since_candidate(candidate: SignalCandidate, closed_df: pd.DataFrame) -
     timestamps = pd.to_datetime(closed_df["timestamp"])
     if getattr(timestamps.dt, "tz", None) is not None:
         timestamps = timestamps.dt.tz_convert("UTC").dt.tz_localize(None)
-    after = closed_df.loc[timestamps >= created].copy()
-    return after if not after.empty else closed_df.tail(2).copy()
+    # The alert candle is the information boundary. Including it (or falling
+    # back to historical bars) can confirm a signal using pre-alert data.
+    return closed_df.loc[timestamps > created].copy()
+
+
+def _frame_atr(frame: pd.DataFrame, period: int = 14, fallback: float = 0.0) -> float:
+    """Return one consistent true-range ATR for the frame being judged."""
+    try:
+        value = float(atr(frame, period).iloc[-1])
+        if pd.notna(value) and value > 0:
+            return value
+    except Exception:
+        pass
+    return float(fallback or 0.0)
 
 
 # ── Viva 09-21 (round 15 phase 2): «هر الگویی اسم داره . قوانین خودش رو داره»
@@ -274,6 +286,26 @@ def enforce_confirmed_snapshot(candidate) -> str:
     return ""
 
 
+def _project_watch_level(watch: dict, when) -> float:
+    """Value of a watched line at `when`. Log-calibrated lines are interpolated
+    in log space between their own anchors (identical to the chord otherwise) —
+    R16 phase 3, so the veto level is the line the chart actually paints."""
+    p0 = (watch or {}).get("p0") or {}
+    p1 = (watch or {}).get("p1") or {}
+    t0 = pd.Timestamp(str(p0.get("ts")))
+    t1 = pd.Timestamp(str(p1.get("ts")))
+    y0, y1 = float(p0.get("price")), float(p1.get("price"))
+    dt = (t1 - t0).total_seconds()
+    if dt <= 0 or not (y0 > 0 and y1 > 0):
+        raise ValueError("degenerate watch anchors")
+    t = pd.Timestamp(when)
+    if watch.get("log_fit"):
+        import math as _m
+        f = (t - t0).total_seconds() / dt
+        return float(10.0 ** (_m.log10(y0) + (_m.log10(y1) - _m.log10(y0)) * f))
+    return y1 + (y1 - y0) / dt * (t - t1).total_seconds()
+
+
 def evaluate_confirmation(
     candidate: SignalCandidate, closed_df: pd.DataFrame,
     htf_closed_df: Optional[pd.DataFrame] = None,
@@ -348,8 +380,7 @@ def evaluate_confirmation(
         pass
     _zone_edge = float(candidate.entry_zone_top if candidate.direction == "LONG"
                        else candidate.entry_zone_bottom)
-    _atr = float(candidate.metadata.get("atr", 0) or 0) or float(
-        (closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
+    _atr = float(candidate.metadata.get("atr", 0) or 0) or _frame_atr(closed_df)
     touched = bool(candidate.metadata.get("touched", False))
     # Viva 2026-09-13 «اولین کلوز بالا/پایین هر ترند یا ضلعِ وج/مثلث/کانال
     # تأیید است»: EVERY closed bar since the alert can fire the confirmation
@@ -369,7 +400,9 @@ def evaluate_confirmation(
             if _la is not None and _lb is not None and _lb[0] != _la[0]:
                 _dt = (_lb[0] - _la[0]).total_seconds()
                 if _dt:
-                    _frac = (pd.Timestamp(ts) - _la[0]).total_seconds() / _dt
+                    _frac = max(0.0, min(1.0, (
+                        (pd.Timestamp(ts) - _la[0]).total_seconds() / _dt
+                    )))
                     return float(_la[1] + (_lb[1] - _la[1]) * _frac)
             return static_edge
         _is_long = candidate.direction == "LONG"
@@ -385,7 +418,7 @@ def evaluate_confirmation(
             # almost-impossible bar nobody stated — «اولین کلوز معتبر» means
             # valid FOR THAT CANDLE, so the buffer/body are scaled to the
             # scanned frame's own average range (14 bars, high-low).
-            _f_atr = float((_frame["high"] - _frame["low"]).tail(14).mean() or 0.0) or _atr
+            _f_atr = _frame_atr(_frame, fallback=_atr)
             # ── Viva 09-21 (round 15), his verbatim law, fourth time stated:
             # «اولین کلوز بالای یا زیر هر نوع ناحیه‌های داخل ستاپ / کلوز بالا یا
             # پایین هر تول ترند نزولی و صعودی / هر نوع الگو باید تایید بشه» and
@@ -448,8 +481,21 @@ def evaluate_confirmation(
             _ts_now20 = pd.Timestamp(str(_row20["timestamp"]))
             _bars20 = max(0.0, (_ts_now20 - _ts_last20).total_seconds() / 60.0
                           / float(_band20["tf_minutes"]))
-            _band_lo20 = float(_band20["lo"]) + float(_band20.get("slope_lo") or 0.0) * _bars20
-            _band_hi20 = float(_band20["hi"]) + float(_band20.get("slope_hi") or 0.0) * _bars20
+            # R16 phase 3: a log-calibrated edge must be projected on its OWN
+            # curve — the linear tangent would drift away from the line the
+            # chart shows (bands without log geometry keep the old maths).
+            _lo20 = _band20.get("log_lo") or {}
+            _hi20 = _band20.get("log_hi") or {}
+            if _lo20.get("fit") and float(_lo20.get("intercept") or 0.0):
+                _x20 = float(_lo20["slope"]) * _bars20 + float(_lo20["intercept"])
+                _band_lo20 = float(10.0 ** _x20)
+            else:
+                _band_lo20 = float(_band20["lo"]) + float(_band20.get("slope_lo") or 0.0) * _bars20
+            if _hi20.get("fit") and float(_hi20.get("intercept") or 0.0):
+                _x21 = float(_hi20["slope"]) * _bars20 + float(_hi20["intercept"])
+                _band_hi20 = float(10.0 ** _x21)
+            else:
+                _band_hi20 = float(_band20["hi"]) + float(_band20.get("slope_hi") or 0.0) * _bars20
         except Exception:
             _band_lo20 = _band_hi20 = None
     # ── Viva 09-21 (round 12) — BREAK-SIDE LAW, enforced on every setup ───
@@ -466,10 +512,6 @@ def evaluate_confirmation(
     # Closing THROUGH a line in the trade's own direction stays allowed (that
     # is the break/retest lane), and INTERNAL/fade lanes are exempt by design.
     if not _is_internal and candidate.direction in ("LONG", "SHORT"):
-        try:
-            _lu = float(candidate.metadata.get("last_unconfirmed_at") or 0)
-        except Exception:
-            _lu = 0.0
         _watch = (candidate.metadata or {}).get("render_line_watch") or []
         _side_wrong = ""
         for _ln in _watch:
@@ -483,7 +525,7 @@ def evaluate_confirmation(
                 if _dt <= 0 or not (_y0 > 0 and _y1 > 0):
                     continue
                 _tnow = pd.Timestamp(str(_row20["timestamp"]))
-                _lvl = _y1 + (_y1 - _y0) / _dt * (_tnow - _t1).total_seconds()
+                _lvl = _project_watch_level(_ln, _tnow)
                 # only lines that are still RELEVANT to the live price may veto
                 # (a dead line projected far away is history, not context)
                 # relevant = the line is still within a few ATR of the price
@@ -507,6 +549,18 @@ def evaluate_confirmation(
                 f"در جهت مخالف سناریو با کلوز شکسته است (کلوز {_close20:.8g}). "
                 "طبق قانون، پس از شکست و کلوزِ معتبر، پوزیشن فقط در جهت ضلعِ "
                 "شکسته معنا دارد؛ این سناریو باطل می‌شود."))
+    # TECHCLASSIC carries an explicit canonical contract from the detector.
+    # Never allow a later generic/internal path to reverse that contract.
+    if not _is_internal:
+        _contract = (candidate.metadata or {})
+        _contract_kind = str(_contract.get("strategy_variant") or "").upper()
+        _contract_break = str(_contract.get("break_direction") or "").upper()
+        if _contract_kind == "VIVA_TLBREAK" and _contract_break in {"UP", "DOWN"}:
+            _expected = "LONG" if _contract_break == "UP" else "SHORT"
+            if str(candidate.direction).upper() != _expected:
+                return reject("BREAK_SIDE_MISMATCH", (
+                    f"قرارداد ماهیت الگو نقض شده است: شکست {_contract_break} است، "
+                    f"اما جهت معامله {candidate.direction} ثبت شده؛ فقط {_expected} مجاز است."))
     # ── Viva 09-20 (round 9) — INTERNAL-ENTRY lane ───────────────────────
     # Verbatim: «داخل کانال یا رنجِ جانبی فقط از کف مجاز به لانگ هستیم با
     # تأیید کندل و استاپ پشت کانال با بافر، و اهداف زیر سقف کانال؛ شورت هم
@@ -517,7 +571,13 @@ def evaluate_confirmation(
     # ceiling (LONG) / ABOVE the channel floor (SHORT). Marked INTERNAL so the
     # breakout-containment gate exempts it by design.
     _internal_plan = None
+    _pattern_kind20 = str((_band20 or {}).get("kind") or "").upper()
+    _internal_allowed20 = (
+        _pattern_kind20 in {"RANGE", "RECTANGLE", "CHANNEL"}
+        or _pattern_kind20.startswith("CHANNEL_")
+    )
     if (_band_lo20 is not None and _band_hi20 is not None
+            and _internal_allowed20
             and str(_md20.get("viva_entry_type") or "").upper() != "INTERNAL"):
         try:
             _w20 = max(_band_hi20 - _band_lo20, 1e-12)
@@ -532,7 +592,7 @@ def evaluate_confirmation(
             # the internal-lane buffer is the standard price allowance.
             from analysis.trade_management import structural_buffer
             _buf20i = structural_buffer(_close20)
-            if candidate.direction == "LONG" and _close20 <= _band_lo20 + 0.30 * _w20:
+            if candidate.direction == "LONG" and _close20 <= _band_lo20 + 0.20 * _w20:
                 _bull_pin = ((min(_o20, _close20) - _l20) >= 2.0 * max(_body20, 1e-12)
                              and (_h20 - _close20) <= 0.35 * _rng20)
                 _bull_engulf = (_prev_c20 < _prev_o20 and _close20 > _o20
@@ -559,7 +619,7 @@ def evaluate_confirmation(
                         "tp2": _wall,
                         "pattern": str(_band20.get("kind") or "RANGE"),
                     }
-            elif candidate.direction == "SHORT" and _close20 >= _band_hi20 - 0.30 * _w20:
+            elif candidate.direction == "SHORT" and _close20 >= _band_hi20 - 0.20 * _w20:
                 _bear_pin = ((_h20 - max(_o20, _close20)) >= 2.0 * max(_body20, 1e-12)
                              and (_close20 - _l20) <= 0.35 * _rng20)
                 _bear_engulf = (_prev_c20 > _prev_o20 and _close20 < _o20

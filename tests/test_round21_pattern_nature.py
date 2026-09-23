@@ -47,6 +47,7 @@ def test_absorb_never_redraws_a_published_trendline():
         "tl_line": 92.0, "viva_upper_points": [{"index": 3, "price": 80.0}],
         "viva_major_break_line": 90.92, "atr": 1.0,
     })
+    holder.planned_entry, holder.sl, holder.tp1, holder.tp2 = 100.0, 95.0, 108.0, 115.0
     holder.approaching_sent = True            # the chain is PUBLIC
     fresh = _mk_candidate("r21-snap", metadata={
         "tl_a_ts": "2026-09-05 00:00", "tl_a_price": 83.0,     # re-fit moved it
@@ -55,6 +56,7 @@ def test_absorb_never_redraws_a_published_trendline():
         "viva_major_break_line": 95.5, "atr": 1.2,
         "score_ctx": "fresh market context is still welcome",
     })
+    fresh.planned_entry, fresh.sl, fresh.tp1, fresh.tp2 = 110.0, 105.0, 118.0, 125.0
     absorb_update_into_chain(holder, fresh)
     md = holder.metadata
     assert md["tl_a_ts"] == "2026-09-01 00:00" and float(md["tl_a_price"]) == 80.0
@@ -63,6 +65,7 @@ def test_absorb_never_redraws_a_published_trendline():
     assert md["viva_upper_points"] == [{"index": 3, "price": 80.0}]
     assert float(md["viva_major_break_line"]) == 90.92   # the MAJOR-TL law level
     assert md["score_ctx"] == "fresh market context is still welcome"  # context refreshes
+    assert (holder.planned_entry, holder.sl, holder.tp1, holder.tp2) == (100.0, 95.0, 108.0, 115.0)
 
 
 def test_absorb_before_publication_still_refreshes_geometry():

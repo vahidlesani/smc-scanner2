@@ -668,6 +668,7 @@ def _spot_status_write(reason: str, stats: Optional[Dict[str, int]] = None) -> N
     """Viva 09-23/24 («چرا اسپات رو فعال نمیکنی؟؟»): the lane's liveness is
     VISIBLE — reason + last-pass counters in KV, surfaced in the app."""
     try:
+        from bot.messages_v7 import CHAT_ID_SPOT
         from database.bot_kv import set_json
         set_json("spot_lane_status", {
             "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

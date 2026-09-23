@@ -1880,6 +1880,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         if _htfp:
             notes.append((f"PAT 4H · {str(_htfp)}", CHART_THEME["muted"]))
         # pattern render commands: wedge / triangle / channel / flag / range
+        from analysis.render_kit import line_xy as _line_xy, line_y as _line_y_cal
         for _pat in ((candidate.metadata or {}).get("render_patterns") or []):
             if _pat.get("type") == "RANGE":
                 # anchored to its oldest tested pivot when it carries a time
@@ -1940,8 +1941,27 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _x0f = max(0.0, (float(_ln0.get("x0", 0))
                                      - max(0, len(df) - len(frame))) * _tfscale)
                     _ic8 = float(_ln0["intercept"])
-                _lns.append({**_ln0, "slope": _sl8, "intercept": _ic8,
-                             "x0": _x0f})
+                _ln8 = {**_ln0, "slope": _sl8, "intercept": _ic8, "x0": _x0f}
+                # R16 phase 3: a log-calibrated line rescales in LOG space
+                # (log_slope/scale, re-anchored on the same pivot) — scaling
+                # the linear tangent would bend it away from its pivots.
+                if _ln0.get("log_fit"):
+                    try:
+                        import math as _m8
+                        _ls8 = float(_ln0.get("log_slope") or 0.0) / _tfscale
+                        _anch = ((_pt8[0].get("price") if _pt8 else None)
+                                 or 10.0 ** (float(_ln0.get("log_slope") or 0.0)
+                                             * float(_ln0.get("x0") or 0.0)
+                                             + float(_ln0.get("log_intercept") or 0.0)))
+                        _li8 = _m8.log10(float(_anch)) - _ls8 * _x0f
+                        _y_now = 10.0 ** (_ls8 * (count + future) + _li8)
+                        _ln8["log_slope"] = _ls8
+                        _ln8["log_intercept"] = _li8
+                        _ln8["slope"] = _m8.log(10.0) * _ls8 * _y_now
+                        _ln8["intercept"] = _y_now - _ln8["slope"] * (count + future)
+                    except Exception:
+                        _ln8["log_fit"] = False
+                _lns.append(_ln8)
             _atr9 = float((frame["high"] - frame["low"]).tail(14).mean())
             _flat8 = []
             _brk8 = []
@@ -1955,7 +1975,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # trend — it is the supply/demand box of the base it came
                 # from, so paint it as a zone band instead of a line.
                 if _atr9 > 0 and abs(_sl) * max(1.0, count - _xa) < 0.5 * _atr9:
-                    _y8 = _sl * count + _ic
+                    _y8 = _line_y_cal(_ln, count)
                     ax.fill_between([_xa, _xe], _y8 - 0.12 * _atr9,
                                     _y8 + 0.12 * _atr9, color=_col8,
                                     alpha=0.10, linewidth=0, zorder=1)
@@ -1984,11 +2004,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # spec §13: parent patterns thick & solid, children thin
                 _lw8 = 1.2 if _pat.get("child") else 2.0
                 _al8 = 0.60 if _pat.get("child") else 0.95
-                ax.plot([_xa, _xend8], [_sl * _xa + _ic, _sl * _xend8 + _ic],
+                # R16 phase 3: draw the CALIBRATED geometry. A log-fitted line
+                # is a curve on a log axis, so it is painted as a polyline
+                # through its own fit — that is what makes it touch the pivots
+                # instead of hanging in the air. Linear lines keep the exact
+                # two-point segment they always had.
+                _xsA, _ysA = _line_xy(_ln, _xa, _xend8)
+                ax.plot(_xsA, _ysA,
                         color=_col8, linewidth=_lw8, alpha=_al8, zorder=7,
                         solid_capstyle="round")
                 if _bx8 is None and count < _xe - 0.6:
-                    ax.plot([count, _xe], [_sl * count + _ic, _sl * _xe + _ic],
+                    _xsB, _ysB = _line_xy(_ln, count, _xe)
+                    ax.plot(_xsB, _ysB,
                             color=_col8, linewidth=_lw8 * 0.7, alpha=_al8 * 0.75,
                             zorder=6, linestyle=(0, (6, 4)),
                             solid_capstyle="butt")
@@ -1996,8 +2023,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # Viva 09-18: every trend EXTENDS past price so its break
                     # stays visible & alertable — broken history continues as
                     # a faint dotted projection into the future panel.
-                    ax.plot([_xend8, _xe],
-                            [_sl * _xend8 + _ic, _sl * _xe + _ic],
+                    _xsC, _ysC = _line_xy(_ln, _xend8, _xe)
+                    ax.plot(_xsC, _ysC,
                             color=_col8, linewidth=0.9, alpha=0.35, zorder=5,
                             linestyle=(0, (2, 3)), solid_capstyle="butt")
                 _px8, _xs8 = [], []
@@ -2269,19 +2296,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             tool_start = int(_anchored_x(_entry_ts, max(0, count - 20)))
             tool_start = max(0, min(tool_start, count - 1))
             tool_end = count + 4.5
-            # TradingView-style Long/Short position marker AT THE ENTRY CANDLE.
-            marker_price = candidate.planned_entry
-            marker_x = tool_start
             # Viva 09-22: «اون فلش سبزِ کوچولو رو روی کندل‌ها و ابزار ننویس» —
-            # the entry triangle glyph is gone; the entry pill + the tool box
-            # already mark the trade, and the note now lives in the margin.
-            if candidate.direction == "LONG":
-                pos_note = "LONG POSITION"
-                pos_color = CHART_THEME["tp1"]
-            else:
-                pos_note = "SHORT POSITION"
-                pos_color = CHART_THEME["invalidation"]
-            notes.append((pos_note, pos_color))
+            # the entry triangle and LONG/SHORT position label are gone. The
+            # chart keeps only clean price lines/fills; direction remains in
+            # the Telegram text and metadata, not over the candles.
             ax.fill_between(
                 [tool_start, tool_end],
                 candidate.planned_entry,
@@ -2344,7 +2362,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # Pills are SPECs here and materialize AFTER the final y-limits
             # exist (the in-render ylim is still autoscale garbage — that was
             # the «pills in the sky» bug). The guide line always draws NOW at
-            # the true level.
+            # the true level. (The interleave idea from the parallel branch —
+            # dropping the pills entirely — was tried and Viva rejected it:
+            # the pills ARE the tool, 09-23/24.)
             for _lvl, _items in _groups:
                 for label, level, color in _items:
                     # Viva 09-16: solid guide lines read cleaner than dashes;

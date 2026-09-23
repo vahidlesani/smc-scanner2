@@ -111,7 +111,7 @@ def _spot_frames():
 
 
 def _fake_patterns(bias="BULL", label="WEDGE_FALLING", upper=105.0, slope=-0.05):
-    def _fake(df, direction=""):
+    def _fake(df, direction="", log_axis=None):   # R16 phase 3 signature
         n = len(df) - 1
         upper_line = {"side": "HIGH", "slope": slope,
                       "intercept": upper - slope * n, "x0": 5, "x1": n,

@@ -82,7 +82,8 @@ def _upper_edge(pattern: dict, n: int) -> Optional[float]:
     """The pattern's upper side, projected to the newest bar."""
     try:
         lines = pattern.get("lines") or []
-        vals = [float(l["slope"]) * n + float(l["intercept"]) for l in lines]
+        from analysis.render_kit import line_y as _ly     # calibrated (log) geometry
+        vals = [float(_ly(l, n)) for l in lines]
         if not vals:
             return None
         if pattern.get("shape") == "box":
@@ -130,7 +131,7 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
     already past the «first valid close above the shape» law.
     """
     from analysis.render_kit import detect_patterns
-    from analysis.patterns import classify, pattern_info, state_label
+    from analysis.patterns import pattern_info, state_label
     out: List[dict] = []
     if not frames:
         return out
@@ -151,7 +152,7 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 continue
             close = float(d["close"].iloc[-1])
             n = len(d) - 1
-            pats = detect_patterns(d, "LONG")
+            pats = detect_patterns(d, "LONG", log_axis=True)
             for pat in pats:
                 if pat.get("child"):
                     continue
@@ -177,7 +178,8 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 kind = str(pat.get("type") or "NONE").upper()
                 lower_vals = []
                 for _l in (pat.get("lines") or []):
-                    lower_vals.append(float(_l["slope"]) * n + float(_l["intercept"]))
+                    from analysis.render_kit import line_y as _ly2
+                    lower_vals.append(float(_ly2(_l, n)))
                 sl_struct = _minor_swing_low(d)
                 if lower_vals:
                     sl_struct = min(sl_struct, min(lower_vals))
@@ -222,7 +224,7 @@ def _next_spot_public_code() -> str:
     try:
         from database.bot_kv import get_json as _g, set_json as _s
         cur = int((_g("spot_code_seq", {}) or {}).get("n", 0) or 0) + 1
-        set_json("spot_code_seq", {"n": cur})
+        _s("spot_code_seq", {"n": cur})
         return f"VIVA-SPOT-E{cur:06d}"
     except Exception:
         return ("VIVA-SPOT-E"
@@ -322,7 +324,8 @@ def _edges_at(pat: dict, n: int) -> tuple:
     lines = list(pat.get("lines") or [])
     if not lines:
         return None, None
-    vals = [float(l["slope"]) * n + float(l["intercept"]) for l in lines]
+    from analysis.render_kit import line_y as _ly3    # calibrated (log) geometry
+    vals = [float(_ly3(l, n)) for l in lines]
     if str(pat.get("shape") or "single") == "single":
         side = str(lines[0].get("side") or "").upper()
         return (vals[0], None) if side != "LOW" else (None, vals[0])
@@ -412,7 +415,7 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                 continue
             n = len(d) - 1
             close = float(d["close"].iloc[-1])
-            for pat in detect_patterns(d, "LONG"):
+            for pat in detect_patterns(d, "LONG", log_axis=True):
                 if pat.get("child"):
                     continue                  # half a shape is not a shape
                 _lns = list(pat.get("lines") or [])

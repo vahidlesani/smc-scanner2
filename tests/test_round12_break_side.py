@@ -24,6 +24,7 @@ def _candidate(direction="SHORT", **over):
                 tp2=104.0 if direction == "LONG" else 96.0,
                 rr_tp1=1.0, rr_tp2=2.0, bias="BEAR" if direction == "SHORT" else "BULL",
                 trigger_timeframe="15m", mandatory_gates={"zone": True},
+                created_at="2026-09-21 09:45:00+00:00",
                 metadata={"atr": 1.0, "touched": True})
     base.update(over)
     return SignalCandidate(**base)

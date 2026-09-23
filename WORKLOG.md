@@ -8,11 +8,30 @@
 ## 📍 وضعیت لحظهٔ آخرین به‌روزرسانی
 | مورد | مقدار |
 |---|---|
-| شاخهٔ فعال | `main` — round16 **merge شد** (`841202e`) |
+| شاخهٔ فعال | `main` — audit patch آمادهٔ commit روی HEAD `754f4d3` |
 | لایو | ✅ دیپلوی `dbe39015` **SUCCESS** + لاگ تمیز (هارت‌بیت ۲۱:۲۵Z، اسکن ۴۴ نماد، صفر exception) |
-| تست‌ها | ✅ 349 پاس / 1 اسکیپ (روی main) |
+| تست‌ها | ✅ `375 passed, 1 skipped`; وب‌اپ `7 passed` |
 | هندآف کامل | `handoff/HANDOFF.md` · `handoff/KARTABEL.md` · `handoff/PROJECT_MAP.md` (همه داخل همین ریپو) |
-| توکن‌ها | GitHub + Railway (شخصی، خارج از ریپو نگه داشته می‌شوند) |
+| توکن‌ها | GitHub OAuth فعال؛ Railway در این تسک متصل نیست |
+
+## ✅ ممیزی فاز اول (۰۹-۲۳)
+- قانون تأیید اکنون strictly-after-alert است؛ کندل هشدار و fallback تاریخی دیگر نمی‌توانند تأیید بسازند.
+- ATR confirmation در هر فریم از True Range واقعی محاسبه می‌شود و projection خط روند به بازهٔ anchorها clamp می‌شود.
+- NameErrorهای `dist`، `set_json` و `CHAT_ID_SPOT` رفع شد؛ CI pytest کامل و lint هستهٔ معاملات را اجرا می‌کند.
+- UI موجود با همان chart engine ربات راستی‌آزمایی کرد: **۷ تست سبز**. دیپلوی Railway هنوز انجام نشده است.
+
+## ✅ فاز دوم — کالیبراسیون موتور ترند و الگو (۰۹-۲۳)
+- هر edge رویداد اکنون `pattern_type`, `pattern_bias`, `break_edge`, `break_direction`, `trade_direction` و `direction_reason` دارد.
+- قانون ماهیت wedge حفظ و سخت‌گیر شد: rising wedge فقط شکست کف/SHORT و falling wedge فقط شکست سقف/LONG؛ edge نامعتبر Flag پس از relabel دیگر event تولید نمی‌کند.
+- confirmation از قرارداد detector دفاع می‌کند؛ SHORT روی UP break و LONG روی DOWN break با `BREAK_SIDE_MISMATCH` رد می‌شوند، حتی اگر generic/internal lane تلاش به تأیید کند.
+- تست نهایی: **376 passed / 1 skipped**. warningهای pandas در fixtureهای قدیمی باقی مانده‌اند و blocker عملکردی نیستند.
+
+## ✅ فاز سوم — internal geometry، snapshot و چارت (۰۹-۲۳)
+- لاین INTERNAL فقط برای `RANGE`, `RECTANGLE`, `CHANNEL` و `CHANNEL_*` مجاز شد؛ وج‌ها، مثلث‌ها و broadening دیگر از وسط یا انتهای خود internal confirmation نمی‌گیرند.
+- لبهٔ داخلی از ۳۰٪ به ۲۰٪ عرض الگو سخت‌تر شد؛ entry همان close تأیید است، stop پشت کف/سقف ساختاری و target مسیر تا دیوارهٔ مقابل است.
+- absorb برای زنجیرهٔ منتشرشده دیگر `entry/SL/TP` را از fresh scan کپی نمی‌کند؛ geometry همان signal ID ثابت می‌ماند و شناسهٔ جدید geometry خودش را دارد.
+- لیبل‌های `LONG POSITION`/`SHORT POSITION` و level pills کنار ابزار حذف شدند؛ خطوط Entry/Stop/TP باقی هستند و مقادیر در متن پیام می‌مانند.
+- راستی‌آزمایی نهایی: **377 passed / 1 skipped**.
 
 ## ✅ انجام‌شدهٔ راند ۱۶ (کامیت‌شده — تکرار نمی‌شود)
 1. **فاز ۱** `2546437` — لَدر هشدار اسپات: TOUCH (برخورد اولیه) → NEAR_BREAK (نزدیک شکست) → BREAK_DOWN (شکست نزولی = فقط هشدار) → تأیید همان قانون یک‌کلوز صعودی · باکس سبز از اولین هشدار تا سقف ساختاری +۱٪ · گیت ضدتکرار سه‌مرحله‌ای (ارتقا همیشه مجاز، تکرار با کول‌داون، مارکر فقط بعد از ارسال موفق) · بودجهٔ مستقل `SPOT_ALERT_MAX_PER_DAY` (۸/روز).

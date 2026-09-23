@@ -122,6 +122,7 @@ def _candidate(direction="LONG", **over):
                 status="NEAR_CONFIRM", entry_zone_bottom=99.5, entry_zone_top=100.0,
                 planned_entry=100.0, sl=98.4, tp1=101.5, tp2=103.0, rr_tp1=1.0, rr_tp2=2.0,
                 bias="BULL", trigger_timeframe="15m",
+                created_at="2026-09-20 09:45:00+00:00",
                 mandatory_gates={"zone": True, "rr": True},
                 metadata={"atr": 1.0, "touched": True,
                           "pattern_band": {"kind": "RANGE", "lo": 99.0, "hi": 103.0,
@@ -164,6 +165,19 @@ def test_internal_long_from_the_range_floor_gets_structural_stop_and_targets():
     assert lad["targets"][2] < 103.0                    # TP3 (60% of path) under the ceiling
     assert "کانال" in str(cand.metadata.get("internal_entry_note_fa"))
     assert ok is True, reason
+
+
+def test_wedge_floor_touch_never_becomes_internal_entry():
+    from analysis.quality_engine import evaluate_confirmation
+    cand = _candidate(metadata={"atr": 1.0, "touched": True,
+                                 "pattern_band": {"kind": "WEDGE_FALLING", "lo": 99.0, "hi": 103.0,
+                                                  "slope_lo": 0.0, "slope_hi": 0.0,
+                                                  "ts_last": "2026-09-20 16:15", "tf_minutes": 15.0}})
+    df = _range_frame(last=(99.1, 99.35, 98.62, 99.30, 1500.0))
+    ok, cand, _reason = evaluate_confirmation(cand, df)
+    assert ok is False
+    assert "internal_entry" not in cand.metadata
+    assert cand.metadata.get("last_reject_code") == "INSIDE_PATTERN_NO_BREAK"
 
 
 # ── 5. protection exit → re-entry on the pullback ────────────────────────
