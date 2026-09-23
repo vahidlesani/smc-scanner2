@@ -149,3 +149,16 @@
   engine-validated lines ON the pivots, chips + pills clean.
 - Upload cache: 3 duplicate screenshots removed (2 dup-pairs); 14 old scratch
   chart_*.png (4.8MB) deleted; old chart_r22_*.png controls retired.
+
+## Round 23d — MODEL LAW end-to-end (2026-09-24)
+- Viva's demand re-checked at ENGINE level: his hand-drawn ZK-1D model (falling
+  wedge + upper-edge break → LONG) replayed through the real pipeline
+  (detect_patterns → enrich_render → evaluate_confirmation).
+- Verdict: engine DETECTS the model by name (WEDGE_FALLING, 4+4 touches, both
+  edges on pivots); break+close beyond the fitted upper edge CONFIRMS the LONG;
+  the mirrored SHORT is rejected BREAK_SIDE_MISMATCH (tz veto from 05eaa14 at work).
+  Earlier "two controls had no pattern / floating line" = hand-stuffed fixtures,
+  NOT the engine; fixtures now go through the real pipeline (make_controls.py).
+- Locked: tests/test_round23_model_law.py (2 tests — name + break direction).
+  Suite: 414 passed / 1 skipped. Upload cache: 2 more perceptual dups removed
+  (48 unique screenshots remain).
