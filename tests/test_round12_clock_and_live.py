@@ -152,4 +152,9 @@ def test_live_candle_helper_is_silent_when_the_tape_has_closed(monkeypatch):
 def test_chart_source_marks_the_forming_candle():
     src = open("bot/messages_v7.py", encoding="utf-8").read()
     assert "FORMING" in src and "_live_candle(candidate, df)" in src
-    assert "LIVE  {_price(live_price)}" in src
+    # Viva 09-23: live price is a TV-style tag ON the price ladder (never a
+    # floating mid-chart pill) + a live date/time stamp under the youngest candle
+    assert '" LIVE {_price(_live_px)} "' in src
+    assert "_live_stamp" in src and "get_yaxis_transform" in src
+    # no floating mid-chart live pill any more
+    assert '_level_tag(ax, count + 1.8, live_price' not in src

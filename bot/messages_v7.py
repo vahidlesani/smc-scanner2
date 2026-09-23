@@ -1510,6 +1510,64 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _price_ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
             # log-scale minor ticks otherwise print scientific snippets (9×10¹)
             _price_ax.yaxis.set_minor_formatter(_NF())
+        # ── Viva 09-23 («ستون‌های حجم خراب شده و کل محور زمانی نابود شده» +
+        # «در کندل لایو حتماً تاریخ و ساعت مشخص باشه»): the time axis carries
+        # REAL UTC dates — majors on UTC-day boundaries, plus a bold LIVE tag
+        # under the youngest candle; the live PRICE gets a TV-style tag on the
+        # price ladder; volume ticks go compact K/M with no scientific offset.
+        _vol_ax = axes[2]
+        try:
+            for _va in axes[2:]:
+                _va.yaxis.offsetText.set_visible(False)
+                _va.yaxis.offsetText.set_text("")
+            _vol_ax = axes[2]
+            def _fmt_vol(v, pos):
+                v = float(v)
+                if v >= 1e9: return f"{v / 1e9:.0f}B"
+                if v >= 1e6: return f"{v / 1e6:.0f}M"
+                if v >= 1e3: return f"{v / 1e3:.0f}K"
+                return f"{v:.0f}"
+            _vol_ax.yaxis.set_major_formatter(FuncFormatter(_fmt_vol))
+            # mplfinance appends the ScalarFormatter offset («$10^{6}$») INTO
+            # the ylabel — strip it; the K/M formatter already carries magnitude
+            _vol_ax.set_ylabel("VOLUME")
+        except Exception:
+            pass
+        _times = list(frame.index)
+        def _fmt_time(x, pos):
+            i = int(round(float(x)))
+            if 0 <= i < len(_times):
+                return pd.Timestamp(_times[i]).strftime("%m-%d\n%H:%M")
+            return ""
+        _day_ticks = []
+        _seen_days = set()
+        _min_gap = max(1, len(_times) // 9)
+        _last_i = -10 ** 9
+        for _i, _t in enumerate(_times):
+            _d = pd.Timestamp(_t).date()
+            if _d not in _seen_days and _i - _last_i >= _min_gap:
+                _day_ticks.append(_i)
+                _seen_days.add(_d)
+                _last_i = _i
+        # NOTE: the youngest candle does NOT get a tick — the dark LIVE stamp
+        # (figure-level, below) IS its label; two labels would overlap.
+        _vol_ax.set_xticks(_day_ticks)
+        _vol_ax.xaxis.set_major_formatter(FuncFormatter(_fmt_time))
+        # (مهر زمان لایو سطح فیگور کشیده می‌شود — بعد از قطعی‌شدن xlim؛ پایین فایل)
+        # TV-style LIVE tag on the price ladder (never on the canvas)
+        try:
+            _live_px = float(frame["close"].iloc[-1])
+            ax.annotate(
+                f" LIVE {_price(_live_px)} ", xy=(1.0, _live_px),
+                xycoords=ax.get_yaxis_transform(), xytext=(5, 0),
+                textcoords="offset points", ha="left", va="center",
+                fontsize=7.2, fontweight="bold", color="white",
+                annotation_clip=False, zorder=35,
+                bbox={"boxstyle": "round,pad=0.3", "facecolor": "#2b2f3a",
+                      "edgecolor": "none"},
+            )
+        except Exception as _exc:
+            print(f"Chart live-price tag warning: {_exc}")
         ax.tick_params(
             axis="y",
             colors=CHART_THEME["text"],
@@ -2059,14 +2117,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _live_clock = _lt.tz_convert("UTC").strftime("%H:%M UTC")
         except Exception:
             _live_clock = ""
-        # Viva 2026-09-11: the live-price DASHED line was removed — only the
-        # LIVE price pill remains (the line duplicated the pill and cluttered
-        # the future margin around it). On CONFIRMED charts the LIVE pill joins
-        # the merged right-hand tag column below instead.
-        if not confirmed:
-            _level_tag(ax, count + 1.8, live_price,
-                       f"LIVE  {_price(live_price)}" + (f" • {_live_clock}" if _live_clock else ""),
-                       CHART_THEME["muted"])
+        # Viva 09-23 («این قیمت نیاز به لیبل جداگانهٔ لایو روی چارت نداره؛ روی
+        # همون ستون قیمت‌ها مشخص بشه»): NO floating live pill on the canvas —
+        # the live price lives ON the price ladder as a TV-style tag (drawn
+        # with the time-axis block below) and the live CLOCK lives on the time
+        # axis under the youngest candle, so a glance answers «لایوه یا قدیمی؟».
 
         sweep_level = candidate.metadata.get("sweep_level")
         if sweep_level:
@@ -2166,7 +2221,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # ONE stacked pill instead of drawing «LIVI…DE» over each other.
             _yr0 = max(float(frame["high"].max()) - float(frame["low"].min()), 1e-9)
             _tol = 0.030 * _yr0
-            _tags = list(levels) + [(float(frame["close"].iloc[-1]), "LIVE", CHART_THEME["muted"])]
+            # Viva 09-23: LIVE moved to the price-ladder tag (no mid-chart pill).
+            _tags = list(levels)
             hit_index = int(ladder.get("hit_index") or (candidate.metadata or {}).get("hit_index") or 0)
             trailing_sl = float((candidate.metadata or {}).get("current_trailing_sl") or 0)
             if hit_index > 0 and trailing_sl > 0:
@@ -2524,6 +2580,28 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             fig.text(0.762, 0.931, str(candidate.setup_code or "").upper(),
                      color=CHART_THEME["text"], fontsize=9.5, fontweight="bold", va="center")
         _add_branding(fig, ax, candidate)
+
+        # ── Viva 09-23 («در کندل لایو حتماً تاریخ و ساعت مشخص باشه که متوجه
+        # بشم لایوه یا قدیمیه»): figure-level LIVE stamp under the YOUNGEST
+        # candle — drawn after the final xlim so the data→figure mapping is
+        # exact, and ABOVE every axes (nothing can bury it).
+        try:
+            _lt = pd.Timestamp(frame.index[-1])
+            if _lt.tzinfo is None:
+                _lt = _lt.tz_localize("UTC")
+            _live_stamp = _lt.tz_convert("UTC").strftime("%m-%d %H:%M UTC")
+            fig.canvas.draw()
+            _xd = fig.transFigure.inverted().transform(
+                axes[2].transData.transform((len(frame) - 1, 0.0))
+            )[0]
+            _vol_y0 = axes[2].get_position().y0
+            fig.text(_xd, _vol_y0 - 0.022, f" {_live_stamp} ",
+                     ha="center", va="top", fontsize=7.6, fontweight="bold",
+                     color="white", zorder=40,
+                     bbox={"boxstyle": "round,pad=0.3", "facecolor": "#2b2f3a",
+                           "edgecolor": "none"})
+        except Exception as _exc:
+            print(f"Chart live-stamp warning: {_exc}")
 
         buffer = io.BytesIO()
         fig.savefig(
@@ -3276,10 +3354,20 @@ def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
     rows = []
     if upd_n:
         rows.append(f"🔁 <b>آخرین آپدیت • آپدیت {_fa_num(upd_n)}</b>")
+    # Viva 09-23 («چون از هشدار اولیه ۶ ساعت گذشته اون چارت رو برای ۶ ساعت قبل
+    # معرفی میکنه که این اشتباهه»): every update says EXPLICITLY that the
+    # attached chart is LIVE up to the current candle — the «کندل مبدا» clock
+    # below is the SIGNAL's origin, never the chart's age.
+    try:
+        _now_clock = datetime.now(ZoneInfo("UTC")).strftime("%H:%M")
+    except Exception:
+        _now_clock = ""
     rows += [
         f"🏷 <b>{_e(badge)}</b>",
         VIVA_SEP,
         state_fa,
+        (f"📊 چارت پیوست: <b>لایو</b> — تا کندلِ جاری {_e(_now_clock)} UTC"
+         if _now_clock else "📊 چارت پیوست: <b>لایو</b>"),
         "⛔ تأیید ورود نیست",
         VIVA_SEP,
         f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}  •  {_e(str(candidate.trigger_timeframe or '').upper())}",
