@@ -913,6 +913,34 @@ def _slot_alloc(taken: List[float], y: float, span: float, step: float = 0.034) 
     return y
 
 
+def _relayout_pills(rows: List[List[float]], lo: float, hi: float, step: float) -> None:
+    """Final guarantee (r23): clamp-after-alloc could fold two pills onto one
+    slot (seen live: ADA ENTRY×LIVE, RENDER ENTRY×TP1, TAO LIVE×chip).
+    Deterministic 1-D parking: clamp every row into the band, sort, forward-
+    push to ≥step, then at most ONE uniform down-shift (a uniform shift keeps
+    every gap). A degenerate panel (never on real charts) falls back to a
+    reduced step instead of ever printing two pills on one line."""
+    if not rows:
+        return
+    rows.sort(key=lambda r: r[0])
+    _b0, _t0 = lo + step * 0.6, hi - step
+    for _r in rows:
+        _r[0] = min(max(_r[0], _b0), _t0)
+    for _i in range(1, len(rows)):
+        if rows[_i][0] - rows[_i - 1][0] < step:
+            rows[_i][0] = rows[_i - 1][0] + step
+    _over = rows[-1][0] - _t0
+    if _over > 0:
+        for _r in rows:
+            _r[0] -= _over
+    if rows[0][0] < lo:
+        _need = (len(rows) - 1) * step
+        _room = _t0 - _b0
+        _s2 = step if _room >= _need else max(_room / max(len(rows) - 1, 1), 1e-9)
+        for _i, _r in enumerate(rows):
+            _r[0] = min(_b0 + _i * _s2, _t0)
+
+
 def _scenario_arrow(ax, start, end, color: str, alpha: float = 0.9) -> None:
     arrow = FancyArrowPatch(
         start,
@@ -2179,9 +2207,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     if abs(_cy8 - _yy8) < 0.035 * _rng8:
                         _cy8 = _yy8 + 0.045 * _rng8
                 _fr_span8 = max(float(frame["high"].max() - frame["low"].min()), 1e-12)
-                _cy8 = _slot_alloc(_right_slots, _cy8, _fr_span8)
+                # r23: clamp BEFORE the slot (the old order broke the gap it
+                # had just reserved) and reserve a chip-sized footprint so
+                # LIVE/pills can never print on the label again (TAO 15m)
                 _cy8 = min(max(_cy8, float(frame["low"].min()) + 0.06 * _fr_span8),
                            float(frame["high"].max()) - 0.06 * _fr_span8)
+                _cy8 = _slot_alloc(_right_slots, _cy8, _fr_span8, step=0.056)
                 _right_texts.append(ax.text(count + 4.85, _cy8,
                         str(_pat.get("label") or _pat.get("type")), color=CHART_THEME["text"],
                         fontsize=7, va="center", ha="left", fontweight="bold",
@@ -2689,10 +2720,19 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _lo2, _hi2 = ax.get_ylim()
             _sp2 = max(_hi2 - _lo2, 1e-9)
             _right_specs.sort(key=lambda t: float(t[0]))
+            _b2 = 0.025 * _sp2
+            _rows2: List[List[float]] = []
             for _lvl2, _lab2, _col2 in sorted(
                     _right_specs, key=lambda t: -abs(float(t[0]) - (_lo2 + _hi2) / 2.0)):
-                _y2 = _slot_alloc(_right_slots, float(_lvl2), _sp2, step=0.042)
-                _y2 = min(max(_y2, _lo2 + 0.025 * _sp2), _hi2 - 0.025 * _sp2)
+                # clamp BEFORE allocating (the old order let a clamped pill
+                # land on an already-taken slot → ADA ENTRY×LIVE overlap)
+                _tgt2 = min(max(float(_lvl2), _lo2 + _b2), _hi2 - _b2)
+                _y2 = _slot_alloc(_right_slots, _tgt2, _sp2, step=0.042)
+                _rows2.append([_y2, _lab2, _col2])
+            # r23: the clamp/push above can still fold neighbours — one
+            # deterministic pass now GUARANTEES the gap on every chart
+            _relayout_pills(_rows2, _lo2 + _b2, _hi2 - _b2, 0.036 * _sp2)
+            for _y2, _lab2, _col2 in _rows2:
                 _right_texts.append(_level_tag(ax, count + 4.85, _y2, _lab2, _col2))
             fig.canvas.draw()
             _rend = fig.canvas.get_renderer()

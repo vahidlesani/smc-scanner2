@@ -103,3 +103,44 @@ def test_long_respecting_support_still_confirms():
         "LONG", _SUPPORT_LINE, 86150.0, 85900.0,
         86200.0, 84200.0, 87500.0, 89400.0), df, None)
     assert ok, cand.metadata.get("last_reject_code")
+
+
+# ── r23 pill-column relayout (the ADA ENTRY×LIVE / RENDER ENTRY×TP1 /
+#    TAO LIVE×chip overlaps on the fresh deploy) ────────────────────────────
+from bot.messages_v7 import _relayout_pills
+
+
+def test_relayout_pills_never_folds_two_rows():
+    import random
+    rng = random.Random(7)
+    for _ in range(2000):
+        lo, hi = 2.5, 97.5
+        n = rng.randint(2, 8)
+        rows = [[rng.uniform(0.0, 100.0), f"p{i}", "#000"] for i in range(n)]
+        _relayout_pills(rows, lo, hi, 3.6)
+        ys = [r[0] for r in rows]
+        assert all(ys[i + 1] - ys[i] >= 3.6 - 1e-9 for i in range(len(ys) - 1)), ys
+        assert ys[-1] <= hi + 1e-9
+        assert ys[0] >= lo - 1e-9
+
+
+def test_relayout_pills_dense_cluster_at_edge():
+    """The live ADA case: ENTRY+LIVE clamped onto nearly the same y at the
+    bottom edge — must separate, stay inside, keep every row present."""
+    rows = [[10.0, " LIVE 0.237 ", "#111"], [10.05, " ENTRY 0.2392 ", "#00c"],
+            [10.02, " TP1 0.2403 ", "#0a5"], [80.0, " FIRST STOP 0.2326 ", "#c33"]]
+    _relayout_pills(rows, 2.5, 97.5, 3.6)
+    ys = sorted(r[0] for r in rows)
+    assert all(b - a >= 3.6 - 1e-9 for a, b in zip(ys, ys[1:]))
+    assert 2.5 - 1e-9 <= ys[0] and ys[-1] <= 97.5 + 1e-9
+    assert len(rows) == 4
+
+
+def test_relayout_pills_degenerate_panel_never_collapses():
+    """Impossible on real charts (3 pills in a 2.24-wide band): rows must stay
+    DISTINCT, ordered and inside — reduced step, never one printed line."""
+    rows = [[50.0, "a", ""], [50.0, "b", ""], [50.0, "c", ""]]
+    _relayout_pills(rows, 0.0, 8.0, 3.6)
+    ys = sorted(r[0] for r in rows)
+    assert len(set(ys)) == 3
+    assert ys[0] >= -1e-9 and ys[-1] <= 8.0 + 1e-9

@@ -122,3 +122,15 @@
   K379224 LONGs confirmed under broken support). Fix: `_tz_match` helper normalizes
   both planes (linear + log paths); silent skip now logs. tests/test_round23_law_guard.py (5).
 - Suite: 409 passed / 1 skipped.
+
+## Round 23b — pill-column relayout (2026-09-24)
+- Fresh r22 renders of the 8 reported live IDs: BTC/HBAR/RAY/ADA-1h/DOT/LTC clean
+  (zero-pill defect GONE, chips inside frame, LIVE off the axis) — but a residual
+  fold survived in the dense cluster: ADA ENTRY×LIVE, RENDER ENTRY×TP1, TAO LIVE×chip.
+- Root cause: clamp ran AFTER slot-alloc (a clamped pill landed on a taken slot)
+  and chips reserved a single-slot footprint. Fix: `_relayout_pills` deterministic
+  1-D parking (clamp→sort→push→ONE uniform shift; reduced step fallback) runs as a
+  final guarantee over the materialized rows; chip slot step 0.056·frame-span,
+  clamp-before-alloc. 50k-case fuzz: 0 violations.
+- tests/test_round23_law_guard.py +3 (fuzz, ADA edge cluster, degenerate panel).
+- Suite: 412 passed / 1 skipped.
