@@ -286,6 +286,26 @@ def enforce_confirmed_snapshot(candidate) -> str:
     return ""
 
 
+def _project_watch_level(watch: dict, when) -> float:
+    """Value of a watched line at `when`. Log-calibrated lines are interpolated
+    in log space between their own anchors (identical to the chord otherwise) —
+    R16 phase 3, so the veto level is the line the chart actually paints."""
+    p0 = (watch or {}).get("p0") or {}
+    p1 = (watch or {}).get("p1") or {}
+    t0 = pd.Timestamp(str(p0.get("ts")))
+    t1 = pd.Timestamp(str(p1.get("ts")))
+    y0, y1 = float(p0.get("price")), float(p1.get("price"))
+    dt = (t1 - t0).total_seconds()
+    if dt <= 0 or not (y0 > 0 and y1 > 0):
+        raise ValueError("degenerate watch anchors")
+    t = pd.Timestamp(when)
+    if watch.get("log_fit"):
+        import math as _m
+        f = (t - t0).total_seconds() / dt
+        return float(10.0 ** (_m.log10(y0) + (_m.log10(y1) - _m.log10(y0)) * f))
+    return y1 + (y1 - y0) / dt * (t - t1).total_seconds()
+
+
 def evaluate_confirmation(
     candidate: SignalCandidate, closed_df: pd.DataFrame,
     htf_closed_df: Optional[pd.DataFrame] = None,
@@ -461,8 +481,21 @@ def evaluate_confirmation(
             _ts_now20 = pd.Timestamp(str(_row20["timestamp"]))
             _bars20 = max(0.0, (_ts_now20 - _ts_last20).total_seconds() / 60.0
                           / float(_band20["tf_minutes"]))
-            _band_lo20 = float(_band20["lo"]) + float(_band20.get("slope_lo") or 0.0) * _bars20
-            _band_hi20 = float(_band20["hi"]) + float(_band20.get("slope_hi") or 0.0) * _bars20
+            # R16 phase 3: a log-calibrated edge must be projected on its OWN
+            # curve — the linear tangent would drift away from the line the
+            # chart shows (bands without log geometry keep the old maths).
+            _lo20 = _band20.get("log_lo") or {}
+            _hi20 = _band20.get("log_hi") or {}
+            if _lo20.get("fit") and float(_lo20.get("intercept") or 0.0):
+                _x20 = float(_lo20["slope"]) * _bars20 + float(_lo20["intercept"])
+                _band_lo20 = float(10.0 ** _x20)
+            else:
+                _band_lo20 = float(_band20["lo"]) + float(_band20.get("slope_lo") or 0.0) * _bars20
+            if _hi20.get("fit") and float(_hi20.get("intercept") or 0.0):
+                _x21 = float(_hi20["slope"]) * _bars20 + float(_hi20["intercept"])
+                _band_hi20 = float(10.0 ** _x21)
+            else:
+                _band_hi20 = float(_band20["hi"]) + float(_band20.get("slope_hi") or 0.0) * _bars20
         except Exception:
             _band_lo20 = _band_hi20 = None
     # ── Viva 09-21 (round 12) — BREAK-SIDE LAW, enforced on every setup ───
@@ -492,7 +525,7 @@ def evaluate_confirmation(
                 if _dt <= 0 or not (_y0 > 0 and _y1 > 0):
                     continue
                 _tnow = pd.Timestamp(str(_row20["timestamp"]))
-                _lvl = _y1 + (_y1 - _y0) / _dt * (_tnow - _t1).total_seconds()
+                _lvl = _project_watch_level(_ln, _tnow)
                 # only lines that are still RELEVANT to the live price may veto
                 # (a dead line projected far away is history, not context)
                 # relevant = the line is still within a few ATR of the price

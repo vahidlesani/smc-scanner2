@@ -156,7 +156,7 @@ def test_gate_commit_only_after_send():
 def test_scan_spot_alerts_monkeypatched(monkeypatch):
     import analysis.render_kit as rk
 
-    def fake_detect(df, direction=""):
+    def fake_detect(df, direction="", log_axis=None):
         # the wedge's sides at THIS frame's last bar (n = len-1 = 50)
         return [dict(WEDGE, label="WEDGE_FALLING")]
 

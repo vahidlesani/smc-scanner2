@@ -164,6 +164,51 @@ def detect_zones(df: pd.DataFrame, direction: str,
 
 
 
+# ── R16 phase 3 · calibrated line geometry ──────────────────────────────
+# A validated line may carry a log10 fit (wide-span window / log axis). These
+# helpers are THE way to ask a serialized line for its value or its polyline —
+# never `slope * x + intercept` by hand, or the line leaves the pivots it was
+# fit through on a log chart («خط قرمز لنگ در هوا»).
+_LINE_STEPS = 24
+
+
+def line_y(line, x: float) -> float:
+    """Calibrated price of a serialized render line at x."""
+    if not line:
+        return float("nan")
+    if line.get("log_fit"):
+        try:
+            return float(10.0 ** (float(line["log_slope"]) * float(x)
+                                  + float(line["log_intercept"])))
+        except Exception:
+            pass
+    return float(line.get("slope") or 0.0) * float(x) + float(line.get("intercept") or 0.0)
+
+
+def line_tangent(line, x: float) -> float:
+    """Δprice per bar at x — the value legacy projections want."""
+    if line and line.get("log_fit"):
+        try:
+            return float(np.log(10.0) * float(line["log_slope"]) * line_y(line, x))
+        except Exception:
+            pass
+    return float(line.get("slope") or 0.0)
+
+
+def line_xy(line, x_from: float, x_to: float, steps: int = _LINE_STEPS):
+    """(xs, ys) for ax.plot: an exact polyline for log fits (a straight segment
+    for linear ones — identical to the old two-point draw)."""
+    x0, x1 = float(x_from), float(x_to)
+    if line and line.get("log_fit"):
+        xs = np.linspace(x0, x1, max(3, int(steps)))
+        try:
+            ys = 10.0 ** (float(line["log_slope"]) * xs + float(line["log_intercept"]))
+        except Exception:
+            return [x0, x1], [line_y(line, x0), line_y(line, x1)]
+        return xs, ys
+    return [x0, x1], [line_y(line, x0), line_y(line, x1)]
+
+
 def _line_contradicts(line, side: str, direction: str, df: pd.DataFrame,
                       sub: bool = False) -> bool:
     """True when a validated trendline contradicts the trade context.
@@ -188,7 +233,10 @@ def _line_contradicts(line, side: str, direction: str, df: pd.DataFrame,
             slope = float(getattr(line, "slope", 0.0) or 0.0)
             inter = float(getattr(line, "intercept", 0.0) or 0.0)
         n = len(df) - 1
-        y_last = slope * n + inter
+        y_last = line_y({"log_fit": bool(getattr(line, "log_fit", False)),
+                         "log_slope": float(getattr(line, "log_slope", 0.0) or 0.0),
+                         "log_intercept": float(getattr(line, "log_intercept", 0.0) or 0.0),
+                         "slope": slope, "intercept": inter}, n)
         close = float(df["close"].iloc[-1])
         atr = 0.0
         try:
@@ -211,7 +259,37 @@ def _line_contradicts(line, side: str, direction: str, df: pd.DataFrame,
     except Exception:
         return False
 
-def detect_patterns(df: pd.DataFrame, direction: str = "") -> List[Dict]:
+def _chart_will_be_log(candidate, df: pd.DataFrame) -> bool:
+    """Mirror the renderer's own decision (`generate_chart`): is THIS chart
+    drawn on a log price axis? Only then may lines be log-calibrated — the
+    futures look must not change on charts that stay linear."""
+    md = getattr(candidate, "metadata", None) or {}
+    if md.get("log_scale"):
+        return True                                   # spot engine: always log
+    try:
+        from config import get_settings
+        settings = get_settings()
+    except Exception:
+        return False
+    try:
+        lo = float(df["low"].min())
+        hi = float(df["high"].max())
+        ratio = (hi / lo) if lo > 0 else 1.0
+    except Exception:
+        ratio = 1.0
+    if bool(getattr(settings, "chart_log_all", False)):
+        return ratio > 1.03
+    if not bool(getattr(settings, "chart_log_htf", True)):
+        return False
+    setup = str(getattr(candidate, "setup_code", "") or "").upper()
+    ctx_tf = str(md.get("tl_context_tf") or "").lower()
+    if setup in ("TLBREAK", "TECHCLASSIC") and ctx_tf in ("4h", "1d"):
+        return True
+    return str(getattr(candidate, "trigger_timeframe", "") or "").lower() == "1h" and ratio > 1.35
+
+
+def detect_patterns(df: pd.DataFrame, direction: str = "",
+                    log_axis: Optional[bool] = None) -> List[Dict]:
     """Validated edge geometry + honest shape classification (doctrine:
     Edwards & Magee / Brooks / E&M) as render commands; plus a trading-range
     box when the window is flat between two tested horizontals.
@@ -237,6 +315,11 @@ def detect_patterns(df: pd.DataFrame, direction: str = "") -> List[Dict]:
         cfg = _dc.replace(load_config(), pivot_left=3, pivot_right=3,
                           min_touches=2, touch_tolerance_atr=0.20,
                           max_fit_residual_atr=0.45, require_alive=True)
+        # R16 phase 3: fit in the space the chart is drawn in. A linear chart
+        # keeps the linear fit (futures look untouched); a log chart fits in
+        # log10 so the painted line lands exactly on its pivots.
+        if log_axis is False:
+            cfg = _dc.replace(cfg, log_fit_min_span=99.0)
         n = len(df) - 1
 
         def _score(ln) -> float:
@@ -325,6 +408,10 @@ def detect_patterns(df: pd.DataFrame, direction: str = "") -> List[Dict]:
                 "side": side,
                 "slope": float(ln.slope),
                 "intercept": float(ln.intercept) - float(ln.slope) * off,
+                "log_fit": bool(getattr(ln, "log_fit", False)),
+                "log_slope": float(getattr(ln, "log_slope", 0.0) or 0.0),
+                "log_intercept": (float(getattr(ln, "log_intercept", 0.0) or 0.0)
+                                  - float(getattr(ln, "log_slope", 0.0) or 0.0) * off),
                 "break_x": (int(off + ln.break_index)
                             if ln.break_index is not None else None),
                 "x0": int(off + ln.first_index), "x1": int(n),
@@ -353,7 +440,7 @@ def detect_patterns(df: pd.DataFrame, direction: str = "") -> List[Dict]:
             import types as _t8
             return _t8.SimpleNamespace(
                 slope=d["slope"], first_index=d["x0"], last_index=d["x1"],
-                price_at=lambda X, _d=d: _d["slope"] * X + _d["intercept"])
+                price_at=lambda X, _d=d: line_y(_d, X))
 
         if gu is not None and gl is not None:
             shape = classify_shape(_ns(gu), _ns(gl), n)
@@ -361,10 +448,8 @@ def detect_patterns(df: pd.DataFrame, direction: str = "") -> List[Dict]:
                 # converging pair = wedge (global coords! the old check mixed
                 # per-window local x and misfired on CRV)
                 _xs = max(gu["x0"], gl["x0"])
-                _g0 = (gu["slope"] * _xs + gu["intercept"]) - \
-                      (gl["slope"] * _xs + gl["intercept"])
-                _g1 = (gu["slope"] * n + gu["intercept"]) - \
-                      (gl["slope"] * n + gl["intercept"])
+                _g0 = line_y(gu, _xs) - line_y(gl, _xs)
+                _g1 = line_y(gu, n) - line_y(gl, n)
                 same_dir = (gu["slope"] < 0) == (gl["slope"] < 0) and gu["slope"] != 0
                 if same_dir and 0 < _g1 < _g0:
                     shape = "WEDGE_FALLING" if gu["slope"] < 0 else "WEDGE_RISING"
@@ -374,8 +459,8 @@ def detect_patterns(df: pd.DataFrame, direction: str = "") -> List[Dict]:
                 # price) — demote to two honest trendlines instead.
                 _a = _atr(df)
                 _c = float(df["close"].iloc[-1])
-                _u = gu["slope"] * n + gu["intercept"]
-                _l = gl["slope"] * n + gl["intercept"]
+                _u = line_y(gu, n)
+                _l = line_y(gl, n)
                 if _a > 0 and (_c > max(_u, _l) + 0.75 * _a
                                or _c < min(_u, _l) - 0.75 * _a):
                     shape = "NONE"
@@ -589,8 +674,10 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
         trigger_df, getattr(candidate, "direction", ""),
         float(getattr(candidate, "entry_zone_bottom", 0) or 0),
         float(getattr(candidate, "entry_zone_top", 0) or 0))
+    _log_axis = _chart_will_be_log(candidate, trigger_df)
     pats = detect_patterns(trigger_df.tail(170),
-                           getattr(candidate, "direction", ""))
+                           getattr(candidate, "direction", ""),
+                           log_axis=_log_axis)
     md["render_patterns"] = pats
     # broken legs need a TIME for their break bar too: on a higher display TF
     # a bare bar index would land the break marker on the wrong candle.
@@ -632,13 +719,22 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
             if len(_lns) == 2 and str(_p.get("type") or "").upper() not in ("TRENDLINE", "RANGE") \
                     and not _p.get("child"):
                 _x_last = float(max(0, _win_len - 1))
-                _y1 = float(_lns[0]["slope"]) * _x_last + float(_lns[0]["intercept"])
-                _y2 = float(_lns[1]["slope"]) * _x_last + float(_lns[1]["intercept"])
+                _y1 = line_y(_lns[0], _x_last)
+                _y2 = line_y(_lns[1], _x_last)
+                _lo_ln, _hi_ln = ((_lns[0], _lns[1]) if _y1 <= _y2 else (_lns[1], _lns[0]))
                 _band = {
                     "kind": str(_p.get("type")),
                     "lo": float(min(_y1, _y2)), "hi": float(max(_y1, _y2)),
-                    "slope_lo": float(_lns[0]["slope"]) if _y1 <= _y2 else float(_lns[1]["slope"]),
-                    "slope_hi": float(_lns[1]["slope"]) if _y1 <= _y2 else float(_lns[0]["slope"]),
+                    # Δprice/bar right now: identical to the old slope for a
+                    # linear pair, the local tangent for a log-calibrated one
+                    "slope_lo": float(line_tangent(_lo_ln, _x_last)),
+                    "slope_hi": float(line_tangent(_hi_ln, _x_last)),
+                    "log_lo": {"fit": bool(_lo_ln.get("log_fit")),
+                               "slope": float(_lo_ln.get("log_slope") or 0.0),
+                               "intercept": float(_lo_ln.get("log_intercept") or 0.0)},
+                    "log_hi": {"fit": bool(_hi_ln.get("log_fit")),
+                               "slope": float(_hi_ln.get("log_slope") or 0.0),
+                               "intercept": float(_hi_ln.get("log_intercept") or 0.0)},
                 }
                 break
         if _band:
@@ -660,6 +756,9 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
     md["render_line_watch"] = [
         {"side": l.get("side"), "slope": l.get("slope"),
          "intercept": l.get("intercept"),
+         "log_fit": bool(l.get("log_fit")),
+         "log_slope": float(l.get("log_slope") or 0.0),
+         "log_intercept": float(l.get("log_intercept") or 0.0),
          "ts0": ((l.get("points") or [{}])[0].get("ts")),
          "p0": ((l.get("points") or [{}])[0] if (l.get("points") or []) else {}),
          "p1": ((l.get("points") or [{}])[-1] if (l.get("points") or []) else {}),
@@ -669,8 +768,9 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
     # the trigger chart — «وج باید در ۴ ساعته یا روزانه پیدا بشه و اعلام بشه».
     try:
         _hp = detect_patterns(htf_df.tail(170),
-                              getattr(candidate, "direction", "")) if htf_df is not None \
-            and len(htf_df) >= 60 else []
+                              getattr(candidate, "direction", ""),
+                              log_axis=_chart_will_be_log(candidate, htf_df)) \
+            if htf_df is not None and len(htf_df) >= 60 else []
         md["render_htf_pattern"] = str(_hp[0]["type"]) if _hp else None
     except Exception:
         md["render_htf_pattern"] = None
@@ -679,7 +779,7 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
         if _p.get("type") in ("FLAG_BULL", "FLAG_BEAR") and _p.get("lines"):
             _ln = _p["lines"][0]
             _xe = float(_ln.get("x1", 0))
-            _ye = float(_ln["slope"]) * _xe + float(_ln["intercept"])
+            _ye = line_y(_ln, _xe)
             _atr = _atr(trigger_df)
             _band = max(0.15 * _atr, 1e-9)
             md["render_zones"] = [{

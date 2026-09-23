@@ -7,6 +7,8 @@ replay results and explicitly enables it.
 from __future__ import annotations
 
 import json
+import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
@@ -41,6 +43,12 @@ class VivaTLBreakConfig:
     max_pattern_bars_swing: int = 90
     channel_parallel_tolerance_pct: float = 15.0
     triangle_apex_max_progress: float = 0.90
+    # R16 phase 3 — log-space calibration. On a window whose price span is
+    # wider than this, the chart is drawn on a LOG axis; a straight line in
+    # price space is a CURVE there and visibly leaves the pivots it was fit
+    # through («خط قرمز لنگ در هوا»). Above the threshold the fit itself moves
+    # into log10 space so the line touches its pivots on the rendered chart.
+    log_fit_min_span: float = 0.03
 
 
 def load_config(path: Path = DEFAULT_CONFIG) -> VivaTLBreakConfig:
@@ -65,6 +73,7 @@ def load_config(path: Path = DEFAULT_CONFIG) -> VivaTLBreakConfig:
         max_pattern_bars_swing=int(profiles["swing"]["max_pattern_length_bars_on_structure_tf"]),
         channel_parallel_tolerance_pct=float(raw["pattern_types"]["channel"]["parallel_tolerance_pct"]),
         triangle_apex_max_progress=0.90,
+        log_fit_min_span=float(os.getenv("TLBREAK_LOG_FIT_MIN_SPAN", "0.03") or 0.03),
     )
 
 
@@ -79,9 +88,24 @@ class ValidatedLine:
     last_index: int
     points: tuple[dict, ...]
     break_index: int | None = None
+    # R16 phase 3: set when the fit ran in log10 space (wide-span window).
+    # `slope`/`intercept` stay the LOCAL tangent at `last_index` so every
+    # legacy consumer (sign tests, ATR-scaled drift, chord projections) keeps
+    # its meaning, while `price_at` returns the calibrated curve value.
+    log_fit: bool = False
+    log_slope: float = 0.0
+    log_intercept: float = 0.0
 
     def price_at(self, index: float) -> float:
+        if self.log_fit:
+            return float(10.0 ** (self.log_slope * float(index) + self.log_intercept))
         return self.slope * float(index) + self.intercept
+
+    def tangent_at(self, index: float) -> float:
+        """Δprice per bar at `index` (log fits: d/dx of 10**(a x + b))."""
+        if not self.log_fit:
+            return self.slope
+        return float(np.log(10.0) * self.log_slope * self.price_at(index))
 
 
 def _atr(df: pd.DataFrame) -> float:
@@ -106,6 +130,16 @@ def fit_validated_line(
     atr = _atr(df)
     if atr <= 0:
         return None
+    # R16 phase 3 — is this window drawn on a log axis? Same 3% guard the
+    # chart obeys (spot is always log; futures go log when the span demands).
+    use_log = False
+    try:
+        _lo = float(df["low"].min())
+        _hi = float(df["high"].max())
+        if _lo > 0 and (_hi - _lo) / _lo > float(cfg.log_fit_min_span or 0.0):
+            use_log = True
+    except Exception:
+        use_log = False
     highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right)
     pts = highs if side == "HIGH" else lows
     n = len(df) - 1
@@ -121,10 +155,19 @@ def fit_validated_line(
             x1, y1 = float(pool[j]["index"]), float(pool[j]["price"])
             if x1 - x0 < max(20.0, float(cfg.pivot_left) * 4):
                 continue
+            if use_log and y0 > 0 and y1 > 0:
+                # fit the line where the eye will see it: straight in log10
+                _ls = (math.log10(y1) - math.log10(y0)) / (x1 - x0)
+                _li = math.log10(y0) - _ls * x0
+            else:
+                _ls = 0.0
+                _li = 0.0
             slope = (y1 - y0) / (x1 - x0)
             intercept = y0 - slope * x0
 
             def _val(p):
+                if _ls or _li:
+                    return float(10.0 ** (_ls * float(p["index"]) + _li))
                 return slope * float(p["index"]) + intercept
 
             def _over(p):
@@ -163,7 +206,7 @@ def fit_validated_line(
                 # the trend DIED (Viva 09-18: a broken leg-trend is still
                 # drawn — but only UP TO its break bar, never past it).
                 for kk in range(int(x1) + 1, n + 1):
-                    _lv = slope * kk + intercept
+                    _lv = float(10.0 ** (_ls * kk + _li)) if (_ls or _li) else slope * kk + intercept
                     if side == "HIGH" and float(closes[kk]) > _lv + 0.35 * atr:
                         break_at = kk
                         break
@@ -203,7 +246,8 @@ def fit_validated_line(
                 # floating in the air above/below a market that moved on).
                 if lx < n - cfg.recency_bars:
                     continue
-                if abs(slope * n + intercept - float(closes[n])) > cfg.edge_atr * atr:
+                _edge_now = float(10.0 ** (_ls * n + _li)) if (_ls or _li) else slope * n + intercept
+                if abs(_edge_now - float(closes[n])) > cfg.edge_atr * atr:
                     continue
             need = max(cfg.min_touches, 3) if pierces else cfg.min_touches
             if len(touching) < need:
@@ -221,7 +265,8 @@ def fit_validated_line(
                 score *= 0.80  # a live trend outranks a finished one
             # spec §9 context_score: a line price actually sits near right
             # now is the line the chart must show (Viva 09-18: best-of-cands)
-            if abs(slope * n + intercept - float(closes[n])) <= 2.0 * atr:
+            _edge_now2 = float(10.0 ** (_ls * n + _li)) if (_ls or _li) else slope * n + intercept
+            if abs(_edge_now2 - float(closes[n])) <= 2.0 * atr:
                 score *= 1.15
             # Viva 09-17 schematics: the trendline of a leg STARTS AT THE LEG
             # EXTREME (peak for highs, trough for lows) — reward such lines.
@@ -232,10 +277,22 @@ def fit_validated_line(
                 score *= 2.0
             if score > best_score:
                 best_score = score
+                if _ls or _li:
+                    # local tangent at the newest touch: keeps `slope`'s
+                    # price-per-bar meaning for every legacy consumer while
+                    # price_at() walks the calibrated log curve.
+                    _y_last = float(10.0 ** (_ls * max(lx, x1) + _li))
+                    _tan = math.log(10.0) * _ls * _y_last
+                    _int = _y_last - _tan * max(lx, x1)
+                else:
+                    _tan, _int = float(slope), float(intercept)
                 best = ValidatedLine(
                     side=side,
-                    slope=float(slope),
-                    intercept=float(intercept),
+                    slope=float(_tan),
+                    intercept=float(_int),
+                    log_fit=bool(_ls or _li),
+                    log_slope=float(_ls),
+                    log_intercept=float(_li),
                     touch_count=len(touching),
                     fit_residual_atr=float(dev),
                     first_index=int(fx),
