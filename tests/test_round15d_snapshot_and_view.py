@@ -160,7 +160,10 @@ def test_chart_writings_and_the_green_marker_never_sit_on_the_candles():
     # the entry triangle glyph is gone
     assert 'marker="^", s=130' not in src and 'marker="v", s=130' not in src
     # notes live in a carved-out left margin, drawn in FIGURE coordinates
-    assert "_MARGIN = 0.115" in src and "fig.text(_x_notes," in src
+    # Viva 09-23: NO carved-out left margin — tape owns the full width;
+    # notes live INSIDE the axes (empty sky corner), chip-backed
+    assert "_MARGIN = 0.115" not in src and "fig.text(_x_notes," not in src
+    assert "transform=ax.transAxes" in src
     # …and the tool's own read-out left the tape as well
     assert "fig.text(\n                _posi.x0 + 0.012," in src
     # zones are on a diet: at most two per side

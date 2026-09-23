@@ -1060,46 +1060,37 @@ def _setup_stickers(candidate: SignalCandidate, confirmed: bool) -> list:
 
 def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool = False,
                          fig=None) -> None:
-    """Structural notes in a DEDICATED LEFT MARGIN, never over the candles.
+    """Structural notes INSIDE the axes, parked in the EMPTY sky corner.
 
-    Viva 09-22: «نوشته‌ها را روی کندل‌ها و ابزار لانگ و شورت ننویس … نمی‌خوام
-    محل کندل‌ها و قیمت‌ها روشون مخدوش بشه». The old stack floated inside the
-    axes and covered the tape on charts whose candles reach the left edge. The
-    margin is carved out of the figure (every wide axes shifts right by the
-    same amount), so notes, candles and the trade tool can never collide.
+    Viva 09-23 (after the margin-carve experiment he rejected — «یک‌سوم
+    کندل‌ها رو حذف کردی واسه ۶ تا کلمه مسخره»): the figure is NEVER
+    re-laid-out and no candles are ever sacrificed for text. The stack sits in
+    the emptier of the top/bottom spaces of the chart's OLDEST third — his own
+    reference charts show exactly this (notes at the top-left sky, tape full
+    width). A translucent chip keeps every line readable if a candle ever
+    reaches it.
     """
     if not notes or frame is None or frame.empty:
         return
+    if fig is None:
+        return
     lo, hi = ax.get_ylim()
     span = max(hi - lo, 1e-12)
-    # Measure the oldest visible third: choose the larger of top/bottom empty
-    # spaces, exactly where discretionary charting normally parks annotations.
     sample = frame.iloc[:max(12, len(frame) // 3)]
     top_empty = max(0.0, (hi - float(sample["high"].max())) / span)
     bottom_empty = max(0.0, (float(sample["low"].min()) - lo) / span)
     # Confirmed charts reserve upper-left for the Long/Short trade box.
     # Their structural notes therefore always use the lower-left empty corner.
     use_top = (top_empty >= bottom_empty) and not confirmed
-    if fig is None:
-        return
-    _MARGIN = 0.115
-    _wide = [a for a in fig.axes if a.get_position().width > 0.30]
-    _x_left = min((a.get_position().x0 for a in _wide), default=0.06)
-    for _a in _wide:
-        _pp = _a.get_position()
-        _a.set_position([_pp.x0 + _MARGIN, _pp.y0,
-                         max(0.05, _pp.width - _MARGIN), _pp.height])
-    _x_notes = _x_left + _MARGIN - 0.008      # the NEW left edge of the tape
-    _pos = ax.get_position()
-    _top = _pos.y0 + _pos.height * 0.965
-    _step = -(_pos.height * 0.037)
-    if not use_top:
-        _top = _pos.y0 + _pos.height * 0.055 + _step * (len(notes[:11]) - 1)
-        _step = -_step
-    for _i, (text, color) in enumerate(notes[:11]):
-        fig.text(_x_notes, _top + _step * _i, text,
-                 ha="right", va="center", color=color, fontsize=5.6,
-                 fontweight="bold", zorder=25)
+    _n = min(len(notes), 11)
+    _y0 = 0.975 if use_top else 0.025 + 0.037 * (_n - 1)
+    _step = 0.037 if use_top else 0.037
+    for _i, (text, color) in enumerate(notes[:_n]):
+        ax.text(0.012, _y0 - _step * _i, text,
+                ha="left", va="center", color=color, fontsize=5.8,
+                fontweight="bold", zorder=25, transform=ax.transAxes,
+                bbox={"boxstyle": "round,pad=0.22", "facecolor": "white",
+                      "edgecolor": "none", "alpha": 0.55})
 
 
 def _draw_visible_fvgs(ax, frame: pd.DataFrame, count: int) -> list:
@@ -1491,8 +1482,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # directly: wide price area, compact volume, and a small branded footer.
         # Wide candle-free future area: at 120dpi this is ~7cm from the last
         # candle to the price ladder, leaving every chart label readable.
-        price_position = [0.050, 0.235, 0.820, 0.665]
-        volume_position = [0.050, 0.085, 0.820, 0.125]
+        # Viva 09-23: «مثل چارت تریدینگ ویو کامل باشه» — the tape owns the
+        # width; only a slim right margin stays for the price ladder.
+        price_position = [0.040, 0.235, 0.845, 0.665]
+        volume_position = [0.040, 0.085, 0.845, 0.125]
         for index, chart_ax in enumerate(axes):
             chart_ax.set_position(price_position if index < 2 else volume_position)
             chart_ax.set_facecolor(CHART_THEME["panel"])
@@ -1512,8 +1505,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 face = bar.get_facecolor()
                 bar.set_edgecolor(face)
                 bar.set_linewidth(0.35)
+        from matplotlib.ticker import NullFormatter as _NF
         for _price_ax in axes[:2]:
             _price_ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
+            # log-scale minor ticks otherwise print scientific snippets (9×10¹)
+            _price_ax.yaxis.set_minor_formatter(_NF())
         ax.tick_params(
             axis="y",
             colors=CHART_THEME["text"],
@@ -1547,7 +1543,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # future margin read as «یک سوم خالی» — HALVE it and let real
         # candles fill the reclaimed width (his reference charts keep
         # only a slim right margin for the pills).
-        future = 24 if confirmed else 22
+        future = 28 if confirmed else 26
         for chart_ax in axes:
             chart_ax.set_xlim(-1, count + future)
 

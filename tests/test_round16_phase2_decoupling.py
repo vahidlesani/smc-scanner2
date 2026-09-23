@@ -97,11 +97,12 @@ def test_spot_confirmed_text_carries_label_and_invalidation():
     assert "۸٫۰٪" in text or "8.0٪" in text      # (100-92)/100 written out
 
 
-def test_futures_keep_linear_log_off_by_default():
-    """Viva 09-23 («چرا کلا همه‌چی رو تغییر دادی؟»): the futures five keep the
-    EXACT previous look — log-scale default OFF; only SPOT charts are log."""
+def test_log_wherever_it_matters_default_on():
+    """Viva 09-23 final ruling: log ON by default everywhere (spot always;
+    futures whenever the span makes log differ — the renderer's <3% guard
+    keeps short horizons linear)."""
     from config import get_settings
-    assert get_settings().chart_log_all is False
+    assert get_settings().chart_log_all is True
 
 
 def test_volume_reason_line_honesty():
