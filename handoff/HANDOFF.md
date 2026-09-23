@@ -1,4 +1,6 @@
 # 
+> **اضافهٔ ۰۹-۲۳ (راند ۱۹):** فاز-۳ فیت لگاریتمی خطوط پیوت (span>۳٪ روی محور لگ) + باکس سبز هرگز نصف نمی‌شود (re-anchor) + چیپ‌های ناحیه روی هم نمی‌نشیند. ۳۵۹ تست سبز. دیپلوی `d8d5d872` SUCCESS. صف بعدی: موتور کریپتوکاو (ریجکت ترند بی‌معنی) · اسنپ‌شات شناسه · قانون استاپ (پشت سوینگ، فیوچرز ≤۲٪) · مانیتینگ زندهٔ VIVA-MON-SPOT + تأیید به‌موقع.
+
 > **اضافهٔ ۰۹-۲۳ (راند ۱۷):** اپلیکیشن موبایل VIVA SIGNALS PRO لایو شد — `https://smc-scanner2-production.up.railway.app/app` (رمز: env `VIVA_APP_PASSWORD`). فید زنده + وین‌ریت هر ستاپ + کنترل توقف/ستاپ‌ها (bot_kv `webapp_control`، گیت fail-open در main.py دیسکاوری). APK در `/home/user/viva-android/`. کد: `webapp_viva.py` + `install_viva_app(app)` در dashboard/app.py. هر تغییری در وب‌اپ = فقط همان یک فایل.
 
 HANDOFF.md — smc-scanner2 (VivaSignals Pro)
