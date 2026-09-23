@@ -248,7 +248,7 @@ def _fetch_state() -> Dict[str, Any]:
                 (symbol, source, fa, direction, entry, sl, tp1, tp2, result, pnl, score,
                  style, code, tf, created_at, closed_at, confirmed, partial_win) = r
                 code = str(code or "")
-                is_spot = code.startswith("VIVA-SPOT-")
+                is_spot = code.startswith("VIVA-SPOT-") or str(source or "") == "SPOTBREAK"
                 res = "WIN" if (result == "WIN" or partial_win) else str(result or "PENDING")
                 _acc = spot if is_spot else fut
                 _acc["total"] += 1
@@ -263,8 +263,6 @@ def _fetch_state() -> Dict[str, Any]:
                     style=style, code=code, tf=str(tf or "").upper(),
                     time=str(created_at or ""), spot=is_spot, confirmed=bool(confirmed),
                 ))
-            for pref, acc in (("VIVA-SPOT-%", spot), ("%", fut)):
-                pass  # computed above from feed rows' codes (last 60) — corrected below
             c.execute("""
                 SELECT CASE WHEN public_code LIKE 'VIVA-SPOT-%%' THEN 'SPOT' ELSE 'FUT' END AS mkt,
                        COUNT(*) AS total,
@@ -309,7 +307,8 @@ def _fetch_state() -> Dict[str, Any]:
                 ))
         chains: List[Dict[str, Any]] = []
         try:
-            from database.repository_v7 import get_active_candidates
+            # live WATCH chains ( EDUCATIONAL/APPROACHING previews + slots )
+            from database.candidate_store import get_active_candidates
             for cand in (get_active_candidates() or [])[:24]:
                 md = getattr(cand, "metadata", None) or {}
                 code = str(md.get("public_code") or "")
@@ -322,6 +321,28 @@ def _fetch_state() -> Dict[str, Any]:
                     tf=str(getattr(cand, "trigger_timeframe", "") or "").upper(),
                     spot=code.startswith("VIVA-SPOT-"),
                 ))
+        except Exception:
+            pass
+        # live POSITIONS (confirmed, still running) on top of the chains list
+        try:
+            with db_cursor() as c2:
+                c2.execute("""
+                    SELECT symbol, source, strategy_fa, direction, entry, sl, score,
+                           trade_style, public_code, trigger_timeframe, created_at
+                    FROM signals
+                    WHERE confirmed=TRUE AND result='PENDING'
+                    ORDER BY created_at DESC LIMIT 12
+                """)
+                for r in c2.fetchall():
+                    (symbol, source, fa, direction, entry, sl, score, style, code, tf, created_at) = r
+                    code = str(code or "")
+                    chains.insert(0, dict(
+                        symbol=symbol, badge=str(source or ""), direction=direction,
+                        status="CONFIRMED", score=score,
+                        zone=_fmt_price(entry), updates=0, code=code,
+                        tf=str(tf or "").upper(),
+                        spot=code.startswith("VIVA-SPOT-") or str(source or "") == "SPOTBREAK",
+                    ))
         except Exception:
             pass
         wr = lambda a: (round(a["wins"] * 100.0 / max(1, a["wins"] + a["losses"]), 1))
