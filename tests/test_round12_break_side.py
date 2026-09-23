@@ -116,12 +116,12 @@ def test_a_far_structural_stop_is_clamped_not_deleted():
     تا ۱.۲۵ قیمت نماد محاسبه بشه» — the VVV 1h case (stop 15.193 against an 18.795
     entry) is now CUT at 1.25% instead of holding the chain «منتظر» for two days."""
     from analysis.trade_management import clamp_stop_price, MAX_STOP_PCT
-    assert MAX_STOP_PCT == 1.25
+    assert MAX_STOP_PCT == 2.00   # Viva 09-23 widening (see round14 table test)
     stop, clamped = clamp_stop_price(18.795, "LONG", 15.193)
     assert clamped is True
-    assert abs((18.795 - stop) / 18.795 * 100 - 1.25) < 1e-9
+    assert abs((18.795 - stop) / 18.795 * 100 - 2.00) < 1e-9
     up, clamped_up = clamp_stop_price(18.795, "SHORT", 22.5)
-    assert clamped_up is True and abs((up - 18.795) / 18.795 * 100 - 1.25) < 1e-9
+    assert clamped_up is True and abs((up - 18.795) / 18.795 * 100 - 2.00) < 1e-9
     near, near_clamped = clamp_stop_price(18.795, "LONG", 18.60)   # ~1.04%
     assert near_clamped is False and near == 18.60
     # the alert lane records the clamp instead of dropping the setup, and the

@@ -326,6 +326,26 @@ def evaluate_confirmation(
         if _v > 0 and _edge <= 0:
             _edge = _v
             break
+    # ── Viva 09-23 (round 20 ENTRY LAW, verbatim): «ورود با کلوز بالای خط
+    # روندِ اصلی تأیید می‌شود». Breaking the tool's own line is necessary, not
+    # sufficient: when a MAJOR-pivot trendline (the HTF validated line stored
+    # at detection) still stands BEYOND the tool edge in the break direction,
+    # the first confirmable close is a close beyond the MAJOR line. If price
+    # already cleared the major line (HYPEUSDT: the 1D TL cross had happened),
+    # nothing changes. Sane-bound + fail-open.
+    try:
+        _maj = float((candidate.metadata or {}).get("viva_major_break_line") or 0.0)
+        if _maj > 0 and _edge > 0:
+            _is_l = candidate.direction == "LONG"
+            _beyond = (_maj > _edge) if _is_l else (_maj < _edge)
+            _atr_m = float(candidate.metadata.get("atr", 0) or 0)
+            _sane = abs(_maj - float(getattr(candidate, "planned_entry", _maj) or _maj)) <= max(
+                0.04 * _maj, 2.5 * _atr_m)
+            if _beyond and _sane:
+                _edge = _maj
+                candidate.metadata["confirm_edge_source"] = "MAJOR_TL"
+    except Exception:
+        pass
     _zone_edge = float(candidate.entry_zone_top if candidate.direction == "LONG"
                        else candidate.entry_zone_bottom)
     _atr = float(candidate.metadata.get("atr", 0) or 0) or float(

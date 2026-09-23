@@ -74,8 +74,11 @@ def test_a_honest_candidate_passes_every_check():
                                tp1=101.3, tp2=104.0)) is None
     assert sanity_reject(_Cand(direction="SHORT", entry=100.0, sl=101.0,
                                tp1=98.7, tp2=96.0)) is None
-    # …and 1.5% on the same 15m is genuinely past its ceiling now
+    # 1.5% fits INSIDE the widened (09-23) 15m ceiling of 2.0%…
     assert sanity_reject(_Cand(direction="LONG", entry=100.0, sl=98.5,
+                               tp1=101.3, tp2=104.0)) is None
+    # …and 2.5% on the same 15m is genuinely past its ceiling now
+    assert sanity_reject(_Cand(direction="LONG", entry=100.0, sl=97.5,
                                tp1=101.3, tp2=104.0)) == "STOP_HORIZON"
 
 

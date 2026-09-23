@@ -796,11 +796,50 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     except Exception:
         pass
     candidate.sl = float(stop)
+    # ── Viva 09-23 (his chart ruling, verbatim): «استاپ باید از کف بیس ۴
+    # ساعته در بیاد … اگر استاپ و تی‌پی‌ها رو از نواحی تایم پایین‌تر از تایم
+    # تریگر در بیاریم خیلی بهتر بشه» — the LTF base hosts the stop and the
+    # NEAREST LTF swing hosts TP1 (the high-probability touch that arms the
+    # trailing). Fail-open: any fetch/compute problem keeps today's values.
+    _ltf_note = ""
+    try:
+        from analysis.trade_management import (ltf_for_trigger, ltf_structural_stop,
+                                               ltf_tp1)
+        from data.fetcher import get_klines
+        _ltf = ltf_for_trigger(trigger_tf)
+        _ltf_df = get_klines(str(bundle.symbol), _ltf, 60, closed_only=False, use_cache=True)
+        _lstop = ltf_structural_stop(entry, direction, _ltf_df)
+        if _lstop > 0:
+            _lstop2, _clamp2 = clamp_stop_price(entry, direction, _lstop, str(trigger_tf or ""))
+            if abs(entry - _lstop2) > abs(entry - stop) * 0.8:   # materially behind
+                stop = float(_lstop2)
+                candidate.sl = stop
+                _ltf_note = f"LTF{_ltf}"
+    except Exception as _exc:
+        print(f"TECHCLASSIC LTF stop skipped {getattr(bundle, 'symbol', '?')}: {_exc}")
     tp2 = float(final_target)
-    # five-part path split (round 11): TP1 = 1/5 of the way, exits 40/30/30
+    _path_full = abs(tp2 - entry)
     tp1 = entry + (tp2 - entry) / 5.0 if direction == "LONG" else entry - (entry - tp2) / 5.0
+    try:
+        from analysis.trade_management import ltf_for_trigger as _lf, ltf_tp1 as _ltp1
+        _TP1_CAP = {"1d": 6.0, "4h": 3.5, "2h": 2.5, "1h": 2.0, "30m": 1.5,
+                    "15m": 1.2, "5m": 1.0, "3m": 1.0, "1m": 1.0}
+        _ltf2 = _lf(trigger_tf)
+        _ltp = _ltp1(entry, direction,
+                     get_klines(str(bundle.symbol), _ltf2, 60, closed_only=False, use_cache=True),
+                     path=_path_full, cap_pct=float(_TP1_CAP.get(str(trigger_tf or "15m"), 2.0)))
+        if _ltp > 0 and ((direction == "LONG" and entry < _ltp < tp2)
+                         or (direction == "SHORT" and tp2 < _ltp < entry)):
+            tp1 = float(_ltp)
+    except Exception:
+        pass
     candidate.tp1 = float(tp1)
     candidate.tp2 = tp2
+    if _ltf_note:
+        try:
+            candidate.metadata["stop_source"] = _ltf_note + "_BASE"
+        except Exception:
+            pass
     # ── Viva 09-21 (round 12): the entry the geometry actually traded from must
     # be the entry the message shows. DASH 15m LONG carried its stop ABOVE the
     # POI-mid entry because only the stop had been rebuilt on the live price.
@@ -859,6 +898,19 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         "tc_base": ev.get("base_box") or [],
         "public_code": generate_viva_public_code("TLBREAK", style),
     })
+    # ── Viva 09-23 (round 20 ENTRY LAW): remember the MAJOR-pivot trendline
+    # opposing this break (highest-TF validated 1d/4h/1h line on the break's
+    # side) — confirmation must be a CLOSE beyond it, not just the tool line.
+    try:
+        _maj_cands = [l for l in _htf_lines(str(bundle.symbol))
+                      if (str(l.get("side")) == "upper") == (direction == "LONG")]
+        if _maj_cands:
+            _rank = {"1d": 3, "4h": 2, "1h": 1}
+            _maj_cands.sort(key=lambda l: _rank.get(str(l.get("tf")), 0), reverse=True)
+            candidate.metadata["viva_major_break_line"] = float(_maj_cands[0]["price"])
+            candidate.metadata["viva_major_break_line_tf"] = str(_maj_cands[0]["tf"])
+    except Exception:
+        pass
     return candidate
 
 

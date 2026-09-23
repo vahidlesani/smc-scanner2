@@ -26,10 +26,11 @@ from analysis.trade_management import (MAX_STOP_PCT, BAND_TOLERANCE, clamp_stop_
 from config import get_settings as _get_settings
 
 
-# ── 1.25% stop ceiling ──────────────────────────────────────────────────────
+# ── 2.00% stop ceiling (Viva 09-23: LTF-structural stops must FIT; the old
+# 1.25% bare-call default hunted every trade) ────────────────────────────────
 
 def test_the_ceiling_is_exactly_his_number():
-    assert MAX_STOP_PCT == 1.25
+    assert MAX_STOP_PCT == 2.00
 
 
 @pytest.mark.parametrize("direction,structural", [("LONG", 15.193), ("SHORT", 23.5)])
@@ -50,7 +51,7 @@ def test_the_vvv_case_from_his_screenshot():
     entry = 18.795
     stop, clamped = clamp_stop_price(entry, "LONG", 15.193)
     assert clamped and stop == pytest.approx(entry * (1 - MAX_STOP_PCT / 100))
-    assert abs(stop - entry) / entry * 100 == pytest.approx(1.25, abs=1e-6)
+    assert abs(stop - entry) / entry * 100 == pytest.approx(2.00, abs=1e-6)
 
 
 def test_every_lane_clamps_the_stop():

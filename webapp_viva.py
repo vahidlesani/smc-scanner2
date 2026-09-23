@@ -476,7 +476,7 @@ def _fetch_state() -> Dict[str, Any]:
                     SELECT signal_id, symbol, source, direction, entry, sl, score,
                            public_code, trigger_timeframe, created_at
                     FROM signals
-                    WHERE confirmed=TRUE AND result='PENDING'
+                    WHERE confirmed=TRUE AND result='PENDING' AND closed_at IS NULL
                     ORDER BY created_at DESC LIMIT 12
                 """)
                 for r in c2.fetchall():
@@ -574,13 +574,69 @@ def _candidate_from_row(row: dict) -> Any:
 _CHART_CACHE: Dict[str, Any] = {"key": "", "png": b"", "at": 0.0}
 
 
+_TG_IMG_CACHE: Dict[str, Any] = {}   # file_id → (bytes, monotonic)
+
+
+def _app_mirror(sid: str, kind: str) -> Optional[Dict[str, Any]]:
+    try:
+        from database.bot_kv import get_json
+        return get_json(f"app_chart|{sid}" if kind == "chart" else f"app_msg|{sid}|{kind}", {}) or None
+    except Exception:
+        return None
+
+
+def _tg_file_bytes(file_id: str) -> Optional[bytes]:
+    """The bot's ALREADY-SENT chart, from Telegram's own CDN (Viva 09-23:
+    «از همون چارت‌های ساخته‌شده برای ربات تلگرام استفاده کن») — one getFile +
+    one download, ZERO renderer CPU. 30-minute in-process cache."""
+    hit = _TG_IMG_CACHE.get(file_id)
+    now = time.monotonic()
+    if hit and now - hit[1] < 1800:
+        return hit[0]
+    try:
+        import os as _os
+        import urllib.request
+        import urllib.parse
+        token = (_os.getenv("TELEGRAM_TOKEN") or "").strip()
+        if not token:
+            return None
+        q = urllib.parse.urlencode({"file_id": file_id})
+        with urllib.request.urlopen(
+                f"https://api.telegram.org/bot{token}/getFile?{q}", timeout=10) as r:
+            import json as _json
+            path = str(((_json.loads(r.read()) or {}).get("result") or {}).get("path") or "")
+        if not path:
+            return None
+        with urllib.request.urlopen(
+                f"https://api.telegram.org/file/bot{token}/{path}", timeout=25) as r:
+            data = r.read()
+        if data[:4] == b"\x89PNG" and len(data) > 1000:
+            if len(_TG_IMG_CACHE) > 80:
+                _TG_IMG_CACHE.clear()
+            _TG_IMG_CACHE[file_id] = (data, now)
+            return data
+    except Exception as exc:
+        print(f"app telegram chart fetch failed: {exc}")
+    return None
+
+
 def _signal_chart_png(sid: str) -> Optional[bytes]:
-    """The bot's own renderer, on demand — cached 90s per signal."""
+    """The chart the CHANNEL already sent (mirror); renderer only as fallback."""
     if _demo_mode():
         return _demo_chart_png()
     now = time.monotonic()
     if _CHART_CACHE["key"] == sid and _CHART_CACHE["png"] and now - _CHART_CACHE["at"] < 90:
         return _CHART_CACHE["png"]
+    try:
+        mirror = _app_mirror(sid, "chart") or {}
+        fid = str(mirror.get("fid") or "")
+        if fid:
+            data = _tg_file_bytes(fid)
+            if data:
+                _CHART_CACHE.update(key=sid, png=data, at=now)
+                return data
+    except Exception:
+        pass
     try:
         from database.db import db_cursor
         with db_cursor() as c:
@@ -651,6 +707,11 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
         base = demo or _demo_payload()["feed"][0]
         base = dict(base)
         base.update(dict(
+            messages={
+                "compact": "🎯 <b>VIVA ✦ TLBREAK</b> — DEMOUSDT خرید\nکلوز بالای خط روند نزولی؛ ابزار لانگ فعال شد.",
+                "confirmed": "✅ <b>تأیید ورود</b>\n📊 جدول مدیریت سرمایه:\n• ورود: همان ناحیه\n• حجم: 1-2٪ ریسک\n• استاپ: پشت بیس",
+            },
+            hit_log=[dict(label="TP1", ok=True, time=base.get("time", ""))],
             created_at=base.get("time", ""), confirmed_at=base.get("time", ""),
             closed_at=(base.get("time") if base.get("result") in ("WIN", "LOSS") else ""),
             entry_conditions="شرط ورود: کلوز کندلِ تایم‌فریم بالای سطح شکست + حجم بالاتر از میانگین ۲۰.",
@@ -702,6 +763,30 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
         except Exception:
             conf = [str(row.get("confirmations") or "")] if row.get("confirmations") else []
         is_spot = _row_is_spot(str(row.get("public_code") or ""), row.get("source"), row.get("market_json"))
+        # ── hit log with CLOCK (Viva 09-23: «هیت شدن‌ها با تیک و ساعت هیت شدن؛
+        # استاپ‌ها هم همین») — TP1/TP2/SL each carry its exact stamp.
+        hit_log: List[Dict[str, Any]] = []
+        if row.get("tp1_hit"):
+            hit_log.append(dict(label="TP1", ok=True,
+                                time=str(row.get("tp1_hit_at") or "")))
+        try:
+            _ts = json.loads(row.get("target_state_json") or "{}") if isinstance(
+                row.get("target_state_json"), (str, bytes)) else (row.get("target_state_json") or {})
+            for _i, _t in enumerate((_ts.get("targets") or [])[:2]):
+                _ht = str(_t.get("hit_at") or (_t.get("ts") if _t.get("hit") else "") or "")
+                if _ht:
+                    hit_log.append(dict(label=f"TP{_i + 1}", ok=True, time=_ht))
+        except Exception:
+            pass
+        if str(row.get("result")) == "LOSS" and row.get("closed_at"):
+            hit_log.append(dict(label="STOP", ok=False, time=str(row.get("closed_at"))))
+        elif str(row.get("result")) == "WIN" and row.get("closed_at"):
+            hit_log.append(dict(label="CLOSE", ok=True, time=str(row.get("closed_at"))))
+        _messages: Dict[str, str] = {}
+        for _k in ("compact", "confirmed", "confirm", "final", "detailed"):
+            _m = _app_mirror(str(sid), _k)
+            if _m and _m.get("html"):
+                _messages[_k] = str(_m["html"])[:6000]
         return dict(
             signal_id=str(row.get("signal_id") or ""), symbol=row.get("symbol"),
             source=row.get("source"), strategy_fa=row.get("strategy_fa"),
@@ -722,6 +807,8 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
             confirmations=[str(x) for x in conf],
             ladder=[dict(price=_fmt_price(row.get("tp1")), hit=bool(row.get("tp1_hit") or lh1)),
                     dict(price=_fmt_price(row.get("tp2")), hit=lh2)],
+            hit_log=hit_log,
+            messages=_messages,
             timeline=timeline,
         )
     except Exception as exc:
@@ -1072,6 +1159,9 @@ nav .bdg{position:absolute;top:0;left:18%;background:var(--short);color:#fff;fon
 .dsec{margin-top:12px}
 .dsec h3{font-size:12.5px;color:var(--gold);margin-bottom:8px;letter-spacing:.03em}
 .prose{font-size:12.5px;line-height:2;color:#c9cfda;background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:12px 14px}
+.prose.tgmsg{white-space:pre-wrap;word-break:break-word;font-size:13px}
+.prose.tgmsg b{color:#fff}
+.prose.tgmsg i,.prose.tgmsg code{color:#8ab4ff}
 .conf{display:flex;align-items:center;gap:8px;font-size:12px;color:#c9cfda;padding:6px 2px}
 .conf svg{width:15px;height:15px;color:var(--long);flex-shrink:0}
 .tl{position:relative;padding-right:18px}
@@ -1312,6 +1402,9 @@ async function openDetail(sid){
     <div class="pill stop"><i>استاپ</i><b>${fnum(d.sl)}${d.sl_moved_to_be?' (BE)':''}</b></div>
     <div class="pill tp1 ${d.tp1_hit?'hit':''}"><i>TP1</i><b>${fnum(d.tp1)}${d.tp1_hit?' ✓':''}</b></div>
     <div class="pill tp2 ${d.tp2_hit?'hit':''}"><i>TP2</i><b>${fnum(d.tp2)}${d.tp2_hit?' ✓':''}</b></div></div>
+   ${(d.hit_log&&d.hit_log.length)?`<div class="dsec"><h3>🎯 رویدادهای قیمتی</h3>${d.hit_log.map(h=>`<div class="conf" style="${h.ok?'':'color:#ef5350'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="${h.ok?'M20 6L9 17l-5-5':'M18 6L6 18M6 6l12 12'}"/></svg><b>${h.label}</b><span>${tehran(h.time)}</span></div>`).join('')}</div>`:''}
+   ${(d.messages&&d.messages.compact)?`<div class="dsec"><h3>📨 پیام مختصر (همان پیام کانال)</h3><div class="prose tgmsg">${d.messages.compact}</div></div>`:''}
+   ${(d.messages&&(d.messages.confirmed||d.messages.confirm))?`<div class="dsec"><h3>✅ پیام کانفرمد (همان پیام کانال)</h3><div class="prose tgmsg">${d.messages.confirmed||d.messages.confirm}</div></div>`:''}
    ${d.summary?`<div class="dsec"><h3>📝 توضیحات</h3><div class="prose">${fnum(d.summary)}</div></div>`:''}
    ${d.entry_conditions?`<div class="dsec"><h3>⚖️ شرط ورود / تأیید</h3><div class="prose">${fnum(d.entry_conditions)}</div></div>`:''}
    ${confirmTxt.length?`<div class="dsec"><h3>✅ تأییدها</h3>${confirmTxt.map(c=>`<div class="conf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>${fnum(c)}</div>`).join('')}</div>`:''}

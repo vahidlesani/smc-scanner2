@@ -792,6 +792,9 @@ def attach_results_link(message_id: int, results_mid: int) -> bool:
                                                       "url": link}]]})
 
 
+_LAST_PHOTO_FILE: Dict[int, str] = {}   # photo message_id → telegram file_id
+
+
 def send_photo(
     image: bytes,
     caption: str,
@@ -826,6 +829,16 @@ def send_photo(
     if not result:
         return None
     mid = int(result.get("result", {}).get("message_id") or 0) or None
+    # Round-19 (Viva 09-23: «از همون چارت‌های ساخته‌شده برای ربات تلگرام
+    # استفاده کن، نمی‌خوام با ساخت چارت دوباره مصرف ریلوی بالا بره»): keep the
+    # Telegram file_id so the mobile app serves the SAME image from Telegram's
+    # CDN instead of re-rendering anything.
+    try:
+        _photos = (result.get("result", {}) or {}).get("photo") or []
+        if mid and _photos:
+            _LAST_PHOTO_FILE[int(mid)] = str(_photos[-1].get("file_id") or "")
+    except Exception:
+        pass
     _audit_send("photo", target, mid)
     if mid and _tails:
         # Viva 2026-09-15: the continuation comes RIGHT BEHIND as a plain
@@ -3297,6 +3310,22 @@ def _pro_slot_post(candidate, caption: str, chart=None, markup=None,
         _setup_chain_set(candidate, chain)
     except Exception as exc:
         print(f"pro slot chain warning {getattr(candidate, 'signal_id', '?')}: {exc}")
+    # ── Round-19: the app mirrors EXACTLY what the channel received — the
+    # chart via its Telegram file_id, the message text verbatim (HTML+emoji).
+    # No re-render, no second copy of the message logic.
+    try:
+        from database.bot_kv import set_json
+        _sid = str(getattr(candidate, "signal_id", "") or "")
+        if _sid:
+            _fid = _LAST_PHOTO_FILE.get(int(_photo_mid or 0)) if _photo_mid else ""
+            if _fid:
+                set_json(f"app_chart|{_sid}", {"fid": _fid, "mid": int(_photo_mid)})
+            if str(kind) != "update":
+                set_json(f"app_msg|{_sid}|{kind}", {"html": str(caption)[:6000]})
+            else:
+                set_json(f"app_msg|{_sid}|update", {"html": str(caption)[:6000]})
+    except Exception as exc:
+        print(f"pro slot app-mirror warning {getattr(candidate, 'signal_id', '?')}: {exc}")
     return int(mid)
 
 
@@ -4016,12 +4045,27 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
     """Execution channel is intentionally chart-first: confirmed trade numbers
     plus a one-click link back to its educational alert/chart."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    # ── Viva 09-23 (round 20): the confirmed ladder's FIRST pill also obeys
+    # the lower-TF law — snap it to the nearest LTF swing (the touch a member
+    # actually watches) instead of a pure 20%-of-path step. Fail-open.
+    _ltf_df_conf = None
+    try:
+        from analysis.trade_management import ltf_for_trigger, TP1_CAP_BY_TF
+        from data.fetcher import get_klines as _gk
+        _ltf_df_conf = _gk(str(candidate.symbol),
+                           ltf_for_trigger(str(candidate.trigger_timeframe or "15m")),
+                           60, closed_only=False, use_cache=True)
+    except Exception:
+        _ltf_df_conf = None
     candidate.metadata["target_ladder"] = build_ladder(
         candidate.planned_entry, candidate.sl, candidate.direction, candidate.market,
         candidate.tp2, structural_tp1=candidate.tp1,
         fee_pct=(SETTINGS.fee_rate_percent + SETTINGS.slippage_percent) * 2.0 / 100.0,
         trigger_tf=str(candidate.trigger_timeframe or "15m"),
         wall_level=float((candidate.metadata or {}).get("internal_wall") or 0.0),
+        ltf_df=_ltf_df_conf,
+        ltf_cap_pct=float(TP1_CAP_BY_TF.get(str(candidate.trigger_timeframe or "15m"), 2.0))
+        if _ltf_df_conf is not None else 0.0,
     )
     if chart_df is not None and not chart_df.empty and "close" in chart_df.columns:
         candidate.metadata["live_price"] = float(chart_df["close"].iloc[-1])

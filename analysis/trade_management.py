@@ -4,6 +4,7 @@ This module has no database or Telegram dependency so every fill rule is unit
  testable before it is wired into the live monitor.
 """
 from __future__ import annotations
+import numpy as np
 from typing import Dict, List, Optional
 
 # Viva 09-19 ruling (WR73% / −22.68% diagnosis): the old hidden 5-segment
@@ -105,7 +106,14 @@ def structural_buffer(price: float, market: Optional[Dict] = None) -> float:
 # «۳ تا ۵ درصد … ۴ تا ۷ … ۷ تا ۱۰ … هم با تلورانس ۲۰ درصد بالایی پایینی سقف و
 #   کف های اعلام شده برای تی پی ها اوکیه» → the announced TP band edges carry a
 #   ±20% tolerance.
-MAX_STOP_PCT = 1.25
+MAX_STOP_PCT = 2.00   # Viva 09-23: the 15m ceiling (legacy bare-call default)
+
+# Viva 09-23 (round 20): TP1 is a HIGH-PROBABILITY TOUCH that arms the
+# trailing — never the far end of the path. Per-trigger-TF distance ceiling
+# (%) shared by every TP1 source (pattern engine, confirmed ladder).
+TP1_CAP_BY_TF: Dict[str, float] = {"1d": 6.0, "4h": 3.5, "2h": 2.5, "1h": 2.0,
+                                   "30m": 1.5, "15m": 1.2, "5m": 1.0,
+                                   "3m": 1.0, "1m": 1.0}
 BAND_TOLERANCE = 0.20
 
 # ── Viva 09-21 (round 14, verbatim): «اون ۱.۲۵ صدم استاپ برای ۱۵ دقیقه است /
@@ -115,11 +123,26 @@ BAND_TOLERANCE = 0.20
 # بزرگ‌تر باشه» → the ceiling is PER TIMEFRAME now. A structural swing keeps its
 # own place as long as it stays inside the ceiling (+ its buffer); a farther
 # swing is CUT at the ceiling («حذف نشه») — never a dropped scenario.
+# Viva 09-23 («استاپها خیلی کوچیک و بلافاصله هانت میشه» + «استاپ باید از کف
+# بیسِ تایم پایین‌تر دربیاد»): the ceilings widen so an LTF-structural stop
+# actually FITS behind the base — the old numbers (1d 2.75%) kept slicing
+# real 4h-base stops to a huntable 2.75%. Spot keeps its own 10% cap.
 MAX_STOP_PCT_BY_TF = {
-    "1m": 1.25, "3m": 1.25, "5m": 1.25, "15m": 1.25,      # his 15m number
-    "30m": 1.50, "1h": 1.75, "2h": 2.00,                   # 1h = his 1.75
-    "4h": 2.25, "1d": 2.75,                                # his 4h/1d ceilings
+    "1m": 1.25, "3m": 1.25, "5m": 1.50, "15m": 2.00,
+    "30m": 2.25, "1h": 2.75, "2h": 3.25,
+    "4h": 4.50, "1d": 8.00,
 }
+
+# Trigger TF → the LOWER timeframe whose BASE defines the stop & TP1 zones.
+LTF_BY_TRIGGER = {
+    "1d": "4h", "4h": "1h", "2h": "1h", "1h": "15m",
+    "30m": "5m", "15m": "5m", "5m": "1m", "3m": "1m", "1m": "1m",
+}
+
+
+def ltf_for_trigger(trigger_tf: str) -> str:
+    """The lower timeframe that hosts the entry base / first resistance."""
+    return LTF_BY_TRIGGER.get(str(trigger_tf or "").lower(), "15m")
 
 
 def stop_ceiling_pct(trigger_tf: str) -> float:
@@ -217,6 +240,76 @@ def doctrine_path(entry: float, trigger_tf: str, level: float = 0.0,
         return float((lo + hi) / 2.0), "BAND_MID"
     except Exception:
         return 0.0, "NONE"
+
+
+def _swing_highs(df, left: int = 2, right: int = 2) -> list:
+    """Fractal swing highs of a frame (high column) — pure, no network."""
+    try:
+        hi = df["high"].to_numpy(float)
+    except Exception:
+        return []
+    out = []
+    for i in range(left, len(hi) - right):
+        w = hi[i - left:i + right + 1]
+        if hi[i] >= max(w):
+            out.append((i, float(hi[i])))
+    return out
+
+
+def ltf_structural_stop(entry: float, direction: str, ltf_df,
+                        buffer_pct: float = 0.0010,
+                        lookback: int = 12) -> float:
+    """Stop = BEHIND the LTF base low/high (Viva 09-23: «استاپ از کف بیس ۴
+    ساعته دربیاد»). The base = the lowest low (LONG) / highest high (SHORT) of
+    the last `lookback` LTF candles before the break. 0.0 when nothing sane
+    comes out (fail-open)."""
+    try:
+        entry = float(entry or 0.0)
+        if entry <= 0 or ltf_df is None or len(ltf_df) < 4:
+            return 0.0
+        lo = ltf_df["low"].to_numpy(float)[-lookback:]
+        hi = ltf_df["high"].to_numpy(float)[-lookback:]
+        if str(direction).upper() == "LONG":
+            base = float(np.min(lo))
+            stop = base * (1.0 - float(buffer_pct))
+            return float(stop) if 0 < stop < entry * 0.994 else 0.0
+        base = float(np.max(hi))
+        stop = base * (1.0 + float(buffer_pct))
+        return float(stop) if stop > entry * 1.006 else 0.0
+    except Exception:
+        return 0.0
+
+
+def ltf_tp1(entry: float, direction: str, ltf_df, path: float = 0.0,
+            cap_pct: float = 6.0, floor_pct: float = 1.2) -> float:
+    """TP1 = the NEAREST LTF swing above entry — the high-probability touch
+    that arms the trailing stop («تی‌پی یک باید جایی باشه که به احتمال بالا
+    تاچ بشه»). No structure → a fraction of the doctrine path, capped by the
+    caller's per-TF number. 0.0 when unusable."""
+    try:
+        entry = float(entry or 0.0)
+        if entry <= 0:
+            return 0.0
+        long = str(direction).upper() == "LONG"
+        cands = []
+        if ltf_df is not None and len(ltf_df) >= 8:
+            for _i, px in _swing_highs(ltf_df):
+                if long and px >= entry * (1.0 + floor_pct / 100.0):
+                    cands.append(px)
+                elif not long and px <= entry * (1.0 - floor_pct / 100.0):
+                    cands.append(px)
+        hard_cap = entry * (1.0 + cap_pct / 100.0) if long             else entry * (1.0 - cap_pct / 100.0)
+        if cands:
+            nearest = min(cands, key=lambda v: abs(v - entry))
+            return float(min(nearest, hard_cap)) if long else float(max(nearest, hard_cap))
+        frac = abs(float(path or 0.0)) * 0.35
+        cap_frac = abs(hard_cap - entry)
+        d = min(frac, cap_frac) if frac > 0 else cap_frac
+        if d < entry * floor_pct / 100.0:
+            d = min(entry * floor_pct / 100.0, abs(cap_frac))
+        return float(entry + d if long else entry - d)
+    except Exception:
+        return 0.0
 
 
 def clamp_path_to_band(entry: float, trigger_tf: str, distance: float) -> tuple:
@@ -319,7 +412,8 @@ def venue_tick(price: float, market: Optional[Dict] = None) -> float:
 def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict] = None,
                  final_target: Optional[float] = None, structural_tp1: Optional[float] = None,
                  fee_pct: float = 0.0, trigger_tf: str = "",
-                 wall_level: Optional[float] = None) -> Dict:
+                 wall_level: Optional[float] = None,
+                 ltf_df=None, ltf_cap_pct: float = 0.0) -> Dict:
     """Five-pill exit ladder — the ORIGINAL approved tool shape (Viva
     09-19/20 revisit): five equal price segments entry→final, TP1 distance
     exactly as before (no 1R floor), exits 40/30/30 on TP1..TP3, TP4/TP5
@@ -386,6 +480,23 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
         _ahead_of_entry = (_struct_tp1 > entry) if sign > 0 else (_struct_tp1 < entry)
         if _before_final and _ahead_of_entry and abs(abs(_struct_tp1 - entry) - step) <= 0.20 * step:
             tp1 = _struct_tp1
+    # ── Viva 09-23 (round 20, verbatim): «اگر استاپ و تی‌پی‌ها رو از نواحی
+    # تایم پایین‌تر از تایم تریگر در بیاریم خیلی بهتر بشه» + «TP1 = لمسِ
+    # پراحتمال». When the lower-TF frame is supplied, the first pill snaps to
+    # the NEAREST lower-TF swing (inside the path, at most half of it) — the
+    # old ±20%-of-step rule discarded exactly the level a member watches get
+    # touched. Fail-open: any problem keeps today's geometry.
+    try:
+        if ltf_df is not None and len(ltf_df) >= 5:
+            _lp = ltf_tp1(entry, direction, ltf_df, path=_path,
+                          cap_pct=float(ltf_cap_pct or TP1_CAP_BY_TF.get(_cap_tf, 2.0)))
+            _lp_ahead = ((_lp - entry) * sign) > 0
+            _lp_before = ((final_price - _lp) * sign) > 0
+            _lp_sane = ((_lp - entry) * sign) <= 0.5 * max(_path, 1e-12)
+            if _lp > 0 and _lp_ahead and _lp_before and _lp_sane:
+                tp1 = float(_lp)
+    except Exception:
+        pass
     targets = []
     for i in range(5):
         _lv = tp1 + sign * min(step, max(0.4 * step, abs(final_price - tp1) / 4.0)) * i

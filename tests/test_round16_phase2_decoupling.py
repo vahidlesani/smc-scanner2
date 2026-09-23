@@ -153,7 +153,7 @@ def test_final_stop_guard_still_binds_futures():
         created_at="2026-09-22T00:00:00", confirmed_at="2026-09-22T00:00:00",
         metadata={})
     out = _final_stop_guard(cand)
-    assert float(out.sl) == pytest.approx(97.25)           # 1d ceiling 2.75%
+    assert float(out.sl) == pytest.approx(92.0)           # 1d ceiling 8% (09-23 table)
     assert out.metadata.get("stop_clamped")
 
 

@@ -193,8 +193,8 @@ def test_the_stop_ceiling_is_enforced_just_before_publishing():
         created_at="2026-09-21T09:00:00+00:00", metadata={})
     out = _final_stop_guard(cand)
     dist = (out.sl - out.planned_entry) / out.planned_entry * 100.0
-    assert abs(dist - 1.75) < 1e-6, dist          # 1h ceiling, round 14 table
-    assert out.metadata["stop_clamped"] == "1.75%"
+    assert abs(dist - 2.75) < 1e-6, dist          # 1h ceiling, 09-23 table
+    assert out.metadata["stop_clamped"] == "2.75%"
     # an inside-the-ceiling structural stop is never touched
     cand.sl = 0.2225
     _final_stop_guard(cand)

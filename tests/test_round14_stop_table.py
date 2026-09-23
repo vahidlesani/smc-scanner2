@@ -27,23 +27,27 @@ from analysis.trade_management import (stop_ceiling_pct,
 
 # ── 1. the ceiling table is exactly his numbers ────────────────────────────
 
-@pytest.mark.parametrize("tf,ceiling", [("15m", 1.25), ("5m", 1.25), ("3m", 1.25),
-                                        ("30m", 1.50), ("1h", 1.75), ("2h", 2.00),
-                                        ("4h", 2.25), ("1d", 2.75)])
+# Viva 09-23 (reversal, verbatim: «استاپها هنوز اشتباه هستن و خیلی کوچک و
+# بلافاصله هانت میشیم … استاپ باید از کف بیس ۴ ساعته دربیاد … از نواحی تایم
+# پایین‌تر از تایم تریگر») — the round-14 numbers made every LTF-structural
+# stop a huntable squeeze; the ceilings widen so the base actually fits.
+@pytest.mark.parametrize("tf,ceiling", [("15m", 2.00), ("5m", 1.50), ("3m", 1.25),
+                                        ("30m", 2.25), ("1h", 2.75), ("2h", 3.25),
+                                        ("4h", 4.50), ("1d", 8.00)])
 def test_his_stop_ceiling_per_timeframe(tf, ceiling):
     assert stop_ceiling_pct(tf) == ceiling
 
 
 def test_the_four_numbers_he_named():
-    assert stop_ceiling_pct("15m") == 1.25     # «۱.۲۵ صدم استاپ برای ۱۵ دقیقه»
-    assert stop_ceiling_pct("1h") == 1.75      # «۱.۷۵ استاپ برای ۱ ساعته»
-    assert stop_ceiling_pct("4h") == 2.25      # «۲ تا ۲.۲۵ … در ۴ ساعته»
-    assert stop_ceiling_pct("1d") == 2.75      # «۲.۵ تا ۲.۷۵ … در روزانه»
+    assert stop_ceiling_pct("15m") == 2.00
+    assert stop_ceiling_pct("1h") == 2.75
+    assert stop_ceiling_pct("4h") == 4.50
+    assert stop_ceiling_pct("1d") == 8.00
 
 
 def test_an_unknown_timeframe_falls_back_to_the_15m_ceiling():
-    assert stop_ceiling_pct("") == 1.25
-    assert stop_ceiling_pct("7h") == 1.25
+    assert stop_ceiling_pct("") == 2.00
+    assert stop_ceiling_pct("7h") == 2.00
 
 
 # ── 2. a structural swing keeps its place while it fits the ceiling ────────
@@ -56,13 +60,16 @@ def test_a_swing_inside_the_ceiling_is_kept_as_it_is():
 
 def test_a_swing_farther_than_the_ceiling_is_cut_at_the_ceiling():
     stop, clamped = clamp_stop_price(100.0, "LONG", 96.0, "1h")
-    assert clamped is True and stop == pytest.approx(100.0 - 1.75)
+    assert clamped is True and stop == pytest.approx(100.0 - 2.75)   # 1h = 2.75% (09-23 table)
     stop4, clamped4 = clamp_stop_price(100.0, "SHORT", 104.0, "4h")
-    assert clamped4 is True and stop4 == pytest.approx(100.0 + 2.25)
+    # 4h ceiling is 4.5% now — a 4% swing FITS (no clamp)
+    assert clamped4 is False and stop4 == pytest.approx(104.0)
     stop1d, clamped1d = clamp_stop_price(100.0, "LONG", 90.0, "1d")
-    assert clamped1d is True and stop1d == pytest.approx(100.0 - 2.75)
+    # 1d ceiling is 8% now — a 10% swing is cut to 8%
+    assert clamped1d is True and stop1d == pytest.approx(100.0 - 8.0)
     stop15, clamped15 = clamp_stop_price(100.0, "SHORT", 103.0, "15m")
-    assert clamped15 is True and stop15 == pytest.approx(100.0 + 1.25)
+    # 15m ceiling is 2.0% now — 3% is cut
+    assert clamped15 is True and stop15 == pytest.approx(100.0 + 2.0)
 
 
 def test_the_clamp_never_crosses_the_entry_and_never_invents_a_side():
