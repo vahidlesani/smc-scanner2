@@ -238,7 +238,7 @@ def _fetch_state() -> Dict[str, Any]:
             c.execute("""
                 SELECT symbol, source, strategy_fa, direction, entry, sl, tp1, tp2,
                        result, pnl_pct, score, trade_style, public_code, trigger_timeframe,
-                       created_at, closed_at, confirmed, partial_win
+                       created_at, closed_at, confirmed, partial_win, market_json
                 FROM signals
                 ORDER BY created_at DESC
                 LIMIT 60
@@ -246,9 +246,11 @@ def _fetch_state() -> Dict[str, Any]:
             rows = c.fetchall()
             for r in rows:
                 (symbol, source, fa, direction, entry, sl, tp1, tp2, result, pnl, score,
-                 style, code, tf, created_at, closed_at, confirmed, partial_win) = r
+                 style, code, tf, created_at, closed_at, confirmed, partial_win, market_json) = r
                 code = str(code or "")
-                is_spot = code.startswith("VIVA-SPOT-") or str(source or "") == "SPOTBREAK"
+                mkt = str(market_json or "")
+                is_spot = (code.startswith("VIVA-SPOT-") or str(source or "") == "SPOTBREAK"
+                           or '"SPOT"' in mkt or "'SPOT'" in mkt)
                 res = "WIN" if (result == "WIN" or partial_win) else str(result or "PENDING")
                 _acc = spot if is_spot else fut
                 _acc["total"] += 1
