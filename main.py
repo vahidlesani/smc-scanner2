@@ -664,11 +664,26 @@ def _spot_alert_daily_count() -> None:
         pass
 
 
+def _spot_status_write(reason: str, stats: Optional[Dict[str, int]] = None) -> None:
+    """Viva 09-23/24 («چرا اسپات رو فعال نمیکنی؟؟»): the lane's liveness is
+    VISIBLE — reason + last-pass counters in KV, surfaced in the app."""
+    try:
+        from database.bot_kv import set_json
+        set_json("spot_lane_status", {
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "enabled": _spot_enabled(), "chat_set": bool(CHAT_ID_SPOT),
+            "reason": str(reason or ""), "stats": dict(stats or {}),
+        })
+    except Exception:
+        pass
+
+
 def run_spot_scan() -> Dict[str, int]:
     """One full spot pass: 4h · 1d · 3d · 1w over the liquidity watchlist."""
-    stats = {"symbols": 0, "found": 0, "published": 0,
-             "alerts": 0, "errors": 0}
+    stats: Dict[str, int] = {"symbols": 0, "found": 0, "published": 0,
+                             "alerts": 0, "errors": 0}
     if not _spot_enabled():
+        _spot_status_write("disabled", stats)
         return stats
     try:
         from analysis.spot_engine import spot_signals_for, SPOT_TRIGGERS
@@ -677,9 +692,11 @@ def run_spot_scan() -> Dict[str, int]:
         from data.fetcher import get_market_bundle
     except Exception as exc:
         print(f"spot lane import failed: {exc}")
+        _spot_status_write(f"import_failed: {exc}", stats)
         return stats
     if not CHAT_ID_SPOT:
         print("spot lane idle: CHAT_ID_SPOT is not set")
+        _spot_status_write("no_spot_channel", stats)
         return stats
     try:
         symbols, _metrics = UNIVERSE.get()
@@ -781,6 +798,7 @@ def run_spot_scan() -> Dict[str, int]:
                 print(f"spot alert warning {aitem.get('symbol')}: {exc}")
     except ImportError as exc:
         print(f"spot ladder import failed: {exc}")
+    _spot_status_write("ok", stats)
     print(f"🪙 SPOT pass finished in {time.monotonic() - started:.1f}s • "
           f"symbols={stats['symbols']} found={stats['found']} "
           f"published={stats['published']} budget_left={_spot_daily_left()}")

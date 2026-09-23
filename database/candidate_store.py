@@ -354,6 +354,29 @@ def absorb_update_into_chain(holder: SignalCandidate, fresh: SignalCandidate) ->
         "education_separator_attempted", "approaching_message_id", "pro_separator_message_id",
         "chain_opened_at",
     }
+    # ── Viva 09-23/24 (snapshot identity, verbatim): «اسنپ‌شات برای همون
+    # شناسه یکتا باید بمونه». Once a chain is PUBLIC (approaching/alert sent,
+    # message ids exist, or confirmed), its DRAWN structure is its identity —
+    # a later scan may refresh market context but may NOT redraw a longer or
+    # different trendline under the same signal id (the «خط کش اومده باز»
+    # bug: every absorb carried the fresh re-fit's anchor points). Geometry
+    # keys keep their ALERT-TIME values for the chain's whole life.
+    _published = bool(getattr(holder, "approaching_sent", False)) or _frozen or any(
+        k in (holder.metadata or {}) for k in (
+            "education_message_id", "education_chart_message_id",
+            "approaching_message_id", "pro_separator_message_id"))
+    if _published:
+        keep |= {
+            "tl_a_ts", "tl_a_price", "tl_b_ts", "tl_b_price", "tl_anchor_ts",
+            "tl_anchor_price", "tl_slope", "tl_touches", "tl_height",
+            "tl_fit_error_atr", "tl_line", "tl_bound_now", "tl_base_kind",
+            "viva_upper_points", "viva_lower_points", "viva_break_line",
+            "viva_breakout_line", "viva_retest_zone", "viva_touch_count",
+            "viva_fit_error_atr", "viva_pattern", "tl_pattern", "tl_pattern_fa",
+            "tc_base", "tc_projection", "technoclassic",
+            "viva_major_break_line", "viva_major_break_line_tf",
+            "viva_watch_line", "viva_watch_points",
+        }
     for key, value in (fresh.metadata or {}).items():
         if key in keep or str(key).startswith("education_"):
             continue

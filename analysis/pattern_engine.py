@@ -49,11 +49,23 @@ STATE_FADE = "REJECTION_FADE"
 
 # E&M: breaking above a resistance is the LONG event; below support the SHORT.
 # Every shape alerts both edges; the pattern label only informs the caption.
-_EDGE_RULES = {p: {"upper": "LONG", "lower": "SHORT"} for p in (
-    "WEDGE_FALLING", "WEDGE_RISING", "TRIANGLE_ASCENDING", "TRIANGLE_DESCENDING",
-    "TRIANGLE_SYMMETRICAL", "TRIANGLE", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING",
+# Viva 09-23/24 (حکم ماهیت الگو — verbatim): «رایزینگ وج ماهیت نزولی داره،
+# با شکست کف و کلوز زیرش تایید میشه». A wedge trades its NATURE only:
+# rising wedge → breakdown-SHORT, falling wedge → breakout-LONG. The
+# counter-nature edge carries NO rule, so a LONG at the bottom of a rising
+# wedge (the ADA morning bug) or a SHORT at the top of a falling one can
+# never be created or confirmed. Internal کف→سقف / سقف→کف candidates stay
+# legal ONLY in parallel channels (the is_parallel fade gate below) —
+# channels and rectangles, exactly as he defined.
+_EDGE_RULES = {
+    "WEDGE_RISING": {"lower": "SHORT"},
+    "WEDGE_FALLING": {"upper": "LONG"},
+}
+_EDGE_RULES.update({p: {"upper": "LONG", "lower": "SHORT"} for p in (
+    "TRIANGLE_ASCENDING", "TRIANGLE_DESCENDING", "TRIANGLE_SYMMETRICAL",
+    "TRIANGLE", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING",
     "CHANNEL_FLAT", "CHANNEL", "TRENDLINE", "HORIZONTAL_SR", "BROADENING",
-)}
+)})
 
 PATTERN_FA = {
     "WEDGE_FALLING": "گوه نزولی (فالینگ‌وج)",

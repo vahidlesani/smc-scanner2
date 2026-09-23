@@ -500,6 +500,22 @@ def _fetch_state() -> Dict[str, Any]:
             avg_pnl=float(summary.get("avg_pnl") or 0.0),
         ))
         scanner = dict(alive=True, mode="")
+        # ── Viva 09-23/24 («چرا اسپات رو فعال نمیکنی؟؟»): the spot lane's
+        # real state is visible in the app — reason + last pass, from KV.
+        try:
+            from database.bot_kv import get_json as _gj
+            _spot = _gj("spot_lane_status", {}) or {}
+            _st = (_spot.get("stats") or {})
+            _rs = str(_spot.get("reason") or "")
+            _fa = {"ok": "فعال", "no_spot_channel": "بدون کانال اسپوت (CHAT_ID_SPOT تنظیم نشده)",
+                   "disabled": "خاموش", "import_failed": "خطای ایمپورت"}.get(
+                _rs, ("خطا" if _rs.startswith("import_failed") else (_rs or "هنوز پاس نگرفته")))
+            scanner["spot"] = dict(
+                state=_fa, at=str(_spot.get("at") or ""),
+                symbols=int(_st.get("symbols") or 0), found=int(_st.get("found") or 0),
+                published=int(_st.get("published") or 0))
+        except Exception:
+            pass
         try:
             from flask import current_app
             thr = current_app.config.get("VIVA_SCANNER_THREAD")
@@ -1196,7 +1212,7 @@ nav .bdg{position:absolute;top:0;left:18%;background:var(--short);color:#fff;fon
   <div class="dr-item" onclick="go('about')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></svg>درباره و راهنما</div>
   <div class="dr-item" onclick="logout()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg><span style="color:#ff7b80">خروج از حساب</span></div>
  </div>
- <div class="dr-f">موتور اسکن: <b id="engState">—</b><br>زمان سرور: <span id="srvT">—</span> • نسخهٔ ۲٫۰</div>
+ <div class="dr-f">موتور اسکن: <b id="engState">—</b><br>لاین اسپات: <b id="spotState">—</b><br>زمان سرور: <span id="srvT">—</span> • نسخهٔ ۲٫۰</div>
 </aside>
 
 <main>
@@ -1336,6 +1352,8 @@ function render(){
  $('#clock').textContent=STATE.server_time||'—';
  $('#srvT').textContent=STATE.server_time||'—';
  $('#engState').textContent=(STATE.scanner&&STATE.scanner.alive)?'فعال ✅':'خاموش ⛔';
+ const sp=(STATE.scanner&&STATE.scanner.spot)||null,spE=$('#spotState');
+ if(spE)spE.textContent=sp?`${sp.state}${sp.published?` • ${sp.published} انتشار`:''}${sp.found?` • ${sp.found} کشف`:''}${sp.at?` • ${tehran(sp.at)}`:''}`:'—';
  $('#dot').style.background=(STATE.scanner&&STATE.scanner.alive)?'#1fae7c':'#e5484d';
  const chains=STATE.chains||[],feed=STATE.feed||[],hits=STATE.hits||[];
  $('#chains').innerHTML=chains.length?chains.map(chainCard).join(''):'<div class="empty">زنجیرهٔ فعالی نیست</div>';

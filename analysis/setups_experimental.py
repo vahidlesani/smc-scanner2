@@ -378,6 +378,13 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             continue
         geometry_ok, _geometry_pattern = pattern_geometry_ok(upper, lower, len(refine_df) - 1)
         pattern = classify_pattern_detailed(upper, lower, len(refine_df) - 1)
+        # ── Viva 09-23/24 (wedge NATURE law, verbatim): «رایزینگ وج ماهیت
+        # نزولی داره … با شکست کف و کلوز زیرش تایید میشه». LONG-out-of-rising
+        # / SHORT-out-of-falling is counter-nature and never becomes a signal.
+        if pattern == "WEDGE_RISING" and direction == "LONG":
+            continue
+        if pattern == "WEDGE_FALLING" and direction == "SHORT":
+            continue
         if not geometry_ok or not pattern_length_ok(line, style):
             continue
         failed_penalty = recent_failed_breakout_penalty(trigger_df, line, direction)
@@ -615,6 +622,18 @@ def detect_trendline_breakout(bundle: MarketBundle, style: str) -> Optional[Sign
                 pattern = "TRIANGLE" if fit["slope"] * other_fit["slope"] < 0 else "WEDGE"
             else:
                 pattern = "CHANNEL"
+        # ── Viva 09-23/24 (wedge NATURE law): a converging pair whose BOTH
+        # edges rise is a RISING wedge (bearish — its confirmation is the
+        # floor break with a close below) and both falling = FALLING wedge
+        # (bullish — ceiling break with a close above). A LONG at the bottom
+        # of a rising wedge / SHORT at the top of a falling one is a
+        # counter-nature trade and dies here, before any alert.
+        if pattern == "WEDGE":
+            _fs, _ofs = float(fit["slope"]), float(other_fit["slope"])
+            if direction == "LONG" and _fs > 0 and _ofs > 0:
+                return None
+            if direction == "SHORT" and _fs < 0 and _ofs < 0:
+                return None
         pattern_fa = {"TRIANGLE": "الگوی مثلث", "WEDGE": "الگوی وج",
                       "CHANNEL": "کانال داینامیک", "TRENDLINE": "ترندلاین داینامیک"}[pattern]
         viva_mode = bool(getattr(settings, "viva_tlbreak_enabled", False))
