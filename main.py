@@ -549,6 +549,14 @@ def run_discovery_scan() -> Dict[str, int]:
             _QUIET_RUN = 0
         except Exception as _p9:
             print(f"scan pulse skipped: {_p9}")
+    try:
+        from analysis import onchain_free as _oc2
+        _ctx_line = _oc2.context_line_fa()
+        if _ctx_line:
+            print(f"Flow context (context only, never a gate): {_ctx_line}")
+            stats["flow_context"] = _ctx_line
+    except Exception:
+        pass
     duration = time.monotonic() - started
     print(
         f"Discovery scan finished in {duration:.1f}s • "
@@ -704,8 +712,32 @@ def run_spot_scan() -> Dict[str, int]:
     except Exception:
         symbols = []
     limit = max(5, int(os.getenv("SPOT_SYMBOL_LIMIT", "24") or 24))
+    # ── free flow context (fail-open, never a gate) ──────────────────────
+    # The spot pass owns a small symbol budget, so it is the one lane where
+    # ORDER decides what gets looked at. The first few names of the watchlist
+    # keep their place (the classics never starve); the rest is ordered by 24h
+    # turnover so an active tape can win a seat. Nothing here can confirm,
+    # reject, delay or resize a signal — a dead API just returns today's list.
+    _flow_note = ""
+    try:
+        from analysis import onchain_free as _oc
+        _head = max(0, int(os.getenv("SPOT_FLOW_HEAD", "6") or 6))
+        _ordered = _oc.order_symbols(symbols, head=_head)
+        if _ordered and _ordered != list(symbols):
+            _promoted = [s for s in _ordered[:limit] if s not in list(symbols)[:limit]]
+            symbols = _ordered
+            stats["flow_ranked"] = len(_promoted)
+            if _promoted:
+                _flow_note = f" · flow promoted: {', '.join(_promoted[:4])}"
+        _ctx = _oc.context_line_fa()
+        if _ctx:
+            _flow_note = f" · {_ctx}" + _flow_note
+    except Exception as _oc_exc:
+        print(f"spot flow order skipped: {_oc_exc}")
     symbols = list(symbols)[:limit]
     stats["symbols"] = len(symbols)
+    if _flow_note:
+        print(f"Spot lane order (context only, never a gate){_flow_note}")
     started = time.monotonic()
     pending = []
     ladder = []          # round 16: TOUCH / NEAR_BREAK / BREAK_DOWN warnings

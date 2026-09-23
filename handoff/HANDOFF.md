@@ -132,3 +132,9 @@ HANDOFF.md — smc-scanner2 (VivaSignals Pro)
 - expiry را در دو جا تنظیم نکن (فقط `expiry_hours_for`).
 - KV `setup_chain|CODE` را بدون خواندن مجدد آپدیت نکن (دو نویسنده دارد).
 - مارکر dedup را **قبل از** ارسال موفق ذخیره نکن.
+
+## ۰۹-۲۳ شب — راند ۱۶ فاز ۳ + ماژول فلو (لِین مایک) · لایو `460a45c4`
+- **فاز ۳ لاگ‌فیت:** خطوط اعتبارسنجی‌شده وقتی چارت لاگاریتمی است در فضای log10 فیت و به‌صورت منحنی رسم می‌شوند (`fit_validated_line(log_fit_min_span)` · `line_y/line_xy` · پروجکشن لاگ در گیت‌های تأیید و اشعه‌های اسپات). چارت‌های خطی/فیوچرز بی‌تغییر. پروف: `/home/user/proof_phase3_loglines.png`. تست: `tests/test_round16_log_calibration.py`.
+- **ماژول فلو رایگان:** `analysis/onchain_free.py` — CoinGecko + alternative.me + DefiLlama، fail-open، فقط **ترتیب** لاین اسپات (سر واچ‌لیست ثابت، هشدارها اول) و یک خط لاگ زمینه؛ صف فیوچرز دست‌نخورده. تست: `tests/test_round16_onchain_free_priority.py`.
+- سوئیچ‌ها: `ONCHAIN_FREE_ENABLED` (پیش‌فرض on) · `ONCHAIN_CACHE_TTL_SECONDS` · `SPOT_FLOW_HEAD` (۶) · `TLBREAK_LOG_FIT_MIN_SPAN` (۰.۰۳).
+- وضعیت: ۴۰۴ تست سبز / ۱ اسکیپ · دیپلوی با commitSha انجام و لاگ تمیز · گزارش + پروف برای ویوا ارسال شد.
