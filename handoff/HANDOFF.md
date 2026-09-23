@@ -1,4 +1,7 @@
-# HANDOFF.md — smc-scanner2 (VivaSignals Pro)
+# 
+> **اضافهٔ ۰۹-۲۳ (راند ۱۷):** اپلیکیشن موبایل VIVA SIGNALS PRO لایو شد — `https://smc-scanner2-production.up.railway.app/app` (رمز: env `VIVA_APP_PASSWORD`). فید زنده + وین‌ریت هر ستاپ + کنترل توقف/ستاپ‌ها (bot_kv `webapp_control`، گیت fail-open در main.py دیسکاوری). APK در `/home/user/viva-android/`. کد: `webapp_viva.py` + `install_viva_app(app)` در dashboard/app.py. هر تغییری در وب‌اپ = فقط همان یک فایل.
+
+HANDOFF.md — smc-scanner2 (VivaSignals Pro)
 > **این فایل از روی کد نوشته شده، نه از روی حافظهٔ چت.** تاریخ: ۲۰۲۶-۰۹-۱۴ · HEAD `b21b50a` · بیلد لایو `2026.09.14-11b`
 > ⚠️ `CHAT_CONTEXT.md` داخل ریپو **منسوخ و غلط است** (Render/Supabase/13 استراتژی/اسکن ۵ دقیقه). آن را نخوان؛ این فایل را بخوان.
 
