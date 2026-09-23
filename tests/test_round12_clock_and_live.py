@@ -155,6 +155,11 @@ def test_chart_source_marks_the_forming_candle():
     # Viva 09-23: live price is a TV-style tag ON the price ladder (never a
     # floating mid-chart pill) + a live date/time stamp under the youngest candle
     assert '" LIVE {_price(_live_px)} "' in src
-    assert "_live_stamp" in src and "get_yaxis_transform" in src
+    assert "_live_stamp" in src
+    # Viva 09-23/24 (13-chart audit): the LIVE tag sits in the IN-PANEL label
+    # column — the old axes-fraction x=1.0 anchor printed it OVER the price
+    # axis numbers, so that anchor is banned from the source.
+    assert "get_yaxis_transform" not in src
+    assert "annotation_clip=False" not in src
     # no floating mid-chart live pill any more
     assert '_level_tag(ax, count + 1.8, live_price' not in src

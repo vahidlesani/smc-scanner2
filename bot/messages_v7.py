@@ -869,15 +869,17 @@ def _pivot_line_fit(ax, frame, xs, ys):
     return "lin", float(a), float(b)
 
 
-def _level_tag(ax, x: float, y: float, label: str, color: str) -> None:
-    # readable text color based on the chip background luminance
+def _level_tag(ax, x: float, y: float, label: str, color: str):
+    """One right-column pill. OPAQUE background (Viva 09-23/24 night: dashed
+    channel extensions were striking through the chip text) — and the artist
+    is returned so the anti-overflow x-clamp can measure its real width."""
     try:
         rgb = matplotlib.colors.to_rgb(color)
         lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
         text_color = "#131722" if lum > 0.62 else "#FFFFFF"
     except Exception:
         text_color = "#FFFFFF"
-    ax.text(
+    return ax.text(
         x,
         y,
         label,
@@ -887,8 +889,28 @@ def _level_tag(ax, x: float, y: float, label: str, color: str) -> None:
         va="center",
         ha="left",
         zorder=12,
-        bbox={"boxstyle": "round,pad=0.28", "facecolor": color, "edgecolor": "none", "alpha": 0.92},
+        clip_on=False,
+        bbox={"boxstyle": "round,pad=0.28", "facecolor": color, "edgecolor": "none", "alpha": 1.0},
     )
+
+
+# ── Viva 09-23/24 night (the 13-chart audit): the right label column had
+# chips overlapping each other, spilling over the price axis and struck
+# through by dashed extensions. ONE registry + ONE allocator now owns the
+# column: LIVE, pattern-name chips and every ENTRY/TP/STOP pill take a slot,
+# and the axes are widened (bounded) so no chip ever crosses the ladder.
+def _slot_alloc(taken: List[float], y: float, span: float, step: float = 0.034) -> float:
+    """Reserve the nearest free slot for `y`; existing slots never move."""
+    lim = step * max(span, 1e-9)
+    for _ in range(60):
+        near = [t for t in taken if abs(t - y) < lim]
+        if not near:
+            taken.append(y)
+            return y
+        c = min(near, key=lambda t: abs(t - y))
+        y = c + (lim if y >= c else -lim)
+    taken.append(y)
+    return y
 
 
 def _scenario_arrow(ax, start, end, color: str, alpha: float = 0.9) -> None:
@@ -1004,19 +1026,8 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
         ha="center", va="center", fontsize=31, fontweight="bold",
         color=CHART_THEME["text"], alpha=0.040, zorder=0,
     )
-    ax.text(
-        0.985,
-        0.025,
-        CHART_BRAND_NAME.upper(),
-        transform=ax.transAxes,
-        ha="right",
-        va="bottom",
-        fontsize=10,
-        fontweight="bold",
-        color=CHART_THEME["text"],
-        alpha=0.10,
-        zorder=2,
-    )
+    # (the in-axes bottom-right brand mark is GONE — Viva 09-23/24: the chart
+    # showed TWO watermarks; the figure footer + the center mark are the brand)
 
 
 def _setup_identity(candidate: SignalCandidate) -> dict:
@@ -1111,18 +1122,44 @@ def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool =
     sample = frame.iloc[:max(12, len(frame) // 3)]
     top_empty = max(0.0, (hi - float(sample["high"].max())) / span)
     bottom_empty = max(0.0, (float(sample["low"].min()) - lo) / span)
-    # Confirmed charts reserve upper-left for the Long/Short trade box.
-    # Their structural notes therefore always use the lower-left empty corner.
-    use_top = (top_empty >= bottom_empty) and not confirmed
     _n = min(len(notes), 11)
-    _y0 = 0.975 if use_top else 0.025 + 0.037 * (_n - 1)
-    _step = 0.037 if use_top else 0.037
+    _step = 0.037
+    _stack_h = _step * (_n - 1) + 0.030
+
+    def _candle_hits(y_top: float, y_bot: float) -> float:
+        """Share of the LEFT quarter candles piercing the candidate band —
+        the ledger goes where the tape is NOT (Viva 09-23/24: BTC/RENDER
+        renders parked the stack ON the early candles)."""
+        try:
+            _s = frame.iloc[:max(8, int(len(frame) * 0.27))]
+            _hit = (( _s["high"] >= y_bot) & (_s["low"] <= y_top)).sum()
+            return float(_hit) / max(1, len(_s))
+        except Exception:
+            return 0.0
+
+    # candidate anchors (axes-fraction y of the stack's top line): top-left
+    # sky, lower-left, and mid-left (below the confirmed trade box).
+    _cands = []
+    if not confirmed:
+        _cands.append(("top", 0.975))
+    _cands.append(("bottom", 0.025 + _stack_h - _step))
+    _cands.append(("mid", 0.50 + _stack_h / 2.0))
+    _best, _best_hits, _best_tag = None, None, None
+    for _tag, _yc in _cands:
+        _y_top = min(0.985, _yc)
+        _y_bot = max(0.015, _yc - _stack_h)
+        _d_top = lo + float(_y_top) * span
+        _d_bot = lo + float(_y_bot) * span
+        _hits = _candle_hits(_d_top, _d_bot)
+        if _best_hits is None or _hits < _best_hits - 1e-9:
+            _best, _best_hits, _best_tag = _yc, _hits, _tag
+    _y0 = float(_best)
     for _i, (text, color) in enumerate(notes[:_n]):
         ax.text(0.012, _y0 - _step * _i, text,
                 ha="left", va="center", color=color, fontsize=5.8,
                 fontweight="bold", zorder=25, transform=ax.transAxes,
                 bbox={"boxstyle": "round,pad=0.22", "facecolor": "white",
-                      "edgecolor": "none", "alpha": 0.55})
+                      "edgecolor": "none", "alpha": 0.93})
 
 
 def _draw_visible_fvgs(ax, frame: pd.DataFrame, count: int) -> list:
@@ -1547,6 +1584,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # REAL UTC dates — majors on UTC-day boundaries, plus a bold LIVE tag
         # under the youngest candle; the live PRICE gets a TV-style tag on the
         # price ladder; volume ticks go compact K/M with no scientific offset.
+        # (registered BEFORE the volume try: the right-column registry must
+        # exist on every path — chips/LIVE/pattern labels all reserve slots)
+        _right_slots: List[float] = []
+        _right_texts: List[Any] = []
+        _right_specs: list = []      # (level, label, color) → pills built AFTER ylim finalize
         _vol_ax = axes[2]
         try:
             for _va in axes[2:]:
@@ -1586,18 +1628,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         _vol_ax.set_xticks(_day_ticks)
         _vol_ax.xaxis.set_major_formatter(FuncFormatter(_fmt_time))
         # (مهر زمان لایو سطح فیگور کشیده می‌شود — بعد از قطعی‌شدن xlim؛ پایین فایل)
-        # TV-style LIVE tag on the price ladder (never on the canvas)
+        # TV-style LIVE tag ON the in-panel label column (Viva 09-23/24: the
+        # old x=1.0 anchor sat ON the price-axis numbers — «لیو روی اعداد»).
         try:
             _live_px = float(frame["close"].iloc[-1])
-            ax.annotate(
-                f" LIVE {_price(_live_px)} ", xy=(1.0, _live_px),
-                xycoords=ax.get_yaxis_transform(), xytext=(5, 0),
-                textcoords="offset points", ha="left", va="center",
-                fontsize=7.2, fontweight="bold", color="white",
-                annotation_clip=False, zorder=35,
-                bbox={"boxstyle": "round,pad=0.3", "facecolor": "#2b2f3a",
-                      "edgecolor": "none"},
-            )
+            _right_specs.append((float(_live_px), f" LIVE {_price(_live_px)} ", "#2b2f3a"))
         except Exception as _exc:
             print(f"Chart live-price tag warning: {_exc}")
         ax.tick_params(
@@ -1818,7 +1853,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         zorder=12,
                         bbox={"boxstyle": "round,pad=0.26",
                               "facecolor": CHART_THEME["panel"],
-                              "edgecolor": "none", "alpha": 0.78})
+                              "edgecolor": "none", "alpha": 1.0})
                 _chip_taken.append((float(_spot[0]),
                                     float(_spot[0]) + 1.4 + 0.52 * len(_it["text"]),
                                     float(_spot[1])))
@@ -2116,14 +2151,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 for _yy8 in list(_chip_ys8):
                     if abs(_cy8 - _yy8) < 0.035 * _rng8:
                         _cy8 = _yy8 + 0.045 * _rng8
-                _chip_ys8.append(_cy8)
-                ax.text(count + 1.0, _cy8,
+                _fr_span8 = max(float(frame["high"].max() - frame["low"].min()), 1e-12)
+                _cy8 = _slot_alloc(_right_slots, _cy8, _fr_span8)
+                _cy8 = min(max(_cy8, float(frame["low"].min()) + 0.06 * _fr_span8),
+                           float(frame["high"].max()) - 0.06 * _fr_span8)
+                _right_texts.append(ax.text(count + 4.85, _cy8,
                         str(_pat.get("label") or _pat.get("type")), color=CHART_THEME["text"],
                         fontsize=7, va="center", ha="left", fontweight="bold",
-                        zorder=12,
+                        zorder=12, clip_on=False,
                         bbox={"boxstyle": "round,pad=0.26",
                               "facecolor": CHART_THEME["panel"],
-                              "edgecolor": "none", "alpha": 0.78})
+                              "edgecolor": "none", "alpha": 1.0}))
 
         # TLBREAK: draw the dynamic channel/trendline + parallel bound with
         # thin solid lines (Viva's chart style) using pivot timestamps.
@@ -2280,14 +2318,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # grammar frozen); with the 3-exit ladder that is the last pill.
                 levels.append((float(level), label,
                                CHART_THEME["tp1"] if (i < 3 and i < len(ladder_targets) - 1) else CHART_THEME["tp2"]))
-            # Viva 2026-09-14 «شکل ابزار LONG/SHORT خراب شده»: the art itself is
-            # FROZEN — same pills, same colors, same dashes. What is fixed here
-            # is purely COLLISION: tags closer than 3% of the visible range
-            # (ENTRY≈LIVE≈TP1 when entry prints on top of a target) merge into
-            # ONE stacked pill instead of drawing «LIVI…DE» over each other.
+            # Viva 09-23/24 night (13-chart audit): ONE pill per level. The old
+            # 3%-merge produced mega-chips («TP4 INFO … · TP5 INFO …») that
+            # spilled over the price axis, and near-level pills overlapped.
+            # Now: every level gets its own pill; the slot allocator spaces
+            # them (LIVE + pattern chips keep their already-taken slots), the
+            # guide line always stays at the TRUE level, and the x-clamp below
+            # widens the panel so nothing ever crosses the ladder.
             _yr0 = max(float(frame["high"].max()) - float(frame["low"].min()), 1e-9)
-            _tol = 0.030 * _yr0
-            # Viva 09-23: LIVE moved to the price-ladder tag (no mid-chart pill).
+            _tol = 0.004 * _yr0          # collapse only near-identical levels
             _tags = list(levels)
             hit_index = int(ladder.get("hit_index") or (candidate.metadata or {}).get("hit_index") or 0)
             trailing_sl = float((candidate.metadata or {}).get("current_trailing_sl") or 0)
@@ -2301,8 +2340,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         break
                 else:
                     _groups.append([float(level), [(label, float(level), color)]])
-            for y_mid, items in _groups:
-                for label, level, color in items:
+            _groups.sort(key=lambda g: float(g[0]))
+            # Pills are SPECs here and materialize AFTER the final y-limits
+            # exist (the in-render ylim is still autoscale garbage — that was
+            # the «pills in the sky» bug). The guide line always draws NOW at
+            # the true level.
+            for _lvl, _items in _groups:
+                for label, level, color in _items:
                     # Viva 09-16: solid guide lines read cleaner than dashes;
                     # only the trailing stop keeps its own tight dash.
                     _dash = (0, (2, 2)) if label.startswith("TRAILING") else "-"
@@ -2310,9 +2354,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                               linewidth=1.25 if label.startswith("TRAILING") else 1.15,
                               linestyles=_dash,
                               zorder=9 if label.startswith("TRAILING") else 8)
-                _level_tag(ax, tool_end + 0.35, y_mid,
-                           "  ·  ".join(f"{lb}  {_price(pc)}" for lb, pc, _c in items),
-                           items[-1][2])
+                _right_specs.append((
+                    float(_lvl),
+                    "  ·  ".join(f"{lb}  {_price(_pc)}" for lb, _pc, _c in _items),
+                    _items[-1][2]))
 
             # (Viva 2026-09-11) slanted PROJECTED-SCENARIO arrows removed from
             # confirmed charts too — the tagged TP ladder lines above are the
@@ -2616,6 +2661,36 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         _yr = max(_yhi - _ylo, 1e-9)
         ax.set_ylim(_ylo - 0.06 * _yr, _yhi + 0.06 * _yr)
 
+        # ── FINAL pill materialization (Viva 09-23/24): with the y-limits now
+        # FINAL, allocate the label column and draw every pill — then widen
+        # the panel (bounded) until the whole column sits INSIDE the axes.
+        try:
+            fig.canvas.draw()
+            _lo2, _hi2 = ax.get_ylim()
+            _sp2 = max(_hi2 - _lo2, 1e-9)
+            _right_specs.sort(key=lambda t: float(t[0]))
+            for _lvl2, _lab2, _col2 in sorted(
+                    _right_specs, key=lambda t: -abs(float(t[0]) - (_lo2 + _hi2) / 2.0)):
+                _y2 = _slot_alloc(_right_slots, float(_lvl2), _sp2, step=0.042)
+                _y2 = min(max(_y2, _lo2 + 0.025 * _sp2), _hi2 - 0.025 * _sp2)
+                _right_texts.append(_level_tag(ax, count + 4.85, _y2, _lab2, _col2))
+            fig.canvas.draw()
+            _rend = fig.canvas.get_renderer()
+            _inv = ax.transData.inverted()
+            _need = float(count + future)
+            for _t in _right_texts:
+                try:
+                    _bb = _t.get_window_extent(_rend)
+                    _need = max(_need, float(_inv.transform((_bb.x1 + 7, 0))[0]) + 1.2)
+                except Exception:
+                    continue
+            if _need > count + future:
+                _fut2 = min(_need - count, future + 30.0)
+                for _ca in axes:
+                    _ca.set_xlim(-1, count + _fut2)
+                fig.canvas.draw()
+        except Exception as exc:
+            print(f"chip column clamp warning: {exc}")
         _render_corner_notes(ax, notes, frame, confirmed=confirmed, fig=fig)
 
         # Viva 2026-09-14 «تایم‌فریم پوزیشن یک‌ساعته‌ست، چارت ۴ ساعته میدی؟!» —
