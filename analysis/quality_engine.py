@@ -286,6 +286,19 @@ def enforce_confirmed_snapshot(candidate) -> str:
     return ""
 
 
+def _tz_match(ts_target, ref):
+    """Two pandas timestamps on ONE tz plane. The 09-24 audit found the real
+    production killer: live frames are tz-aware, metadata anchors are naive →
+    the subtraction raised TypeError, the break-side veto silently skipped and
+    BTC/ADA/RENDER-style LONGs confirmed UNDER their broken support line."""
+    a, b = pd.Timestamp(ts_target), pd.Timestamp(ref)
+    if a.tzinfo is not None and b.tzinfo is None:
+        b = b.tz_localize(a.tzinfo)
+    elif a.tzinfo is None and b.tzinfo is not None:
+        a = a.tz_convert("UTC").tz_localize(None)
+    return a, b
+
+
 def _project_watch_level(watch: dict, when) -> float:
     """Value of a watched line at `when`. Log-calibrated lines are interpolated
     in log space between their own anchors (identical to the chord otherwise) —
@@ -295,13 +308,16 @@ def _project_watch_level(watch: dict, when) -> float:
     t0 = pd.Timestamp(str(p0.get("ts")))
     t1 = pd.Timestamp(str(p1.get("ts")))
     y0, y1 = float(p0.get("price")), float(p1.get("price"))
+    t1, t0 = _tz_match(t1, t0)
     dt = (t1 - t0).total_seconds()
     if dt <= 0 or not (y0 > 0 and y1 > 0):
         raise ValueError("degenerate watch anchors")
     t = pd.Timestamp(when)
+    t, t1 = _tz_match(t, t1)
     if watch.get("log_fit"):
         import math as _m
-        f = (t - t0).total_seconds() / dt
+        _tm2, _t02 = _tz_match(t, t0)
+        f = (_tm2 - _t02).total_seconds() / dt
         return float(10.0 ** (_m.log10(y0) + (_m.log10(y1) - _m.log10(y0)) * f))
     return y1 + (y1 - y0) / dt * (t - t1).total_seconds()
 
@@ -541,7 +557,9 @@ def evaluate_confirmation(
                 if candidate.direction == "SHORT" and _side == "HIGH" and _close20 > _lvl + _buf:
                     _side_wrong = f"سقف/خط مقاومتی {_lvl:.8g}"
                     break
-            except Exception:
+            except Exception as _exc:
+                # a silent skip here once disabled the whole law in production
+                print(f"break-side watch skip {getattr(candidate, 'signal_id', '?')}: {_exc}")
                 continue
         if _side_wrong:
             return reject("BREAK_SIDE_MISMATCH", (

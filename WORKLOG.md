@@ -108,3 +108,17 @@
 - «چپ خالی چارت» = ردیف‌های NaN ابتدای فریم (تجمیع ۳d/۱w قدیم) → dropna در generate_chart (فاز ۲، اجرا شد).
 - «خط طوسی روی کندل لایو» = خطوط تمام‌عرض RANGE HIGH/LOW → حذف شد؛ فقط گزارش گوشه.
 - «۵۱ آپدیت ۱۸→۲۸ دلار» = قبل از این، سناریوی تأییدنشده تا ابد منتظر برگشت قیمت می‌ماند → الان `_scenario_out_of_reach` (فاصلهٔ >۲ATR از ناحیه در جهت سناریو = بستن زنجیره با پیام شفاف) + سقف ۱۲ آپدیت + تازگی کندل (هشدار فقط کندل تازه). **پس از دیپلوی روی لایو با نمادهای رنج‌شکن پایش شود.**
+
+## Round 23 — merge audit + BREAK-SIDE tz hole (2026-09-24)
+- Audit `09bd0a1`/`460a45c`/`f93f8f2` line-by-line vs our laws. Verdict: pill-removal in
+  `09bd0a1` violated the frozen-tool law (was live ~19:30–22:00Z 09-23 → the pill-less
+  HBAR/DASH/UNI/AVAX/ADA/ARB/DOT charts) — already reverted in r22 (pill-law test).
+  Everything else STRENGTHENS laws (alert-candle exclusion, internal-lane restriction,
+  TECHCLASSIC break contract, flag edge rules, doctrine-path bug fix, log-fit line
+  accuracy, onchain priority-only) — KEPT.
+- REAL production hole (ours, since r12): `_project_watch_level` raised TypeError on
+  tz-aware live frames vs naive anchor timestamps → silent `except: continue` → the
+  BREAK-SIDE LAW never vetoed in production (BTC K211718 / ADA K962147 / RENDER-1h
+  K379224 LONGs confirmed under broken support). Fix: `_tz_match` helper normalizes
+  both planes (linear + log paths); silent skip now logs. tests/test_round23_law_guard.py (5).
+- Suite: 409 passed / 1 skipped.
