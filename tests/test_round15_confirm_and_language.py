@@ -78,9 +78,15 @@ def test_first_valid_close_beyond_the_named_level_confirms():
     assert not cand2.metadata.get("last_reject_code")
 
 
-def test_no_hidden_body_or_extra_atr_threshold_blocks_a_clean_close():
+def test_no_hidden_body_or_extra_atr_threshold_blocks_a_clean_close(monkeypatch):
     """A small-bodied candle that closes beyond the level is a confirmation —
     the member was told «first close», nothing else."""
+    # HERMETIC: the counter-trend gate fetches the parent TF from the venue.
+    # When that fetch succeeds (OKX fallback), REAL ETHFIUSDT data (which fell
+    # over the last 30 bars) flips the gate and the synthetic confirm dies.
+    # This test owns the offline path: parent frame = None.
+    import data.fetcher as fetcher
+    monkeypatch.setattr(fetcher, "get_klines", lambda *a, **k: None)
     from analysis.quality_engine import evaluate_confirmation
     cand = _pin_candidate(level=100.0)
     frame = _frame([100.25, 100.30])
@@ -88,9 +94,11 @@ def test_no_hidden_body_or_extra_atr_threshold_blocks_a_clean_close():
     assert ok is True, reason
 
 
-def test_pattern_band_cannot_veto_a_pinbar_confirmation():
+def test_pattern_band_cannot_veto_a_pinbar_confirmation(monkeypatch):
     """The exact ETHFIUSDT mis-fire: fast lane satisfied, then a foreign wedge
     band rejected the row with INSIDE_PATTERN_NO_BREAK."""
+    import data.fetcher as fetcher
+    monkeypatch.setattr(fetcher, "get_klines", lambda *a, **k: None)  # hermetic (see above)
     from analysis.quality_engine import evaluate_confirmation
     cand = _pin_candidate(level=100.0, zone=(99.0, 99.4))
     cand.metadata["pattern_band"] = {"kind": "WEDGE_FALLING", "lo": 98.0, "hi": 102.0,

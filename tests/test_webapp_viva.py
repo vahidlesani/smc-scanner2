@@ -100,3 +100,42 @@ def test_publish_allowed_fail_open_and_gate(monkeypatch):
     # scanner source gate honours the scanner main.py insertion
     src = open("main.py", encoding="utf-8").read()
     assert "from webapp_viva import publish_allowed" in src
+
+
+def test_detail_chart_hits_routes(app):
+    client = app.test_client()
+    client.post("/app/api/login", json={"password": "test-pass-123"})
+    # demo detail page
+    r = client.get("/app/api/signal/demo-1")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["symbol"] and "summary" in d and "timeline" in d and "ladder" in d
+    # demo chart = the bot renderer's PNG
+    rc = client.get("/app/api/chart/demo-1")
+    assert rc.status_code == 200
+    assert rc.mimetype == "image/png" and len(rc.data) > 10_000
+    assert rc.data[:4] == b"\x89PNG"
+    # hits feed
+    rh = client.get("/app/api/state")
+    assert rh.status_code == 200
+    assert "hits" in rh.get_json()
+    # unknown signal → 404 (demo falls back to first demo card, so use direct route)
+    import webapp_viva
+    import os
+    os.environ["VIVA_APP_DEMO"] = ""
+    webapp_viva._demo_mode()
+    # locked without session again
+    anon = app.test_client()
+    assert anon.get("/app/api/signal/demo-1").status_code == 401
+    assert anon.get("/app/api/chart/demo-1").status_code == 401
+
+
+def test_setup_active_archive_split():
+    """«چرا آمار کلی گذاشتی واسه ستاپهایی که دوماهه خاموش هستن» — stale setups
+    must land in the archive bucket, active ones (<=30d) in the main board."""
+    import webapp_viva as w
+    payload = w._demo_payload()
+    a = payload["analytics"]
+    assert all(r["active"] for r in a["rows_active"])
+    assert all(not r["active"] for r in a["rows_archive"])
+    assert "rows_archive" in a and len(a["rows_archive"]) >= 1
