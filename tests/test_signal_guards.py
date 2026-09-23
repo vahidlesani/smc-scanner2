@@ -1392,8 +1392,15 @@ def test_chart_pills_match_ladder_exits():
         assert m7.generate_chart(frame, c, confirmed=True)
     finally:
         m7._level_tag = orig
+    # Round-22 law: ONE pill per level (the old 3%-merge produced mega-chips),
+    # and the entry/stop pills stay on the chart — Viva 09-23/24 (the parallel
+    # branch's «drop the pills» experiment was rejected: the pills ARE the
+    # tool). Every ladder level must appear exactly once.
     joined = " | ".join(tags)
-    assert joined == "", joined
+    assert "ENTRY" in joined and "FIRST STOP" in joined
+    for i in range(1, 6):
+        assert f"TP{i}" in joined, (i, joined)
+    assert joined.count("ENTRY") == 1 and joined.count("TP1") == 1
 
 
 def _s6_frame_and_candidate(direction="LONG"):
