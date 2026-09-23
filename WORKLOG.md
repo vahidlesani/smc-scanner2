@@ -162,3 +162,16 @@
 - Locked: tests/test_round23_model_law.py (2 tests — name + break direction).
   Suite: 414 passed / 1 skipped. Upload cache: 2 more perceptual dups removed
   (48 unique screenshots remain).
+
+## Round 24 — numeric tool (2026-09-24)
+- Viva: «ابزار لانگ و شورت در ۵ ستاپ فقط با tp1 تا tp5 مشخص بشه و اعدادش … روی
+  ستون قیمت زده بشه با رنگ خط tpها… لیبل های نواحی روی کندلها نخوره».
+- Shipped: tool pills = bare numbers 1..5 (+ENTRY, FIRST STOP, SL for trailing);
+  the VALUES print as TV-style tags ON the price ladder in each line's own
+  colour (TP1-3 tp1-colour, TP4-5 tp2-colour, SL red); weights/INFO/POST-BREAK
+  stay in the confirmation message. Merged near-level pills keep the r22 _tol.
+- tests: signal_guards law updated + model_law numeric-tool test. Suite: 415/1skip.
+- Queued from his 09-24 txt files (UNSTARTED): engine nature rules per schematic
+  (wedge break-opposite-side = WARN-only, never a signal), scalping TF gate
+  (15m/30m), spot=green-box-only confirmation, TF-bump check, update-51 $28 bug,
+  Railway cost pass, smart-money free-source plan.

@@ -104,3 +104,51 @@ def test_wedge_upper_break_confirms_long_and_never_short():
     ok2, cand2, _m2 = evaluate_confirmation(short, closed, None)
     assert not ok2
     assert cand2.metadata.get("last_reject_code") == "BREAK_SIDE_MISMATCH"
+
+
+# ── Round-24: the numeric tool — «ابزار لانگ و شورت در ۵ ستاپ فقط با
+#    tp1 تا tp5 مشخص بشه» (no big labels over candles/tool) ─────────────────
+def test_tool_pills_are_bare_numbers_with_axis_values():
+    import numpy as _np
+    from datetime import datetime, timedelta, timezone
+    import bot.messages_v7 as m7
+    from analysis.models import SignalCandidate as _SC, EvidenceItem as _EV
+    from analysis.trade_management import build_ladder as _bl
+    rng = _np.random.default_rng(11)
+    n = 90
+    ts = [datetime(2026, 9, 19, tzinfo=timezone.utc) + timedelta(minutes=15 * i) for i in range(n)]
+    close = 96.5 + _np.linspace(0, 8.0, n) + rng.normal(0, 0.05, n)
+    frame = pd.DataFrame({"timestamp": ts, "open": close - 0.08, "high": close + 0.2,
+                          "low": close - 0.2, "close": close, "volume": _np.full(n, 900.0)})
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    c = _SC(signal_id="NUM-TOOL-1", symbol="BTCUSDT", style="DAYTRADE",
+            setup_code="TLBREAK", setup_name="VIVA-TLBREAK", strategy_fa="x",
+            direction="LONG", score=8, status="CONFIRMED",
+            entry_zone_bottom=99.4, entry_zone_top=99.6, planned_entry=99.5, sl=97.5,
+            tp1=103.5, tp2=107.5, rr_tp1=2.0, rr_tp2=4.0, bias="BULLISH",
+            trigger_timeframe="15m",
+            evidence=[_EV("tlbreak", "t", "d", True, 2)],
+            confirmations=[], warnings=[], mandatory_gates={"rr": True},
+            market={"turnover24h": 1e9, "spread_pct": 0.02, "tick_size": 0.01},
+            metadata={"atr": 1.0, "public_code": "NUM-1"},
+            created_at=now.isoformat(timespec="seconds"),
+            confirmed_at=now.isoformat(timespec="seconds"))
+    c.metadata["target_ladder"] = _bl(c.planned_entry, c.sl, c.direction, c.market, c.tp2,
+                                      structural_tp1=c.tp1, fee_pct=0.0018)
+    tags = []
+    orig = m7._level_tag
+    def spy(ax, x, y, label, color):
+        tags.append(label)
+        return orig(ax, x, y, label, color)
+    m7._level_tag = spy
+    try:
+        assert m7.generate_chart(frame, c, confirmed=True)
+    finally:
+        m7._level_tag = orig
+    joined = " | ".join(tags)
+    # bare numbers 1..5 (near-identical levels may share one pill — the r22
+    # _tol grouping); NO big TPxx/percent labels anywhere on the tool.
+    for i in range(1, 6):
+        assert str(i) in joined, (i, joined)
+    assert not any(t.strip().startswith("TP") for t in tags), joined
+    assert "ENTRY" in joined and "FIRST STOP" in joined

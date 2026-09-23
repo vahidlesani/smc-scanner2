@@ -2357,14 +2357,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _tpg = (candidate.metadata or {}).get("tp_gates") or {}
             _tp_locked = set(_tpg.get("locked") or [])
             for i, level in enumerate(ladder_targets):
-                _w = float(ladder_weights[i]) if i < len(ladder_weights) else 0.0
-                # Viva 09-19/20: zero-weight levels stay drawn (tool shape
-                # frozen) but read as information pills, not exit promises.
-                label = f"TP{i+1} {_w:.0f}%" if _w > 0 else f"TP{i+1} INFO"
-                if i in _tp_locked:
-                    label += " • POST-BREAK"   # doctrine: خارج از رنج فقط بعد از بریک
-                # Viva 09-19: the FINAL target pill keeps the tp2 tint (visual
-                # grammar frozen); with the 3-exit ladder that is the last pill.
+                # Viva 09-24 («ابزار لانگ و شورت در ۵ ستاپ فقط با tp1 تا tp5
+                # مشخص بشه… لیبل های بزرگ روی کندلها و ابزار نخوره»): the tool
+                # carries ONLY the numbers 1..5 — weights/INFO/POST-BREAK live
+                # in the confirmation message, values go on the price axis.
+                label = str(i + 1)
                 levels.append((float(level), label,
                                CHART_THEME["tp1"] if (i < 3 and i < len(ladder_targets) - 1) else CHART_THEME["tp2"]))
             # Viva 09-23/24 night (13-chart audit): ONE pill per level. The old
@@ -2380,7 +2377,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             hit_index = int(ladder.get("hit_index") or (candidate.metadata or {}).get("hit_index") or 0)
             trailing_sl = float((candidate.metadata or {}).get("current_trailing_sl") or 0)
             if hit_index > 0 and trailing_sl > 0:
-                _tags.append((trailing_sl, f"TRAILING SL • TP{hit_index}", CHART_THEME["liquidity"]))
+                _tags.append((trailing_sl, "SL", CHART_THEME["liquidity"]))
             _groups: list = []
             for level, label, color in _tags:
                 for grp in _groups:
@@ -2396,19 +2393,27 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # the true level. (The interleave idea from the parallel branch —
             # dropping the pills entirely — was tried and Viva rejected it:
             # the pills ARE the tool, 09-23/24.)
+            _axis_tags: list = []   # (level, price_str, color) → price-axis tags
             for _lvl, _items in _groups:
                 for label, level, color in _items:
                     # Viva 09-16: solid guide lines read cleaner than dashes;
                     # only the trailing stop keeps its own tight dash.
-                    _dash = (0, (2, 2)) if label.startswith("TRAILING") else "-"
+                    _is_sl9 = str(label) == "SL"
+                    _dash = (0, (2, 2)) if _is_sl9 else "-"
                     ax.hlines(level, tool_start, tool_end, color=color,
-                              linewidth=1.25 if label.startswith("TRAILING") else 1.15,
+                              linewidth=1.25 if _is_sl9 else 1.15,
                               linestyles=_dash,
-                              zorder=9 if label.startswith("TRAILING") else 8)
+                              zorder=9 if _is_sl9 else 8)
+                # Viva 09-24: numeric tags ride the column; the VALUES print ON
+                # the price axis in the TP line's own colour (or live in the
+                # confirmation message) — no big labels over candles/tool.
                 _right_specs.append((
                     float(_lvl),
-                    "  ·  ".join(f"{lb}  {_price(_pc)}" for lb, _pc, _c in _items),
+                    "  ·  ".join(str(_lb) for _lb, _pc, _c in _items),
                     _items[-1][2]))
+                for _lb, _pc, _c in _items:
+                    if (str(_lb).isdigit() or str(_lb) in ("SL", "ENTRY", "FIRST STOP")):
+                        _axis_tags.append((float(_pc), _price(_pc), _c))
 
             # (Viva 2026-09-11) slanted PROJECTED-SCENARIO arrows removed from
             # confirmed charts too — the tagged TP ladder lines above are the
@@ -2734,6 +2739,20 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _relayout_pills(_rows2, _lo2 + _b2, _hi2 - _b2, 0.036 * _sp2)
             for _y2, _lab2, _col2 in _rows2:
                 _right_texts.append(_level_tag(ax, count + 4.85, _y2, _lab2, _col2))
+            # Viva 09-24: TP/SL VALUES as TV-style tags ON the price ladder,
+            # coloured by their own line — never a big label over the candles.
+            if _axis_tags:
+                import matplotlib.transforms as _mtr9
+                _tr9 = _mtr9.blended_transform_factory(ax.transAxes, ax.transData)
+                for _lv9, _pv9, _cv9 in _axis_tags:
+                    _yv9 = min(max(_lv9, _lo2), _hi2)
+                    ax.text(1.004, _yv9, _pv9, transform=_tr9, color=_cv9,
+                            fontsize=6.3, va="center", ha="left", zorder=13,
+                            clip_on=False,
+                            bbox={"boxstyle": "round,pad=0.22",
+                                  "facecolor": CHART_THEME["panel"],
+                                  "edgecolor": _cv9, "alpha": 0.95,
+                                  "linewidth": 0.5})
             fig.canvas.draw()
             _rend = fig.canvas.get_renderer()
             _inv = ax.transData.inverted()
