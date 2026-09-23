@@ -13,6 +13,11 @@ from config import get_settings
 
 SETTINGS = get_settings()
 app = Flask(__name__)
+
+# ── Viva 09-23: the mobile PWA (feed/analytics/control) + THE login lock on
+# every route of this server (the Railway domain is public — nothing leaks).
+from webapp_viva import install_viva_app
+install_viva_app(app)
 CHANNEL_NAME = SETTINGS.channel_name
 
 try:

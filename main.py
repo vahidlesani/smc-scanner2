@@ -303,6 +303,16 @@ def run_discovery_scan() -> Dict[str, int]:
                 if candidate.score < SETTINGS.educational_min_score:
                     _t(candidate)["low_score"] += 1
                     continue
+                # ── Viva 09-23: the mobile-app CONTROL gate (master pause +
+                # per-setup switches from bot_kv['webapp_control']). Fail-open:
+                # if the app/KV is unreachable the scanner publishes as before.
+                try:
+                    from webapp_viva import publish_allowed
+                    if not publish_allowed(candidate):
+                        stats["gated"] = stats.get("gated", 0) + 1
+                        continue
+                except Exception:
+                    pass
                 # Reserve before *any* public alert. A display code is a real
                 # position identity, not a random label that may later change.
                 try:
