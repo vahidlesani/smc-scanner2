@@ -97,9 +97,10 @@ def test_spot_confirmed_text_carries_label_and_invalidation():
     assert "۸٫۰٪" in text or "8.0٪" in text      # (100-92)/100 written out
 
 
-def test_log_everywhere_when_needed():
-    """Viva 09-23 final ruling: futures ALSO go log «در صورت نیاز» — the
-    <3%-span guard keeps short windows linear; spot is always log."""
+def test_log_wherever_it_matters_default_on():
+    """Viva 09-23 final ruling: log ON by default everywhere (spot always;
+    futures whenever the span makes log differ — the renderer's <3% guard
+    keeps short horizons linear)."""
     from config import get_settings
     assert get_settings().chart_log_all is True
 

@@ -105,10 +105,11 @@ class Settings:
     alert_verdict_candles: int = 3
     # Log-scale rendering for higher-context trendline charts
     chart_log_htf: bool = False
-    # Viva 09-23 — FINAL ruling: log scale for EVERY price panel «در صورت
-    # نیاز» — the <3%-span guard keeps linear on short, flat windows (where
-    # log and linear are visually identical) and switches to log wherever the
-    # tape actually needs it. His problem was the canvas SIZE, never the scale.
+    # Viva 09-23 final ruling: log scale WHEREVER IT CHANGES ANYTHING — spot
+    # always, futures whenever the visible span makes log differ (the renderer
+    # keeps linear under ~3% span where log ≡ linear). His point: the canvas/
+    # candle SIZE was his complaint, not the scale; on long horizons log is
+    # simply more truthful for pivots, trendlines and zones.
     chart_log_all: bool = True
     educational_min_score: int = 6
     execution_min_score: int = 7

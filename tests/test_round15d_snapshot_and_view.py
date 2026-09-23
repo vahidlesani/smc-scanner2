@@ -159,11 +159,11 @@ def test_chart_writings_and_the_green_marker_never_sit_on_the_candles():
     src = open(os.path.join(root, "bot", "messages_v7.py"), encoding="utf-8").read()
     # the entry triangle glyph is gone
     assert 'marker="^", s=130' not in src and 'marker="v", s=130' not in src
-    # Viva 09-23 REVISED: the chart owns the FULL canvas — no carved left
-    # margin any more; notes float INSIDE the panel as chips (his «چارت من
-    # باید کامل باشه مثل چارت تریدینگ ویو»)
+    # notes live in a carved-out left margin, drawn in FIGURE coordinates
+    # Viva 09-23: NO carved-out left margin — tape owns the full width;
+    # notes live INSIDE the axes (empty sky corner), chip-backed
     assert "_MARGIN = 0.115" not in src and "fig.text(_x_notes," not in src
-    assert "notes float INSIDE the panel" in src.replace("'", '"') or "_x = _pos.x0" in src
+    assert "transform=ax.transAxes" in src
     # …and the tool's own read-out left the tape as well
     assert "fig.text(\n                _posi.x0 + 0.012," in src
     # zones are on a diet: at most two per side
