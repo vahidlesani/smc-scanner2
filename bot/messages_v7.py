@@ -837,6 +837,25 @@ def send_photo(
     return mid
 
 
+def _pivot_line_fit(ax, frame, xs, ys):
+    """Phase-3 (Viva 09-23 final ruling): on a LOG price axis whose visible
+    span exceeds ~3%, pivot lines are fitted in LOG10 space — percentage-honest
+    and visually straight ON the log chart (a linear fit drawn on log floats
+    off the pivots on long horizons). Short-span/linear charts keep the classic
+    linear fit (there log ≡ linear — the renderer's own scale guard)."""
+    try:
+        _pmin = float(frame["low"].min())
+        _pmax = float(frame["high"].max())
+        _span = _pmax / max(_pmin, 1e-12) - 1.0
+        if str(getattr(ax, "get_yscale", lambda: "linear")()) == "log" and _span > 0.03:
+            a, b = np.polyfit(np.asarray(xs, float), np.log10(np.asarray(ys, float)), 1)
+            return "log", float(a), float(b)
+    except Exception:
+        pass
+    a, b = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
+    return "lin", float(a), float(b)
+
+
 def _level_tag(ax, x: float, y: float, label: str, color: str) -> None:
     # readable text color based on the chip background luminance
     try:
@@ -1751,6 +1770,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         _lo9 = frame["low"].to_numpy(float)
         _n9 = int(len(frame))
 
+        _chip_taken: list = []
+
         def _place_in_box(_it):
             _wb = 1.4 + 0.52 * len(_it["text"])
             _mid = 0.5 * (_it["bottom"] + _it["top"])
@@ -1764,9 +1785,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     continue
                 if not np.any((_hi9[_a:_b] >= _mid - _hh) &
                               (_lo9[_a:_b] <= _mid + _hh)):
+                    if any((abs(_mid - _ty) < 0.030 * _yr9)
+                           and (_cx < _tx1 + 1.0) and (_cx + _wb + 1.0 > _tx0)
+                           for _tx0, _tx1, _ty in _chip_taken):
+                        continue   # a sibling chip already lives here (FLIP↔DEMAND)
                     return _cx, _mid, "center"
             return None
 
+        # Viva 09-23 polish («FLIP↔DEMAND overlap»): one occupancy registry for
+        # every placed zone chip — an in-box spot that would touch an already
+        # drawn chip (FLIP over DEMAND POI, etc.) is rejected, so the chip
+        # falls through to the staggered top-edge anchors instead.
         _anchored = []
         for _it in _zone_items:
             _spot = _place_in_box(_it)
@@ -1777,6 +1806,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         bbox={"boxstyle": "round,pad=0.26",
                               "facecolor": CHART_THEME["panel"],
                               "edgecolor": "none", "alpha": 0.78})
+                _chip_taken.append((float(_spot[0]),
+                                    float(_spot[0]) + 1.4 + 0.52 * len(_it["text"]),
+                                    float(_spot[1])))
             else:
                 _anchored.append(_it)
         # fallback: chip anchored to the box TOP edge at its left end
@@ -1982,8 +2014,25 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         if (_tp8c - _bt8c) < 0.25 * _h8:
                             _bt8c, _tp8c = _bt8, _tp8
                         _clamp8 = _tp8c < _tp8 - 1e-12
+                        _label_clamp8 = _clamp8   # only the VALUE label clamps
                         _bt8, _tp8 = _bt8c, _tp8c
                         _bx0, _bx1 = count + 2, count + 2 + max(8, int(future * 0.55))
+                        # Viva 09-23 polish: a box riding the chart's top edge
+                        # keeps its value label INSIDE (va="top") — the label
+                        # used to clip at the axes top.
+                        # «باکس نصفش رو نزن» — a box sliced by the panel top is
+                        # re-anchored DOWN so the whole box stays visible; the
+                        # measured % label rides its top edge INSIDE the panel.
+                        _hi8p = float(frame["high"].max())
+                        _lo8p = float(frame["low"].min())
+                        _rng8l = (_hi8p - _lo8p) or 1.0
+                        if _tp8 > _hi8p + 0.02 * _rng8l and _bt8 < _hi8p:
+                            _shift8 = _tp8 - (_hi8p - 0.03 * _rng8l)
+                            _bt8 -= _shift8
+                            _tp8 -= _shift8
+                        _va8l, _yy8l = "bottom", _tp8
+                        if _tp8 > _hi8p - 0.05 * _rng8l:
+                            _va8l, _yy8l = "top", _tp8 - 0.014 * _rng8l
                         ax.fill_between([_bx0, _bx1], _bt8, _tp8,
                                         color=CHART_THEME["demand"],
                                         alpha=0.30, linewidth=0, zorder=2)
@@ -1997,11 +2046,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                                     color=CHART_THEME["text"],
                                                     lw=0.7, alpha=0.8),
                                     zorder=8)
-                        ax.text(_mx8, _tp8,
+                        ax.text(_mx8, _yy8l if _va8l == "top" else _tp8,
                                 f"{_price(_h8)} ({_h8 / _lc8 * 100:.1f}%)",
                                 color=CHART_THEME["muted"], fontsize=6.5,
                                 ha="center",
-                                va="top" if _clamp8 else "bottom",
+                                va="top" if (_clamp8 or _va8l == "top") else "bottom",
                                 zorder=9)
                 except Exception:
                     pass
@@ -2032,14 +2081,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                     color=CHART_THEME["demand"], linewidth=0.7,
                                     alpha=0.55, zorder=3)
                             _mx9 = (_bx0 + _bx1) / 2
+                            _rng9l = (float(frame["high"].max()) - float(frame["low"].min())) or 1.0
+                            _va9l, _yy9l = "bottom", _tp9
+                            if _tp9 > float(frame["high"].max()) - 0.05 * _rng9l:
+                                _va9l, _yy9l = "top", _tp9 - 0.014 * _rng9l
                             ax.annotate("", xy=(_mx9, _tp9), xytext=(_mx9, _lc9),
                                         arrowprops=dict(arrowstyle="<->",
                                                         color=CHART_THEME["text"],
                                                         lw=0.7, alpha=0.8),
                                         zorder=8)
-                            ax.text(_mx9, _tp9, f"{_price(_h9)} ({_h9 / _lc9 * 100:.1f}%)",
+                            ax.text(_mx9, _yy9l, f"{_price(_h9)} ({_h9 / _lc9 * 100:.1f}%)",
                                     color=CHART_THEME["muted"], fontsize=6.5,
-                                    ha="center", va="bottom", zorder=9)
+                                    ha="center", va=_va9l, zorder=9)
                 except Exception:
                     pass
             if _lns:
@@ -2386,7 +2439,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     if len(xs) < 2 or not all(math.isfinite(v) for v in xs + ys) \
                             or max(xs) - min(xs) < 1e-9:
                         continue
-                    slope, intercept = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
+                    # Phase-3: log-space fit when the log axis is live & span>3%
+                    _mode9, slope, intercept = _pivot_line_fit(ax, frame, xs, ys)
+                    def _fy9(_x9, _s=slope, _b=intercept, _m=_mode9):
+                        return 10 ** (_s * _x9 + _b) if _m == "log" else _s * _x9 + _b
+                    def _fx9(_p9, _s=slope, _b=intercept, _m=_mode9):
+                        return (math.log10(_p9) - _b) / _s if _m == "log" else (_p9 - _b) / _s
                     # Viva 2026-09-11 (v2, the «هرچی میگم انجام نمیشه» fix): the
                     # edge spans the WHOLE frame — from the first bar where it
                     # is inside the visible price range (major-pivot start),
@@ -2396,17 +2454,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _pmax = float(frame["high"].max())
                     x0 = min(xs)
                     if abs(slope) > 1e-12:
-                        _xa = (_pmax - intercept) / slope
-                        _xb = (_pmin - intercept) / slope
+                        _xa = _fx9(_pmax)
+                        _xb = _fx9(_pmin)
                         x_left = max(0.0, min(_xa, _xb))
                         x0 = min(x0, x_left)
                     else:
                         x0 = 0.0
                     x1 = min(max(xs) + 0.15 * max(1.0, max(xs) - min(xs)), x_edge, count)
-                    ax.plot([x0, max(x1, min(x_edge, count))], [slope*x0+intercept, slope*max(x1, min(x_edge, count))+intercept],
+                    _xr = max(x1, min(x_edge, count))
+                    ax.plot([x0, _xr], [_fy9(x0), _fy9(_xr)],
                             color=color, linewidth=2.3, alpha=.95, zorder=7, solid_capstyle="round")
                     if count < x_edge - 0.6:
-                        ax.plot([count, x_edge], [slope*count+intercept, slope*x_edge+intercept],
+                        ax.plot([count, x_edge], [_fy9(count), _fy9(x_edge)],
                                 color=color, linewidth=1.5, alpha=.72, zorder=6,
                                 linestyle=(0, (6, 4)), solid_capstyle="butt")
                     ax.scatter(xs, ys, s=42, color=CHART_THEME["panel"], edgecolors=color, linewidths=1.7, zorder=9)
@@ -2477,8 +2536,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             ys.append(float(point["price"]))
                         if not all(math.isfinite(v) for v in xs + ys) or max(xs) - min(xs) < 1e-9:
                             raise ValueError("degenerate watch fit")
-                        slope, intercept = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
-                        ax.plot([xs[0], count + future - .5], [slope*xs[0]+intercept, slope*(count+future-.5)+intercept], color=CHART_THEME["liquidity"], linewidth=1.25, linestyle=(0,(3,3)), alpha=.85, zorder=6)
+                        _modew, slope, intercept = _pivot_line_fit(ax, frame, xs, ys)
+                        def _fyw(_xw, _s=slope, _b=intercept, _m=_modew):
+                            return 10 ** (_s * _xw + _b) if _m == "log" else _s * _xw + _b
+                        ax.plot([xs[0], count + future - .5], [_fyw(xs[0]), _fyw(count + future - .5)], color=CHART_THEME["liquidity"], linewidth=1.25, linestyle=(0,(3,3)), alpha=.85, zorder=6)
                         ax.scatter(xs, ys, s=22, color=CHART_THEME["panel"], edgecolors=CHART_THEME["liquidity"], linewidths=1.0, zorder=9)
                         notes.append(("2-PIVOT WATCH · NO ENTRY", CHART_THEME["liquidity"]))
                     except Exception:
