@@ -2231,19 +2231,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             tool_start = int(_anchored_x(_entry_ts, max(0, count - 20)))
             tool_start = max(0, min(tool_start, count - 1))
             tool_end = count + 4.5
-            # TradingView-style Long/Short position marker AT THE ENTRY CANDLE.
-            marker_price = candidate.planned_entry
-            marker_x = tool_start
             # Viva 09-22: «اون فلش سبزِ کوچولو رو روی کندل‌ها و ابزار ننویس» —
-            # the entry triangle glyph is gone; the entry pill + the tool box
-            # already mark the trade, and the note now lives in the margin.
-            if candidate.direction == "LONG":
-                pos_note = "LONG POSITION"
-                pos_color = CHART_THEME["tp1"]
-            else:
-                pos_note = "SHORT POSITION"
-                pos_color = CHART_THEME["invalidation"]
-            notes.append((pos_note, pos_color))
+            # the entry triangle and LONG/SHORT position label are gone. The
+            # chart keeps only clean price lines/fills; direction remains in
+            # the Telegram text and metadata, not over the candles.
             ax.fill_between(
                 [tool_start, tool_end],
                 candidate.planned_entry,
@@ -2310,9 +2301,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                               linewidth=1.25 if label.startswith("TRAILING") else 1.15,
                               linestyles=_dash,
                               zorder=9 if label.startswith("TRAILING") else 8)
-                _level_tag(ax, tool_end + 0.35, y_mid,
-                           "  ·  ".join(f"{lb}  {_price(pc)}" for lb, pc, _c in items),
-                           items[-1][2])
+                # Do not draw text pills beside the long/short tool. The
+                # horizontal levels remain visible and the exact values stay
+                # in the message body, avoiding chart occlusion.
 
             # (Viva 2026-09-11) slanted PROJECTED-SCENARIO arrows removed from
             # confirmed charts too — the tagged TP ladder lines above are the

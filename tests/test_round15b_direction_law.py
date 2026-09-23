@@ -108,6 +108,19 @@ def test_long_on_a_rising_wedge_that_broke_down_is_void():
     assert c2.metadata.get("last_reject_code") == "BREAK_SIDE_MISMATCH", reason
 
 
+def test_detector_contract_rejects_opposite_trade_direction():
+    """A detector-created UP break cannot later become a SHORT via a generic lane."""
+    from analysis.quality_engine import evaluate_confirmation
+    cand = _cand("SHORT", sl=103.0, tp1=98.0, tp2=96.5,
+                 metadata={"atr": 1.0, "touched": True,
+                           "strategy_variant": "VIVA_TLBREAK",
+                           "break_direction": "UP",
+                           "pattern_type": "CHANNEL_ASCENDING"})
+    ok, c2, reason = evaluate_confirmation(cand, _frame([101.8, 102.4]))
+    assert ok is False
+    assert c2.metadata.get("last_reject_code") == "BREAK_SIDE_MISMATCH", reason
+
+
 def test_break_against_the_bias_keeps_its_own_state_name():
     """His rule: a falling wedge broken DOWN is not a bullish reversal — it is a
     BREAKDOWN and must be published under that state name."""

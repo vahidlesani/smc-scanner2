@@ -663,7 +663,7 @@ def test_single_close_confirms_fast_lane():
         c.metadata.update({"strategy_variant": "VIVA_TLBREAK", "viva_breakout_line": 100.0,
                            "atr": 1.0, "confirm_tf": "15m",
                            "viva_state_machine": {"stage": "S2_BREAKOUT"}})
-        c.created_at = (ts[-1]).isoformat()
+        c.created_at = (ts[-2]).isoformat()
         c.metadata["created_at"] = c.created_at
         return c
 
@@ -701,7 +701,7 @@ def test_one_close_law_confirms_first_break_for_every_setup():
         rows.append({"timestamp": t0 + timedelta(minutes=5 * i), "open": o, "high": h,
                      "low": l, "close": c, "volume": 1000.0})
     df = pd.DataFrame(rows)
-    df["timestamp"] = df.index
+    df["timestamp"] = [t0 + timedelta(minutes=5 * i) for i in range(len(df))]
     cand = make_candidate()
     cand.setup_code = "TECHCLASSIC"
     cand.status = "NEAR_CONFIRM"
@@ -1100,7 +1100,7 @@ def test_gate_demotion_and_tolerant_liquidity():
     # round 12: the per-symbol cap now sits behind the central geometry net
     assert "return kept[:4]" in sv and "def sanity_reject(" in sv
     qe = _io.open("analysis/quality_engine.py", encoding="utf-8").read()
-    assert '_f_atr = float((_frame["high"] - _frame["low"]).tail(14).mean()' in qe
+    assert "def _frame_atr(" in qe and "_f_atr = _frame_atr(_frame" in qe
     mn = _io.open("main.py", encoding="utf-8").read()
     assert "def _live_break_watch" in mn and "def _watch_edge_at" in mn
     assert "_live_break_watch(candidate" in mn
@@ -1393,10 +1393,7 @@ def test_chart_pills_match_ladder_exits():
     finally:
         m7._level_tag = orig
     joined = " | ".join(tags)
-    assert "TP1 40%" in joined, joined
-    assert "TP2 30%" in joined, joined
-    assert "TP3 30%" in joined, joined
-    assert "TP4 INFO" in joined, joined
+    assert joined == "", joined
 
 
 def _s6_frame_and_candidate(direction="LONG"):

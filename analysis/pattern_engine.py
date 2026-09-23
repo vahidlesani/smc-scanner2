@@ -66,6 +66,10 @@ _EDGE_RULES.update({p: {"upper": "LONG", "lower": "SHORT"} for p in (
     "TRIANGLE", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING",
     "CHANNEL_FLAT", "CHANNEL", "TRENDLINE", "HORIZONTAL_SR", "BROADENING",
 )})
+_EDGE_RULES.update({
+    "FLAG_BULL": {"upper": "LONG"},
+    "FLAG_BEAR": {"lower": "SHORT"},
+})
 
 PATTERN_FA = {
     "WEDGE_FALLING": "گوه نزولی (فالینگ‌وج)",
@@ -470,11 +474,21 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             pattern = "FLAG_BULL" if _fp > 0 else "FLAG_BEAR"
             struct_note = (f"میله‌ی پرچم: حرکتِ {abs(_fp)}×ATRِ بلافاصله قبل از "
                            "فشردگی — شکست در جهتِ میله ادامه‌دهنده است (ادواردز/مجی)")
+        # A relabelled shape owns its own edge rule; never retain direction
+        # calculated before the structural/flag overlay.
+        _canonical_direction = _EDGE_RULES.get(pattern, {}).get(side)
+        if pattern in {"FLAG_BULL", "FLAG_BEAR"} and not _canonical_direction:
+            continue
+        direction = (_canonical_direction or direction).upper()
         target = line_now + height if direction == "LONG" else line_now - height
         pct = (target - live) / live * 100.0 if live else 0.0
         ev = {
             "pattern": pattern, "pattern_fa": PATTERN_FA.get(pattern, pattern),
             "side": side, "direction": direction, "state": state,
+            "break_edge": "UPPER" if side == "upper" else "LOWER",
+            "break_direction": "UP" if side == "upper" else "DOWN",
+            "direction_reason": (f"{pattern}: "
+                                 f"{'شکست ضلع بالا' if side == 'upper' else 'شکست ضلع پایین'}"),
             "line_price": line_now, "live": live, "distance_atr": round(abs(dist), 3),
             "touches": int(line.touch_count), "fit_error_atr": round(float(line.fit_residual_atr), 3),
             "structure_score": structure_score(line, cfg), "reactions": react,
@@ -508,7 +522,7 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                 # never anything read off the stop.
                 try:
                     from analysis.trade_management import doctrine_path as _dp14
-                    _p14, _s14 = _dp14(live, str(trigger_tf or "15m"))
+                    _p14, _s14 = _dp14(live, str(pattern_tf or "15m"))
                     ftgt = live - _p14 if fdir == "SHORT" else live + _p14
                 except Exception:
                     ftgt = live - 0.03 * live if fdir == "SHORT" else live + 0.03 * live
@@ -692,6 +706,7 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
                      trigger_tf: str, cfg):
     from analysis.indicators import structure_bias
     from analysis.models import EvidenceItem, generate_viva_public_code
+    from analysis.patterns import pattern_info
     from analysis.setups_v7 import _base_candidate
     from analysis.viva_tlbreak import fit_validated_line, structure_score
     from analysis.viva_tlbreak_state import VivaTLState
@@ -899,6 +914,12 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         "viva_touch_count": int(ev.get("touches") or 0),
         "viva_fit_error_atr": float(ev.get("fit_error_atr") or 0.0),
         "viva_break_line": line_now, "viva_breakout_line": line_now,
+        "pattern_type": ev["pattern"],
+        "pattern_bias": pattern_info(ev["pattern"]).get("bias", "NEUTRAL"),
+        "break_edge": ev.get("break_edge"),
+        "break_direction": ev.get("break_direction"),
+        "trade_direction": direction,
+        "direction_reason": ev.get("direction_reason", ""),
         "viva_structure_score": float(ev.get("structure_score") or 0.0),
         "viva_final_score": raw, "viva_state": stage + "_CLOSED",
         "tl_context_tf": structure_tf, "tl_line": line_now,

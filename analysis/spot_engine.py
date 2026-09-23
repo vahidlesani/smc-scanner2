@@ -130,7 +130,7 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
     already past the «first valid close above the shape» law.
     """
     from analysis.render_kit import detect_patterns
-    from analysis.patterns import classify, pattern_info, state_label
+    from analysis.patterns import pattern_info, state_label
     out: List[dict] = []
     if not frames:
         return out
@@ -222,7 +222,7 @@ def _next_spot_public_code() -> str:
     try:
         from database.bot_kv import get_json as _g, set_json as _s
         cur = int((_g("spot_code_seq", {}) or {}).get("n", 0) or 0) + 1
-        set_json("spot_code_seq", {"n": cur})
+        _s("spot_code_seq", {"n": cur})
         return f"VIVA-SPOT-E{cur:06d}"
     except Exception:
         return ("VIVA-SPOT-E"

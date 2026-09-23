@@ -75,6 +75,9 @@ def test_scan_edges_finds_break_on_falling_wedge():
     assert any(e["state"] in (m.STATE_BREAK, m.STATE_READY) for e in long_upper)
     ev = long_upper[0]
     assert "WEDGE" in ev["pattern"] or "TRIANGLE" in ev["pattern"] or "TRENDLINE" in ev["pattern"]
+    assert ev["break_edge"] == "UPPER"
+    assert ev["break_direction"] == "UP"
+    assert ev["direction"] == "LONG"
 
 
 def test_compression_metrics_detects_squeeze_and_rejects_noise():
