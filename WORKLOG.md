@@ -134,3 +134,18 @@
   clamp-before-alloc. 50k-case fuzz: 0 violations.
 - tests/test_round23_law_guard.py +3 (fuzz, ADA edge cluster, degenerate panel).
 - Suite: 412 passed / 1 skipped.
+
+## Round 23c — control-chart root cause (2026-09-24)
+- Viva caught the r22 CONTROL charts: two had no pattern at all, one drew the
+  trendline floating ABOVE the candles («ترند بالای چارت، کندل‌ها پایین»).
+- Root cause: those controls were built with HAND-STUFFED render metadata on a
+  monotone synthetic drift — not the engine. Reproduction on the same frame shows
+  detect_patterns now gives NO floating line: the 09-22 DIET law (4×ATR removal
+  + duplicate line drop) + pivot-anchored painting work. The defect was the
+  test fixture, not the detection engine.
+- Fix: make_controls.py (workspace) — pattern-SHAPED OHLC (wedge/channel/TL
+  zigzag with real pivots) → enrich_render (the production metadata call) →
+  generate_chart. New controls ctl_wedge_short / ctl_channel_long / ctl_trend_long:
+  engine-validated lines ON the pivots, chips + pills clean.
+- Upload cache: 3 duplicate screenshots removed (2 dup-pairs); 14 old scratch
+  chart_*.png (4.8MB) deleted; old chart_r22_*.png controls retired.
