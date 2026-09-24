@@ -1480,8 +1480,8 @@ function render(){
  $('#clock').textContent=STATE.server_time||'—';
  $('#srvT').textContent=STATE.server_time||'—';
  $('#engState').textContent=(STATE.scanner&&STATE.scanner.alive)?'فعال ✅':'خاموش ⛔';
- const sp=(STATE.scanner&&STATE.scanner.spot)||null,spE=$('#spotState');
- if(spE)spE.textContent=sp?`${sp.state}${sp.published?` • ${sp.published} انتشار`:''}${sp.found?` • ${sp.found} کشف`:''}${sp.at?` • ${tehran(sp.at)}`:''}`:'—';
+ const spotScan=(STATE.scanner&&STATE.scanner.spot)||null,spE=$('#spotState');
+ if(spE)spE.textContent=spotScan?`${spotScan.state}${spotScan.published?` • ${spotScan.published} انتشار`:''}${spotScan.found?` • ${spotScan.found} کشف`:''}${spotScan.at?` • ${tehran(spotScan.at)}`:''}`:'—';
  $('#dot').style.background=(STATE.scanner&&STATE.scanner.alive)?'#1fae7c':'#e5484d';
  const chains=STATE.chains||[],feed=STATE.feed||[],hits=STATE.hits||[],live=STATE.live_positions||[];
  $('#chains').innerHTML=chains.length?chains.map(chainCard).join(''):'<div class="empty">زنجیرهٔ فعالی نیست</div>';
@@ -1509,9 +1509,9 @@ function render(){
  $('#stratsX').innerHTML=arc.map(stratCard).join('');
  $('#archN').textContent=arc.length;
  $('#archBox').style.display=arc.length?'block':'none';
- const sp=a.spot||{},fu=a.futures||{};
+ const spotStats=a.spot||{},fu=a.futures||{};
  $('#sf').innerHTML=`
-  <div class="tile"><small>💎 اسپات</small><b style="color:#39d9a4">%${sp.wr??'—'}</b><span>${sp.wins??0}W / ${sp.losses??0}L از ${sp.total??0}</span></div>
+  <div class="tile"><small>💎 اسپات</small><b style="color:#39d9a4">%${spotStats.wr??'—'}</b><span>${spotStats.wins??0}W / ${spotStats.losses??0}L از ${spotStats.total??0}</span></div>
   <div class="tile"><small>⚡ فیوچرز</small><b style="color:#4c8dff">%${fu.wr??'—'}</b><span>${fu.wins??0}W / ${fu.losses??0}L از ${fu.total??0}</span></div>`;
  renderCtrl();
  const sc=STATE.scanner||{};
