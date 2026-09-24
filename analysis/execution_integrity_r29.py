@@ -261,7 +261,9 @@ def mtf_evidence_matrix(frames: Mapping[str, Any], trigger_tf: str, direction: s
         rows.append({
             "tf": tf,
             "state": "AVAILABLE",
-            "role": "TRIGGER" if tf == trigger else ("HTF_STRUCTURE" if order.index(tf) < order.index(trigger) if trigger in order else False else "LTF_CONFIRMATION"),
+            "role": ("TRIGGER" if tf == trigger else
+                     "HTF_STRUCTURE" if trigger in order and order.index(tf) < order.index(trigger)
+                     else "LTF_CONFIRMATION"),
             "structure": structure,
             "direction": direction,
             "alignment": "ALIGNED" if local >= 50 else "CONFLICT" if local < 25 else "MIXED",
