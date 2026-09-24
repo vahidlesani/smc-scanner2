@@ -269,6 +269,8 @@ def run_discovery_scan() -> Dict[str, int]:
         return tally.setdefault(sc, {
             "seen": 0, "low_score": 0, "dead_gate": 0, "blocked": {},
             "suppressed_pre_tp1": 0, "dup": 0, "ready_new": 0,
+            "absorbed": 0, "license_cap": 0, "same_zone_quiet": 0, "sep2pct": 0,
+            "budget_deferred": 0, "add_failed": 0, "educate_failed": 0, "chain_slot": 0,
         })
     print(
         f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC] "
@@ -343,6 +345,7 @@ def run_discovery_scan() -> Dict[str, int]:
                         stats["chain_absorbed"] = stats.get("chain_absorbed", 0) + 1
                         t = _t(candidate)
                         t["absorbed"] = t.get("absorbed", 0) + 1
+                        t["chain_slot"] = t.get("chain_slot", 0) + 1
                         try:
                             if is_material_update(holder, candidate):
                                 absorb_note = absorb_update_into_chain(holder, candidate)
@@ -374,6 +377,7 @@ def run_discovery_scan() -> Dict[str, int]:
                         used = 0
                     if used >= max(1, int(getattr(SETTINGS, "chains_per_symbol_setup_24h", 3) or 3)):
                         stats["chain_license_cap"] = stats.get("chain_license_cap", 0) + 1
+                        _t(candidate)["license_cap"] = _t(candidate).get("license_cap", 0) + 1
                         continue
                     # same-zone repeat dedupe: a zone already watched in 24h
                     # never re-alerts — that is noise control, not the licence
@@ -389,6 +393,7 @@ def run_discovery_scan() -> Dict[str, int]:
                         _quiet = None
                     if _quiet is not None and str(_quiet.signal_id) != str(candidate.signal_id):
                         stats["same_zone_quiet"] = stats.get("same_zone_quiet", 0) + 1
+                        _t(candidate)["same_zone_quiet"] = _t(candidate).get("same_zone_quiet", 0) + 1
                         continue
                     # THE 2% LAW: the new licence may open only >=2% (fixed,
                     # identical for every setup) away from the price at which
@@ -468,8 +473,10 @@ def run_discovery_scan() -> Dict[str, int]:
                 # symbol locks would hide those updates, so discovery has no lock.
                 if _edu_budget["left"] <= 0:
                     stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
+                    _t(candidate)["budget_deferred"] = _t(candidate).get("budget_deferred", 0) + 1
                     continue  # not persisted; next scan retries when budget frees
                 if not add_candidate(candidate):
+                    _t(candidate)["add_failed"] = _t(candidate).get("add_failed", 0) + 1
                     _t(candidate)["dup"] += 1
                     continue
                 # Advisory is asynchronous and isolated: a Gemini timeout can
@@ -484,6 +491,7 @@ def run_discovery_scan() -> Dict[str, int]:
                 # left unpersisted so the very next scan retries it (nothing
                 # lost, only smoothed).
                 if not _educate(candidate, _chart_frame(candidate, bundle)):
+                    _t(candidate)["educate_failed"] = _t(candidate).get("educate_failed", 0) + 1
                     continue
                 stats["new"] += 1
                 _t(candidate)["ready_new"] += 1
