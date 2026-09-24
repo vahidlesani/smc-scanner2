@@ -218,7 +218,9 @@ def _target_check(candidate: Any, frame: Optional[pd.DataFrame], direction: str)
     # Nearby opposite pivots are an obstruction, not a silent rewrite.
     obstruction = ""
     if frame is not None and len(frame) >= 20:
-        ph, pl = causal_pivots(frame, str(getattr(candidate, "trigger_timeframe", "")))
+        _piv = causal_pivots(frame, str(getattr(candidate, "trigger_timeframe", "")))
+        ph = tuple(p for p in _piv if p.kind == "HIGH")
+        pl = tuple(p for p in _piv if p.kind == "LOW")
         levels = [p.price for p in (ph if direction == "LONG" else pl)
                   if (p.price > entry if direction == "LONG" else p.price < entry)]
         nearer = min(levels, key=lambda x: abs(x-entry), default=0.0)
