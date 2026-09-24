@@ -7,10 +7,9 @@ changing publication templates or lineage IDs.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, Mapping, Optional, Tuple
 
-import math
 
 
 TF_STOP_FLOOR_PCT = {
