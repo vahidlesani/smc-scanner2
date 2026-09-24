@@ -161,6 +161,11 @@ def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
         _market_intel = build_market_intelligence(bundle)
         for candidate in candidates:
             candidate.metadata["market_intelligence"] = dict(_market_intel)
+            # Persist the same evidence packet into market_json so the WebApp can
+            # display it without creating a second scanner or analysis engine.
+            market = dict(candidate.market or {})
+            market["market_intelligence"] = dict(_market_intel)
+            candidate.market = market
     except Exception as _mi_exc:
         for candidate in candidates:
             candidate.metadata["market_intelligence_error"] = str(_mi_exc)[:240]
