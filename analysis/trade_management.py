@@ -133,6 +133,15 @@ MAX_STOP_PCT_BY_TF = {
     "4h": 4.50, "1d": 8.00,
 }
 
+# R28 execution-integrity law: an initial structural/invalidation stop must
+# have enough room for the trigger timeframe. A stop that is only a few ticks
+# below/above entry is not a real invalidation and must be REJECTED, never
+# manufactured by moving the stop to entry±ticks.
+MIN_INITIAL_STOP_PCT_BY_TF = {
+    "1m": 0.20, "3m": 0.25, "5m": 0.30, "15m": 0.45,
+    "30m": 0.55, "1h": 0.75, "2h": 0.90, "4h": 1.20, "1d": 2.00,
+}
+
 # Trigger TF → the LOWER timeframe whose BASE defines the stop & TP1 zones.
 LTF_BY_TRIGGER = {
     "1d": "4h", "4h": "1h", "2h": "1h", "1h": "15m",
@@ -149,6 +158,42 @@ def stop_ceiling_pct(trigger_tf: str) -> float:
     """The stop's hard ceiling for this trigger TF (percent of price)."""
     return float(MAX_STOP_PCT_BY_TF.get(str(trigger_tf or "15m").lower(),
                                         MAX_STOP_PCT_BY_TF["15m"]))
+
+
+def min_initial_stop_pct(trigger_tf: str) -> float:
+    """Minimum initial structural-stop distance for the trigger timeframe."""
+    return float(MIN_INITIAL_STOP_PCT_BY_TF.get(
+        str(trigger_tf or "15m").lower(),
+        MIN_INITIAL_STOP_PCT_BY_TF["15m"],
+    ))
+
+
+def initial_stop_distance_pct(entry: float, stop: float) -> float:
+    """Absolute initial stop distance as a percentage of entry."""
+    try:
+        e, s = float(entry), float(stop)
+        if e <= 0 or s <= 0:
+            return 0.0
+        return abs(e - s) / e * 100.0
+    except Exception:
+        return 0.0
+
+
+def initial_stop_is_valid(entry: float, direction: str, stop: float,
+                          trigger_tf: str) -> bool:
+    """R28 gate: side-correct AND wide enough to be a real invalidation."""
+    try:
+        e, s = float(entry), float(stop)
+        d = str(direction or "").upper()
+        if e <= 0 or s <= 0:
+            return False
+        if d == "LONG" and s >= e:
+            return False
+        if d == "SHORT" and s <= e:
+            return False
+        return initial_stop_distance_pct(e, s) >= min_initial_stop_pct(trigger_tf)
+    except Exception:
+        return False
 
 
 def tolerant_band_for_tf(trigger_tf: str) -> tuple:
@@ -646,14 +691,19 @@ def band_trailing(state: Dict, candles: List[Dict], atr_n: Optional[float] = Non
         atr = _window_atr(candles)
         n = float(atr_n if atr_n is not None else state.get("vol_atr_n") or VOL_STOP_ATR_N)
         current = float(out.get("current_sl") or base)
+        min_gap = max(tick_gap, abs(float(last["close"])) * 0.0010)
         if sign > 0:
             swing = min(float(c["low"]) for c in candles[-SWING_BARS:])
             candidate = max(interp, swing - n * atr)
+            # Never move a LONG stop onto/through the closed candle price.
+            candidate = min(candidate, float(last["close"]) - min_gap)
             new_sl = max(current, candidate)
             improved = new_sl - current > max(tick_gap, 1e-12)
         else:
             swing = max(float(c["high"]) for c in candles[-SWING_BARS:])
             candidate = min(interp, swing + n * atr)
+            # Never move a SHORT stop onto/through the closed candle price.
+            candidate = max(candidate, float(last["close"]) + min_gap)
             new_sl = min(current, candidate)
             improved = current - new_sl > max(tick_gap, 1e-12)
         if improved:
