@@ -688,7 +688,7 @@ def _spot_status_write(reason: str, stats: Optional[Dict[str, int]] = None) -> N
 
 
 def run_spot_scan() -> Dict[str, int]:
-    """One full spot pass: 4h · 1d · 3d · 1w over the liquidity watchlist."""
+    """One full spot pass: 4h/8h short · 12h/1d mid · 3d/1w long."""
     stats: Dict[str, int] = {"symbols": 0, "found": 0, "published": 0,
                              "alerts": 0, "errors": 0}
     if not _spot_enabled():
@@ -741,11 +741,15 @@ def run_spot_scan() -> Dict[str, int]:
     started = time.monotonic()
     pending = []
     ladder = []          # round 16: TOUCH / NEAR_BREAK / BREAK_DOWN warnings
+    bundles = {}         # one fetched bundle per symbol; charts reuse it
     for symbol in symbols:
         try:
             bundle = get_market_bundle(
                 symbol, tuple(SPOT_TRIGGERS),
-                limits={"4h": 170, "8h": 170, "12h": 170, "1d": 170, "3d": 120})
+                limits={"4h": 170, "8h": 170, "12h": 170,
+                        "1d": 420, "3d": 120, "1w": 60,
+                        "5m": 300, "15m": 200})
+            bundles[symbol.upper()] = bundle
             for cand in spot_signals_for(symbol, bundle):
                 stats["found"] += 1
                 pending.append(cand)
@@ -770,13 +774,9 @@ def run_spot_scan() -> Dict[str, int]:
         if _spot_stamp(key, window):
             continue
         try:
-            frame = bundle_frame = None
-            try:
-                from data.fetcher import get_klines
-                frame = get_klines(cand.symbol, cand.trigger_timeframe, 170,
-                                   closed_only=False, use_cache=True)
-            except Exception:
-                frame = None
+            _bundle_for_chart = bundles.get(cand.symbol.upper())
+            frame = (_bundle_for_chart.get(cand.trigger_timeframe)
+                     if _bundle_for_chart is not None else None)
             chart = generate_chart(frame, cand, confirmed=True) if frame is not None else None
             if tf_channel_publish_confirmed(cand, chart=chart, chat_override=CHAT_ID_SPOT):
                 stats["published"] += 1
@@ -806,7 +806,6 @@ def run_spot_scan() -> Dict[str, int]:
         from bot.messages_v7 import send_spot_alert as _send_spot_alert
         from analysis.spot_engine import (spot_alert_check, spot_alert_commit,
                                           build_spot_alert_candidate)
-        from data.fetcher import get_klines as _spot_klines
         for aitem in ladder:
             if _spot_alert_daily_left() <= 0:
                 break
@@ -814,12 +813,9 @@ def run_spot_scan() -> Dict[str, int]:
                 if not spot_alert_check(aitem):
                     continue
                 cand = build_spot_alert_candidate(aitem)
-                frame = None
-                try:
-                    frame = _spot_klines(cand.symbol, cand.trigger_timeframe,
-                                         170, closed_only=False, use_cache=True)
-                except Exception:
-                    frame = None
+                _bundle_for_alert = bundles.get(cand.symbol.upper())
+                frame = (_bundle_for_alert.get(cand.trigger_timeframe)
+                         if _bundle_for_alert is not None else None)
                 chart = (generate_chart(frame, cand, confirmed=False)
                          if frame is not None else None)
                 if _send_spot_alert(aitem, chart):
