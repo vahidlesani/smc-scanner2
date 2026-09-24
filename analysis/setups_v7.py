@@ -787,6 +787,16 @@ def _base_candidate(
         stop_clamped_note = False
     if entry <= 0 or abs(entry - sl) / entry < 0.0008:
         return None
+    # R28: a few-tick stop is not a valid initial structural invalidation.
+    # Never manufacture a tiny stop just to make the candidate publishable.
+    try:
+        from analysis.trade_management import initial_stop_is_valid
+        if not initial_stop_is_valid(entry, direction, sl, trigger_tf):
+            return None
+    except Exception:
+        # If the integrity helper itself fails, keep the historical fail-open
+        # behavior rather than silencing the whole scanner.
+        pass
     # Viva 09-20: the TRIGGER timeframe's own next high/low is the primary
     # target; the higher (context) TF only contributes its important zones.
     targets = _structural_targets(
