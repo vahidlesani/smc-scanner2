@@ -1328,6 +1328,7 @@ nav .bdg{position:absolute;top:0;left:18%;background:var(--short);color:#fff;fon
 
 <nav>
  <button class="on" data-p="feed" onclick="go('feed')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>فید زنده</button>
+ <button data-p="live" onclick="go('live')" style="position:relative"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>پوزیشن‌ها<span class="bdg" id="liveBdg" style="display:none"></span></button>
  <button data-p="hits" onclick="go('hits')" style="position:relative"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>برخوردها<span class="bdg" id="navBdg" style="display:none"></span></button>
  <button data-p="perf" onclick="go('perf')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>عملکرد</button>
  <button data-p="ctrl" onclick="go('ctrl')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h10M18 8h2M4 16h2M10 16h10"/><circle cx="16" cy="8" r="2"/><circle cx="8" cy="16" r="2"/></svg>کنترل</button>
