@@ -1373,6 +1373,23 @@ function feedCard(s){
   <div class="ftr"><span class="code">${fnum(s.code)}</span>
    <span class="res ${s.result}">${resFa(s.result)}${s.pnl!==null&&s.pnl!==undefined?` ${s.pnl>0?'+':''}${s.pnl}%`:''}</span>
    <span class="time">${tehran(s.time)}</span></div></div>`}
+function liveCard(p){
+ const dir=p.spot?'LONG':(p.direction||'');
+ return `<div class="card" onclick="openDetail('${(p.signal_id||'').replace(/'/g,'')}')">
+  <div class="livebar"><div><span class="sym">${fnum(p.symbol)}</span> <span class="badge">${fnum(p.badge)}</span></div>
+   <span class="chip ${dir}">${dir==='LONG'?'لانگ 🟢':'شورت 🔴'}</span></div>
+  <div class="live-meta">
+   <div class="pill entry"><i>ورود</i><b>${fnum(p.zone)}</b></div>
+   <div class="pill stop"><i>استاپ</i><b>${fnum(p.sl||'—')}</b></div>
+   <div class="pill tp1"><i>TP1</i><b>${fnum(p.tp1||'—')}</b></div>
+   <div class="pill tp2"><i>TP2</i><b>${fnum(p.tp2||'—')}</b></div>
+  </div>
+  <div class="statline"><span class="stat">لوریج: <b>${fnum(p.leverage)}×</b></span>
+   <span class="stat">مارجین: <b>${fnum(p.margin)}</b></span>
+   <span class="stat">وضعیت: <b>LIVE</b></span></div>
+  <div class="thumb"><img loading="lazy" src="/app/api/chart/${encodeURIComponent(p.signal_id||'')}" alt="چارت پوزیشن"></div>
+  <div class="ftr"><span class="code">${fnum(p.code)}</span><span class="time">${fnum(p.tf)}</span></div>
+ </div>`}
 function chainCard(c){
  const dir=c.spot?'LONG':(c.direction||'');
  return `<div class="card chain" onclick="openDetail('${(c.signal_id||'').replace(/'/g,'')}')">
@@ -1409,9 +1426,11 @@ function render(){
  const sp=(STATE.scanner&&STATE.scanner.spot)||null,spE=$('#spotState');
  if(spE)spE.textContent=sp?`${sp.state}${sp.published?` • ${sp.published} انتشار`:''}${sp.found?` • ${sp.found} کشف`:''}${sp.at?` • ${tehran(sp.at)}`:''}`:'—';
  $('#dot').style.background=(STATE.scanner&&STATE.scanner.alive)?'#1fae7c':'#e5484d';
- const chains=STATE.chains||[],feed=STATE.feed||[],hits=STATE.hits||[];
+ const chains=STATE.chains||[],feed=STATE.feed||[],hits=STATE.hits||[],live=STATE.live_positions||[];
  $('#chains').innerHTML=chains.length?chains.map(chainCard).join(''):'<div class="empty">زنجیرهٔ فعالی نیست</div>';
- $('#feed').innerHTML=feed.length?feed.map(feedCard).join(''):'<div class="empty">سیگنالی ثبت نشده</div>';
+ $('#feed').innerHTML=feed.length?feed.map(feedCard).join(''):'<div class="empty">هشدار امروز ثبت نشده</div>';
+ $('#livePositions').innerHTML=live.length?live.map(liveCard).join(''):'<div class="empty">پوزیشن لایوی برای امروز ثبت نشده</div>';
+ const lB=$('#liveBdg'); if(live.length){lB.textContent=live.length;lB.style.display='block'}else{lB.style.display='none'}
  $('#chainsN').textContent=chains.length?`${chains.length} فعال`:'';
  const nB=$('#navBdg'),hB=$('#hitsBdg');
  if(hits.length){nB.textContent=hits.length;nB.style.display='block';hB.textContent=hits.length;hB.style.display='inline'}
