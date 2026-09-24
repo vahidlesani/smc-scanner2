@@ -1,6 +1,7 @@
 # dashboard/app.py - Simple Web Dashboard
 import os
 import sys
+import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flask import Flask, render_template_string, jsonify
@@ -13,6 +14,20 @@ from config import get_settings
 
 SETTINGS = get_settings()
 app = Flask(__name__)
+
+# ── r27b: visible boot fingerprint — «تأیید هر دیپلوی» از سطحِ عمومی. The
+# live commit (Railway injects RAILWAY_GIT_COMMIT_SHA) beats the stamped
+# BUILD_INFO file; /health exposes both boot identity keys.
+_BOOT_SHA = ((os.getenv("RAILWAY_GIT_COMMIT_SHA")
+              or os.getenv("COMMIT_SHA") or "")[:12])
+if not _BOOT_SHA:
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "..", "BUILD_INFO")) as _bif:
+            _BOOT_SHA = _bif.read().strip()[:12] or "unknown"
+    except Exception:
+        _BOOT_SHA = "unknown"
+_BOOT_AT = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 # ── Viva 09-23: the mobile PWA (feed/analytics/control) + THE login lock on
 # every route of this server (the Railway domain is public — nothing leaks).
@@ -380,6 +395,8 @@ def health():
         "version": SETTINGS.version,
         "confirmed_only": True,
         "scanner_alive": scanner_alive,
+        "boot_sha": _BOOT_SHA,
+        "boot_at": _BOOT_AT,
     }), (200 if status == "ok" else 503)
 
 

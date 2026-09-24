@@ -229,3 +229,9 @@
 - dedupe_events (§27): exact duplicate event_id only; upper/lower, approach/break, warning/confirmation, other TFs never merged.
 - tests/test_round27_lifecycle.py 5/5; suite 430P/1skip.
 - Note: registry is process-local; symbol-scoped persistence lands with messages-layer integration (§7).
+
+## Round-27b — visible boot fingerprint on /health (deploy verification law)
+- Gap: boot_version KV was written at boot but read by NO route; public surface had zero deploy fingerprint (static version string only) — «تأیید هر دیپلوی» was impossible this round.
+- dashboard/app.py: _BOOT_SHA priority RAILWAY_GIT_COMMIT_SHA → COMMIT_SHA → BUILD_INFO file → "unknown"; /health now returns boot_sha + boot_at (legacy keys intact).
+- tests/test_health_fingerprint.py 2/2 (module-reload pattern for env pinning); suite 432P/1skip.
+- Note for future rounds: fresh containers wipe .git/config AND pip deps — reinstall list + remote rebuild from tokens.env (GITHUB_TOKEN rotated 09-24 after old ghp_ token revoked).
