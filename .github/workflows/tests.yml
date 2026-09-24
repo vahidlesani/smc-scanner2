@@ -4,10 +4,6 @@ on:
   push:
   pull_request:
 
-permissions:
-  contents: read
-  pull-requests: write
-
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
@@ -20,30 +16,5 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m pip install pyflakes
       - run: python -m compileall -q .
-      - id: pytest
-        continue-on-error: true
-        run: |
-          set +e
-          python -m pytest tests/ -q > pytest.log 2>&1
-          status=$?
-          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
-          cat pytest.log
-          exit 0
-      - name: Report pytest failure
-        if: steps.pytest.outputs.exit_code != '0'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const log = fs.readFileSync('pytest.log', 'utf8');
-            const tail = log.slice(-12000);
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: "### R30 pytest failure diagnostic\n\n```text\n" + tail + "\n```"
-            });
-      - name: Fail if pytest failed
-        if: steps.pytest.outputs.exit_code != '0'
-        run: exit 1
+      - run: python -m pytest tests/ -q
       - run: python -m pyflakes analysis/execution_integrity_r28.py
