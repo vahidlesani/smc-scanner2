@@ -1387,10 +1387,15 @@ def monitor_confirmed_trades() -> List[Dict]:
                 step = advance_ladder(ladder, float(candle["high"]), float(candle["low"]))
                 ladder = step["state"]
                 raw_events = list(step["events"])
-                # R29 professional trailing is additive to the existing ladder: ratchet-only,
-                # no pre-TP1 aggressive BE, and net-BE after TP1 including costs.
+                # R29 professional trailing is evaluated on every closed monitor candle.
+                # Before TP1 it may only ratchet structural room; NET-BE is impossible
+                # until TP1 is actually hit. After TP1 it includes fees/slippage.
                 try:
-                    _r29trail = trailing_from_ladder(ladder, wcandles if "wcandles" in locals() and wcandles else [], direction)
+                    _r29_frame = frame.iloc[max(0, int(_pos) - 30):int(_pos) + 1] if '_pos' in locals() and frame is not None else frame.tail(31)
+                    _r29_candles = [{"open": float(r["open"]), "high": float(r["high"]),
+                                     "low": float(r["low"]), "close": float(r["close"])}
+                                    for _, r in _r29_frame.iterrows()]
+                    _r29trail = trailing_from_ladder(ladder, _r29_candles, direction)
                     ladder = _r29trail.get("state", ladder)
                     raw_events.extend(_r29trail.get("events") or [])
                 except Exception as _r29trail_exc:
