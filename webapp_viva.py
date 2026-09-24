@@ -401,7 +401,20 @@ def _fetch_state() -> Dict[str, Any]:
                     tp1_hit=tp1_hit, tp2_hit=tp2_hit,
                     summary=str(description or fa or "")[:220],
                 ))
-            # ── winrate per setup: only setups ACTIVE in the last window
+            # App is a same-day journal: headline totals are derived from the
+            # exact feed shown above, never from the historical dashboard aggregate.
+            _closed_feed = [x for x in feed if x.get("result") in ("WIN", "LOSS")]
+            _wins = sum(1 for x in _closed_feed if x.get("result") == "WIN")
+            _losses = sum(1 for x in _closed_feed if x.get("result") == "LOSS")
+            _pnl_vals = [float(x.get("pnl") or 0) for x in _closed_feed]
+            summary = dict(
+                total_signals=len(feed), wins=_wins, losses=_losses,
+                pending=sum(1 for x in feed if x.get("result") == "PENDING"),
+                winrate=round(_wins * 100.0 / max(1, _wins + _losses), 1),
+                avg_pnl=round(sum(_pnl_vals) / len(_pnl_vals), 2) if _pnl_vals else 0.0,
+            )
+
+            # ── winrate per setup: current day only
             c.execute("""
                 SELECT source, MAX(strategy_fa) AS fa, COUNT(*) AS total,
                        SUM(CASE WHEN (result='WIN' OR partial_win=TRUE) THEN 1 ELSE 0 END) AS wins,
@@ -433,6 +446,14 @@ def _fetch_state() -> Dict[str, Any]:
                     last=_rel_fa(last_iso), active=active,
                 )
                 (rows_active if active else rows_archive).append(row)
+            # Keep all five production futures lanes visible even when one has no
+            # signal today; this is observability, not a ranking.
+            _known = {str(x["name"]).upper() for x in rows_active}
+            for _setup in DEFAULT_SETUPS:
+                if _setup not in _known:
+                    rows_active.append(dict(name=_setup, fa=_setup, total=0, wins=0, losses=0,
+                                            pending=0, wr=0.0, avg_pnl=None, best=None,
+                                            worst=None, avg_score=None, last="امروز بدون سیگنال", active=True))
             # ── hit notifications (TP/SL/close/confirm lifecycle feed)
             c.execute("""
                 SELECT symbol, public_code, tp1_hit_at, closed_at, result, pnl_pct,
