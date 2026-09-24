@@ -1295,6 +1295,10 @@ nav .bdg{position:absolute;top:0;left:18%;background:var(--short);color:#fff;fon
   <div class="tiles" id="sumTiles"></div>
   <div class="sect"><h2>🏆 ستاپ‌های فعال</h2><small>۳۰ روز اخیر</small></div>
   <div id="stratsA"></div>
+  <div class="sect"><h2>📊 نمودار نتایج پنج ستاپ</h2><small>تعداد برد/باخت امروز</small></div>
+  <div class="graph" id="perfGraph"></div>
+  <div class="sect"><h2>🧾 پوزیشن‌های هر ستاپ</h2><small>برد / باخت / در جریان</small></div>
+  <div id="setupBreakdown"></div>
   <details class="archive" id="archBox">
     <summary>🗄 ستاپ‌های خاموش‌شده — آمار قدیمی (<span id="archN">۰</span>)</summary>
     <div id="stratsX" style="margin-top:8px"></div>
@@ -1455,6 +1459,9 @@ function render(){
   <div class="tile"><b>${(a.rows_active||[]).length}</b><span>ستاپ فعال</span></div>`;
  const act=a.rows_active||[],arc=a.rows_archive||[];
  $('#stratsA').innerHTML=act.length?act.map(stratCard).join(''):'<div class="empty">ستاپ فعالی در ۳۰ روز اخیر نیست</div>';
+ const setupRows=['PINVAL','PINWALLQ','ALBROX','TLBREAK','TECHCLASSIC'];
+ $('#perfGraph').innerHTML=setupRows.map(k=>{const r=act.find(x=>String(x.name).toUpperCase()===k)||{wins:0,losses:0,total:0};const mx=Math.max(1,r.wins,r.losses);return `<div class="bar ${r.wins>=r.losses?'win':'loss'}" title="${k}: ${r.wins}W / ${r.losses}L" style="height:${Math.max(8,Math.round((r.wins+1)/mx*95))}%"></div>`}).join('');
+ $('#setupBreakdown').innerHTML=setupRows.map(k=>{const rows=feed.filter(x=>String(x.source||'').toUpperCase()===k);return `<div class="card"><div class="row1"><span class="nm">${k}</span><span class="mini">${rows.length} پوزیشن امروز</span></div>${rows.length?rows.map(x=>`<div class="ftr" onclick="openDetail('${(x.signal_id||'').replace(/'/g,'')}')" style="cursor:pointer"><span><b>${fnum(x.symbol)}</b> • ${fnum(x.direction)}</span><span class="res ${x.result}">${resFa(x.result)}</span><span class="code">${fnum(x.code)}</span></div>`).join(''):'<div class="empty">امروز پوزیشنی ثبت نشده</div>'}</div>`}).join('');
  $('#stratsX').innerHTML=arc.map(stratCard).join('');
  $('#archN').textContent=arc.length;
  $('#archBox').style.display=arc.length?'block':'none';
