@@ -414,7 +414,7 @@ def _fetch_state() -> Dict[str, Any]:
                 FROM signals
                 GROUP BY source
                 ORDER BY MAX(created_at) DESC
-            """)
+            """, (_today_start_utc(),))
             for r in c.fetchall():
                 (name, fa, total, wins, losses, pending, avg_pnl, best, worst, avg_score, last) = r
                 total, wins, losses = int(total or 0), int(wins or 0), int(losses or 0)
@@ -438,11 +438,11 @@ def _fetch_state() -> Dict[str, Any]:
                 SELECT symbol, public_code, tp1_hit_at, closed_at, result, pnl_pct,
                        created_at, confirmed_at, partial_win, tp1, tp2, sl
                 FROM signals
-                WHERE tp1_hit=TRUE OR result IN ('WIN','LOSS')
+                WHERE created_at >= %s AND tp1_hit=TRUE OR result IN ('WIN','LOSS')
                    OR (confirmed=TRUE AND result='PENDING')
                 ORDER BY COALESCE(closed_at, tp1_hit_at, confirmed_at, created_at) DESC
-                LIMIT 40
-            """)
+                LIMIT 80
+            """, (_today_start_utc(),))
             for r in c.fetchall():
                 (symbol, code, tp1_at, closed_at, result, pnl, created_at, confirmed_at,
                  partial_win, tp1, tp2, sl) = r
@@ -491,11 +491,11 @@ def _fetch_state() -> Dict[str, Any]:
                     SELECT signal_id, symbol, source, direction, entry, sl, score,
                            public_code, trigger_timeframe, created_at
                     FROM signals
-                    WHERE confirmed=TRUE AND result='PENDING' AND closed_at IS NULL
+                    WHERE created_at >= %s AND confirmed=TRUE AND result='PENDING' AND closed_at IS NULL
                     ORDER BY created_at DESC LIMIT 12
-                """)
+                """, (_today_start_utc(),))
                 for r in c2.fetchall():
-                    (sid, symbol, source, direction, entry, sl, score, code, tf, created_at) = r
+                    (sid, symbol, source, direction, entry, sl, score, code, tf, created_at, tp1, tp2, leverage, margin, target_state) = r
                     code = str(code or "")
                     chains.insert(0, dict(
                         signal_id=str(sid or ""), symbol=symbol, badge=str(source or ""),
@@ -503,6 +503,8 @@ def _fetch_state() -> Dict[str, Any]:
                         zone=_fmt_price(entry), updates=0, code=code,
                         tf=str(tf or "").upper(),
                         spot=_row_is_spot(code, source, ""),
+                        tp1=_fmt_price(tp1), tp2=_fmt_price(tp2), leverage=int(leverage or 0),
+                        margin=float(margin or 0), target_state=target_state or "{}",
                     ))
         except Exception:
             pass
