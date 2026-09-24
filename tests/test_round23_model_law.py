@@ -85,7 +85,8 @@ def test_wedge_upper_break_confirms_long_and_never_short():
     base = dict(signal_id="model-law", symbol="ZKUSDT", style="SWING",
                 setup_code="PINVAL", setup_name="پین‌بار", strategy_fa="مدل وج",
                 score=9, status="PENDING", rr_tp1=1.5, rr_tp2=4.0,
-                trigger_timeframe="1d", mandatory_gates={"zone": True})
+                trigger_timeframe="1d", mandatory_gates={"zone": True},
+                created_at=TS[140].isoformat())
     long = SignalCandidate(
         direction="LONG", bias="BULLISH",
         entry_zone_bottom=zone_top - 0.0035, entry_zone_top=zone_top,
