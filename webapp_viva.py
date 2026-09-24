@@ -36,8 +36,21 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _ICON_DIR = os.path.join(_BASE_DIR, "assets", "app_icons")
 _FONT_DIR = os.path.join(_BASE_DIR, "assets", "fonts")
 
-DEFAULT_SETUPS = ["TLBREAK", "ALBROX", "PINWALLQ", "PINVAL", "TECHCLASSIC", "SPOT"]
-ACTIVE_WINDOW_DAYS = 30          # «ستاپی که دوماهه خاموشه» → archive
+DEFAULT_SETUPS = ["PINVAL", "PINWALLQ", "ALBROX", "TLBREAK", "TECHCLASSIC"]
+ACTIVE_WINDOW_DAYS = 1  # app is intentionally scoped to the current Tehran calendar day
+
+def _today_start_utc() -> str:
+    now = datetime.now(TEHRAN)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.astimezone(timezone.utc).replace(tzinfo=None).isoformat(sep=" ")
+
+def _db_placeholder() -> str:
+    try:
+        from database import db as _db
+        return "%s" if getattr(_db, "USE_POSTGRES", False) else "?"
+    except Exception:
+        return "%s"
+          # «ستاپی که دوماهه خاموشه» → archive
 
 viva_app = Blueprint("viva_app", __name__)
 
@@ -318,8 +331,9 @@ _FEED_SQL = """
            tp1_hit, tp1_hit_at, sl_moved_to_be, description, entry_conditions,
            confirmations, setup_code, target_state_json
     FROM signals
+    WHERE created_at >= {cutoff}
     ORDER BY created_at DESC
-    LIMIT 60
+    LIMIT 120
 """
 
 
@@ -358,7 +372,8 @@ def _fetch_state() -> Dict[str, Any]:
         rows_archive: List[Dict[str, Any]] = []
         hits: List[Dict[str, Any]] = []
         with db_cursor() as c:
-            c.execute(_FEED_SQL)
+            _cutoff = _today_start_utc()
+            c.execute(_FEED_SQL.format(cutoff=_db_placeholder()), (_cutoff,))
             for r in c.fetchall():
                 (sid, symbol, source, fa, direction, entry, sl, tp1, tp2, result, pnl, score,
                  style, code, tf, created_at, closed_at, confirmed, partial_win, market_json,
