@@ -425,6 +425,7 @@ def _fetch_state() -> Dict[str, Any]:
                        MIN(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) AS worst,
                        AVG(score) AS avg_score, MAX(created_at) AS last
                 FROM signals
+                WHERE created_at >= {_db_placeholder()}
                 GROUP BY source
                 ORDER BY MAX(created_at) DESC
             """, (_today_start_utc(),))
@@ -970,7 +971,7 @@ def pwa_manifest():
         "name": "VIVA SIGNALS PRO", "short_name": "VIVA",
         "description": "Professional crypto signals dashboard and Telegram mirror",
         "lang": "en", "dir": "ltr",
-        "version": "R30",
+        "version": "R31",
         "start_url": "/app", "scope": "/",
         "display": "standalone", "orientation": "portrait",
         "theme_color": "#0d1017", "background_color": "#0d1017",
