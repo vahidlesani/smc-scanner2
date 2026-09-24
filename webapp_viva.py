@@ -788,7 +788,7 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
                        result, pnl_pct, score, trade_style, public_code, trigger_timeframe,
                        created_at, closed_at, confirmed, partial_win, market_json,
                        tp1_hit, tp1_hit_at, sl_moved_to_be, description, entry_conditions,
-                       confirmations, setup_code, target_state_json
+                       confirmations, setup_code, target_state_json, leverage, margin_usd
                 FROM signals WHERE signal_id=%s
             """, (sid,))
             rows = c.fetchall()
@@ -807,7 +807,7 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
                 "tp1", "tp2", "result", "pnl_pct", "score", "trade_style", "public_code",
                 "trigger_timeframe", "created_at", "closed_at", "confirmed", "partial_win",
                 "market_json", "tp1_hit", "tp1_hit_at", "sl_moved_to_be", "description",
-                "entry_conditions", "confirmations", "setup_code", "target_state_json"]
+                "entry_conditions", "confirmations", "setup_code", "target_state_json", "leverage", "margin_usd"]
         row = dict(zip(cols, rows[0]))
         res = "WIN" if (row.get("result") == "WIN" or row.get("partial_win")) else str(row.get("result") or "PENDING")
         lh1, lh2 = _ladder_hits(row.get("target_state_json"))
@@ -844,6 +844,14 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
             hit_log.append(dict(label="STOP", ok=False, time=str(row.get("closed_at"))))
         elif str(row.get("result")) == "WIN" and row.get("closed_at"):
             hit_log.append(dict(label="CLOSE", ok=True, time=str(row.get("closed_at"))))
+        try:
+            _ladder_obj = json.loads(row.get("target_state_json") or "{}") if isinstance(row.get("target_state_json"), (str, bytes)) else (row.get("target_state_json") or {})
+        except Exception:
+            _ladder_obj = {}
+        _management = dict(leverage=int(row.get("leverage") or 0), margin=float(row.get("margin_usd") or 0),
+                            trailing_sl=_fmt_price(_ladder_obj.get("current_sl") or row.get("sl") or 0),
+                            hit_index=int(_ladder_obj.get("hit_index") or 0),
+                            trail_regime=str(_ladder_obj.get("r29_regime") or ""))
         _messages: Dict[str, str] = {}
         for _k in ("compact", "confirmed", "confirm", "final", "detailed"):
             _m = _app_mirror(str(sid), _k)
@@ -874,6 +882,7 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
             timeline=timeline,
             mtf_candles=_mtf_candles,
             classic_patterns=[str(x) for x in _classic_patterns],
+            management=_management,
         )
     except Exception as exc:
         print(f"app signal detail failed {sid}: {exc}")
