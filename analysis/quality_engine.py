@@ -1247,10 +1247,9 @@ def evaluate_confirmation(
             else:
                 _brk = _close_px > float(_prior["high"].max())
             if not _brk:
-                return reject("COUNTER_TREND_TOUCH_ONLY", (
-                    "سیگنال خلاف جهت ساختار است: برخورد به خط/ناحیه فقط هشدار است؛ "
-                    "تأیید نیازمند کلوز معتبر فراتر از سوینگ هم‌جهت است "
-                    "(سلرها/خریداران در برخورد شکار می‌شوند)."))
+                candidate.metadata["mtf_context_warning"] = (
+                    "خلاف جهت ساختار: برخورد به خط/ناحیه به‌تنهایی تأیید ساختاری نیست؛ "
+                    "در توضیحات به‌عنوان هشدار زمینه‌ای ثبت شد و مانع مستقل تأیید نیست.")
             if _trg_tf == "1d" and _pdf is not None and len(_pdf) >= 12:
                 _pp = _pdf.iloc[-11:-1]
                 if candidate.direction == "SHORT":
@@ -1258,9 +1257,8 @@ def evaluate_confirmation(
                 else:
                     _hbrk = float(_pdf["close"].iloc[-1]) > float(_pp["high"].max())
                 if not _hbrk:
-                    return reject("COUNTER_1D_NEEDS_4H_BREAK", (
-                        "خلاف جهت در تایم روزانه: ابتدا کلوزِ بریک ساختار در ۴ساعته لازم است، "
-                        "سپس کلوز روزانه فراتر از ضلع پایین/بالای الگو."))
+                    candidate.metadata["mtf_context_warning_1d"] = (
+                        "کانتکست خلاف جهت در روزانه ثبت شد؛ بریک ۴ساعته هنوز مستقل تأیید نشده است.")
         if _pdf is not None and len(_pdf) >= 40:
             from analysis.indicators import pivots as _pv
             _ph, _pl = _pv(_pdf.reset_index(), 3, 3)
@@ -1274,10 +1272,8 @@ def evaluate_confirmation(
                     _near = [float(x["price"]) for x in _pl[-6:]
                              if 0.0 <= (_close_px - float(x["price"])) <= _band]
                 if _near:
-                    return reject("NEAR_OPPOSING_ZONE_MTF", (
-                        f"قیمت در آستانهٔ ناحیه مخالف در تایم والد ({_parent_tf}) است "
-                        f"(فاصله ≤ ۰٫۵×ATR والد): لانگ زیر سقف/عرضه و شورت بالای کف/تقاضا "
-                        "تأیید نمی‌شود؛ ابتدا شکست معتبر، سپس تأیید در پولبک."))
+                    candidate.metadata["mtf_opposing_zone_warning"] = (
+                        f"نزدیک ناحیه مخالف در تایم والد ({_parent_tf})؛ این مورد به‌عنوان هشدار زمینه‌ای ثبت شد.")
     except Exception as _gexc:
         candidate.metadata["mtf_gate_error"] = str(_gexc)[:120]
 
