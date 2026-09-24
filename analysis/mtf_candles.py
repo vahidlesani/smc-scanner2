@@ -94,7 +94,8 @@ def analyze_mtf_candles(bundle: Dict, direction: str, trigger_tf: str = "") -> D
                     _bundle[tf] = _a
     except Exception:
         pass
-    for tf in TF_ORDER + ("3d", "1w"):
+    # TF_ORDER already contains 3d/1w; do not append them a second time.
+    for tf in TF_ORDER:
         df = _bundle.get(tf) if _bundle else None
         if df is None or len(df) < 25:
             continue
