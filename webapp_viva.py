@@ -895,6 +895,11 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
 # ──────────────────────────────── routes ────────────────────────────────
 @viva_app.route("/app")
 def app_shell():
+    # Keep the private app deterministic: unauthenticated visits must land on
+    # the login screen instead of receiving an empty shell that later redirects
+    # after a failed /api/state request.
+    if _password() and not _session_ok():
+        return redirect("/app/login", code=302)
     resp = make_response(APP_HTML)
     resp.headers["Content-Type"] = "text/html; charset=utf-8"
     return resp
