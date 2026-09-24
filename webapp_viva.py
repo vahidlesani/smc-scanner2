@@ -818,6 +818,13 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
         except Exception:
             conf = [str(row.get("confirmations") or "")] if row.get("confirmations") else []
         is_spot = _row_is_spot(str(row.get("public_code") or ""), row.get("source"), row.get("market_json"))
+        try:
+            _market_obj = json.loads(row.get("market_json") or "{}") if isinstance(row.get("market_json"), (str, bytes)) else (row.get("market_json") or {})
+        except Exception:
+            _market_obj = {}
+        _analysis_obj = _market_obj.get("viva_analysis") or {}
+        _mtf_candles = _analysis_obj.get("mtf_candles") or {}
+        _classic_patterns = _analysis_obj.get("classic_patterns") or []
         # ── hit log with CLOCK (Viva 09-23: «هیت شدن‌ها با تیک و ساعت هیت شدن؛
         # استاپ‌ها هم همین») — TP1/TP2/SL each carry its exact stamp.
         hit_log: List[Dict[str, Any]] = []
@@ -865,6 +872,8 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
             hit_log=hit_log,
             messages=_messages,
             timeline=timeline,
+            mtf_candles=_mtf_candles,
+            classic_patterns=[str(x) for x in _classic_patterns],
         )
     except Exception as exc:
         print(f"app signal detail failed {sid}: {exc}")
