@@ -1247,9 +1247,10 @@ def evaluate_confirmation(
             else:
                 _brk = _close_px > float(_prior["high"].max())
             if not _brk:
-                candidate.metadata["mtf_context_warning"] = (
-                    "خلاف جهت ساختار: برخورد به خط/ناحیه به‌تنهایی تأیید ساختاری نیست؛ "
-                    "در توضیحات به‌عنوان هشدار زمینه‌ای ثبت شد و مانع مستقل تأیید نیست.")
+                return reject("COUNTER_TREND_TOUCH_ONLY", (
+                    "سیگنال خلاف جهت ساختار است: برخورد به خط/ناحیه فقط هشدار است؛ "
+                    "تأیید نیازمند کلوز معتبر فراتر از سوینگ هم‌جهت است "
+                    "(سلرها/خریداران در برخورد شکار می‌شوند)."))
             if _trg_tf == "1d" and _pdf is not None and len(_pdf) >= 12:
                 _pp = _pdf.iloc[-11:-1]
                 if candidate.direction == "SHORT":
