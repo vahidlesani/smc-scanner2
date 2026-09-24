@@ -459,8 +459,10 @@ def _fetch_state() -> Dict[str, Any]:
                 SELECT symbol, public_code, tp1_hit_at, closed_at, result, pnl_pct,
                        created_at, confirmed_at, partial_win, tp1, tp2, sl
                 FROM signals
-                WHERE created_at >= {_db_placeholder()} AND tp1_hit=TRUE OR result IN ('WIN','LOSS')
-                   OR (confirmed=TRUE AND result='PENDING')
+                WHERE created_at >= {_db_placeholder()} AND (
+                       tp1_hit=TRUE OR result IN ('WIN','LOSS')
+                       OR (confirmed=TRUE AND result='PENDING')
+                   )
                 ORDER BY COALESCE(closed_at, tp1_hit_at, confirmed_at, created_at) DESC
                 LIMIT 80
             """, (_today_start_utc(),))
@@ -994,7 +996,7 @@ self.addEventListener('fetch', e => {
   if (url.pathname.startsWith('/app/api/')) return;         // live data: always network
   const hit = SHELL.find(([p]) => url.pathname === p);
   if (hit) {
-    e.respondWith(caches.open('viva-shell-r30').then(async c => {
+    e.respondWith(caches.open('viva-shell-r31').then(async c => {
       const cached = await c.match(e.request);
       const fetchP = fetch(e.request).then(r => { c.put(e.request, r.clone()); return r; }).catch(() => cached);
       return cached || fetchP;
@@ -1046,6 +1048,22 @@ input:focus{border-color:#e8b64c}
 button{width:100%;margin-top:14px;background:linear-gradient(135deg,#e8b64c,#c9962f);border:0;color:#171207;font-weight:800;font-family:inherit;font-size:15px;border-radius:13px;padding:13px;cursor:pointer}
 button:active{transform:scale(.98)}
 .err{color:#e5484d;font-size:12.5px;text-align:center;margin-top:12px;min-height:16px}
+/* R31 LUXURY SHELL — visual-only: Telegram typography/content/IDs are untouched. */
+body:before{content:'';position:fixed;inset:0;pointer-events:none;z-index:-1;
+ background:radial-gradient(520px 260px at 8% 12%,rgba(232,182,76,.07),transparent 70%),
+            radial-gradient(620px 300px at 92% 42%,rgba(76,141,255,.045),transparent 72%)}
+header{box-shadow:0 8px 30px rgba(0,0,0,.20)}
+.card{position:relative;overflow:hidden;box-shadow:0 14px 38px rgba(0,0,0,.34),inset 0 1px 0 rgba(255,255,255,.025)}
+.card:before{content:'';position:absolute;inset:0 0 auto 0;height:1px;background:linear-gradient(90deg,transparent,rgba(232,182,76,.42),transparent);opacity:.7}
+.card:hover{border-color:rgba(232,182,76,.22);box-shadow:0 18px 44px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.035)}
+.badge,.chip,.stat,.live,.pill,.tile,.explain{box-shadow:inset 0 1px 0 rgba(255,255,255,.025)}
+.thumb{box-shadow:inset 0 0 0 1px rgba(255,255,255,.018)}
+.tile{background:linear-gradient(145deg,rgba(255,255,255,.028),rgba(255,255,255,.008)),var(--panel);box-shadow:0 10px 28px rgba(0,0,0,.22)}
+.dhead{box-shadow:0 8px 28px rgba(0,0,0,.22)}
+.chartbox{box-shadow:0 18px 48px rgba(0,0,0,.42)}
+nav{box-shadow:0 -10px 34px rgba(0,0,0,.28)}
+@media(min-width:681px){main,.dbody{max-width:760px}.card{border-radius:20px}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
 <div class="card">
 <img class="logo" src="/app/icons/icon-192.png" alt="VIVA">
@@ -1076,7 +1094,7 @@ APP_HTML = """<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0d1017">
 <meta name="application-name" content="VIVA SIGNALS PRO">
-<meta name="app-version" content="R30">
+<meta name="app-version" content="R31">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="VIVA">
