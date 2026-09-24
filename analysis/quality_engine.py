@@ -961,6 +961,19 @@ def evaluate_confirmation(
         pass
     if risk <= 0:
         return reject("RISK_INVALID", "فاصله Entry تأییدشده تا حد ضرر معتبر نیست.")
+    # R28: confirmation must not turn a tiny structural stop into a trade.
+    # The initial stop remains the candidate's structural invalidation; if its
+    # distance is below the timeframe floor, reject instead of moving it closer
+    # to the entry or silently manufacturing risk geometry.
+    try:
+        from analysis.trade_management import initial_stop_is_valid
+        if not initial_stop_is_valid(executable_entry, candidate.direction,
+                                     float(candidate.sl), str(candidate.trigger_timeframe or "15m")):
+            return reject("STOP_TOO_TIGHT",
+                          "استاپ اولیه نسبت به تایم‌فریم بسیار نزدیک است؛ "
+                          "سناریو بدون ساختار معتبرِ ابطال منتشر نمی‌شود.")
+    except Exception:
+        pass
     # ── «مدیریت ویوا» §4 (09-20): TF distance ceiling for the FINAL target ──
     # A structural level 19% away on a 15m trade is a different trade; the
     # ceiling (1d 10% · 4h 7% · 1h/15m 5%) clamps TP2 so the five-segment
