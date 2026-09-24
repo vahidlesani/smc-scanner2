@@ -103,6 +103,9 @@ def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
                 candidate.metadata["r28_execution"] = apply_execution_integrity(candidate, frames)
             except Exception as _r28_exc:
                 candidate.metadata["r28_execution_error"] = str(_r28_exc)[:240]
+    except Exception as _r28_outer_exc:
+        for candidate in candidates:
+            candidate.metadata["r28_execution_error"] = str(_r28_outer_exc)[:240]
 
     # TechnoClassic HTF-edge intelligence — SCORE-ONLY for all setups
     # (Viva 2026-09-10): a tested 1D/4H edge ahead of TP1 costs points, an
