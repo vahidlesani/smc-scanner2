@@ -1397,6 +1397,14 @@ let STATE=null;
 const fnum=v=>{if(v===null||v===undefined||v==='')return '—';return String(v)};
 function tehran(iso){try{const d=new Date(iso);if(isNaN(d))return iso||'';return d.toLocaleString('fa-IR',{timeZone:'Asia/Tehran',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return iso||''}}
 function resFa(r){return {PENDING:'در جریان',WIN:'برد ✦',LOSS:'باخت',CANCELLED:'ابطال'}[r]||r}
+function miSummary(mi){
+ if(!mi||mi.status!=='OK')return '';
+ const ob=mi.orderbook||{},de=mi.derivatives||{},lm=mi.liquidity_map||{},oc=mi.onchain||{};
+ const b=Number(ob.imbalance_1_pct||0),bias=b>=0.18?'برتری خرید':b<=-0.18?'برتری فروش':'تعادل';
+ const oi=Number(de.oi_change_2h_pct||0),fr=Number(de.funding_rate||0);
+ const chain=oc.status==='OK'&&oc.network?' • زنجیره: '+fnum(oc.network):'';
+ return '<div class="mi"><div class="mihead">📡 <b>تحلیل کمکی جریان بازار</b><span>کمکی و بدون دخالت در ستاپ</span></div><div class="migrid"><span>دفتر سفارشات: <b>'+bias+'</b></span><span>نقدینگی: <b>'+fnum(lm.bias||'—')+'</b></span><span>تغییر OI دو ساعت: <b>'+(oi>0?'+':'')+oi.toFixed(2)+'٪</b></span><span>فاندینگ: <b>'+(fr*100).toFixed(4)+'٪</b>'+chain+'</span></div></div>';
+}
 function drawer(on){$('#dr').classList.toggle('on',on);$('#backdrop').classList.toggle('on',on)}
 function go(p){drawer(false);document.querySelectorAll('.page').forEach(x=>x.classList.remove('on'));$('#page-'+p).classList.add('on');
  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.p===p));
@@ -1418,6 +1426,7 @@ function feedCard(s){
    <div class="pill tp2 ${s.tp2_hit?'hit':''}"><i>TP2</i><b>${fnum(s.tp2)}${s.tp2_hit?' ✓':''}</b></div></div>
   <div class="thumb"><img loading="lazy" src="/app/api/chart/${encodeURIComponent(s.signal_id||'')}" alt="چارت ${fnum(s.symbol)}"></div>
   ${s.summary?`<div class="sumline">${fnum(s.summary)}</div>`:''}
+  ${s.market_intelligence?miSummary(s.market_intelligence):''}
   <div class="ftr"><span class="code">${fnum(s.code)}</span>
    <span class="res ${s.result}">${resFa(s.result)}${s.pnl!==null&&s.pnl!==undefined?` ${s.pnl>0?'+':''}${s.pnl}%`:''}</span>
    <span class="time">${tehran(s.time)}</span></div></div>`}
@@ -1548,6 +1557,7 @@ async function openDetail(sid){
    ${(d.messages&&d.messages.compact)?`<div class="dsec"><h3>📨 پیام مختصر (همان پیام کانال)</h3><div class="prose tgmsg">${d.messages.compact}</div></div>`:''}
    ${(d.messages&&(d.messages.confirmed||d.messages.confirm))?`<div class="dsec"><h3>✅ پیام کانفرمد (همان پیام کانال)</h3><div class="prose tgmsg">${d.messages.confirmed||d.messages.confirm}</div></div>`:''}
    ${d.summary?`<div class="dsec"><h3>📝 توضیحات</h3><div class="prose">${fnum(d.summary)}</div></div>`:''}
+   ${d.market_intelligence?miSummary(d.market_intelligence):''}
    ${(d.classic_patterns&&d.classic_patterns.length)?`<div class="dsec"><h3>📐 الگوهای کلاسیک و منطق شکست</h3>${d.classic_patterns.map(x=>`<div class="explain">${fnum(x)}</div>`).join('')}</div>`:''}
    ${(d.mtf_candles&&d.mtf_candles.items&&d.mtf_candles.items.length)?`<div class="dsec"><h3>🕯️ خوانش کندلی مولتی‌تایم‌فریم</h3>${d.mtf_candles.items.map(x=>`<div class="explain"><b>${fnum(x.tf)}</b> — ${fnum(x.text)}</div>`).join('')}</div>`:''}
    ${d.management?`<div class="dsec"><h3>💰 مدیریت پوزیشن</h3><div class="pills"><div class="pill"><i>لوریج</i><b>${fnum(d.management.leverage)}×</b></div><div class="pill"><i>مارجین</i><b>$${fnum(d.management.margin)}</b></div><div class="pill stop"><i>تریلینگ فعلی</i><b>${fnum(d.management.trailing_sl)}</b></div><div class="pill"><i>TP هیت‌شده</i><b>${fnum(d.management.hit_index)}</b></div></div><div class="explain">تریلینگ یک‌طرفه و غیرقابل‌برگشت است؛ بعد از TP1 کف سود خالص فعال می‌شود.</div></div>`:''}
