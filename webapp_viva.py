@@ -319,7 +319,7 @@ def _demo_payload() -> Dict[str, Any]:
         dict(kind="tp1", symbol="BTCUSDT", code="VIVA-K001204", detail="هدف اول 67,400 هیت شد",
              pnl=None, time=iso_ago(hours=1)),
     ]
-    return dict(demo=True, feed=feed, chains=chains, analytics=analytics, hits=hits,
+    return dict(demo=True, feed=feed, chains=chains, live_positions=chains, analytics=analytics, hits=hits,
                 control=control_state(), scanner=dict(alive=True, mode="نمایشی"),
                 server_time=datetime.now(TEHRAN).strftime("%Y-%m-%d %H:%M"))
 
@@ -487,6 +487,7 @@ def _fetch_state() -> Dict[str, Any]:
                                  pnl=(float(pnl) if pnl is not None else None),
                                  time=str(stamp or "")))
         chains: List[Dict[str, Any]] = []
+        live_positions: List[Dict[str, Any]] = []
         try:
             # live WATCH chains ( EDUCATIONAL/APPROACHING previews + slots )
             from database.candidate_store import get_active_candidates
@@ -518,7 +519,7 @@ def _fetch_state() -> Dict[str, Any]:
                 for r in c2.fetchall():
                     (sid, symbol, source, direction, entry, sl, score, code, tf, created_at, tp1, tp2, leverage, margin, target_state) = r
                     code = str(code or "")
-                    chains.insert(0, dict(
+                    live_positions.append(dict(
                         signal_id=str(sid or ""), symbol=symbol, badge=str(source or ""),
                         direction=direction, status="CONFIRMED", score=score,
                         zone=_fmt_price(entry), updates=0, code=code,
@@ -561,7 +562,7 @@ def _fetch_state() -> Dict[str, Any]:
                 scanner["alive"] = bool(thr.is_alive())
         except Exception:
             pass
-        return dict(demo=False, feed=feed, chains=chains, analytics=analytics, hits=hits,
+        return dict(demo=False, feed=feed, chains=chains, live_positions=live_positions, analytics=analytics, hits=hits,
                     control=control_state(), scanner=scanner,
                     server_time=datetime.now(TEHRAN).strftime("%Y-%m-%d %H:%M"))
     except Exception as exc:
