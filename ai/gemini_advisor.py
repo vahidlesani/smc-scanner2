@@ -50,13 +50,22 @@ def _generate(candidate) -> Optional[str]:
     if _breaker_open():
         return None
     try:
-        response = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-            json={"contents": [{"parts": [{"text": _prompt(candidate)}]},],
-                  "generationConfig": {"temperature": 0.25, "maxOutputTokens": 280}},
-            timeout=20,
-        )
+        payload = {"contents": [{"parts": [{"text": _prompt(candidate)}]},],
+                   "generationConfig": {"temperature": 0.25, "maxOutputTokens": 280}}
+        response = None
+        # Direct REST calls do not have the SDK's retry policy. Retry only
+        # transient failures (408/429/5xx); never retry auth/permission errors.
+        for attempt in range(2):
+            response = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                json=payload,
+                timeout=20,
+            )
+            if response.status_code not in (408, 429) and response.status_code < 500:
+                break
+            if attempt == 0:
+                time.sleep(1.0)
         response.raise_for_status()
         data = response.json()
         text = str((((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [{}])[0].get("text") or "").strip()
