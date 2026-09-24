@@ -54,9 +54,11 @@ def _get(path: str, params: Dict[str, Any], ttl: int = 30) -> Optional[Dict[str,
     cached = _cache_get(key)
     if cached is not None:
         return cached
-    for base in _BASE_URLS:
+    bases = [""] if path.startswith("http://") or path.startswith("https://") else _BASE_URLS
+    for base in bases:
         try:
-            r = _SESSION.get(f"{base}{path}", params=params, timeout=8)
+            url = path if not base else f"{base}{path}"
+            r = _SESSION.get(url, params=params, timeout=8)
             if r.status_code in (403, 451):
                 continue
             r.raise_for_status()
