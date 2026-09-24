@@ -1123,7 +1123,7 @@ main{padding:12px 12px 8px;max-width:680px;margin:0 auto}
 .res.CANCELLED{color:var(--muted);background:var(--chip);border:1px solid var(--line2)}
 .chain .row1{margin-bottom:8px}
 .upd{font-size:10.5px;color:var(--amber);background:rgba(226,163,54,.08);border:1px solid rgba(226,163,54,.3);padding:2px 8px;border-radius:8px}
-.sumline{font-size:11.5px;color:#b9c0cc;line-height:1.8;margin-top:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.thumb{width:100%;margin-top:10px;border-radius:13px;overflow:hidden;background:#0d1017;border:1px solid var(--line2);aspect-ratio:16/9}\n.thumb img{width:100%;height:100%;object-fit:cover;display:block}\n.livegrid{display:grid;gap:10px}\n.livebar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}\n.liveprice{font-size:13px;color:var(--text)}\n.live-meta{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}\n.live-meta .pill{padding:6px 8px}\n.graph{height:130px;display:flex;align-items:flex-end;gap:6px;padding:12px 8px 6px;background:#0f141d;border:1px solid var(--line2);border-radius:14px;margin-top:8px}\n.graph .bar{flex:1;min-width:4px;border-radius:4px 4px 1px 1px;background:var(--gold);opacity:.85}\n.graph .bar.loss{background:var(--short)} .graph .bar.win{background:var(--long)}\n.explain{font-size:11.5px;line-height:1.9;color:#c9cfda;margin-top:8px;background:#0f141d;border:1px solid var(--line2);border-radius:12px;padding:9px 11px}\n.explain b{color:var(--gold)}\n.sumline{font-size:11.5px;color:#b9c0cc;line-height:1.8;margin-top:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 /* ── perf ── */
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
 .tile{background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:11px 8px;text-align:center}
@@ -1258,10 +1258,14 @@ nav .bdg{position:absolute;top:0;left:18%;background:var(--short);color:#fff;fon
 <div class="demo" id="demo" style="display:none">حالت نمایشی — متصل به دیتابیس زنده نیست</div>
 
 <section class="page on" id="page-feed">
+  <div class="sect"><h2>🔔 هشدارهای امروز</h2><small>فقط امروز • کارت + چارت</small></div>
+  <div id="feed"></div>
   <div class="sect"><h2>⛓ زنجیره‌های رصد فعال</h2><small id="chainsN"></small></div>
   <div id="chains"></div>
-  <div class="sect"><h2>📡 فید سیگنال‌ها</h2><small>برای رصد، روی هر کارت بزن</small></div>
-  <div id="feed"></div>
+</section>
+<section class="page" id="page-live">
+  <div class="sect"><h2>🟢 پوزیشن‌های لایو</h2><small>تأییدشده‌های امروز</small></div>
+  <div class="livegrid" id="livePositions"></div>
 </section>
 
 <section class="page" id="page-hits">
