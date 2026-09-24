@@ -1490,7 +1490,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     try:
         # Preserve enough history for real channel / wedge / range geometry;
         # the blank future panel is added separately, never by sacrificing bars.
-        frame = _clean_render_frame(df, window=164)   # a few EXTRA candles fill the reclaimed margin
+        # Macro timeframes need LESS zoom: fewer, larger candles expose the
+        # same structural swings traders see on daily/3D/weekly CryptoCove-style
+        # charts. Lower TFs keep the denser view used for entries.
+        _chart_tf = str((candidate.metadata or {}).get("chart_view_tf")
+                        or getattr(candidate, "trigger_timeframe", "15m") or "15m").lower()
+        _lookback = {"1d": 96, "4h": 120, "2h": 132, "1h": 150,
+                     "30m": 160, "15m": 164, "5m": 164}.get(_chart_tf, 164)
+        frame = _clean_render_frame(df, window=_lookback)
         # Viva 09-18 ruling (PINWALL/PINWALL-Q/ALBROX must paint trends too):
         # ABSOLUTE safety net — any candidate that reaches the chart without
         # render commands (old alert metadata, exotic path) gets enriched HERE.
