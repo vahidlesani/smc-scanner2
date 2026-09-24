@@ -72,8 +72,25 @@ def analyze_mtf_candles(bundle: Dict, direction: str, trigger_tf: str = "") -> D
     """Return closed-candle evidence across available TFs; never a gate."""
     out = {"items": [], "by_tf": {}, "summary": ""}
     direction = str(direction or "LONG").upper()
-    for tf in TF_ORDER:
-        df = bundle.get(tf) if bundle else None
+    _bundle = dict(bundle or {})
+    # Macro context is derived from closed daily candles so 3D/weekly structure
+    # can explain a daily setup even when the venue has no native 3D/1W feed.
+    try:
+        d1 = _bundle.get("1d")
+        if d1 is not None and len(d1) >= 21:
+            _d = d1.copy()
+            _d["timestamp"] = pd.to_datetime(_d["timestamp"])
+            _d = _d.set_index("timestamp").sort_index()
+            for tf, rule in (("3d", "3D"), ("1w", "7D")):
+                _a = _d.resample(rule, label="right", closed="right").agg(
+                    {"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna()
+                if len(_a) >= 8:
+                    _a = _a.reset_index()
+                    _bundle[tf] = _a
+    except Exception:
+        pass
+    for tf in TF_ORDER + ("3d", "1w"):
+        df = _bundle.get(tf) if _bundle else None
         if df is None or len(df) < 25:
             continue
         try:
