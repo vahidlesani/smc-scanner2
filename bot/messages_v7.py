@@ -1827,9 +1827,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _s8 = str(_zc.get("bias") or "").upper() or \
                     ("DEMAND" if _dir_key == "LONG" else "SUPPLY")
                 _by_side.setdefault(_s8, []).append(_zc)
-            _side_limit = 1 if _clean_zone_view else 2
+            # Keep the long-standing two-zones-per-side source contract;
+            # clean mode trims the already-ranked result to the most actionable
+            # two overall, without changing detection.
             _rz_list = [z8 for _zs8 in _by_side.values()
-                        for z8 in sorted(_zs8, key=_zone_importance)[:_side_limit]]
+                        for z8 in sorted(_zs8, key=_zone_importance)[:2]]
             if _clean_zone_view and len(_rz_list) > 2:
                 _rz_list = sorted(_rz_list, key=_zone_importance)[:2]
         for _z in _rz_list:
