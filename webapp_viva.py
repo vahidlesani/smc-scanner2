@@ -381,6 +381,11 @@ def _fetch_state() -> Dict[str, Any]:
                  setup_code, target_state_json) = r
                 code = str(code or "")
                 is_spot = _row_is_spot(code, source, market_json)
+                try:
+                    _market_obj_feed = json.loads(market_json or "{}") if isinstance(market_json, (str, bytes)) else (market_json or {})
+                except Exception:
+                    _market_obj_feed = {}
+                _mi_feed = _market_obj_feed.get("market_intelligence") or {}
                 res = "WIN" if (result == "WIN" or partial_win) else str(result or "PENDING")
                 _acc = spot if is_spot else fut
                 _acc["total"] += 1
@@ -399,6 +404,7 @@ def _fetch_state() -> Dict[str, Any]:
                     style=style, code=code, tf=str(tf or "").upper(),
                     time=str(created_at or ""), spot=is_spot, confirmed=bool(confirmed),
                     tp1_hit=tp1_hit, tp2_hit=tp2_hit,
+                    market_intelligence=_mi_feed,
                     summary=str(description or fa or "")[:220],
                 ))
             # App is a same-day journal: headline totals are derived from the
@@ -826,6 +832,7 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
         except Exception:
             _market_obj = {}
         _analysis_obj = _market_obj.get("viva_analysis") or {}
+        _market_intelligence = _market_obj.get("market_intelligence") or {}
         _mtf_candles = _analysis_obj.get("mtf_candles") or {}
         _classic_patterns = _analysis_obj.get("classic_patterns") or []
         # ── hit log with CLOCK (Viva 09-23: «هیت شدن‌ها با تیک و ساعت هیت شدن؛
@@ -884,6 +891,7 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
             messages=_messages,
             timeline=timeline,
             mtf_candles=_mtf_candles,
+            market_intelligence=_market_intelligence,
             classic_patterns=[str(x) for x in _classic_patterns],
             management=_management,
         )
