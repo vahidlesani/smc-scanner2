@@ -65,7 +65,7 @@ def _describe(tf: str, c: dict, prev: Optional[dict], direction: str, near_suppo
     else:
         text += "؛ این الگو در تایم خودش دیده شده و به‌تنهایی تأیید نهایی نیست."
     source = (
-        "DIRECT" if tf in ("1w", "3d", "1d", "4h", "15m", "5m", "3m", "1m")
+        "DIRECT" if tf in ("1d", "4h", "15m", "5m", "3m", "1m")
         else "RESAMPLED"
     )
     return {"tf": tf, "pattern": label, "text": text,
