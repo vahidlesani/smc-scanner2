@@ -485,7 +485,9 @@ def get_market_bundle(
     """
     requested = tuple(dict.fromkeys(str(tf).lower() for tf in (timeframes or ())))
     limits = limits or {}
-    need_5m = "5m" in requested or bool(requested)
+    # Fetch only the base tapes that the caller actually needs. In particular,
+    # a spot-only 4h/8h/12h/1d/3d/1w scan must not pull unused 5m/15m data.
+    need_5m = "5m" in requested
     need_15m = any(tf in requested for tf in ("15m", "30m", "1h"))
     need_4h = any(tf in requested for tf in ("4h", "8h", "12h"))
     need_1d = any(tf in requested for tf in ("1d", "3d", "1w"))
@@ -493,11 +495,27 @@ def get_market_bundle(
     base_5m = get_klines(
         symbol, "5m", max(300, int(limits.get("5m", 300))), closed_only=True
     ) if need_5m else None
+
+    # Derived 30m/1h views must retain enough source bars for the detector's
+    # structural windows. Size the 15m base from the requested output history.
+    need_15m_bars = max(
+        int(limits.get("15m", 200)),
+        int(limits.get("30m", 200)) * 2 if "30m" in requested else 0,
+        int(limits.get("1h", 200)) * 4 if "1h" in requested else 0,
+    )
     base_15m = get_klines(
-        symbol, "15m", max(200, int(limits.get("15m", 200))), closed_only=True
-    ) if need_15m or need_5m else None
+        symbol, "15m", max(200, need_15m_bars), closed_only=True
+    ) if need_15m else None
+
+    # Derived 8h/12h views must retain enough source 4h candles to preserve
+    # the same structural lookback that a direct feed would have provided.
+    need_4h_bars = max(
+        int(limits.get("4h", 170)),
+        int(limits.get("8h", 170)) * 2 if "8h" in requested else 0,
+        int(limits.get("12h", 170)) * 3 if "12h" in requested else 0,
+    )
     base_4h = get_klines(
-        symbol, "4h", max(60, int(limits.get("4h", 170))), closed_only=True
+        symbol, "4h", max(60, need_4h_bars), closed_only=True
     ) if need_4h else None
 
     # 1D is the economical long-history anchor. For 3D/1W, request enough
