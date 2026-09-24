@@ -239,6 +239,53 @@ def _target_check(candidate: Any, frame: Optional[pd.DataFrame], direction: str)
     }
 
 
+def mtf_evidence_matrix(frames: Mapping[str, Any], trigger_tf: str, direction: str) -> Dict[str, Any]:
+    """Additive five-layer MTF evidence matrix; never a setup gate or score writer."""
+    direction = str(direction or "").upper()
+    trigger = str(trigger_tf or "").lower()
+    order = ["1d", "4h", "1h", "15m", "5m"]
+    # Keep the requested matrix stable; unavailable frames are explicitly marked.
+    rows = []
+    for tf in order:
+        frame = frames.get(tf)
+        if frame is None or len(frame) < 8:
+            rows.append({"tf": tf, "state": "UNAVAILABLE"})
+            continue
+        local, structure = _slope_quality(frame, direction, lookback=min(32, len(frame)))
+        try:
+            av = float(atr(frame).iloc[-1])
+            close = float(frame["close"].iloc[-1])
+            atr_pct = (av / close * 100.0) if close > 0 else 0.0
+        except Exception:
+            atr_pct = 0.0
+        rows.append({
+            "tf": tf,
+            "state": "AVAILABLE",
+            "role": "TRIGGER" if tf == trigger else ("HTF_STRUCTURE" if order.index(tf) < order.index(trigger) if trigger in order else False else "LTF_CONFIRMATION"),
+            "structure": structure,
+            "direction": direction,
+            "alignment": "ALIGNED" if local >= 50 else "CONFLICT" if local < 25 else "MIXED",
+            "strength": round(float(local), 2),
+            "volatility_pct": round(float(atr_pct), 4),
+        })
+    available = [r for r in rows if r.get("state") == "AVAILABLE"]
+    aligned = sum(r.get("alignment") == "ALIGNED" for r in available)
+    conflicts = sum(r.get("alignment") == "CONFLICT" for r in available)
+    return {
+        "version": "MTF-EVIDENCE-1",
+        "trigger_tf": trigger,
+        "direction": direction,
+        "layers": rows,
+        "summary": {
+            "available": len(available),
+            "aligned": aligned,
+            "conflicts": conflicts,
+            "state": "ALIGNED" if aligned >= 3 and conflicts == 0 else "CONFLICT" if conflicts >= 2 else "MIXED",
+        },
+        "advisory_only": True,
+    }
+
+
 def execution_gate(candidate: Any, frames: Mapping[str, Any]) -> Dict[str, Any]:
     direction = str(getattr(candidate, "direction", "") or "").upper()
     tf = str(getattr(candidate, "trigger_timeframe", "") or "").lower()
@@ -424,6 +471,7 @@ def apply_r29(candidate: Any, frames: Mapping[str, Any]) -> Dict[str, Any]:
     base = _local_base(frame, direction)
     edges = pattern_edges(candidate, frame)
     gate = execution_gate(candidate, frames)
+    mtf_matrix = mtf_evidence_matrix(frames, tf, direction)
     return {
         "CORE_STATE": "VALID" if core_valid else "OBSERVATION",
         "CORE_SCORE": int(getattr(candidate, "score", 0) or 0),
@@ -435,12 +483,13 @@ def apply_r29(candidate: Any, frames: Mapping[str, Any]) -> Dict[str, Any]:
         "LocalBase": base,
         "PatternEdges": edges,
         "ExecutionGate": gate,
+        "MTF_Evidence_Matrix": mtf_matrix,
         "causal": True,
     }
 
 
 __all__ = [
     "CausalPivot", "causal_pivots", "trend_quality", "pattern_edges",
-    "execution_gate", "ProfessionalTrailingEngine", "trailing_from_ladder",
+    "execution_gate", "mtf_evidence_matrix", "ProfessionalTrailingEngine", "trailing_from_ladder",
     "apply_r29", "TF_STOP_FLOOR_PCT", "KNOWN_CORES",
 ]
