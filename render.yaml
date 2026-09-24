@@ -53,3 +53,5 @@ services:
         value: "10000"
       - key: DATABASE_URL
         sync: false
+      - key: VIVA_APP_PASSWORD
+        sync: false
