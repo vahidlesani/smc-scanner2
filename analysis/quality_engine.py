@@ -153,6 +153,18 @@ def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
                 pass
     except Exception:
         pass
+    # R31 free market-intelligence layer: one cached public-data snapshot per symbol.
+    # Additive metadata only — no setup core, score, direction, ID, chart geometry,
+    # Telegram format, or execution gate is changed here.
+    try:
+        from analysis.market_intelligence import build_market_intelligence
+        _market_intel = build_market_intelligence(bundle)
+        for candidate in candidates:
+            candidate.metadata["market_intelligence"] = dict(_market_intel)
+    except Exception as _mi_exc:
+        for candidate in candidates:
+            candidate.metadata["market_intelligence_error"] = str(_mi_exc)[:240]
+
     # R29: non-blocking MTF candle and classical-pattern explanations.
     try:
         from analysis.mtf_candles import analyze_mtf_candles, classic_pattern_explanations
