@@ -2356,14 +2356,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             ]
             _tpg = (candidate.metadata or {}).get("tp_gates") or {}
             _tp_locked = set(_tpg.get("locked") or [])
-            for i, level in enumerate(ladder_targets):
-                # Viva 09-24 («ابزار لانگ و شورت در ۵ ستاپ فقط با tp1 تا tp5
-                # مشخص بشه… لیبل های بزرگ روی کندلها و ابزار نخوره»): the tool
-                # carries ONLY the numbers 1..5 — weights/INFO/POST-BREAK live
-                # in the confirmation message, values go on the price axis.
-                label = str(i + 1)
+            # Display labels are ranked by actual price path, not by the
+            # storage order of legacy ladders. LONG: low→high; SHORT: high→low.
+            # This fixes charts such as INJ where TP labels appeared 2,5,4,3,1
+            # while preserving the underlying target values and lifecycle IDs.
+            _display_targets = sorted(
+                [(idx, float(level)) for idx, level in enumerate(ladder_targets)],
+                key=lambda item: item[1], reverse=(str(candidate.direction).upper() == "SHORT"))
+            for _rank, (_idx, level) in enumerate(_display_targets, start=1):
+                label = str(_rank)
                 levels.append((float(level), label,
-                               CHART_THEME["tp1"] if (i < 3 and i < len(ladder_targets) - 1) else CHART_THEME["tp2"]))
+                               CHART_THEME["tp1"] if (_rank <= 3 and _rank < len(ladder_targets)) else CHART_THEME["tp2"]))
             # Viva 09-23/24 night (13-chart audit): ONE pill per level. The old
             # 3%-merge produced mega-chips («TP4 INFO … · TP5 INFO …») that
             # spilled over the price axis, and near-level pills overlapped.
