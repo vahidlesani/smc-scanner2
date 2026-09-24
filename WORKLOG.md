@@ -221,3 +221,11 @@
 - classify_shape: converging claim additionally requires abs(drift_u−drift_l) > 0.15·max(drift_u,drift_l) — noise-parallel fits stay CHANNEL regardless of endpoint width ratio.
 - New test: 6-seed parallel process never labels WEDGE (test_round26_geometry_v3).
 - Suite: 425 passed / 1 skipped.
+
+## Round-27 — V3 phase 3: §28 pattern lifecycle + §27 event dedupe
+- pattern_id_for(): deterministic sha1(kind|tf|both fitted lines|span)[:12] — same geometry same id, refit = structural replacement.
+- Lifecycle registry: observe/get/reset + scan-tick sweep; states DETECTED/ACTIVE/EDGE_NEAR/TOUCH/RETEST/BREAK_*/INVALIDATED/EXPIRED; expiration emits reason (excessive_age span>400, no_recent_touch quiet>60 scans); terminal records NEVER deleted.
+- scan_edges: pid on every event, lifecycle per state (violation → INVALIDATED + reason opposite_side_break_close), candidate metadata passthrough (evidence, never gates).
+- dedupe_events (§27): exact duplicate event_id only; upper/lower, approach/break, warning/confirmation, other TFs never merged.
+- tests/test_round27_lifecycle.py 5/5; suite 430P/1skip.
+- Note: registry is process-local; symbol-scoped persistence lands with messages-layer integration (§7).

@@ -34,6 +34,7 @@ Consequences encoded here (Viva bug-report of 2026-09-10 screenshots):
 """
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
@@ -433,6 +434,105 @@ def _flagpole_strength(df: pd.DataFrame, line, side: str, n: int,
 
 
 # ── edge scan ──────────────────────────────────────────────────────────────
+# ── V3 §27/§28: stable pattern identity + lifecycle registry ──────────────
+# §28: every pattern has a stable pattern_id and an explicit lifecycle;
+# terminal states are NEVER deleted — they stay queryable with their reason.
+_LIFECYCLE: Dict[str, Dict] = {}
+_LIFECYCLE_LOCK = threading.Lock()
+_LIFECYCLE_SCAN_SEQ = {"n": 0}
+_LIFECYCLE_STATE_OF_EVENT = {
+    "EDGE_NEAR": "EDGE_NEAR", "BREAK_READY": "BREAK_READY",
+    "BREAK_CLOSED": "BREAK_CLOSED", "REJECTION_FADE": "RETEST",
+}
+_LIFECYCLE_MAX_SPAN = 400        # expiration reason: excessive age (bars)
+_LIFECYCLE_QUIET_SCANS = 60      # expiration reason: no recent touch/scans
+
+
+def pattern_id_for(pattern, pattern_tf: str, upper, lower, n: int) -> str:
+    """§28 stable id: deterministic hash of kind + both fitted lines + span.
+    Same geometry → same id across rescans; a materially refitted line is a
+    DIFFERENT pattern (structural replacement), never a silent mutation."""
+    parts = [str(pattern), str(pattern_tf)]
+    for line in (upper, lower):
+        if line is None:
+            parts.append("none")
+        else:
+            parts.append("%.8g|%.8g|%d" % (float(line.slope), float(line.intercept),
+                                           int(line.first_index)))
+    parts.append(str(int(n)))
+    digest = hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:12]
+    return "%s-%s" % (str(pattern).lower(), digest)
+
+
+def lifecycle_observe(pattern_id: str, state: str, reason: Optional[str] = None,
+                      meta: Optional[Dict] = None) -> Dict:
+    """Record a lifecycle transition (§28). Terminal records persist."""
+    with _LIFECYCLE_LOCK:
+        rec = dict(_LIFECYCLE.get(pattern_id) or {})
+        if not rec:
+            rec = {"pattern_id": pattern_id, "state": "DETECTED",
+                   "created_ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        rec.update({"state": state,
+                    "last_ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "last_scan": _LIFECYCLE_SCAN_SEQ["n"]})
+        if reason:
+            rec["reason"] = reason
+        if meta:
+            m = dict(rec.get("meta") or {})
+            m.update(meta)
+            rec["meta"] = m
+        _LIFECYCLE[pattern_id] = rec
+        return dict(rec)
+
+
+def lifecycle_get(pattern_id: str) -> Optional[Dict]:
+    with _LIFECYCLE_LOCK:
+        rec = _LIFECYCLE.get(pattern_id)
+        return dict(rec) if rec else None
+
+
+def lifecycle_reset() -> None:
+    with _LIFECYCLE_LOCK:
+        _LIFECYCLE.clear()
+        _LIFECYCLE_SCAN_SEQ["n"] = 0
+
+
+def _lifecycle_scan_tick() -> None:
+    """§28 expiration sweep — excessive age / no recent touch. Expiration is
+    EMITTED (state EXPIRED + reason); the record is never deleted."""
+    with _LIFECYCLE_LOCK:
+        _LIFECYCLE_SCAN_SEQ["n"] += 1
+        seq = _LIFECYCLE_SCAN_SEQ["n"]
+        for _pid, rec in list(_LIFECYCLE.items()):
+            if rec.get("state") in ("EXPIRED", "INVALIDATED", "FAILED"):
+                continue
+            meta = rec.get("meta") or {}
+            reason = None
+            if int(meta.get("span") or 0) > _LIFECYCLE_MAX_SPAN:
+                reason = "excessive_age"
+            elif seq - int(rec.get("last_scan") or seq) > _LIFECYCLE_QUIET_SCANS:
+                reason = "no_recent_touch"
+            if reason:
+                rec.update({"state": "EXPIRED", "reason": reason, "last_scan": seq})
+
+
+def dedupe_events(events: List[Dict]) -> List[Dict]:
+    """§27 PRIMARY EVENT DEDUPLICATION: drop EXACT duplicates only (same
+    event_id). Upper-vs-lower edge, approach-vs-break, warning-vs-later
+    confirmation, and different timeframes are distinct evidence — never
+    merged."""
+    out: List[Dict] = []
+    seen = set()
+    for ev in events or []:
+        eid = ev.get("event_id")
+        if eid is not None:
+            if eid in seen:
+                continue
+            seen.add(eid)
+        out.append(ev)
+    return out
+
+
 def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                pattern_tf: str, live_price: Optional[float] = None) -> List[Dict]:
     """Per-edge lifecycle events on a fitted pattern frame. All distances use
@@ -456,6 +556,9 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
     rules = _EDGE_RULES.get(str(pattern).upper())
     if not rules:
         return events
+    # V3 §27/§28: stable identity for this pattern + expiration sweep tick
+    pid = pattern_id_for(pattern, pattern_tf, upper, lower, n)
+    _lifecycle_scan_tick()
     atr_p = _atr(pattern_df)
     atr_t = _atr(trigger_df) or atr_p
     if atr_p <= 0 or atr_t <= 0:
@@ -668,7 +771,21 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             "prob": "هیچ‌کدام ۱۰۰٪ نیست؛ همه احتمالی‌ست مگر تأییدِ کاملِ زنجیره",
         }
         events.append(ev)
-    return events
+    # V3 §27/§28: identity + lifecycle bookkeeping on every emitted event,
+    # then exact-duplicate dedupe (same event_id only).
+    _meta9 = {"pattern": str(pattern), "pattern_tf": str(pattern_tf),
+              "span": int(n - _start_idx)}
+    for ev in events:
+        ev.setdefault("pattern_id", pid)
+        if ev.get("warn_only"):
+            ev["lifecycle"] = "INVALIDATED"
+            lifecycle_observe(pid, "INVALIDATED",
+                              reason="opposite_side_break_close", meta=_meta9)
+        else:
+            ev["lifecycle"] = _LIFECYCLE_STATE_OF_EVENT.get(
+                str(ev.get("state") or ""), "ACTIVE")
+            lifecycle_observe(pid, ev["lifecycle"], meta=_meta9)
+    return dedupe_events(events)
 
 
 # ── alert cooldown (durable: survives Railway redeploys via bot_kv) ───────
@@ -1030,6 +1147,8 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         "approach_direction": ev.get("approach_direction"),
         "pattern_role": ev.get("pattern_role"),
         "role_confidence": ev.get("role_confidence"),
+        "pattern_id": ev.get("pattern_id"),
+        "lifecycle": ev.get("lifecycle"),
         "viva_structure_score": float(ev.get("structure_score") or 0.0),
         "viva_final_score": raw, "viva_state": stage + "_CLOSED",
         "tl_context_tf": structure_tf, "tl_line": line_now,
