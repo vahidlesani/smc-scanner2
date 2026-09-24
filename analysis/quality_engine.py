@@ -107,6 +107,34 @@ def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
         for candidate in candidates:
             candidate.metadata["r28_execution_error"] = str(_r28_outer_exc)[:240]
 
+    # R29 live execution-integrity layer: CORE/CONTEXT/EXECUTION stay separate.
+    # This is additive metadata only; Telegram/public IDs/link chains are untouched.
+    try:
+        from analysis.execution_integrity_r29 import apply_r29
+        for candidate in candidates:
+            try:
+                frames = {}
+                for _tf in ("1d", "4h", "2h", "1h", "30m", "15m", "5m", "3m", "1m"):
+                    try:
+                        _frame = bundle.get(_tf)
+                    except Exception:
+                        _frame = None
+                    if _frame is not None and len(_frame) > 0:
+                        frames[_tf] = _frame
+                _r29 = apply_r29(candidate, frames)
+                candidate.metadata["r29_execution"] = _r29
+                # Execution is a separate gate: preserve the observation and
+                # expose the reason, but do not silently manufacture a CORE.
+                candidate.metadata["r29_execution_state"] = _r29.get("EXECUTION_STATE", "UNKNOWN")
+                candidate.metadata["r29_execution_reasons"] = list(
+                    ((_r29.get("ExecutionGate") or {}).get("reasons") or [])
+                )
+            except Exception as _r29_exc:
+                candidate.metadata["r29_execution_error"] = str(_r29_exc)[:240]
+    except Exception as _r29_outer_exc:
+        for candidate in candidates:
+            candidate.metadata["r29_execution_error"] = str(_r29_outer_exc)[:240]
+
     # TechnoClassic HTF-edge intelligence — SCORE-ONLY for all setups
     # (Viva 2026-09-10): a tested 1D/4H edge ahead of TP1 costs points, an
     # entry sitting ON such an edge earns them. Never a gate, never a reject.
