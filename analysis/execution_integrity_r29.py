@@ -278,6 +278,7 @@ def execution_gate(candidate: Any, frames: Mapping[str, Any]) -> Dict[str, Any]:
 
 @dataclass
 class ProfessionalTrailingEngine:
+    entry: float
     initial_stop: float
     current_stop: float
     risk_R: float
@@ -304,7 +305,7 @@ class ProfessionalTrailingEngine:
         if d == "LONG":
             self.highest_since_entry = max(float(self.highest_since_entry or px), px)
             if self.tp1_hit:
-                be = self.initial_stop + float(fee_buffer) + float(slippage_buffer)
+                be = self.entry + float(fee_buffer) + float(slippage_buffer)
                 self.profit_floor = max(self.profit_floor, be)
                 self.regime = "NET_BREAKEVEN" if not self.tp2_hit else "RUNNER_TRAIL"
                 candidates = [self.profit_floor]
@@ -328,7 +329,7 @@ class ProfessionalTrailingEngine:
         elif d == "SHORT":
             self.lowest_since_entry = min(float(self.lowest_since_entry or px), px)
             if self.tp1_hit:
-                be = self.initial_stop - float(fee_buffer) - float(slippage_buffer)
+                be = self.entry - float(fee_buffer) - float(slippage_buffer)
                 self.profit_floor = min(self.profit_floor or be, be)
                 self.regime = "NET_BREAKEVEN" if not self.tp2_hit else "RUNNER_TRAIL"
                 candidates = [self.profit_floor]
@@ -361,6 +362,8 @@ def trailing_from_ladder(ladder: Dict[str, Any], candles: Sequence[Mapping[str, 
     """Live-path adapter: ratchet an existing v2 ladder without changing its IDs."""
     if not ladder or not candles:
         return {"state": ladder, "events": []}
+    if float(ladder.get("entry") or 0) <= 0:
+        return {"state": ladder, "events": []}
     frame = pd.DataFrame(candles)
     if frame.empty or not {"high", "low", "close"}.issubset(frame.columns):
         return {"state": ladder, "events": []}
@@ -371,6 +374,7 @@ def trailing_from_ladder(ladder: Dict[str, Any], candles: Sequence[Mapping[str, 
     tp1 = targets[0] if targets else float(ladder.get("tp1") or 0)
     tp2 = targets[1] if len(targets) > 1 else float(ladder.get("tp2") or 0)
     eng = ProfessionalTrailingEngine(
+        entry=float(ladder.get("entry") or 0),
         initial_stop=float(ladder.get("initial_sl") or ladder.get("current_sl") or 0),
         current_stop=float(ladder.get("current_sl") or ladder.get("initial_sl") or 0),
         risk_R=float(ladder.get("risk") or 0),
@@ -387,7 +391,9 @@ def trailing_from_ladder(ladder: Dict[str, Any], candles: Sequence[Mapping[str, 
     result = eng.update(direction, price,
                         fee_buffer=float(ladder.get("fee_buffer") or 0),
                         slippage_buffer=float(ladder.get("slippage_buffer") or 0))
-    if result["new_stop"] != float(ladder.get("current_sl") or 0):
+    old_stop = float(ladder.get("current_sl") or 0)
+    changed = abs(float(result["new_stop"]) - old_stop) > 1e-12
+    if changed:
         ladder["current_sl"] = result["new_stop"]
         ladder["r29_trailing_used"] = True
         ladder["r29_reason"] = result["reason"]
@@ -399,9 +405,8 @@ def trailing_from_ladder(ladder: Dict[str, Any], candles: Sequence[Mapping[str, 
         "r29_chandelier_stop": eng.chandelier_stop,
         "r29_profit_floor": eng.profit_floor,
     })
-    return {"state": ladder, "events": [] if result["new_stop"] == float(ladder.get("current_sl") or 0)
-             else [{"event": "PROFIT_FLOOR", "reason": result["reason"],
-                    "stop": result["new_stop"]}]}
+    return {"state": ladder, "events": ([{"event": "PROFIT_FLOOR", "reason": result["reason"],
+                    "stop": result["new_stop"]}] if changed else [])}
 
 
 def apply_r29(candidate: Any, frames: Mapping[str, Any]) -> Dict[str, Any]:
