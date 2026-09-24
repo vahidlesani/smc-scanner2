@@ -175,3 +175,19 @@
   (wedge break-opposite-side = WARN-only, never a signal), scalping TF gate
   (15m/30m), spot=green-box-only confirmation, TF-bump check, update-51 $28 bug,
   Railway cost pass, smart-money free-source plan.
+
+## Round 24c — broken-blue-line law (2026-09-24)
+- Viva sent FIVE schematics on OUR charts (UNI ✓correct, AVAX, ADA, ARB, DOT —
+  00:09–00:12 local): a RISING support (blue) broken down mid-frame, EN on the
+  retest, SL above structure, stepped TPs below — every one asks «آیا این خط
+  آبی شناسایی شده بود؟؟». Evidence: ADA-15m K458851 = SHORT, confirmed:True
+  (21:08Z) — but the blue line itself was NOT painted → the question is fair.
+- Root cause: two ANTI-FLOATING rules deleted the just-broken line:
+  `_line_contradicts` («support left 2×ATR below = history») and the 4×ATR DIET.
+  The viva_tlbreak fitter DID find it (4 touches, break@122) — the renderer hid it.
+- Fix: `_recently_broken` (break within half the visible frame) exempts a line
+  from both rules; the painter already draws it solid→break + dotted after.
+  ADA-15m @20:30Z replay: TRENDLINE LOW 4-touches + break_x now paints.
+- tests/test_round23_model_law.py +1 (broken-support survival). Suite: 416/1skip.
+- DB note: K744702/K548541/K120341 rotated out of the 60-item feed — per-chart
+  evidence answers need the store retention window, queued.

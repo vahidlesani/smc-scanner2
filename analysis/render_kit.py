@@ -209,6 +209,27 @@ def line_xy(line, x_from: float, x_to: float, steps: int = _LINE_STEPS):
     return [x0, x1], [line_y(line, x0), line_y(line, x1)]
 
 
+def _recently_broken(line, n: int) -> bool:
+    """Viva 09-24 (his five SL/EN/TP schematics: «آیا این خط آبی شناسایی شده
+    بود؟؟»): a line the market JUST broke with a close is THE story of the
+    chart — the break-down of a rising support IS the SHORT's evidence. The
+    anti-floating rules must never delete it; it paints solid to its break
+    bar and dotted beyond (the painter already renders break_ts/break_x)."""
+    try:
+        if isinstance(line, dict):
+            bx = line.get("break_x")
+        else:
+            bx = getattr(line, "break_index", None)
+        if bx is None:
+            return False
+        age = n - int(bx)
+        # his charts show the break mid-frame (DOT/ADA/ARB ~09-23 16:00 in a
+        # 41h window): a line broken within HALF the visible frame stays.
+        return 0 <= age <= max(12, int(0.5 * max(n, 1)))
+    except Exception:
+        return False
+
+
 def _line_contradicts(line, side: str, direction: str, df: pd.DataFrame,
                       sub: bool = False) -> bool:
     """True when a validated trendline contradicts the trade context.
@@ -243,17 +264,23 @@ def _line_contradicts(line, side: str, direction: str, df: pd.DataFrame,
             atr = float((df["high"] - df["low"]).tail(14).mean() or 0.0)
         except Exception:
             atr = 0.0
+        # a JUST-broken line survives (it is the break evidence — the painter
+        # shows it solid to the break, dotted after); only ORIENTATION noise
+        # (rising HIGH over a short) still vetoes.
+        _brok9 = _recently_broken(line, n)
         if str(direction).upper() == "SHORT":
             # an ascending line on the HIGH side of a short = «لنگ در هوا»
             if side == "HIGH" and slope > 0 and (y_last - close) > 0.5 * atr:
                 return True
             # a support line the market fell far below is history, not context
-            if side == "LOW" and (close - y_last) > 2.0 * atr and slope > 0:
+            if (side == "LOW" and (close - y_last) > 2.0 * atr and slope > 0
+                    and not _brok9):
                 return True
         else:
             if side == "LOW" and slope < 0 and (close - y_last) < -0.5 * atr:
                 return True
-            if side == "HIGH" and (y_last - close) > 2.0 * atr and slope < 0:
+            if (side == "HIGH" and (y_last - close) > 2.0 * atr and slope < 0
+                    and not _brok9):
                 return True
         return False
     except Exception:
@@ -501,7 +528,8 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                 _sl = float(_ln.get("slope") or 0.0)
                 _ic = float(_ln.get("intercept") or 0.0)
                 _side = str(_ln.get("side") or "")
-                if _atr_l > 0 and abs(_sl * n + _ic - _live) > 4.0 * _atr_l:
+                if (_atr_l > 0 and abs(_sl * n + _ic - _live) > 4.0 * _atr_l
+                    and not _recently_broken(_ln, n)):
                     continue                     # dead line projected far away
                 _dup = False
                 for _s2, _sl2, _ic2 in _seen:

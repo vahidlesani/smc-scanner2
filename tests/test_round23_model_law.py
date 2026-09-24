@@ -152,3 +152,37 @@ def test_tool_pills_are_bare_numbers_with_axis_values():
         assert str(i) in joined, (i, joined)
     assert not any(t.strip().startswith("TP") for t in tags), joined
     assert "ENTRY" in joined and "FIRST STOP" in joined
+
+
+# ── Round-24b: the broken-blue-line law — «آیا این خط آبی شناسایی شده
+#    بود؟؟» (five 09-24 schematics) ─────────────────────────────────────────
+def test_recently_broken_rising_support_survives_and_travels():
+    """A rising LOW line broken mid-frame with a close is the SHORT's evidence:
+    detect_patterns must keep it (with break_x) and it must ride
+    render_line_watch — the old anti-floating rules deleted it."""
+    import dataclasses as dc
+    from analysis.viva_tlbreak import fit_validated_line, load_config
+    from analysis.render_kit import detect_patterns, _recently_broken
+    n = 170
+    rng = np.random.default_rng(31)
+    # rising support touched 4×, broken down at bar 122 (mid-frame)
+    lows = [(10, 100.0), (45, 101.6), (80, 103.2), (115, 104.8)]
+    xs = np.array([p[0] for p in lows], float)
+    ys = np.array([p[1] for p in lows], float)
+    support = np.interp(np.arange(n, dtype=float), xs, ys)
+    mid = support + 1.2 + rng.normal(0, 0.12, n)
+    mid[122:] = support[122:] - 1.6 - np.linspace(0, 0.8, n - 122)
+    df = pd.DataFrame({
+        "timestamp": pd.date_range(end="2026-09-23 20:30", periods=n, freq="15min", tz="UTC"),
+        "open": mid * 0.999, "high": mid * (1 + 0.004), "low": mid * (1 - 0.004),
+        "close": mid, "volume": np.full(n, 1e6)})
+    cfg = dc.replace(load_config(), pivot_left=3, pivot_right=3, min_touches=2,
+                     touch_tolerance_atr=0.20, max_fit_residual_atr=0.45,
+                     require_alive=True)
+    ln = fit_validated_line(df, "LOW", cfg)
+    assert ln is not None and ln.break_index is not None, "fixture must produce a broken line"
+    assert _recently_broken(ln, n - 1)
+    pats = detect_patterns(df, "SHORT")
+    sides = [(p["type"], l.get("side"), l.get("break_x"))
+             for p in pats for l in (p.get("lines") or [])]
+    assert any(side == "LOW" and bx for _t, side, bx in sides), sides
