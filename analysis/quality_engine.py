@@ -360,24 +360,26 @@ def evaluate_confirmation(
     if closed_df is None or len(closed_df) < 20:
         return reject("NO_DATA", "داده کافی برای تأیید وجود ندارد.")
 
-    # R28 execution boundary: core candidates may remain visible as context,
-    # but an executable confirmation cannot use an invalid/wrong-side stop.
-    try:
-        from analysis.execution_integrity_r28 import structural_stop
-        _r28_stop = structural_stop(
-            float(candidate.planned_entry or 0.0),
-            str(candidate.direction or ""),
-            float(candidate.sl or 0.0),
-            str(candidate.trigger_timeframe or ""),
-        )
-        if not _r28_stop.valid:
-            _code = "STOP_TOO_TIGHT" if _r28_stop.stop_quality == "TOO_TIGHT" else (
-                "RISK_INVALID" if _r28_stop.stop_quality == "RISK_INVALID" else "STOP_INVALID")
-            return reject(_code, f"R28 execution stop rejected: {_r28_stop.stop_reason}")
-        if str((candidate.metadata or {}).get("market") or "").upper() == "SPOT" and str(candidate.direction).upper() != "LONG":
-            return reject("SPOT_SHORT_FORBIDDEN", "اسپات فقط LONG قابل تأیید است.")
-    except Exception as _r28_exc:
-        candidate.metadata["r28_confirmation_check_error"] = str(_r28_exc)[:240]
+    # R28 execution boundary: scan_bundle candidates carry the R28 execution
+    # record. Direct legacy callers/tests without that record keep their existing
+    # confirmation contract; production candidates are checked here.
+    if "r28_execution" in (candidate.metadata or {}):
+        try:
+            from analysis.execution_integrity_r28 import structural_stop
+            _r28_stop = structural_stop(
+                float(candidate.planned_entry or 0.0),
+                str(candidate.direction or ""),
+                float(candidate.sl or 0.0),
+                str(candidate.trigger_timeframe or ""),
+            )
+            if not _r28_stop.valid:
+                _code = "STOP_TOO_TIGHT" if _r28_stop.stop_quality == "TOO_TIGHT" else (
+                    "RISK_INVALID" if _r28_stop.stop_quality == "RISK_INVALID" else "STOP_INVALID")
+                return reject(_code, f"R28 execution stop rejected: {_r28_stop.stop_reason}")
+            if str((candidate.metadata or {}).get("market") or "").upper() == "SPOT" and str(candidate.direction).upper() != "LONG":
+                return reject("SPOT_SHORT_FORBIDDEN", "اسپات فقط LONG قابل تأیید است.")
+        except Exception as _r28_exc:
+            candidate.metadata["r28_confirmation_check_error"] = str(_r28_exc)[:240]
 
     after = _bars_since_candidate(candidate, closed_df)
     if after is None or after.empty:
