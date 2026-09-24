@@ -3042,6 +3042,22 @@ def _ai_detail_block(candidate: SignalCandidate) -> str:
     return "\n".join(x for x in out if x.strip())
 
 
+def _market_intelligence_block(candidate: SignalCandidate) -> str:
+    """R31 — compact auxiliary order-flow/derivatives read.
+
+    This section is additive only: it cannot alter setup geometry, unique IDs,
+    message chaining, fonts, headings, or execution decisions.
+    """
+    try:
+        from analysis.market_intelligence import intelligence_note
+        lines = intelligence_note(candidate)
+    except Exception:
+        lines = []
+    if not lines:
+        return ""
+    return "📡 <b>تحلیل کمکی جریان بازار</b>\\n" + "\\n".join(f"• {_e(x)}" for x in lines)
+
+
 def _ai_note(candidate: SignalCandidate) -> str:
     """🤖 AI Suggestion block — deterministic multi-TF read produced by the
     engine (not an external LLM): regime, risk points, and the one thing that
@@ -3116,6 +3132,7 @@ def build_approaching_message(candidate: SignalCandidate, current_price: float, 
         f"{_why_fa(candidate)}\n\n"
         f"🔎 در انتظار: {_e(waiting)}\n\n"
         f"{_htf_context_fa(candidate)}\n\n"
+        f"{_market_intelligence_block(candidate)}\n\n"
         f"{_ai_note(candidate)}\n\n"
         f"👀 آماده بررسی چارت باشید، اما تا پیام Confirmed وارد نشوید.\n"
         f"📢 <b>{_e(SETTINGS.channel_name)}</b>"
@@ -3164,6 +3181,7 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
         + "\n\n".join(reasons)
         + f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
         f"{_htf_context_fa(candidate)}\n\n"
+        f"{_market_intelligence_block(candidate)}\n\n"
         f"📍 <b>سطوح معامله</b>\n"
         f"├ Entry: <b>{_price(candidate.planned_entry)}</b>\n"
         f"├ {_e(invalidation_label)}: <b>{_price(candidate.sl)}</b>\n"
