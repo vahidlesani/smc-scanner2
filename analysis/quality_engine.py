@@ -153,6 +153,23 @@ def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
                 pass
     except Exception:
         pass
+    # R29: non-blocking MTF candle and classical-pattern explanations.
+    try:
+        from analysis.mtf_candles import analyze_mtf_candles, classic_pattern_explanations
+        for candidate in candidates:
+            try:
+                mtf = analyze_mtf_candles(bundle, candidate.direction, candidate.trigger_timeframe)
+                classic = classic_pattern_explanations(candidate.metadata or {})
+                candidate.metadata["mtf_candle_evidence"] = mtf
+                candidate.metadata["classic_pattern_explanations"] = classic
+                market = dict(candidate.market or {})
+                market["viva_analysis"] = {"mtf_candles": mtf, "classic_patterns": classic}
+                candidate.market = market
+            except Exception as exc:
+                candidate.metadata["mtf_candle_error"] = str(exc)[:180]
+    except Exception as exc:
+        for candidate in candidates:
+            candidate.metadata["mtf_candle_error"] = str(exc)[:180]
     return candidates
 
 def _as_utc(value: str) -> datetime:
