@@ -358,6 +358,8 @@ def evaluate_confirmation(
         return False, candidate, message
 
     if closed_df is None or len(closed_df) < 20:
+        return reject("NO_DATA", "داده کافی برای تأیید وجود ندارد.")
+
     # R28 execution boundary: core candidates may remain visible as context,
     # but an executable confirmation cannot use an invalid/wrong-side stop.
     try:
@@ -377,7 +379,6 @@ def evaluate_confirmation(
     except Exception as _r28_exc:
         candidate.metadata["r28_confirmation_check_error"] = str(_r28_exc)[:240]
 
-        return reject("NO_DATA", "داده کافی برای تأیید وجود ندارد.")
     after = _bars_since_candidate(candidate, closed_df)
     if after is None or after.empty:
         return reject("NO_NEW_BAR", "هنوز کندلی بعد از ایجاد ستاپ بسته نشده است.")
