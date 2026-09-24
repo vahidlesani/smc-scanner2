@@ -191,3 +191,26 @@
 - tests/test_round23_model_law.py +1 (broken-support survival). Suite: 416/1skip.
 - DB note: K744702/K548541/K120341 rotated out of the 60-item feed — per-chart
   evidence answers need the store retention window, queued.
+
+## Round 25 — nature law from his reference sheets (2026-09-24)
+- His 4 unique schematic sheets (سقف/شانه+دوقلو+ویج/مثلث/پرچم/مستطیل/کانال+
+  هارامی/انگالفینگ/ستاره؛ پرایس‌اکشن ورود-نقطه‌ای؛ IMPORTANT CHART ENTRY/SL/TP؛
+  شیت شمعی MINIMUM TARGET) are now the binding NATURE contract.
+- Engine changes (analysis/pattern_engine.py):
+  • ONE-NATURE set: WEDGE_FALLING/RISING, TRIANGLE_ASCENDING/DESCENDING,
+    CHANNEL_ASCENDING/DESCENDING, FLAG_BULL/BEAR, H&S/DT/DB labels.
+  • Directional triangles/channels became one-sided (were two-sided): like
+    ASC={upper:LONG}, DES={lower:SHORT}, CH_A={upper:LONG}, CH_D={lower:SHORT}.
+    Symmetrical triangle/range/trendline stay two-sided (his «از هر طرف
+    بشکنه و کلوز بده سیگنال تایید میشه» for continuation shapes).
+  • STATE_VIOLATED: the wrong-side break+close of a one-nature pattern emits a
+    WARN-ONLY event with his dictated text («...هیچ سیگنالی تأیید نمی‌شود»);
+    send_pattern_violation (light text, 24h KV cooldown per symbol/tf/edge)
+    rides send_prebreak_alerts; candidate detector filters it out by state.
+- tests: test_round24_nature.py (3) + legacy test_pattern_engine updated to
+  the law (upper-break of a descending triangle = violation, lower = SHORT;
+  fade test mirrored to the nature side). Suite: 419 passed / 1 skipped.
+- Sheet coverage: H&S/DoubleTop/DoubleBottom = _structural_refine labels +
+  HORIZONTAL_SR lane (labels today, dedicated break logic queued); doji/
+  engulfing/harami/star = candle-sheet → covered by the PIN family + confirmation
+  candle laws; dedicated engulfing scanner = queued.

@@ -45,6 +45,9 @@ from config import get_settings
 STATE_NEAR = "EDGE_NEAR"
 STATE_READY = "BREAK_READY"
 STATE_BREAK = "BREAK_CLOSED"
+# Viva 09-24 (his nature sheets): an opposite-side break of a ONE-NATURE
+# pattern is a VIOLATION — it warns and explains, it never becomes a signal.
+STATE_VIOLATED = "PATTERN_VIOLATED"
 STATE_FADE = "REJECTION_FADE"
 
 # E&M: breaking above a resistance is the LONG event; below support the SHORT.
@@ -70,6 +73,21 @@ _EDGE_RULES.update({
     "FLAG_BULL": {"upper": "LONG"},
     "FLAG_BEAR": {"lower": "SHORT"},
 })
+# Viva 09-24 «در مثلث‌ها هم همین» + his sheets (مثلث صعودی → بریک بالا،
+# مثلث نزولی → بریک پایین، کانال صعودی/نزولی likewise): directional
+# triangles/channels are ONE-NATURE — the opposite side can never confirm.
+_EDGE_RULES.update({
+    "TRIANGLE_ASCENDING": {"upper": "LONG"},
+    "TRIANGLE_DESCENDING": {"lower": "SHORT"},
+    "CHANNEL_ASCENDING": {"upper": "LONG"},
+    "CHANNEL_DESCENDING": {"lower": "SHORT"},
+})
+# patterns whose ONLY valid break is their nature side; the other side warns
+_ONE_NATURE = frozenset((
+    "WEDGE_FALLING", "WEDGE_RISING", "TRIANGLE_ASCENDING", "TRIANGLE_DESCENDING",
+    "FLAG_BULL", "FLAG_BEAR", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING",
+    "HEAD_SHOULDERS", "INV_HEAD_SHOULDERS", "DOUBLE_TOP", "DOUBLE_BOTTOM",
+))
 
 PATTERN_FA = {
     "WEDGE_FALLING": "گوه نزولی (فالینگ‌وج)",
@@ -431,6 +449,29 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             continue
         direction = rules.get(side)
         if not direction:
+            # Viva 09-24 («هم برخورد هم بعد از کلوز تنها باید هشدار و
+            # توضیحاتش بیاد اما نباید سیگنال صعودی بده یا حتی نزولی»): the
+            # wrong-side break of a ONE-NATURE pattern emits a WARN-ONLY
+            # violation event — never a candidate.
+            if str(pattern).upper() not in _ONE_NATURE:
+                continue
+            _ln9 = float(line.price_at(n))
+            _cross9 = (live > _ln9) if side == "upper" else (live < _ln9)
+            if not _cross9:
+                continue
+            events.append({
+                "pattern": pattern, "pattern_fa": PATTERN_FA.get(pattern, pattern),
+                "side": side, "direction": None, "state": STATE_VIOLATED,
+                "warn_only": True, "distance_atr": round(abs(live - _ln9) / max(atr_p, 1e-12), 3),
+                "break_edge": "UPPER" if side == "upper" else "LOWER",
+                "break_direction": "UP" if side == "upper" else "DOWN",
+                "line_price": _ln9, "live": live, "pattern_tf": pattern_tf,
+                "ref_ts": str(trigger_df["timestamp"].iloc[-1]),
+                "violation_fa": (
+                    f"الگوی {PATTERN_FA.get(pattern, pattern)} در تایم‌فریم {pattern_tf} "
+                    f"نقض شد — بریک و کلوز از ضلعِ {'بالا' if side == 'upper' else 'پایین'} "
+                    "در خلافِ ماهیت الگو است. هیچ سیگنالی تأیید نمی‌شود؛ فقط هشدار."),
+            })
             continue
         line_now = float(line.price_at(n))
         if side == "upper":
@@ -1083,6 +1124,15 @@ def send_prebreak_alerts(bundle) -> Dict[str, int]:
         pdf = pdf.tail(_FIT_WINDOW.get(pattern_tf, 140)).reset_index(drop=True)
         for ev in evaluate_prebreak(str(bundle.symbol), pdf, trig, pattern_tf,
                                     live_price=(live if live > 0 else None)):
+            if ev.get("warn_only"):
+                # Viva 09-24: violation = light warn message, no preview chain
+                counts["violated"] = counts.get("violated", 0) + 1
+                try:
+                    from bot.messages_v7 import send_pattern_violation
+                    send_pattern_violation(ev)
+                except Exception as exc:
+                    print(f"pattern-violation send skipped: {exc}")
+                continue
             counts["near" if ev["state"] == STATE_NEAR else "ready"] += 1
             counts["sent"] += 1
             try:

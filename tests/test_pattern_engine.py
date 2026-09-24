@@ -65,19 +65,39 @@ def _mod():
     return pattern_engine
 
 
-def test_scan_edges_finds_break_on_falling_wedge():
+def _pattern_line(df, side):
+    from analysis.pattern_engine import fit_edge_line
+    from analysis.viva_tlbreak import load_config
+    return fit_edge_line(df, side, load_config(), len(df) - 1)
+
+
+def test_scan_edges_finds_break_on_descending_triangle():
+    """Round-24 nature law (his sheets): this fixture (falling upper + flat
+    lower) is a DESCENDING triangle = ONE-NATURE. The legacy upper-break LONG
+    is now a WARN-ONLY violation; the LOWER-edge break confirms a SHORT."""
     m = _mod()
     pattern, trigger = _wedge_frames()
     events = m.scan_edges(pattern, trigger, "4h")
-    assert events, "expected at least one edge event on a validated wedge"
-    long_upper = [e for e in events if e["direction"] == "LONG" and e["side"] == "upper"]
-    assert long_upper
-    assert any(e["state"] in (m.STATE_BREAK, m.STATE_READY) for e in long_upper)
-    ev = long_upper[0]
-    assert "WEDGE" in ev["pattern"] or "TRIANGLE" in ev["pattern"] or "TRENDLINE" in ev["pattern"]
-    assert ev["break_edge"] == "UPPER"
-    assert ev["break_direction"] == "UP"
-    assert ev["direction"] == "LONG"
+    assert events, "expected at least one edge event on a validated pattern"
+    violated = [e for e in events if e.get("warn_only")]
+    assert violated and violated[0]["state"] == m.STATE_VIOLATED
+    assert violated[0]["side"] == "upper" and violated[0]["direction"] is None
+    assert "هیچ سیگنالی" in (violated[0].get("violation_fa") or "")
+    assert not [e for e in events if e["side"] == "upper" and e.get("direction")]
+    # the nature side: lower-edge break + close → SHORT only
+    line = float(_pattern_line(pattern, "LOWER").price_at(len(pattern) - 1))
+    atr_p = float((pattern["high"] - pattern["low"]).tail(14).mean())
+    trig = trigger.copy()
+    trig["open"].iloc[-1] = line + 0.2 * atr_p
+    trig["close"].iloc[-1] = line - 1.1 * atr_p
+    trig["high"].iloc[-1] = trig["open"].iloc[-1] + 0.05 * atr_p
+    trig["low"].iloc[-1] = trig["close"].iloc[-1] - 0.05 * atr_p
+    short = [e for e in m.scan_edges(pattern, trig, "4h")
+             if e["side"] == "lower" and e.get("direction") == "SHORT"]
+    assert short, "lower-edge break must confirm a SHORT"
+    ev = short[0]
+    assert ev["state"] in (m.STATE_BREAK, m.STATE_READY)
+    assert ev["break_edge"] == "LOWER" and ev["break_direction"] == "DOWN"
 
 
 def test_compression_metrics_detects_squeeze_and_rejects_noise():
@@ -207,15 +227,17 @@ def test_reaction_history_and_fade_plan():
     pattern, trigger = _wedge_frames()
     # rewrite the last trigger bar: wick beyond the line, close back inside
     n = len(pattern) - 1
-    line = 100.0 - 0.10 * n
+    line = float(_pattern_line(pattern, "LOWER").price_at(n))
     atr_p = float((pattern["high"] - pattern["low"]).tail(14).mean())
     trig = trigger.copy()
-    trig["open"].iloc[-1] = line - 0.4 * atr_p
-    trig["close"].iloc[-1] = line - 0.15 * atr_p
+    # mirrored to the NATURE side (lower edge): wick below the line, close
+    # back inside — the classic rejection/overshoot bar
+    trig["open"].iloc[-1] = line + 0.4 * atr_p
+    trig["close"].iloc[-1] = line + 0.15 * atr_p
     trig["high"].iloc[-1] = line + 0.5 * atr_p
     trig["low"].iloc[-1] = line - 0.5 * atr_p
-    events = [e for e in m.scan_edges(pattern, trig, "4h") if e["side"] == "upper"]
-    assert events, "expected an upper-edge event on the overshoot bar"
+    events = [e for e in m.scan_edges(pattern, trig, "4h") if e["side"] == "lower"]
+    assert events, "expected a lower-edge event on the overshoot bar"
     ev = events[0]
     assert ev["reactions"]["touches"] >= 3
     # Viva rule (2026-09-10): triangles/wedges are NOT bounce-played — in a

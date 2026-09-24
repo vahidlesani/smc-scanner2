@@ -5344,6 +5344,40 @@ def edit_chart_message(message_id: int, chat_id: str, image: bytes, caption: str
     return bool(res and res.get("ok"))
 
 
+def send_pattern_violation(ev: dict) -> bool:
+    """Viva 09-24 (his nature sheets + txt verbatim): the wrong-side break of a
+    ONE-NATURE pattern warns ONLY — «تنها باید هشدار و توضیحاتش بیاد اما نباید
+    سیگنال صعودی بده یا حتی نزولی بده». Light text on the execution/admin
+    chain; 24h cooldown per (symbol, tf, edge) so a live violation does not
+    spam on every scan."""
+    import time as _tpv
+    from database.bot_kv import get_json as _gk, set_json as _sk
+    target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    if not target:
+        return False
+    key = (f"pv:{str(ev.get('symbol') or '?')}:{str(ev.get('pattern_tf') or '?')}"
+           f":{str(ev.get('break_edge') or '?')}")
+    now = _tpv.time()
+    try:
+        prev = _gk(key) or {}
+        if now - float(prev.get("ts", 0) or 0) < 24 * 3600:
+            return False
+    except Exception:
+        pass
+    text = ("⛔ <b>هشدار نقض الگو</b> — "
+            f"{str(ev.get('symbol') or '')}\n"
+            f"{str(ev.get('violation_fa') or '')}\n"
+            f"قیمت لحظه‌ای: <code>{ev.get('live')}</code> · فاصله: "
+            f"{ev.get('distance_atr')} ATR")
+    sent = send_message(text, chat_id=target)
+    if sent:
+        try:
+            _sk(key, {"ts": now})
+        except Exception:
+            pass
+    return bool(sent)
+
+
 def send_technoclassic_preview(ev: dict) -> bool:
     """Edge alert in the SAME caption family as the other setups' approaching
     alerts, on Viva's chain-lifecycle rule (2026-09-11): the FIRST alert is
