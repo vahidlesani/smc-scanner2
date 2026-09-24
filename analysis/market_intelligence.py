@@ -177,6 +177,80 @@ def _positioning(symbol: str) -> Dict[str, Any]:
     }
 
 
+def _onchain_context(symbol: str) -> Dict[str, Any]:
+    """Free public-chain context only; unavailable providers are omitted, never guessed."""
+    s = symbol.upper().replace("USDT", "")
+    result: Dict[str, Any] = {"status": "UNAVAILABLE", "provider": None}
+
+    # Ethereum: Blockscout public stats/charts expose network activity without a key.
+    if s == "ETH":
+        try:
+            stats = _get("https://eth.blockscout.com/api/v2/stats", {}, ttl=120)
+            chart = _get("https://eth.blockscout.com/api/v2/stats/charts/transactions", {}, ttl=300)
+            data = (chart or {}).get("chart_data") or []
+            vals = []
+            for row in data[-8:]:
+                v = row.get("transactions_count") or row.get("transactions") or row.get("value")
+                try:
+                    vals.append(float(v))
+                except (TypeError, ValueError):
+                    pass
+            result = {"status": "OK", "provider": "Blockscout", "network": "Ethereum"}
+            if vals:
+                result["tx_count_latest"] = round(vals[-1], 0)
+                result["tx_count_change"] = round((vals[-1] / vals[0] - 1.0) * 100.0, 2) if vals[0] else 0.0
+            if stats:
+                result["counters_available"] = True
+            return result
+        except Exception:
+            pass
+
+    # Bitcoin: Blockchain.com public chart endpoints provide network transaction volume.
+    if s == "BTC":
+        try:
+            tx = _get("https://api.blockchain.info/charts/n-transactions", {"timespan": "7days", "format": "json"}, ttl=300)
+            vol = _get("https://api.blockchain.info/charts/estimated-transaction-volume-usd", {"timespan": "7days", "format": "json"}, ttl=300)
+            tv = [float(x.get("y")) for x in ((tx or {}).get("values") or []) if x.get("y") is not None]
+            vv = [float(x.get("y")) for x in ((vol or {}).get("values") or []) if x.get("y") is not None]
+            result = {"status": "OK", "provider": "Blockchain.com", "network": "Bitcoin"}
+            if len(tv) >= 2:
+                result["tx_count_change"] = round((tv[-1] / tv[0] - 1.0) * 100.0, 2) if tv[0] else 0.0
+            if len(vv) >= 2:
+                result["tx_volume_usd_change"] = round((vv[-1] / vv[0] - 1.0) * 100.0, 2) if vv[0] else 0.0
+            return result
+        except Exception:
+            pass
+
+    # DeFi liquidity context: free chain TVL, useful as broad liquidity context,
+    # not an exchange-flow or whale-transfer claim.
+    if s in {"ETH", "ARB", "OP", "BASE", "SOL"}:
+        try:
+            chains = _get("https://api.llama.fi/v2/chains", {}, ttl=300)
+            wanted = {"ETH": "Ethereum", "ARB": "Arbitrum", "OP": "Optimism", "BASE": "Base", "SOL": "Solana"}[s]
+            row = next((x for x in (chains or []) if str(x.get("name")) == wanted), None)
+            if row:
+                return {"status": "OK", "provider": "DefiLlama", "network": wanted,
+                        "tvl_usd": round(_num(row.get("tvl")), 2)}
+        except Exception:
+            pass
+    return result
+
+
+def _liquidity_map(depth: Dict[str, Any]) -> Dict[str, Any]:
+    if depth.get("status") != "OK":
+        return {"status": "UNAVAILABLE"}
+    imb = _num(depth.get("imbalance_1_pct"))
+    nearest_bid = _num(depth.get("nearest_bid_wall_pct"))
+    nearest_ask = _num(depth.get("nearest_ask_wall_pct"))
+    return {
+        "status": "OK",
+        "bias": "BID" if imb >= 0.18 else "ASK" if imb <= -0.18 else "BALANCED",
+        "nearest_bid_wall_pct": nearest_bid,
+        "nearest_ask_wall_pct": nearest_ask,
+        "wall_side": "BID" if nearest_bid < nearest_ask else "ASK" if nearest_ask < nearest_bid else "BALANCED",
+    }
+
+
 def build_market_intelligence(bundle) -> Dict[str, Any]:
     """Build one compact, cached evidence packet per symbol/scan cycle."""
     symbol = str(getattr(bundle, "symbol", "") or "").upper()
@@ -192,6 +266,8 @@ def build_market_intelligence(bundle) -> Dict[str, Any]:
     depth = _depth_snapshot(symbol)
     oi = _oi_and_funding(symbol)
     positioning = _positioning(symbol)
+    onchain = _onchain_context(symbol)
+    liquidity_map = _liquidity_map(depth)
 
     volume_24h = _num(ticker.get("turnover24h") or ticker.get("volume24h"))
     result = {
@@ -202,10 +278,8 @@ def build_market_intelligence(bundle) -> Dict[str, Any]:
         "orderbook": depth,
         "derivatives": oi,
         "positioning": positioning,
-        "onchain": {
-            "status": "NOT_CONNECTED",
-            "note": "No paid on-chain dependency is required by the baseline engine.",
-        },
+        "liquidity_map": liquidity_map,
+        "onchain": onchain,
     }
     _cache_set(key, result, 20)
     return result
@@ -245,6 +319,13 @@ def intelligence_note(candidate) -> list[str]:
         if abs(delta) >= 0.10:
             side = "لانگ" if delta > 0 else "شورت"
             lines.append(f"نسبت حساب‌های خرید/فروش به سمت {side} متمایل است؛ این فقط تأیید کمکی است، نه سیگنال مستقل.")
+
+    oc = mi.get("onchain") or {}
+    if oc.get("status") == "OK":
+        chg = _num(oc.get("tx_volume_usd_change") or oc.get("tx_count_change"))
+        if abs(chg) >= 8:
+            direction = "افزایش" if chg > 0 else "کاهش"
+            lines.append(f"فعالیت شبکهٔ {oc.get('network','کریپتو')} طی دادهٔ اخیر {direction} داشته است؛ این بخش صرفاً زمینهٔ آنچین است.")
 
     lines.append("این داده‌ها فقط لایهٔ کمکی‌اند و پایهٔ ستاپ، خطوط، شناسه و قالب پیام را تغییر نمی‌دهند.")
     return lines[:4]
