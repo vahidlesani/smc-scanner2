@@ -1488,6 +1488,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     if _hit is not None:
         return _hit
     try:
+        # Always define chart-only price-axis tags before any conditional render path.
+        # This is display state only and must never affect setup detection or message format.
+        _axis_tags: list = []
         # Preserve enough history for real channel / wedge / range geometry;
         # the blank future panel is added separately, never by sacrificing bars.
         # Macro timeframes need LESS zoom: fewer, larger candles expose the
@@ -2411,7 +2414,6 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # the true level. (The interleave idea from the parallel branch —
             # dropping the pills entirely — was tried and Viva rejected it:
             # the pills ARE the tool, 09-23/24.)
-            _axis_tags: list = []   # (level, price_str, color) → price-axis tags
             for _lvl, _items in _groups:
                 for label, level, color in _items:
                     # Viva 09-16: solid guide lines read cleaner than dashes;
