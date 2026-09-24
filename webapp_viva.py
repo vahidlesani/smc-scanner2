@@ -1368,6 +1368,7 @@ function feedCard(s){
    <div class="pill stop"><i>استاپ</i><b>${fnum(s.sl)}</b></div>
    <div class="pill tp1 ${s.tp1_hit?'hit':''}"><i>TP1</i><b>${fnum(s.tp1)}${s.tp1_hit?' ✓':''}</b></div>
    <div class="pill tp2 ${s.tp2_hit?'hit':''}"><i>TP2</i><b>${fnum(s.tp2)}${s.tp2_hit?' ✓':''}</b></div></div>
+  <div class="thumb"><img loading="lazy" src="/app/api/chart/${encodeURIComponent(s.signal_id||'')}" alt="چارت ${fnum(s.symbol)}"></div>
   ${s.summary?`<div class="sumline">${fnum(s.summary)}</div>`:''}
   <div class="ftr"><span class="code">${fnum(s.code)}</span>
    <span class="res ${s.result}">${resFa(s.result)}${s.pnl!==null&&s.pnl!==undefined?` ${s.pnl>0?'+':''}${s.pnl}%`:''}</span>
