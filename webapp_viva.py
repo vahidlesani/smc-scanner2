@@ -966,8 +966,9 @@ def api_control():
 def pwa_manifest():
     manifest = {
         "name": "VIVA SIGNALS PRO", "short_name": "VIVA",
-        "description": "داشبورد سیگنال‌ها و کنترل ربات ویوا",
-        "lang": "fa", "dir": "rtl",
+        "description": "Professional crypto signals dashboard and Telegram mirror",
+        "lang": "en", "dir": "ltr",
+        "version": "R30",
         "start_url": "/app", "scope": "/",
         "display": "standalone", "orientation": "portrait",
         "theme_color": "#0d1017", "background_color": "#0d1017",
@@ -993,7 +994,7 @@ self.addEventListener('fetch', e => {
   if (url.pathname.startsWith('/app/api/')) return;         // live data: always network
   const hit = SHELL.find(([p]) => url.pathname === p);
   if (hit) {
-    e.respondWith(caches.open('viva-shell-v2').then(async c => {
+    e.respondWith(caches.open('viva-shell-r30').then(async c => {
       const cached = await c.match(e.request);
       const fetchP = fetch(e.request).then(r => { c.put(e.request, r.clone()); return r; }).catch(() => cached);
       return cached || fetchP;
@@ -1074,6 +1075,8 @@ document.getElementById('pw').addEventListener('keydown',e=>{if(e.key==='Enter')
 APP_HTML = """<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0d1017">
+<meta name="application-name" content="VIVA SIGNALS PRO">
+<meta name="app-version" content="R30">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="VIVA">
