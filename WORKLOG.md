@@ -214,3 +214,10 @@
   HORIZONTAL_SR lane (labels today, dedicated break logic queued); doji/
   engulfing/harami/star = candle-sheet → covered by the PIN family + confirmation
   candle laws; dedicated engulfing scanner = queued.
+
+## Round-26b — «کانال، وج شد» flip killer (V3 §5 slope-delta evidence)
+- Repro: parallel descending channel re-detected over 6 noise seeds → 3× WEDGE_FALLING flip (fitted-pivot noise kinks slopes; endpoint-width alone is not convergence evidence).
+- Instrumented separation: channels Δdrift/max(du,dl) ≤ 0.09; true wedge (ZK model) = 0.24 → threshold 0.15.
+- classify_shape: converging claim additionally requires abs(drift_u−drift_l) > 0.15·max(drift_u,drift_l) — noise-parallel fits stay CHANNEL regardless of endpoint width ratio.
+- New test: 6-seed parallel process never labels WEDGE (test_round26_geometry_v3).
+- Suite: 425 passed / 1 skipped.

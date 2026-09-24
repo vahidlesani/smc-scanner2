@@ -207,13 +207,44 @@ def classify_shape(upper, lower, n) -> str:
     flat_u = drift_u <= 0.12 * width_now
     flat_l = drift_l <= 0.12 * width_now
     width_then = upper.price_at(start) - lower.price_at(start)
-    converging = width_then > 0 and width_now < 0.85 * width_then
+    # V3 §5/§29: contraction must be PROGRESSIVE, not an endpoint-noise
+    # artifact — the mid-span width has to sit clearly below the start width
+    # before any wedge/triangle claim. A true channel keeps width_mid ≈ width_then
+    # and can never flip to a wedge under small noise (his «کانال، وج شده» bug).
+    width_mid = upper.price_at(start + span // 2) - lower.price_at(start + span // 2)
+    converging = (width_then > 0 and width_now < 0.85 * width_then
+                  and width_mid < 0.97 * width_then)
+    # V3 §5 slope-delta evidence: a WEDGE claim needs the two fitted lines to
+    # genuinely APPROACH (Δdrift > 15% of the dominant drift). Noise-parallel
+    # fits (measured: channels Δ/max ≤ 0.09, real wedges ≥ 0.24) stay channels
+    # no matter what the noisy endpoint width suggests — this is the
+    # «کانال، وج شد» flip killer (same symbol, two charts, two labels).
+    if abs(drift_u - drift_l) <= 0.15 * max(drift_u, drift_l, 1e-12):
+        converging = False
     # slope deadband: a drift under 2% of height over the span IS horizontal
     tol = 0.02 * width_now / span
     if not converging:
         if width_then > 0 and width_now > 1.18 * width_then and upper.slope > tol and lower.slope < -tol:
             return "BROADENING"          # E&M megaphone: both edges fan outward
-        sgn = (upper.slope > tol) - (upper.slope < -tol)
+        # V3 §31: flat-top/flat-bottom triangles are judged BEFORE the channel
+        # branch (a slowly-descending triangle is NOT a descending channel)
+        flat_u25 = drift_u <= 0.25 * width_now
+        flat_l25 = drift_l <= 0.25 * width_now
+        if flat_u25 and not flat_l25 and lower.slope > tol:
+            return "TRIANGLE_ASCENDING"
+        if flat_l25 and not flat_u25 and upper.slope < -tol:
+            return "TRIANGLE_DESCENDING"
+        # V3 §29: a channel needs parallelism evidence — BOTH edges moving the
+        # same way. Opposing drifts that never converged are an honest triangle.
+        sgn_u = (upper.slope > tol) - (upper.slope < -tol)
+        sgn_l = (lower.slope > tol) - (lower.slope < -tol)
+        if sgn_u and sgn_l and sgn_u != sgn_l:
+            return "TRIANGLE"
+        # V3 §29: a channel needs BOTH edges meaningful — a one-slope shape is
+        # «نه کانال» (his sheets); it renders as two honest trendlines.
+        if (sgn_u == 0) != (sgn_l == 0):
+            return "TRIANGLE"
+        sgn = sgn_u or sgn_l
         return "CHANNEL_ASCENDING" if sgn > 0 else "CHANNEL_DESCENDING" if sgn < 0 else "CHANNEL_FLAT"
     if flat_u and not flat_l and lower.slope > tol:
         return "TRIANGLE_ASCENDING"
@@ -444,6 +475,33 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
     thr = float(getattr(settings, "technoclassic_reject_rate", 0.6) or 0.6)
     fade_enabled = bool(getattr(settings, "technoclassic_fade_signals", True))
     comp = compression_metrics(pattern_df)
+    # V3 §6 APPROACH DIRECTION: net displacement of the PRE-PATTERN path
+    # into the pattern — evidence only, geometry is never overwritten.
+    _start_idx = max(upper.first_index, lower.first_index) if (upper and lower) else \
+        (upper.first_index if upper else lower.first_index)
+    _lookback = min(40, max(6, int(_start_idx)))
+    _seg = pattern_df["close"].iloc[max(0, int(_start_idx) - _lookback):int(_start_idx) + 1]
+    if len(_seg) >= 6:
+        _net = float(_seg.iloc[-1]) - float(_seg.iloc[0])
+        _thr6 = 0.25 * atr_p * max(1.0, _lookback ** 0.5)
+        approach_direction = ("FROM_ABOVE" if _net < -_thr6
+                              else "FROM_BELOW" if _net > _thr6 else "INSIDE")
+    else:
+        approach_direction = "UNKNOWN"
+    # V3 §7 PATTERN ROLE: contextual evidence, never a trade instruction.
+    _ROLE9 = {
+        "WEDGE_FALLING": ("REVERSAL", 70), "WEDGE_RISING": ("REVERSAL", 70),
+        "TRIANGLE_ASCENDING": ("CONTINUATION", 60), "TRIANGLE_DESCENDING": ("CONTINUATION", 60),
+        "TRIANGLE_SYMMETRICAL": ("CONTINUATION", 60), "TRIANGLE": ("CONTINUATION", 50),
+        "CHANNEL_ASCENDING": ("CONTINUATION", 55), "CHANNEL_DESCENDING": ("CONTINUATION", 55),
+        "CHANNEL_FLAT": ("CONSOLIDATION", 60), "CHANNEL": ("CONTINUATION", 55),
+        "FLAG_BULL": ("CONTINUATION", 80), "FLAG_BEAR": ("CONTINUATION", 80),
+        "BROADENING": ("UNKNOWN", 25), "TRENDLINE": ("UNKNOWN", 30),
+        "HEAD_SHOULDERS": ("REVERSAL", 70), "DOUBLE_TOP": ("REVERSAL", 70),
+        "INV_HEAD_SHOULDERS": ("REVERSAL", 70), "DOUBLE_BOTTOM": ("REVERSAL", 70),
+    }
+    _role9, _rolec9 = _ROLE9.get(str(pattern).upper(), ("UNKNOWN", 30))
+    ev_ref9 = str(trigger_df["timestamp"].iloc[-1])
     for side, line in (("upper", upper), ("lower", lower)):
         if not _line_alive(line, n):
             continue
@@ -467,6 +525,10 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                 "break_direction": "UP" if side == "upper" else "DOWN",
                 "line_price": _ln9, "live": live, "pattern_tf": pattern_tf,
                 "ref_ts": str(trigger_df["timestamp"].iloc[-1]),
+                "approach_direction": approach_direction,
+                "pattern_role": _role9, "role_confidence": _rolec9,
+                "legality": "WARNING_ONLY",
+                "event_id": f"{side}|{pattern}|{STATE_VIOLATED}|{ev_ref9}",
                 "violation_fa": (
                     f"الگوی {PATTERN_FA.get(pattern, pattern)} در تایم‌فریم {pattern_tf} "
                     f"نقض شد — بریک و کلوز از ضلعِ {'بالا' if side == 'upper' else 'پایین'} "
@@ -536,6 +598,10 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             "measured": {"from": line_now, "to": target, "pct": round(pct, 1),
                          "height": height, "last_close": live},
             "compression": comp, "pattern_tf": pattern_tf,
+            "approach_direction": approach_direction,
+            "pattern_role": _role9, "role_confidence": _rolec9,
+            "legality": "LEGAL",
+            "event_id": f"{side}|{pattern}|{state}|{ev_ref9}",
             "upper_points": [dict(p) for p in (upper.points if upper else ())],
             "lower_points": [dict(p) for p in (lower.points if lower else ())],
             "ref_ts": str(trigger_df["timestamp"].iloc[-1]),
@@ -961,6 +1027,9 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         "break_direction": ev.get("break_direction"),
         "trade_direction": direction,
         "direction_reason": ev.get("direction_reason", ""),
+        "approach_direction": ev.get("approach_direction"),
+        "pattern_role": ev.get("pattern_role"),
+        "role_confidence": ev.get("role_confidence"),
         "viva_structure_score": float(ev.get("structure_score") or 0.0),
         "viva_final_score": raw, "viva_state": stage + "_CLOSED",
         "tl_context_tf": structure_tf, "tl_line": line_now,
