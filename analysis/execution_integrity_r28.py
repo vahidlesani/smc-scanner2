@@ -217,12 +217,13 @@ def _last_closed(df) -> Optional[Mapping[str, Any]]:
 
 
 def _atr_like(df, period: int = 14) -> float:
+    """Compatibility wrapper around the repository's canonical Wilder ATR."""
     try:
-        if df is None or len(df) < 2:
+        if df is None or len(df) < period:
             return 0.0
-        h = [float(x) for x in df["high"].tail(period)]
-        l = [float(x) for x in df["low"].tail(period)]
-        return sum(max(a - b, 0.0) for a, b in zip(h, l)) / max(len(h), 1)
+        from analysis.indicators import atr as _wilder_atr
+        value = float(_wilder_atr(df, period).iloc[-1])
+        return value if value > 0 else 0.0
     except Exception:
         return 0.0
 
