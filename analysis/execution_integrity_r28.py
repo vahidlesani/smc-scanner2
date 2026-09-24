@@ -386,7 +386,7 @@ def structural_stop(entry: float, direction: str, stop: float,
     pct = dist / e * 100.0 if e > 0 else 0.0
     side_ok = (d == "LONG" and 0 < s < e) or (d == "SHORT" and s > e > 0)
     floor = float(TF_STOP_FLOOR_PCT.get(str(trigger_tf or "").lower(), 0.45))
-    floor_ok = pct >= floor
+    floor_ok = pct + 1e-9 >= floor
     invalid_ok = True
     if invalidation > 0:
         invalid_ok = (s < invalidation) if d == "LONG" else (s > invalidation)
