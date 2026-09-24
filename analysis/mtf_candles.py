@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Dict, Optional
 import pandas as pd
 
-TF_ORDER = ("1d", "4h", "1h", "30m", "15m", "5m", "3m", "1m")
+TF_ORDER = ("1w", "3d", "1d", "12h", "8h", "4h", "1h", "30m", "15m", "5m", "3m", "1m")
 
 
 def _candle(o, h, l, c):
@@ -64,8 +64,13 @@ def _describe(tf: str, c: dict, prev: Optional[dict], direction: str, near_suppo
         text += f" روی/نزدیک {focus}؛ برای سناریوی {dir_fa} قابل تفسیر است."
     else:
         text += "؛ این الگو در تایم خودش دیده شده و به‌تنهایی تأیید نهایی نیست."
+    source = (
+        "DIRECT" if tf in ("1d", "4h", "15m", "5m", "3m", "1m")
+        else "RESAMPLED"
+    )
     return {"tf": tf, "pattern": label, "text": text,
-            "relevance": "ZONE" if (near_support or near_resistance) else "CONTEXT"}
+            "relevance": "ZONE" if (near_support or near_resistance) else "CONTEXT",
+            "source": source}
 
 
 def analyze_mtf_candles(bundle: Dict, direction: str, trigger_tf: str = "") -> Dict:
@@ -89,7 +94,8 @@ def analyze_mtf_candles(bundle: Dict, direction: str, trigger_tf: str = "") -> D
                     _bundle[tf] = _a
     except Exception:
         pass
-    for tf in TF_ORDER + ("3d", "1w"):
+    # TF_ORDER already contains 3d/1w; do not append them a second time.
+    for tf in TF_ORDER:
         df = _bundle.get(tf) if _bundle else None
         if df is None or len(df) < 25:
             continue
@@ -108,7 +114,9 @@ def analyze_mtf_candles(bundle: Dict, direction: str, trigger_tf: str = "") -> D
             continue
     if out["items"]:
         preferred = [x for x in out["items"] if x["relevance"] == "ZONE"]
-        chosen = preferred[:3] if preferred else out["items"][:3]
+        trigger_items = [x for x in out["items"] if x["tf"] == str(trigger_tf or "").lower()]
+        pool = trigger_items + [x for x in preferred if x not in trigger_items]
+        chosen = pool[:3] if pool else out["items"][:3]
         out["summary"] = " | ".join(x["text"] for x in chosen)
     return out
 

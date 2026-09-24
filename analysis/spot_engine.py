@@ -6,7 +6,7 @@ Rules he fixed for spot, verbatim:
 * **LONG only**; only **bullish** patterns (falling wedge · descending trendline
   break · ascending/continuation triangle · bullish rectangle) «دقیقا دقیق همین»
   CryptoCove shapes;
-* timeframes **4h · 1d · 3d · 1w** (3d/1w are aggregated from the daily tape);
+* timeframes **4h · 8h · 12h · 1d · 3d · 1w**; 4h/8h are short-term, 12h/1d mid-term, 3d/1w long-term (3d/1w are aggregated from the daily tape);
 * **LOG scale** chart; pivots extended; supply/demand boxes; a green vertical
   measured-move box (upward, with value + % label) — the box he wants on SPOT
   only (futures charts carry none);
@@ -27,7 +27,10 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-SPOT_TRIGGERS = ("4h", "8h", "12h", "1d", "3d")
+SPOT_SHORT_TFS = ("4h", "8h")
+SPOT_MID_TFS = ("12h", "1d")
+SPOT_LONG_TFS = ("3d", "1w")
+SPOT_TRIGGERS = SPOT_SHORT_TFS + SPOT_MID_TFS + SPOT_LONG_TFS
 SPOT_SETUPS = ("TLBREAK", "TECHCLASSIC")
 
 # ── ROUND 16 DECOUPLING (Viva 09-22, verbatim: «هیچ ارتباطی بین ستاپ‌های
@@ -40,12 +43,13 @@ SPOT_SETUPS = ("TLBREAK", "TECHCLASSIC")
 # shared setup).
 SPOT_SETUP_CODE = "SPOTBREAK"
 
-# his trigger set for spot (09-22): «۴ساعته · ۸ساعته · ۱۲ساعته · ۱روزه · ۳روزه»
-# — the weekly is gone; 8h/12h come native from the venue (Bybit 360/720).
+# Spot horizon law: 4h/8h = short, 12h/1d = medium, 3d/1w = long.
+# 8h/12h may be locally derived from the 4h structural tape; 3d/1w from 1d.
+# This preserves the requested six spot views without changing message IDs/chains.
 
 # his band law for these timeframes (round 15): the ladder never sits closer
 # than this to the entry, whatever the structure says
-MIN_PATH_PCT_BY_TF = {"4h": 5.0, "8h": 5.5, "12h": 6.0, "1d": 5.0, "3d": 6.0}
+MIN_PATH_PCT_BY_TF = {"4h": 5.0, "8h": 5.5, "12h": 6.0, "1d": 5.0, "3d": 6.0, "1w": 7.0}
 SPOT_WEIGHTS = (40.0, 30.0, 30.0)
 
 # his stop law for spot (09-22): «استاپ هم ۱۰ درصد خوبه» — the structural stop
@@ -53,7 +57,7 @@ SPOT_WEIGHTS = (40.0, 30.0, 30.0)
 SPOT_STOP_CAP_PCT = 10.0
 
 _SPOT_STYLE_BY_TF = {"4h": "SWING", "8h": "SWING", "12h": "SWING",
-                     "1d": "GRAND", "3d": "GRAND"}
+                     "1d": "GRAND", "3d": "GRAND", "1w": "GRAND"}
 
 
 def _atr(df: pd.DataFrame, k: int = 14) -> float:
@@ -125,7 +129,7 @@ def _fresh(d: pd.DataFrame, tf: str) -> bool:
 
 def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                      buffer_pct: float = 0.10) -> List[dict]:
-    """Confirmed spot setups for one symbol across 4h/1d/3d/1w.
+    """Confirmed spot setups for one symbol across 4h/8h/12h/1d/3d/1w.
 
     Returns plain dicts (the caller turns them into SignalCandidate rows), each
     already past the «first valid close above the shape» law.
@@ -194,6 +198,7 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 targets = [close + path * f for f in (0.2, 0.6, 1.0)]
                 out.append({
                     "symbol": symbol.upper(), "tf": tf, "pattern": kind,
+                    "horizon": ("SHORT" if tf in SPOT_SHORT_TFS else "MID" if tf in SPOT_MID_TFS else "LONG"),
                     "pattern_fa": pattern_info(kind)["fa"],
                     "label": state_label(kind, str(pat.get("break_direction") or "")),
                     "rule_fa": pattern_info(kind)["rule_fa"],
@@ -260,6 +265,7 @@ def build_spot_candidate(item: dict):
         "public_code": _next_spot_public_code(),
         "atr": float(item.get("atr") or 0.0),
         "pattern_type": str(item.get("pattern") or ""),
+        "spot_horizon": str(item.get("horizon") or ""),
         "pattern_state_label": str(item.get("label") or ""),
         "pattern_rule_fa": str(item.get("rule_fa") or ""),
         "render_patterns": list(item.get("pattern_commands") or []),
@@ -394,7 +400,7 @@ def _structural_high_above(d: pd.DataFrame, close: float,
 
 
 def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]:
-    """Pre-confirmation ladder items for one symbol across 4h/1d/3d/1w.
+    """Pre-confirmation ladder items for one symbol across 4h/8h/12h/1d/3d/1w.
 
     Returns plain dicts (stage TOUCH / NEAR_BREAK / BREAK_DOWN); publication
     gating lives in the caller (spot_alert_check → send → spot_alert_commit).

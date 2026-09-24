@@ -1,6 +1,6 @@
 """Round 16 phase 2 — decoupling + his format laws (Viva 09-22):
 
-* spot triggers = his set: 4h · 8h · 12h · 1d · 3d (weekly is gone)
+* spot triggers = current R30 set: 4h · 8h · 12h · 1d · 3d · 1w
 * spot setup identity = SPOTBREAK — NEVER the futures TLBREAK/TECHCLASSIC
   codes («هیچ ارتباطی بین ستاپ‌های فیوچرز و اسپات نباید وجود داشته باشه»)
 * unique id format VIVA-SPOT-E000000
@@ -19,8 +19,8 @@ import pytest
 
 def test_spot_triggers_are_his_set():
     from analysis.spot_engine import SPOT_TRIGGERS
-    assert SPOT_TRIGGERS == ("4h", "8h", "12h", "1d", "3d")
-    assert "1w" not in SPOT_TRIGGERS
+    assert SPOT_TRIGGERS == ("4h", "8h", "12h", "1d", "3d", "1w")
+    assert "1w" in SPOT_TRIGGERS
 
 
 def test_8h_12h_exist_in_fetcher_maps():

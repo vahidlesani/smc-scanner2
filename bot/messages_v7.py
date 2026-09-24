@@ -1810,7 +1810,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # most two zones per side, chosen by importance = near the live price
         # AND tall (a real base/ceiling), never every imbalance on the tape.
         _rz_list = list(_rz or [])
-        if len(_rz_list) > 4:
+        _clean_zone_view = str(os.getenv("CHART_CLEAN_ZONES", "1")).strip().lower() \
+            in {"1", "true", "on", "yes"}
+        if _rz_list:
             _live8z = float(frame["close"].iloc[-1])
 
             def _zone_importance(_z8: dict) -> float:
@@ -1825,8 +1827,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _s8 = str(_zc.get("bias") or "").upper() or \
                     ("DEMAND" if _dir_key == "LONG" else "SUPPLY")
                 _by_side.setdefault(_s8, []).append(_zc)
+            # Keep the long-standing two-zones-per-side source contract;
+            # clean mode trims the already-ranked result to the most actionable
+            # two overall, without changing detection.
             _rz_list = [z8 for _zs8 in _by_side.values()
                         for z8 in sorted(_zs8, key=_zone_importance)[:2]]
+            if _clean_zone_view and len(_rz_list) > 2:
+                _rz_list = sorted(_rz_list, key=_zone_importance)[:2]
         for _z in _rz_list:
             # timestamp-anchored when the zone carries its origin time (every
             # zone detected since 09-20 does); legacy rows keep the old rule.
@@ -1841,7 +1848,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             if (_fam8, _dir_key) in ZONE_PALETTE and _fam8 != "DEF":
                 _f8, _t8 = ZONE_PALETTE[(_fam8, _dir_key)]
             ax.fill_between([_x0, zone_end], float(_z["bottom"]),
-                            float(_z["top"]), color=_f8, alpha=0.18,
+                            float(_z["top"]), color=_f8,
+                            alpha=0.10 if _clean_zone_view else 0.18,
                             linewidth=0, zorder=1)
             _zone_items.append({"x0": float(_x0), "x1": float(zone_end),
                                 "bottom": float(_z["bottom"]),
@@ -2712,8 +2720,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 print(f"Trendline overlay warning: {exc}")
 
         # Semantic setup chips and fresh imbalances are visual context, not extra signals.
+        # Clean structure mode keeps detection unchanged but removes visual noise:
+        # the engine still sees every zone/FVG/candle; the chart shows only the
+        # most actionable structural zones so the geometry remains readable.
         notes = _setup_stickers(candidate, confirmed) + notes
-        notes.extend(_draw_visible_fvgs(ax, frame, count))
+        if not _clean_zone_view:
+            notes.extend(_draw_visible_fvgs(ax, frame, count))
 
         # keep candle scale: long context lines may not stretch the y-axis
         _ylo = float(frame["low"].min())

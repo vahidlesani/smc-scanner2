@@ -392,20 +392,152 @@ def get_instruments(use_cache: bool = True) -> List[Dict]:
     return result
 
 
+def _resample_ohlcv(frame: Optional[pd.DataFrame], rule: str, min_bars: int) -> Optional[pd.DataFrame]:
+    """Build a higher closed candle locally from a lower structural tape.
+
+    The input timestamps are candle-open timestamps. Buckets are therefore
+    left-labeled/left-closed, and incomplete first/last buckets are discarded.
+    This is used only where the source timeframe has enough history; long
+    history (1D) remains a direct tape so 3D/1W patterns do not silently lose
+    context.
+    """
+    try:
+        if frame is None or frame.empty:
+            return None
+        d = frame.copy()
+        d["timestamp"] = pd.to_datetime(d["timestamp"])
+        d = d.sort_values("timestamp").drop_duplicates("timestamp")
+        d = d.set_index("timestamp")
+        agg = d.resample(rule, label="left", closed="left").agg(
+            {"open": "first", "high": "max", "low": "min",
+             "close": "last", "volume": "sum"}
+        )
+        counts = d["close"].resample(rule, label="left", closed="left").count()
+        expected = max(1, int(min_bars))
+        agg = agg[counts >= expected].dropna(subset=["open", "high", "low", "close"])
+        if agg.empty:
+            return None
+        return agg.reset_index().reset_index(drop=True)
+    except Exception as exc:
+        _log_error_once(f"resample:{rule}", f"local resample failed {rule}: {exc}")
+        return None
+
+
+def _derive_from_base(
+    base_15m: Optional[pd.DataFrame],
+    base_4h: Optional[pd.DataFrame],
+    daily: Optional[pd.DataFrame],
+    requested: tuple,
+    limits: Dict[str, int],
+) -> Dict[str, Optional[pd.DataFrame]]:
+    """Derive exact multiples locally where this saves a venue request.
+
+    5m is always a real venue tape (never reconstructed from 15m).
+    1h/30m come from 15m; 8h/12h come from 4h; 3d/1w come from 1d.
+    4h and 1d themselves remain direct because they carry the long structural
+    history required by the pattern engine.
+    """
+    out: Dict[str, Optional[pd.DataFrame]] = {}
+    for tf in requested:
+        if tf == "5m":
+            # 5m is filled by the caller from the direct venue tape.
+            out[tf] = None
+        elif tf == "15m":
+            out[tf] = base_15m
+        elif tf == "4h":
+            out[tf] = base_4h
+        elif tf == "1d":
+            out[tf] = daily
+        elif tf == "1h":
+            out[tf] = _resample_ohlcv(base_15m, "1h", 4)
+        elif tf == "30m":
+            out[tf] = _resample_ohlcv(base_15m, "30min", 2)
+        elif tf == "8h":
+            out[tf] = _resample_ohlcv(base_4h, "8h", 2)
+        elif tf == "12h":
+            out[tf] = _resample_ohlcv(base_4h, "12h", 3)
+        elif tf == "3d":
+            out[tf] = _aggregate_daily(daily, 3)
+        elif tf == "1w":
+            out[tf] = _aggregate_daily(daily, 7)
+    return out
+
+
 def get_market_bundle(
     symbol: str,
-    timeframes=("1d", "4h", "1h", "15m"),  # Viva 09-16: 5m/3m مانیتور انسانی
+    timeframes=("1d", "4h", "1h", "15m", "5m"),
     limits: Optional[Dict[str, int]] = None,
     ticker: Optional[Dict] = None,
 ) -> MarketBundle:
-    limits = limits or {"1d": 120, "4h": 200, "1h": 200, "15m": 200}
-    frames = {
-        tf: get_klines(symbol, tf, limits.get(tf, 200), closed_only=True)
-        for tf in timeframes
-    }
+    """Fetch the smallest honest base set, then derive safe higher multiples.
+
+    Cost/accuracy law:
+      * 5m is fetched directly — it cannot be reconstructed from 15m.
+      * 15m is fetched directly and is the operational LTF source.
+      * 1h/30m are resampled from 15m.
+      * 8h/12h are resampled from the direct 4h structural tape.
+      * 3d/1w are resampled from the direct 1d macro tape.
+      * 4h/1d stay direct because reconstructing enough long history from 5m/15m
+        would require pagination and more API calls, not fewer.
+
+    The returned API remains the same MarketBundle, so Telegram formats,
+    lineage links and unique IDs are untouched.
+    """
+    requested = tuple(dict.fromkeys(str(tf).lower() for tf in (timeframes or ())))
+    limits = limits or {}
+    # Fetch only the base tapes that the caller actually needs. In particular,
+    # a spot-only 4h/8h/12h/1d/3d/1w scan must not pull unused 5m/15m data.
+    need_5m = "5m" in requested
+    need_15m = any(tf in requested for tf in ("15m", "30m", "1h"))
+    need_4h = any(tf in requested for tf in ("4h", "8h", "12h"))
+    need_1d = any(tf in requested for tf in ("1d", "3d", "1w"))
+
+    base_5m = get_klines(
+        symbol, "5m", max(300, int(limits.get("5m", 300))), closed_only=True
+    ) if need_5m else None
+
+    # Derived 30m/1h views must retain enough source bars for the detector's
+    # structural windows. Size the 15m base from the requested output history.
+    need_15m_bars = max(
+        int(limits.get("15m", 200)),
+        int(limits.get("30m", 200)) * 2 if "30m" in requested else 0,
+        int(limits.get("1h", 200)) * 4 if "1h" in requested else 0,
+    )
+    base_15m = get_klines(
+        symbol, "15m", max(200, need_15m_bars), closed_only=True
+    ) if need_15m else None
+
+    # Derived 8h/12h views must retain enough source 4h candles to preserve
+    # the same structural lookback that a direct feed would have provided.
+    need_4h_bars = max(
+        int(limits.get("4h", 170)),
+        int(limits.get("8h", 170)) * 2 if "8h" in requested else 0,
+        int(limits.get("12h", 170)) * 3 if "12h" in requested else 0,
+    )
+    base_4h = get_klines(
+        symbol, "4h", max(60, need_4h_bars), closed_only=True
+    ) if need_4h else None
+
+    # 1D is the economical long-history anchor. For 3D/1W, request enough
+    # daily bars to produce the requested number of complete higher bars.
+    daily_need = int(limits.get("1d", 120))
+    daily_need = max(daily_need, int(limits.get("3d", 45)) * 3 + 6)
+    daily_need = max(daily_need, int(limits.get("1w", 45)) * 7 + 7)
+    daily = get_klines(symbol, "1d", daily_need, closed_only=True) if need_1d else None
+
+    # Direct fallbacks for unusual requested frames not covered by the local
+    # resampler. They preserve backward compatibility without changing callers.
+    frames = _derive_from_base(base_15m, base_4h, daily, requested, limits)
+    for tf in requested:
+        if frames.get(tf) is None and tf not in ("5m", "15m", "4h", "1d", "1h", "30m", "8h", "12h", "3d", "1w"):
+            frames[tf] = get_klines(symbol, tf, int(limits.get(tf, 200)), closed_only=True)
+    # 5m is direct; keep it separate from _derive_from_base to make the
+    # impossible 15m→5m reconstruction explicit.
+    if "5m" in requested:
+        frames["5m"] = base_5m
     return MarketBundle(symbol=symbol.upper(), frames=frames, ticker=ticker or {})
 
 
 def get_multi_tf(symbol: str) -> Dict[str, Optional[pd.DataFrame]]:
     """Backward-compatible helper. New code should fetch one MarketBundle."""
-    return get_market_bundle(symbol, ("1d", "4h", "1h", "15m")).frames
+    return get_market_bundle(symbol, ("1d", "4h", "1h", "15m", "5m")).frames
