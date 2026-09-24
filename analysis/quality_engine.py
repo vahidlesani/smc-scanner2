@@ -170,6 +170,20 @@ def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
         for candidate in candidates:
             candidate.metadata["market_intelligence_error"] = str(_mi_exc)[:240]
 
+    # R31 money-management evidence: calculate the existing deterministic risk plan
+    # once and expose it as advisory metadata. It never changes setup geometry.
+    try:
+        from analysis.risk import build_money_management
+        for candidate in candidates:
+            try:
+                candidate.metadata["money_management"] = build_money_management(candidate)
+            except Exception as _mm_exc:
+                candidate.metadata["money_management_error"] = str(_mm_exc)[:180]
+
+    except Exception as _mm_outer_exc:
+        for candidate in candidates:
+            candidate.metadata["money_management_error"] = str(_mm_outer_exc)[:180]
+
     # R29: non-blocking MTF candle and classical-pattern explanations.
     try:
         from analysis.mtf_candles import analyze_mtf_candles, classic_pattern_explanations
