@@ -523,8 +523,3 @@ def get_market_bundle(
 def get_multi_tf(symbol: str) -> Dict[str, Optional[pd.DataFrame]]:
     """Backward-compatible helper. New code should fetch one MarketBundle."""
     return get_market_bundle(symbol, ("1d", "4h", "1h", "15m", "5m")).frames
-
-
-def get_multi_tf(symbol: str) -> Dict[str, Optional[pd.DataFrame]]:
-    """Backward-compatible helper. New code should fetch one MarketBundle."""
-    return get_market_bundle(symbol, ("1d", "4h", "1h", "15m")).frames
