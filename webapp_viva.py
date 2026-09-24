@@ -415,7 +415,7 @@ def _fetch_state() -> Dict[str, Any]:
             )
 
             # ── winrate per setup: current day only
-            c.execute("""
+            c.execute(f"""
                 SELECT source, MAX(strategy_fa) AS fa, COUNT(*) AS total,
                        SUM(CASE WHEN (result='WIN' OR partial_win=TRUE) THEN 1 ELSE 0 END) AS wins,
                        SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) AS losses,
@@ -455,11 +455,11 @@ def _fetch_state() -> Dict[str, Any]:
                                             pending=0, wr=0.0, avg_pnl=None, best=None,
                                             worst=None, avg_score=None, last="امروز بدون سیگنال", active=True))
             # ── hit notifications (TP/SL/close/confirm lifecycle feed)
-            c.execute("""
+            c.execute(f"""
                 SELECT symbol, public_code, tp1_hit_at, closed_at, result, pnl_pct,
                        created_at, confirmed_at, partial_win, tp1, tp2, sl
                 FROM signals
-                WHERE created_at >= %s AND tp1_hit=TRUE OR result IN ('WIN','LOSS')
+                WHERE created_at >= {_db_placeholder()} AND tp1_hit=TRUE OR result IN ('WIN','LOSS')
                    OR (confirmed=TRUE AND result='PENDING')
                 ORDER BY COALESCE(closed_at, tp1_hit_at, confirmed_at, created_at) DESC
                 LIMIT 80
@@ -509,11 +509,11 @@ def _fetch_state() -> Dict[str, Any]:
         # live POSITIONS (confirmed, still running) on top of the chains list
         try:
             with db_cursor() as c2:
-                c2.execute("""
+                c2.execute(f"""
                     SELECT signal_id, symbol, source, direction, entry, sl, score,
                            public_code, trigger_timeframe, created_at
                     FROM signals
-                    WHERE created_at >= %s AND confirmed=TRUE AND result='PENDING' AND closed_at IS NULL
+                    WHERE created_at >= {_db_placeholder()} AND confirmed=TRUE AND result='PENDING' AND closed_at IS NULL
                     ORDER BY created_at DESC LIMIT 12
                 """, (_today_start_utc(),))
                 for r in c2.fetchall():
