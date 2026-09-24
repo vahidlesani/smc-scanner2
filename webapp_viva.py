@@ -36,8 +36,21 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _ICON_DIR = os.path.join(_BASE_DIR, "assets", "app_icons")
 _FONT_DIR = os.path.join(_BASE_DIR, "assets", "fonts")
 
-DEFAULT_SETUPS = ["TLBREAK", "ALBROX", "PINWALLQ", "PINVAL", "TECHCLASSIC", "SPOT"]
-ACTIVE_WINDOW_DAYS = 30          # «ستاپی که دوماهه خاموشه» → archive
+DEFAULT_SETUPS = ["PINVAL", "PINWALLQ", "ALBROX", "TLBREAK", "TECHCLASSIC"]
+ACTIVE_WINDOW_DAYS = 1  # app is intentionally scoped to the current Tehran calendar day
+
+def _today_start_utc() -> str:
+    now = datetime.now(TEHRAN)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.astimezone(timezone.utc).replace(tzinfo=None).isoformat(sep=" ")
+
+def _db_placeholder() -> str:
+    try:
+        from database import db as _db
+        return "%s" if getattr(_db, "USE_POSTGRES", False) else "?"
+    except Exception:
+        return "%s"
+          # «ستاپی که دوماهه خاموشه» → archive
 
 viva_app = Blueprint("viva_app", __name__)
 
@@ -306,7 +319,7 @@ def _demo_payload() -> Dict[str, Any]:
         dict(kind="tp1", symbol="BTCUSDT", code="VIVA-K001204", detail="هدف اول 67,400 هیت شد",
              pnl=None, time=iso_ago(hours=1)),
     ]
-    return dict(demo=True, feed=feed, chains=chains, analytics=analytics, hits=hits,
+    return dict(demo=True, feed=feed, chains=chains, live_positions=chains, analytics=analytics, hits=hits,
                 control=control_state(), scanner=dict(alive=True, mode="نمایشی"),
                 server_time=datetime.now(TEHRAN).strftime("%Y-%m-%d %H:%M"))
 
@@ -318,8 +331,9 @@ _FEED_SQL = """
            tp1_hit, tp1_hit_at, sl_moved_to_be, description, entry_conditions,
            confirmations, setup_code, target_state_json
     FROM signals
+    WHERE created_at >= {cutoff}
     ORDER BY created_at DESC
-    LIMIT 60
+    LIMIT 120
 """
 
 
@@ -358,7 +372,8 @@ def _fetch_state() -> Dict[str, Any]:
         rows_archive: List[Dict[str, Any]] = []
         hits: List[Dict[str, Any]] = []
         with db_cursor() as c:
-            c.execute(_FEED_SQL)
+            _cutoff = _today_start_utc()
+            c.execute(_FEED_SQL.format(cutoff=_db_placeholder()), (_cutoff,))
             for r in c.fetchall():
                 (sid, symbol, source, fa, direction, entry, sl, tp1, tp2, result, pnl, score,
                  style, code, tf, created_at, closed_at, confirmed, partial_win, market_json,
@@ -386,8 +401,21 @@ def _fetch_state() -> Dict[str, Any]:
                     tp1_hit=tp1_hit, tp2_hit=tp2_hit,
                     summary=str(description or fa or "")[:220],
                 ))
-            # ── winrate per setup: only setups ACTIVE in the last window
-            c.execute("""
+            # App is a same-day journal: headline totals are derived from the
+            # exact feed shown above, never from the historical dashboard aggregate.
+            _closed_feed = [x for x in feed if x.get("result") in ("WIN", "LOSS")]
+            _wins = sum(1 for x in _closed_feed if x.get("result") == "WIN")
+            _losses = sum(1 for x in _closed_feed if x.get("result") == "LOSS")
+            _pnl_vals = [float(x.get("pnl") or 0) for x in _closed_feed]
+            summary = dict(
+                total_signals=len(feed), wins=_wins, losses=_losses,
+                pending=sum(1 for x in feed if x.get("result") == "PENDING"),
+                winrate=round(_wins * 100.0 / max(1, _wins + _losses), 1),
+                avg_pnl=round(sum(_pnl_vals) / len(_pnl_vals), 2) if _pnl_vals else 0.0,
+            )
+
+            # ── winrate per setup: current day only
+            c.execute(f"""
                 SELECT source, MAX(strategy_fa) AS fa, COUNT(*) AS total,
                        SUM(CASE WHEN (result='WIN' OR partial_win=TRUE) THEN 1 ELSE 0 END) AS wins,
                        SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) AS losses,
@@ -399,7 +427,7 @@ def _fetch_state() -> Dict[str, Any]:
                 FROM signals
                 GROUP BY source
                 ORDER BY MAX(created_at) DESC
-            """)
+            """, (_today_start_utc(),))
             for r in c.fetchall():
                 (name, fa, total, wins, losses, pending, avg_pnl, best, worst, avg_score, last) = r
                 total, wins, losses = int(total or 0), int(wins or 0), int(losses or 0)
@@ -418,16 +446,24 @@ def _fetch_state() -> Dict[str, Any]:
                     last=_rel_fa(last_iso), active=active,
                 )
                 (rows_active if active else rows_archive).append(row)
+            # Keep all five production futures lanes visible even when one has no
+            # signal today; this is observability, not a ranking.
+            _known = {str(x["name"]).upper() for x in rows_active}
+            for _setup in DEFAULT_SETUPS:
+                if _setup not in _known:
+                    rows_active.append(dict(name=_setup, fa=_setup, total=0, wins=0, losses=0,
+                                            pending=0, wr=0.0, avg_pnl=None, best=None,
+                                            worst=None, avg_score=None, last="امروز بدون سیگنال", active=True))
             # ── hit notifications (TP/SL/close/confirm lifecycle feed)
-            c.execute("""
+            c.execute(f"""
                 SELECT symbol, public_code, tp1_hit_at, closed_at, result, pnl_pct,
                        created_at, confirmed_at, partial_win, tp1, tp2, sl
                 FROM signals
-                WHERE tp1_hit=TRUE OR result IN ('WIN','LOSS')
+                WHERE created_at >= {_db_placeholder()} AND tp1_hit=TRUE OR result IN ('WIN','LOSS')
                    OR (confirmed=TRUE AND result='PENDING')
                 ORDER BY COALESCE(closed_at, tp1_hit_at, confirmed_at, created_at) DESC
-                LIMIT 40
-            """)
+                LIMIT 80
+            """, (_today_start_utc(),))
             for r in c.fetchall():
                 (symbol, code, tp1_at, closed_at, result, pnl, created_at, confirmed_at,
                  partial_win, tp1, tp2, sl) = r
@@ -451,6 +487,7 @@ def _fetch_state() -> Dict[str, Any]:
                                  pnl=(float(pnl) if pnl is not None else None),
                                  time=str(stamp or "")))
         chains: List[Dict[str, Any]] = []
+        live_positions: List[Dict[str, Any]] = []
         try:
             # live WATCH chains ( EDUCATIONAL/APPROACHING previews + slots )
             from database.candidate_store import get_active_candidates
@@ -472,22 +509,24 @@ def _fetch_state() -> Dict[str, Any]:
         # live POSITIONS (confirmed, still running) on top of the chains list
         try:
             with db_cursor() as c2:
-                c2.execute("""
+                c2.execute(f"""
                     SELECT signal_id, symbol, source, direction, entry, sl, score,
                            public_code, trigger_timeframe, created_at
                     FROM signals
-                    WHERE confirmed=TRUE AND result='PENDING' AND closed_at IS NULL
+                    WHERE created_at >= {_db_placeholder()} AND confirmed=TRUE AND result='PENDING' AND closed_at IS NULL
                     ORDER BY created_at DESC LIMIT 12
-                """)
+                """, (_today_start_utc(),))
                 for r in c2.fetchall():
-                    (sid, symbol, source, direction, entry, sl, score, code, tf, created_at) = r
+                    (sid, symbol, source, direction, entry, sl, score, code, tf, created_at, tp1, tp2, leverage, margin, target_state) = r
                     code = str(code or "")
-                    chains.insert(0, dict(
+                    live_positions.append(dict(
                         signal_id=str(sid or ""), symbol=symbol, badge=str(source or ""),
                         direction=direction, status="CONFIRMED", score=score,
                         zone=_fmt_price(entry), updates=0, code=code,
                         tf=str(tf or "").upper(),
                         spot=_row_is_spot(code, source, ""),
+                        tp1=_fmt_price(tp1), tp2=_fmt_price(tp2), leverage=int(leverage or 0),
+                        margin=float(margin or 0), target_state=target_state or "{}",
                     ))
         except Exception:
             pass
@@ -523,7 +562,7 @@ def _fetch_state() -> Dict[str, Any]:
                 scanner["alive"] = bool(thr.is_alive())
         except Exception:
             pass
-        return dict(demo=False, feed=feed, chains=chains, analytics=analytics, hits=hits,
+        return dict(demo=False, feed=feed, chains=chains, live_positions=live_positions, analytics=analytics, hits=hits,
                     control=control_state(), scanner=scanner,
                     server_time=datetime.now(TEHRAN).strftime("%Y-%m-%d %H:%M"))
     except Exception as exc:
@@ -749,7 +788,7 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
                        result, pnl_pct, score, trade_style, public_code, trigger_timeframe,
                        created_at, closed_at, confirmed, partial_win, market_json,
                        tp1_hit, tp1_hit_at, sl_moved_to_be, description, entry_conditions,
-                       confirmations, setup_code, target_state_json
+                       confirmations, setup_code, target_state_json, leverage, margin_usd
                 FROM signals WHERE signal_id=%s
             """, (sid,))
             rows = c.fetchall()
@@ -768,7 +807,7 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
                 "tp1", "tp2", "result", "pnl_pct", "score", "trade_style", "public_code",
                 "trigger_timeframe", "created_at", "closed_at", "confirmed", "partial_win",
                 "market_json", "tp1_hit", "tp1_hit_at", "sl_moved_to_be", "description",
-                "entry_conditions", "confirmations", "setup_code", "target_state_json"]
+                "entry_conditions", "confirmations", "setup_code", "target_state_json", "leverage", "margin_usd"]
         row = dict(zip(cols, rows[0]))
         res = "WIN" if (row.get("result") == "WIN" or row.get("partial_win")) else str(row.get("result") or "PENDING")
         lh1, lh2 = _ladder_hits(row.get("target_state_json"))
@@ -779,6 +818,13 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
         except Exception:
             conf = [str(row.get("confirmations") or "")] if row.get("confirmations") else []
         is_spot = _row_is_spot(str(row.get("public_code") or ""), row.get("source"), row.get("market_json"))
+        try:
+            _market_obj = json.loads(row.get("market_json") or "{}") if isinstance(row.get("market_json"), (str, bytes)) else (row.get("market_json") or {})
+        except Exception:
+            _market_obj = {}
+        _analysis_obj = _market_obj.get("viva_analysis") or {}
+        _mtf_candles = _analysis_obj.get("mtf_candles") or {}
+        _classic_patterns = _analysis_obj.get("classic_patterns") or []
         # ── hit log with CLOCK (Viva 09-23: «هیت شدن‌ها با تیک و ساعت هیت شدن؛
         # استاپ‌ها هم همین») — TP1/TP2/SL each carry its exact stamp.
         hit_log: List[Dict[str, Any]] = []
@@ -798,6 +844,14 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
             hit_log.append(dict(label="STOP", ok=False, time=str(row.get("closed_at"))))
         elif str(row.get("result")) == "WIN" and row.get("closed_at"):
             hit_log.append(dict(label="CLOSE", ok=True, time=str(row.get("closed_at"))))
+        try:
+            _ladder_obj = json.loads(row.get("target_state_json") or "{}") if isinstance(row.get("target_state_json"), (str, bytes)) else (row.get("target_state_json") or {})
+        except Exception:
+            _ladder_obj = {}
+        _management = dict(leverage=int(row.get("leverage") or 0), margin=float(row.get("margin_usd") or 0),
+                            trailing_sl=_fmt_price(_ladder_obj.get("current_sl") or row.get("sl") or 0),
+                            hit_index=int(_ladder_obj.get("hit_index") or 0),
+                            trail_regime=str(_ladder_obj.get("r29_regime") or ""))
         _messages: Dict[str, str] = {}
         for _k in ("compact", "confirmed", "confirm", "final", "detailed"):
             _m = _app_mirror(str(sid), _k)
@@ -826,6 +880,9 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
             hit_log=hit_log,
             messages=_messages,
             timeline=timeline,
+            mtf_candles=_mtf_candles,
+            classic_patterns=[str(x) for x in _classic_patterns],
+            management=_management,
         )
     except Exception as exc:
         print(f"app signal detail failed {sid}: {exc}")
@@ -1084,7 +1141,7 @@ main{padding:12px 12px 8px;max-width:680px;margin:0 auto}
 .res.CANCELLED{color:var(--muted);background:var(--chip);border:1px solid var(--line2)}
 .chain .row1{margin-bottom:8px}
 .upd{font-size:10.5px;color:var(--amber);background:rgba(226,163,54,.08);border:1px solid rgba(226,163,54,.3);padding:2px 8px;border-radius:8px}
-.sumline{font-size:11.5px;color:#b9c0cc;line-height:1.8;margin-top:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.thumb{width:100%;margin-top:10px;border-radius:13px;overflow:hidden;background:#0d1017;border:1px solid var(--line2);aspect-ratio:16/9}\n.thumb img{width:100%;height:100%;object-fit:cover;display:block}\n.livegrid{display:grid;gap:10px}\n.livebar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}\n.liveprice{font-size:13px;color:var(--text)}\n.live-meta{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}\n.live-meta .pill{padding:6px 8px}\n.graph{height:130px;display:flex;align-items:flex-end;gap:6px;padding:12px 8px 6px;background:#0f141d;border:1px solid var(--line2);border-radius:14px;margin-top:8px}\n.graph .bar{flex:1;min-width:4px;border-radius:4px 4px 1px 1px;background:var(--gold);opacity:.85}\n.graph .bar.loss{background:var(--short)} .graph .bar.win{background:var(--long)}\n.explain{font-size:11.5px;line-height:1.9;color:#c9cfda;margin-top:8px;background:#0f141d;border:1px solid var(--line2);border-radius:12px;padding:9px 11px}\n.explain b{color:var(--gold)}\n.sumline{font-size:11.5px;color:#b9c0cc;line-height:1.8;margin-top:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 /* ── perf ── */
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
 .tile{background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:11px 8px;text-align:center}
@@ -1219,10 +1276,14 @@ nav .bdg{position:absolute;top:0;left:18%;background:var(--short);color:#fff;fon
 <div class="demo" id="demo" style="display:none">حالت نمایشی — متصل به دیتابیس زنده نیست</div>
 
 <section class="page on" id="page-feed">
+  <div class="sect"><h2>🔔 هشدارهای امروز</h2><small>فقط امروز • کارت + چارت</small></div>
+  <div id="feed"></div>
   <div class="sect"><h2>⛓ زنجیره‌های رصد فعال</h2><small id="chainsN"></small></div>
   <div id="chains"></div>
-  <div class="sect"><h2>📡 فید سیگنال‌ها</h2><small>برای رصد، روی هر کارت بزن</small></div>
-  <div id="feed"></div>
+</section>
+<section class="page" id="page-live">
+  <div class="sect"><h2>🟢 پوزیشن‌های لایو</h2><small>تأییدشده‌های امروز</small></div>
+  <div class="livegrid" id="livePositions"></div>
 </section>
 
 <section class="page" id="page-hits">
@@ -1234,6 +1295,10 @@ nav .bdg{position:absolute;top:0;left:18%;background:var(--short);color:#fff;fon
   <div class="tiles" id="sumTiles"></div>
   <div class="sect"><h2>🏆 ستاپ‌های فعال</h2><small>۳۰ روز اخیر</small></div>
   <div id="stratsA"></div>
+  <div class="sect"><h2>📊 نمودار نتایج پنج ستاپ</h2><small>تعداد برد/باخت امروز</small></div>
+  <div class="graph" id="perfGraph"></div>
+  <div class="sect"><h2>🧾 پوزیشن‌های هر ستاپ</h2><small>برد / باخت / در جریان</small></div>
+  <div id="setupBreakdown"></div>
   <details class="archive" id="archBox">
     <summary>🗄 ستاپ‌های خاموش‌شده — آمار قدیمی (<span id="archN">۰</span>)</summary>
     <div id="stratsX" style="margin-top:8px"></div>
@@ -1285,6 +1350,7 @@ nav .bdg{position:absolute;top:0;left:18%;background:var(--short);color:#fff;fon
 
 <nav>
  <button class="on" data-p="feed" onclick="go('feed')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>فید زنده</button>
+ <button data-p="live" onclick="go('live')" style="position:relative"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>پوزیشن‌ها<span class="bdg" id="liveBdg" style="display:none"></span></button>
  <button data-p="hits" onclick="go('hits')" style="position:relative"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>برخوردها<span class="bdg" id="navBdg" style="display:none"></span></button>
  <button data-p="perf" onclick="go('perf')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>عملکرد</button>
  <button data-p="ctrl" onclick="go('ctrl')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h10M18 8h2M4 16h2M10 16h10"/><circle cx="16" cy="8" r="2"/><circle cx="8" cy="16" r="2"/></svg>کنترل</button>
@@ -1315,10 +1381,28 @@ function feedCard(s){
    <div class="pill stop"><i>استاپ</i><b>${fnum(s.sl)}</b></div>
    <div class="pill tp1 ${s.tp1_hit?'hit':''}"><i>TP1</i><b>${fnum(s.tp1)}${s.tp1_hit?' ✓':''}</b></div>
    <div class="pill tp2 ${s.tp2_hit?'hit':''}"><i>TP2</i><b>${fnum(s.tp2)}${s.tp2_hit?' ✓':''}</b></div></div>
+  <div class="thumb"><img loading="lazy" src="/app/api/chart/${encodeURIComponent(s.signal_id||'')}" alt="چارت ${fnum(s.symbol)}"></div>
   ${s.summary?`<div class="sumline">${fnum(s.summary)}</div>`:''}
   <div class="ftr"><span class="code">${fnum(s.code)}</span>
    <span class="res ${s.result}">${resFa(s.result)}${s.pnl!==null&&s.pnl!==undefined?` ${s.pnl>0?'+':''}${s.pnl}%`:''}</span>
    <span class="time">${tehran(s.time)}</span></div></div>`}
+function liveCard(p){
+ const dir=p.spot?'LONG':(p.direction||'');
+ return `<div class="card" onclick="openDetail('${(p.signal_id||'').replace(/'/g,'')}')">
+  <div class="livebar"><div><span class="sym">${fnum(p.symbol)}</span> <span class="badge">${fnum(p.badge)}</span></div>
+   <span class="chip ${dir}">${dir==='LONG'?'لانگ 🟢':'شورت 🔴'}</span></div>
+  <div class="live-meta">
+   <div class="pill entry"><i>ورود</i><b>${fnum(p.zone)}</b></div>
+   <div class="pill stop"><i>استاپ</i><b>${fnum(p.sl||'—')}</b></div>
+   <div class="pill tp1"><i>TP1</i><b>${fnum(p.tp1||'—')}</b></div>
+   <div class="pill tp2"><i>TP2</i><b>${fnum(p.tp2||'—')}</b></div>
+  </div>
+  <div class="statline"><span class="stat">لوریج: <b>${fnum(p.leverage)}×</b></span>
+   <span class="stat">مارجین: <b>${fnum(p.margin)}</b></span>
+   <span class="stat">وضعیت: <b>LIVE</b></span></div>
+  <div class="thumb"><img loading="lazy" src="/app/api/chart/${encodeURIComponent(p.signal_id||'')}" alt="چارت پوزیشن"></div>
+  <div class="ftr"><span class="code">${fnum(p.code)}</span><span class="time">${fnum(p.tf)}</span></div>
+ </div>`}
 function chainCard(c){
  const dir=c.spot?'LONG':(c.direction||'');
  return `<div class="card chain" onclick="openDetail('${(c.signal_id||'').replace(/'/g,'')}')">
@@ -1355,9 +1439,11 @@ function render(){
  const sp=(STATE.scanner&&STATE.scanner.spot)||null,spE=$('#spotState');
  if(spE)spE.textContent=sp?`${sp.state}${sp.published?` • ${sp.published} انتشار`:''}${sp.found?` • ${sp.found} کشف`:''}${sp.at?` • ${tehran(sp.at)}`:''}`:'—';
  $('#dot').style.background=(STATE.scanner&&STATE.scanner.alive)?'#1fae7c':'#e5484d';
- const chains=STATE.chains||[],feed=STATE.feed||[],hits=STATE.hits||[];
+ const chains=STATE.chains||[],feed=STATE.feed||[],hits=STATE.hits||[],live=STATE.live_positions||[];
  $('#chains').innerHTML=chains.length?chains.map(chainCard).join(''):'<div class="empty">زنجیرهٔ فعالی نیست</div>';
- $('#feed').innerHTML=feed.length?feed.map(feedCard).join(''):'<div class="empty">سیگنالی ثبت نشده</div>';
+ $('#feed').innerHTML=feed.length?feed.map(feedCard).join(''):'<div class="empty">هشدار امروز ثبت نشده</div>';
+ $('#livePositions').innerHTML=live.length?live.map(liveCard).join(''):'<div class="empty">پوزیشن لایوی برای امروز ثبت نشده</div>';
+ const lB=$('#liveBdg'); if(live.length){lB.textContent=live.length;lB.style.display='block'}else{lB.style.display='none'}
  $('#chainsN').textContent=chains.length?`${chains.length} فعال`:'';
  const nB=$('#navBdg'),hB=$('#hitsBdg');
  if(hits.length){nB.textContent=hits.length;nB.style.display='block';hB.textContent=hits.length;hB.style.display='inline'}
@@ -1373,6 +1459,9 @@ function render(){
   <div class="tile"><b>${(a.rows_active||[]).length}</b><span>ستاپ فعال</span></div>`;
  const act=a.rows_active||[],arc=a.rows_archive||[];
  $('#stratsA').innerHTML=act.length?act.map(stratCard).join(''):'<div class="empty">ستاپ فعالی در ۳۰ روز اخیر نیست</div>';
+ const setupRows=['PINVAL','PINWALLQ','ALBROX','TLBREAK','TECHCLASSIC'];
+ $('#perfGraph').innerHTML=setupRows.map(k=>{const r=act.find(x=>String(x.name).toUpperCase()===k)||{wins:0,losses:0,total:0};const mx=Math.max(1,r.wins,r.losses);return `<div class="bar ${r.wins>=r.losses?'win':'loss'}" title="${k}: ${r.wins}W / ${r.losses}L" style="height:${Math.max(8,Math.round((r.wins+1)/mx*95))}%"></div>`}).join('');
+ $('#setupBreakdown').innerHTML=setupRows.map(k=>{const rows=feed.filter(x=>String(x.source||'').toUpperCase()===k);return `<div class="card"><div class="row1"><span class="nm">${k}</span><span class="mini">${rows.length} پوزیشن امروز</span></div>${rows.length?rows.map(x=>`<div class="ftr" onclick="openDetail('${(x.signal_id||'').replace(/'/g,'')}')" style="cursor:pointer"><span><b>${fnum(x.symbol)}</b> • ${fnum(x.direction)}</span><span class="res ${x.result}">${resFa(x.result)}</span><span class="code">${fnum(x.code)}</span></div>`).join(''):'<div class="empty">امروز پوزیشنی ثبت نشده</div>'}</div>`}).join('');
  $('#stratsX').innerHTML=arc.map(stratCard).join('');
  $('#archN').textContent=arc.length;
  $('#archBox').style.display=arc.length?'block':'none';
@@ -1424,6 +1513,9 @@ async function openDetail(sid){
    ${(d.messages&&d.messages.compact)?`<div class="dsec"><h3>📨 پیام مختصر (همان پیام کانال)</h3><div class="prose tgmsg">${d.messages.compact}</div></div>`:''}
    ${(d.messages&&(d.messages.confirmed||d.messages.confirm))?`<div class="dsec"><h3>✅ پیام کانفرمد (همان پیام کانال)</h3><div class="prose tgmsg">${d.messages.confirmed||d.messages.confirm}</div></div>`:''}
    ${d.summary?`<div class="dsec"><h3>📝 توضیحات</h3><div class="prose">${fnum(d.summary)}</div></div>`:''}
+   ${(d.classic_patterns&&d.classic_patterns.length)?`<div class="dsec"><h3>📐 الگوهای کلاسیک و منطق شکست</h3>${d.classic_patterns.map(x=>`<div class="explain">${fnum(x)}</div>`).join('')}</div>`:''}
+   ${(d.mtf_candles&&d.mtf_candles.items&&d.mtf_candles.items.length)?`<div class="dsec"><h3>🕯️ خوانش کندلی مولتی‌تایم‌فریم</h3>${d.mtf_candles.items.map(x=>`<div class="explain"><b>${fnum(x.tf)}</b> — ${fnum(x.text)}</div>`).join('')}</div>`:''}
+   ${d.management?`<div class="dsec"><h3>💰 مدیریت پوزیشن</h3><div class="pills"><div class="pill"><i>لوریج</i><b>${fnum(d.management.leverage)}×</b></div><div class="pill"><i>مارجین</i><b>$${fnum(d.management.margin)}</b></div><div class="pill stop"><i>تریلینگ فعلی</i><b>${fnum(d.management.trailing_sl)}</b></div><div class="pill"><i>TP هیت‌شده</i><b>${fnum(d.management.hit_index)}</b></div></div><div class="explain">تریلینگ یک‌طرفه و غیرقابل‌برگشت است؛ بعد از TP1 کف سود خالص فعال می‌شود.</div></div>`:''}
    ${d.entry_conditions?`<div class="dsec"><h3>⚖️ شرط ورود / تأیید</h3><div class="prose">${fnum(d.entry_conditions)}</div></div>`:''}
    ${confirmTxt.length?`<div class="dsec"><h3>✅ تأییدها</h3>${confirmTxt.map(c=>`<div class="conf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>${fnum(c)}</div>`).join('')}</div>`:''}
    ${(d.timeline||[]).length?`<div class="dsec"><h3>🕒 تایم‌لاین زندگی سیگنال</h3><div class="tl">${d.timeline.map(t=>`<div class="tli"><b>${fnum(t.fa)}</b><span>${tehran(t.time)}</span></div>`).join('')}</div></div>`:''}

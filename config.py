@@ -72,9 +72,9 @@ class Settings:
     # ALBROX spike/reclaim detection thresholds (env-tunable). The original
     # 5x-ATR spike bar almost never occurs on liquid crypto, so no candidate
     # was ever produced; defaults are relaxed to tradeable-but-decisive.
-    albrox_min_spike_atr: float = 3.0
-    albrox_min_reclaim_frac: float = 0.45
-    albrox_base_max_atr: float = 2.5
+    albrox_min_spike_atr: float = 2.5
+    albrox_min_reclaim_frac: float = 0.40
+    albrox_base_max_atr: float = 3.0
     pinwall_quality_enabled: bool = True
     pinwall_quality_min_score: float = 78.0
     pinv_min_wick_body: float = 2.0      # dominant wick / body
@@ -173,8 +173,8 @@ class Settings:
     # (e.g. "SOLUSDT,ETHUSDT"); empty string = no symbol restriction.
     experimental_p1234_symbols: str = "SOLUSDT"
     # Experimental TLBREAK (trendline/channel breakout) detector.
-    experimental_tlbreak_enabled: bool = False
-    viva_tlbreak_enabled: bool = False
+    experimental_tlbreak_enabled: bool = True
+    viva_tlbreak_enabled: bool = True
     # TechnoClassic (stage 5): 4H/1D classical-pattern lifecycle. NEAR/READY
     # pre-break previews + real TECHCLASSIC candidates on confirmed breaks
     # (retest + lower-TF BOS via the shared VIVA_TLBREAK state machine).

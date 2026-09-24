@@ -18,6 +18,7 @@ from analysis.models import SignalCandidate, generate_viva_public_code
 from analysis.risk import build_money_management
 from analysis.trade_management import (build_ladder, advance_ladder, entry_touched,
                                        band_trailing, smart_exit_scan, reentry_setup)
+from analysis.execution_integrity_r29 import trailing_from_ladder
 from config import get_settings
 from data.fetcher import get_klines
 from database import db as legacy_db
@@ -1386,6 +1387,20 @@ def monitor_confirmed_trades() -> List[Dict]:
                 step = advance_ladder(ladder, float(candle["high"]), float(candle["low"]))
                 ladder = step["state"]
                 raw_events = list(step["events"])
+                # R29 professional trailing is evaluated on every closed monitor candle.
+                # Before TP1 it may only ratchet structural room; NET-BE is impossible
+                # until TP1 is actually hit. After TP1 it includes fees/slippage.
+                try:
+                    _r29_frame = frame.iloc[max(0, int(_pos) - 30):int(_pos) + 1] if '_pos' in locals() and frame is not None else frame.tail(31)
+                    _r29_candles = [{"open": float(r["open"]), "high": float(r["high"]),
+                                     "low": float(r["low"]), "close": float(r["close"])}
+                                    for _, r in _r29_frame.iterrows()]
+                    _r29trail = trailing_from_ladder(ladder, _r29_candles, direction)
+                    ladder = _r29trail.get("state", ladder)
+                    raw_events.extend(_r29trail.get("events") or [])
+                except Exception as _r29trail_exc:
+                    ladder["r29_trailing_error"] = str(_r29trail_exc)[:180]
+
                 # Viva 09-19 smart-trailing ruling (+ his professional engine
                 # spec §4/§5/§7/§9): after the first target prints, the stop
                 # follows the formula-based protection floor between targets

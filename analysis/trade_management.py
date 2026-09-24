@@ -632,15 +632,25 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
 
 
 def _window_atr(candles: List[Dict]) -> float:
-    """True-range mean over the last ≤14 monitor-TF candles."""
+    """Canonical Wilder ATR used by the repository execution layer (R29)."""
+    try:
+        from analysis.indicators import atr as _wilder_atr
+        import pandas as _pd
+        frame = _pd.DataFrame(candles)
+        if len(frame) >= 14:
+            value = float(_wilder_atr(frame, 14).iloc[-1])
+            if value > 0:
+                return value
+    except Exception:
+        pass
+    # Conservative fallback only for short/partial diagnostic windows.
     trs: List[float] = []
     for i in range(1, len(candles)):
         h, l, pc = float(candles[i]["high"]), float(candles[i]["low"]), float(candles[i - 1]["close"])
         trs.append(max(h - l, abs(h - pc), abs(l - pc)))
     if not trs:
         trs.append(max(float(candles[0]["high"]) - float(candles[0]["low"]), 1e-12))
-    trs = trs[-14:]
-    return sum(trs) / len(trs)
+    return sum(trs[-14:]) / max(1, len(trs[-14:]))
 
 
 def band_trailing(state: Dict, candles: List[Dict], atr_n: Optional[float] = None) -> Dict:
