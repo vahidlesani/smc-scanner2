@@ -440,7 +440,8 @@ def _derive_from_base(
     out: Dict[str, Optional[pd.DataFrame]] = {}
     for tf in requested:
         if tf == "5m":
-            out[tf] = base_5m if False else None
+            # 5m is filled by the caller from the direct venue tape.
+            out[tf] = None
         elif tf == "15m":
             out[tf] = base_15m
         elif tf == "4h":
