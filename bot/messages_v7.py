@@ -1487,10 +1487,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     _hit = _chart_cache_get(_ck)
     if _hit is not None:
         return _hit
+    # Always initialize chart-only price-axis tags before entering any render branch.
+    # This is display state only and never affects setup detection or message format.
+    _axis_tags: list = []
     try:
-        # Always define chart-only price-axis tags before any conditional render path.
-        # This is display state only and must never affect setup detection or message format.
-        _axis_tags: list = []
         # Preserve enough history for real channel / wedge / range geometry;
         # the blank future panel is added separately, never by sacrificing bars.
         # Macro timeframes need LESS zoom: fewer, larger candles expose the
