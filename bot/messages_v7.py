@@ -1949,6 +1949,20 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _y9 = float(_it["top"])
             if _prev9 is not None and _prev9 - _y9 < 0.035 * _yr9:
                 _y9 = _prev9 - 0.035 * _yr9
+            # r29c (Viva 09-25, «نوشته‌ها روی کندلها می‌افته»): the top-edge
+            # fallback used to stack chips straight over the tape. Walk the
+            # chip UP in slot steps until its band is clear of the candle
+            # envelope across its own x-range (the in-box chooser already
+            # does this; now the fallback obeys the same law).
+            _wb9 = 1.4 + 0.52 * len(_it["text"])
+            _a9 = int(max(0, float(_it["x0"])))
+            _b9 = int(min(_n9, float(_it["x0"]) + _wb9 + 1))
+            if _b9 > _a9:
+                for _try9 in range(8):
+                    if not np.any((_hi9[_a9:_b9] >= _y9 - 0.012 * _yr9)
+                                  & (_lo9[_a9:_b9] <= _y9 + 0.012 * _yr9)):
+                        break
+                    _y9 += 0.035 * _yr9
             _prev9 = _y9
             ax.text(_it["x0"] + 0.6, _y9, _it["text"], color=_it["color"],
                     fontsize=7, va="bottom", ha="left", fontweight="bold",

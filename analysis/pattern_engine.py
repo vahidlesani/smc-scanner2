@@ -245,6 +245,17 @@ def classify_shape(upper, lower, n) -> str:
         # «نه کانال» (his sheets); it renders as two honest trendlines.
         if (sgn_u == 0) != (sgn_l == 0):
             return "TRIANGLE"
+        # V3 §29: a channel needs SIMILAR slopes («both lines rise with
+        # similar slope»). When one edge DOMINATES (drift > 2.2× the other)
+        # the pair is a triangle hugging a dominant line, not a parallel
+        # channel — measured live: SHIB 1H rising-bottom + mildly-rising top
+        # was labelled CHANNEL_ASCENDING and read wrong to the eye.
+        _span_c = max(1, int(n) - max(int(getattr(upper, "first_index", 0)),
+                                      int(getattr(lower, "first_index", 0))))
+        _du = abs(float(upper.slope)) * _span_c
+        _dl = abs(float(lower.slope)) * _span_c
+        if max(_du, _dl) > 2.2 * max(min(_du, _dl), 1e-12):
+            return "TRIANGLE"
         sgn = sgn_u or sgn_l
         return "CHANNEL_ASCENDING" if sgn > 0 else "CHANNEL_DESCENDING" if sgn < 0 else "CHANNEL_FLAT"
     if flat_u and not flat_l and lower.slope > tol:

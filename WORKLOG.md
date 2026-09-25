@@ -249,3 +249,9 @@
 - RENDER FREEZE («از اولین تأیید شکل و زوم عوض نشه»): first confirmed render freezes the smart price window in metadata; later renders reuse it verbatim (survives TF-bump); when live price escapes the box, window recomputes + re-freezes (the legal mutation, noted by the escape law).
 - Queue (told user): BTC structural 4H stop + saner targets = V3 §18/§19 slices; DASH stop 13.297 violation; patches A–M of the parallel agent await his approval; MTF TF-labeling (§ setup/confirmation/execution) queued.
 - Suite 468P/1skip.
+
+## Round-29c — §29 channel slope-similarity + labels never on candles
+- Pattern misnaming audit: header «PAT 4H · X» comes from render_htf_pattern ← render_kit.detect_patterns — which ALREADY routes through classify_shape V3 (render_kit ~line 472). Remaining misnames were §29's unenforced «similar slope»: dominant-edge pairs (SHIB rising-bottom + mildly-rising top) fell through to CHANNEL. Fix: classify_shape channel branch now requires drift dominance < 2.2×; beyond that → TRIANGLE.
+- Labels-on-candles: zone chips' in-box chooser already avoided the candle envelope; the TOP-EDGE FALLBACK did not — it now walks the chip up in 0.035·yr steps (≤8) until clear of the envelope in its own x-range.
+- Backup-branch audit: r30-spot-mtf-chart-handoff content ALREADY fully in main (git diff empty on spot_engine); old 09-06/09-09 branches (pinval-zone-polarity, stage4-zone-policy) share NO merge base with main → direct merge forbidden (audit law); their zone-polarity ideas → future hand-ported patch. arena/01a0d606 branch = third agent's replay/floating-line fixes — queued for audited merge with approval.
+- tests/test_round29c_similarity_labels.py 3/3; suite 471P/1skip.
