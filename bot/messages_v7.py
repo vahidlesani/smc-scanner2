@@ -3374,8 +3374,32 @@ def _chart_label(symbol: str = "", code: str = "", title_fa: str = "") -> str:
     return " • ".join(p for p in parts if p)
 
 
+def _send_photo_file_id(file_id: str, chat_id: str, label: str = "",
+                        reply_to_message_id: Optional[int] = None,
+                        reply_markup: Optional[dict] = None) -> Optional[int]:
+    """Mirror an already-rendered Telegram chart by file_id.
+    No PNG upload, no rendering, no chart bytes copied through Railway."""
+    if not TOKEN or not chat_id or not file_id:
+        return None
+    payload = {"chat_id": chat_id, "photo": str(file_id), "caption": label or "📊 چارت",
+               "parse_mode": "HTML"}
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = int(reply_to_message_id)
+        payload["allow_sending_without_reply"] = True
+    if reply_markup:
+        import json
+        payload["reply_markup"] = json.dumps(reply_markup)
+    result = _tg_post("https://api.telegram.org/bot" + TOKEN + "/sendPhoto",
+                      data=payload, timeout=20)
+    if not result:
+        return None
+    mid = int(result.get("result", {}).get("message_id") or 0) or None
+    _audit_send("photo-file-id", chat_id, mid)
+    return mid
+
+
 def _post_chart_then_text(chart, text: str, target, reply_to=None,
-                          reply_markup=None, label: str = "") -> tuple:
+                          reply_markup=None, label: str = "", file_id: str = "") -> tuple:
     """Viva 2026-09-16 (verbatim ruling): «پیام مختصر رو بصورت کپشن نذار؛ اول
     عکس چارت، بلافاصله پیام مختصر، تا پیام چندپاره و نصفه نشه» — the chart goes
     up as its own photo bubble carrying ONLY a one-line Persian label, then
@@ -3384,7 +3408,11 @@ def _post_chart_then_text(chart, text: str, target, reply_to=None,
     The text message carries the chain (reply/markup) and its id is what the
     chain stores. Returns (photo_mid, text_mid)."""
     photo_mid = 0
-    if chart:
+    if file_id:
+        photo_mid = int(_send_photo_file_id(file_id, target, label=label,
+                                            reply_to_message_id=reply_to,
+                                            reply_markup=reply_markup) or 0)
+    elif chart:
         photo_mid = int(send_photo(chart, label or "📊 چارت", target,
                                    caption_limit=1024) or 0)
     text_mid = int(send_message(text, target,
@@ -3394,7 +3422,7 @@ def _post_chart_then_text(chart, text: str, target, reply_to=None,
 
 
 def _sig_mirror(code: str, kind: str, text: str, chart=None, reply_kind: str = "",
-                link: str = "", link_text: str = "") -> int:
+                link: str = "", link_text: str = "", file_id: str = "") -> int:
     """PROP-1 (Viva 09-16, approved — channel VIVA-MON-SIGNALS he created and
     admined the bot on): the clean journal mirror. ONLY final alert,
     Confirmed, TP1–5, stop/trail and the final result land there, each quoting
@@ -3416,14 +3444,16 @@ def _sig_mirror(code: str, kind: str, text: str, chart=None, reply_kind: str = "
             _ttl = f"هدف {kind[2:]} زده شد"
         _ph, mid = _post_chart_then_text(
             chart, text, CHAT_ID_VIVA_SIGNALS, reply_to=reply,
-            reply_markup=markup, label=_chart_label(code=code, title_fa=_ttl))
+            reply_markup=markup, label=_chart_label(code=code, title_fa=_ttl),
+            file_id=file_id)
         if not mid and reply:
             # Viva 09-17: a journal entry must NEVER die because its parent
             # (a replaced/deleted update) is gone — retry as a plain post.
             print(f"viva-signals mirror {code}/{kind}: reply target unusable, retry plain")
             _ph, mid = _post_chart_then_text(
                 chart, text, CHAT_ID_VIVA_SIGNALS, reply_to=None,
-                reply_markup=markup, label=_chart_label(code=code, title_fa=_ttl))
+                reply_markup=markup, label=_chart_label(code=code, title_fa=_ttl),
+                file_id=file_id)
         if not mid:
             print(f"viva-signals mirror FAILED {code}/{kind}: no message id")
         if mid:
@@ -4110,7 +4140,7 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
 
 
 def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
-                                 chat_override: str = "") -> int:
+                                 chat_override: str = "", file_id: str = "") -> int:
     """Post the confirmed signal into its timeframe family's channel.
 
     `chat_override` is how the SPOT lane reaches VIVA-MON-SPOT: the same
@@ -4125,7 +4155,8 @@ def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
     try:
         _ph, mid = _post_chart_then_text(
             chart, text, chat,
-            label=_chart_label(symbol=candidate.symbol, code=code, title_fa="تأیید سیگنال"))
+            label=_chart_label(symbol=candidate.symbol, code=code, title_fa="تأیید سیگنال"),
+            file_id=file_id)
         if not mid:
             print(f"TF-channel publish failed {code} → {chat}")
             return 0
@@ -4329,11 +4360,13 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
         _lnk = _telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, _anchor) if _anchor else ""
         _sig_mirror(_public_code(candidate), "confirmed",
                     _confirmed_chart_caption(candidate), chart, reply_kind="approach",
-                    link=_lnk, link_text="🔗 پیام مختصر در کانال اصلی")
+                    link=_lnk, link_text="🔗 پیام مختصر در کانال اصلی",
+                    file_id=_LAST_PHOTO_FILE.get(int(_ph or 0), ""))
     # ── Round 15: the confirmed-only mirror of this signal into its
     # timeframe family's channel (no-op while those channel ids are unset).
     try:
-        tf_channel_publish_confirmed(candidate, chart if candidate.metadata.get("confirmation_chart_sent") else None)
+        tf_channel_publish_confirmed(candidate, chart if candidate.metadata.get("confirmation_chart_sent") else None,
+                                     file_id=_LAST_PHOTO_FILE.get(int(_ph or 0), ""))
     except Exception as exc:
         print(f"TF-channel mirror skipped {candidate.signal_id}: {exc}")
     # Deliberately no second verbose message in VivaMon Labs Pro.
