@@ -185,6 +185,14 @@ def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
         for candidate in candidates:
             candidate.metadata["money_management_error"] = str(_mm_outer_exc)[:180]
 
+    # R31.5 (opt-in, HTF_TREND_GATE=4h): against-trend candidates become
+    # DEAD_GATE (educational only). No-op when the env var is unset.
+    try:
+        from analysis.quality_filters import apply_trend_gate
+        apply_trend_gate(bundle, candidates)
+    except Exception:
+        pass
+
     # R29: non-blocking MTF candle and classical-pattern explanations.
     try:
         from analysis.mtf_candles import analyze_mtf_candles, classic_pattern_explanations
@@ -1370,6 +1378,16 @@ def evaluate_confirmation(
                         f"نزدیک ناحیه مخالف در تایم والد ({_parent_tf})؛ این مورد به‌عنوان هشدار زمینه‌ای ثبت شد.")
     except Exception as _gexc:
         candidate.metadata["mtf_gate_error"] = str(_gexc)[:120]
+
+    # R31.5 (opt-in, MIN_STOP_FLOOR): a stop tighter than the TF floor is the
+    # most-hunted class in the replay — refuse the confirmation (plan restored).
+    try:
+        from analysis.quality_filters import stop_floor_violation
+        _sf_msg = stop_floor_violation(candidate)
+    except Exception:
+        _sf_msg = None
+    if _sf_msg:
+        return reject("STOP_BELOW_FLOOR", _sf_msg)
 
     candidate.status = "CONFIRMED"
     candidate.confirmed_at = candidate.confirmed_at or iso_now()

@@ -150,3 +150,8 @@ HANDOFF.md — smc-scanner2 (VivaSignals Pro)
 - **ماژول فلو رایگان:** `analysis/onchain_free.py` — CoinGecko + alternative.me + DefiLlama، fail-open، فقط **ترتیب** لاین اسپات (سر واچ‌لیست ثابت، هشدارها اول) و یک خط لاگ زمینه؛ صف فیوچرز دست‌نخورده. تست: `tests/test_round16_onchain_free_priority.py`.
 - سوئیچ‌ها: `ONCHAIN_FREE_ENABLED` (پیش‌فرض on) · `ONCHAIN_CACHE_TTL_SECONDS` · `SPOT_FLOW_HEAD` (۶) · `TLBREAK_LOG_FIT_MIN_SPAN` (۰.۰۳).
 - وضعیت: ۴۰۴ تست سبز / ۱ اسکیپ · دیپلوی با commitSha انجام و لاگ تمیز · گزارش + پروف برای ویوا ارسال شد.
+
+## ۰۹-۲۵ — R31.4/R31.5 (برنچ `arena/01a0d606-smc-scanner2`، PR #5، دیپلوی نشده)
+- فیکس‌های A1 تا A12، از جمله استریم 30m که مرده بود و حالا پشت `PINVAL_30M_ENABLED` و پیش‌فرض خاموش است. بررسی کد: `docs/REVIEW_2026-09-25.md`.
+- هارنس replay: `experiments/replay_live_setups.py` و workflow `replay` (بازوها در `ARMS`). گزارش: `docs/REPLAY_2026-09-25.md`.
+- فیلترهای opt-in: `HTF_TREND_GATE=4h` و `MIN_STOP_FLOOR=1` در `analysis/quality_filters.py`. قدم بعدی: paper forward با این دو، و بازوی `trend4h+B4`. تست‌ها: **479 passed / 1 skipped**.

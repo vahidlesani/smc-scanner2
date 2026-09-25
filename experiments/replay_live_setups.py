@@ -64,6 +64,9 @@ ARMS: Dict[str, Dict[str, str]] = {
     "oor4": {"SCENARIO_OUT_OF_REACH_ATR": "4"},
     "trend4h": {"REPLAY_TREND_GATE": "4h"},
     "combo": {"REPLAY_STOP_FLOOR": _FLOOR, "REPLAY_TREND_GATE": "4h"},
+    # the production implementation of the two recommended filters
+    # (analysis/quality_filters.py): trend = mandatory gate, stop floor = reject
+    "prodfilters": {"HTF_TREND_GATE": "4h", "MIN_STOP_FLOOR": "1"},
 }
 
 TF_MIN = {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}

@@ -33,7 +33,8 @@ jobs:
       fail-fast: false
       matrix:
         symbol: [BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT, ADAUSDT, LINKUSDT, AVAXUSDT, SUIUSDT, BNBUSDT]
-        arm: [base, stopfloor, oor4, trend4h, combo]
+        # round 1: base,legacy · round 2: base,stopfloor,oor4,trend4h,combo (docs/REPLAY_2026-09-25.md)
+        arm: [base, prodfilters, trend4h]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

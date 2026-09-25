@@ -69,3 +69,45 @@ def test_pinval_30m_stream_is_opt_in(monkeypatch):
     assert Settings.pinval_30m_enabled is False
     from analysis import setups_experimental as exp
     assert 'pinval_30m_enabled' in inspect.getsource(exp.detect_pinbar_zone)
+
+
+def _cand(direction="LONG", entry=100.0, sl=99.0, tf="15m"):
+    from analysis.models import SignalCandidate
+    return SignalCandidate(signal_id="x", symbol="XUSDT", style="DAYTRADE", setup_code="PINVAL",
+                           setup_name="p", strategy_fa="p", direction=direction, score=8,
+                           status="EDUCATIONAL", entry_zone_bottom=entry - 0.5, entry_zone_top=entry + 0.5,
+                           planned_entry=entry, sl=sl, tp1=entry + 1, tp2=entry + 3, rr_tp1=1, rr_tp2=3,
+                           bias="BULLISH", trigger_timeframe=tf, mandatory_gates={"g": True})
+
+
+def test_quality_filters_are_off_by_default(monkeypatch):
+    from analysis import quality_filters as qf
+    monkeypatch.delenv("MIN_STOP_FLOOR", raising=False)
+    monkeypatch.delenv("HTF_TREND_GATE", raising=False)
+    assert qf.stop_floor_violation(_cand(sl=99.9)) is None
+    c = _cand()
+    qf.apply_trend_gate(object(), [c])
+    assert c.mandatory_gates == {"g": True}
+
+
+def test_stop_floor_rejects_tight_stop(monkeypatch):
+    from analysis import quality_filters as qf
+    monkeypatch.setenv("MIN_STOP_FLOOR", "1")
+    assert qf.stop_floor_violation(_cand(sl=99.0)) is not None      # 1.0% < 1.2%
+    assert qf.stop_floor_violation(_cand(sl=98.5)) is None          # 1.5% ok
+    monkeypatch.setenv("MIN_STOP_FLOOR", "15m:0.8")
+    assert qf.stop_floor_violation(_cand(sl=99.0)) is None
+
+
+def test_trend_gate_marks_against_trend(monkeypatch):
+    from analysis import quality_filters as qf
+    monkeypatch.setenv("HTF_TREND_GATE", "4h")
+    up = pd.DataFrame({"close": [100 + i for i in range(80)]})
+
+    class B:
+        def get(self, k):
+            return up if k == "4h" else None
+    long_c, short_c = _cand("LONG"), _cand("SHORT", sl=101.0)
+    qf.apply_trend_gate(B(), [long_c, short_c])
+    assert long_c.execution_ready is True
+    assert short_c.mandatory_gates["htf_trend_4h"] is False and short_c.execution_ready is False
