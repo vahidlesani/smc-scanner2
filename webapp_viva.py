@@ -414,7 +414,14 @@ def _fetch_state() -> Dict[str, Any]:
                     tp1_hit=tp1_hit, tp2_hit=tp2_hit,
                     market_intelligence=_mi_feed,
                     summary=str(description or fa or "")[:220],
+                    telegram_text="",
                 ))
+                try:
+                    from database.bot_kv import get_json as _app_gj
+                    _am = _app_gj(f"app_msg|{sid}|update", {}) or _app_gj(f"app_msg|{sid}|compact", {}) or {}
+                    feed[-1]["telegram_text"] = str(_am.get("html") or "")
+                except Exception:
+                    pass
             # App is a same-day journal: headline totals are derived from the
             # exact feed shown above, never from the historical dashboard aggregate.
             _closed_feed = [x for x in feed if x.get("result") in ("WIN", "LOSS")]
@@ -717,38 +724,10 @@ def _signal_chart_png(sid: str) -> Optional[bytes]:
     hit = _CHART_CACHE.get(sid)
     if hit and now - hit[1] < 1800:
         return hit[0]
-    try:
-        from database.db import db_cursor
-        with db_cursor() as c:
-            c.execute("""
-                SELECT signal_id, symbol, source, strategy_fa, direction, entry, sl, tp1, tp2,
-                       score, trade_style, public_code, trigger_timeframe, created_at,
-                       confirmed_at, confirmed, market_json, setup_code
-                FROM signals WHERE signal_id=%s
-            """, (sid,))
-            rows = c.fetchall()
-        if not rows:
-            return None
-        cols = ["signal_id", "symbol", "source", "strategy_fa", "direction", "entry", "sl",
-                "tp1", "tp2", "score", "trade_style", "public_code", "trigger_timeframe",
-                "created_at", "confirmed_at", "confirmed", "market_json", "setup_code"]
-        row = dict(zip(cols, rows[0]))
-        from data.fetcher import get_klines
-        tf = str(row.get("trigger_timeframe") or "4h")
-        df = get_klines(str(row.get("symbol")), tf, 170, closed_only=False, use_cache=True)
-        if df is None or len(df) < 40:
-            return None
-        cand = _candidate_from_row(row)
-        from bot.messages_v7 import generate_chart
-        png = generate_chart(df, cand, confirmed=bool(row.get("confirmed")))
-        if png:
-            if len(_CHART_CACHE) >= 48:
-                _CHART_CACHE.pop(next(iter(_CHART_CACHE)))
-            _CHART_CACHE[sid] = (png, now)
-        return png
-    except Exception as exc:
-        print(f"app chart render failed {sid}: {exc}")
-        return None
+    # Mirror-only rule: never render a chart from the dashboard.
+    # If Telegram has not produced the canonical chart yet, the app waits.
+    return None
+
 
 
 def _demo_chart_png() -> Optional[bytes]:
@@ -1448,7 +1427,7 @@ function feedCard(s){
    <div class="pill tp1 ${s.tp1_hit?'hit':''}"><i>TP1</i><b>${fnum(s.tp1)}${s.tp1_hit?' ✓':''}</b></div>
    <div class="pill tp2 ${s.tp2_hit?'hit':''}"><i>TP2</i><b>${fnum(s.tp2)}${s.tp2_hit?' ✓':''}</b></div></div>
   <div class="thumb"><img loading="lazy" src="/app/api/chart/${encodeURIComponent(s.signal_id||'')}" alt="چارت ${fnum(s.symbol)}"></div>
-  ${s.summary?`<div class="sumline">${fnum(s.summary)}</div>`:''}
+  ${s.telegram_text?`<div class="explain">${s.telegram_text}</div>`:(s.summary?`<div class="sumline">${fnum(s.summary)}</div>`:"")}
   ${s.market_intelligence?miSummary(s.market_intelligence):''}
   <div class="ftr"><span class="code">${fnum(s.code)}</span>
    <span class="res ${s.result}">${resFa(s.result)}${s.pnl!==null&&s.pnl!==undefined?` ${s.pnl>0?'+':''}${s.pnl}%`:''}</span>
@@ -1527,7 +1506,7 @@ function render(){
  const act=a.rows_active||[],arc=a.rows_archive||[];
  $('#stratsA').innerHTML=act.length?act.map(stratCard).join(''):'<div class="empty">ستاپ فعالی در ۳۰ روز اخیر نیست</div>';
  const setupRows=['PINVAL','PINWALLQ','ALBROX','TLBREAK','TECHCLASSIC'];
- $('#perfGraph').innerHTML=setupRows.map(k=>{const r=act.find(x=>String(x.name).toUpperCase()===k)||{wins:0,losses:0,total:0};const mx=Math.max(1,r.wins,r.losses);return `<div class="bar ${r.wins>=r.losses?'win':'loss'}" title="${k}: ${r.wins}W / ${r.losses}L" style="height:${Math.max(8,Math.round((r.wins+1)/mx*95))}%"></div>`}).join('');
+ $('#perfGraph').innerHTML=setupRows.map(k=>{const r=act.find(x=>String(x.name).toUpperCase()===k)||{wins:0,losses:0,total:0,avg_pnl:0,best:0,worst:0};const total=Math.max(1,(r.wins||0)+(r.losses||0));const wp=Math.round((r.wins||0)/total*100);const lp=100-wp;return `<div class="card"><div class="row1"><span class="nm">${k}</span><span class="mini">${r.total||0} معامله</span></div><div class="graph"><div class="pie" style="background:conic-gradient(var(--long) 0 ${wp}%,var(--short) ${wp}% 100%)"></div><div class="pieLegend"><div><span class="legendDot"></span><b>${r.wins||0}</b> برد • ${wp}%</div><div><span class="legendDot loss"></span><b>${r.losses||0}</b> باخت • ${lp}%</div><div>میانگین: <b>${r.avg_pnl==null?'—':r.avg_pnl+'%'}</b></div><div>بهترین/بدترین: <b>${r.best==null?'—':r.best+'%'}</b> / <b>${r.worst==null?'—':r.worst+'%'}</b></div></div></div></div>`}).join('');
  $('#setupBreakdown').innerHTML=setupRows.map(k=>{const rows=feed.filter(x=>String(x.source||'').toUpperCase()===k);return `<div class="card"><div class="row1"><span class="nm">${k}</span><span class="mini">${rows.length} پوزیشن امروز</span></div>${rows.length?rows.map(x=>`<div class="ftr" onclick="openDetail('${(x.signal_id||'').replace(/'/g,'')}')" style="cursor:pointer"><span><b>${fnum(x.symbol)}</b> • ${fnum(x.direction)}</span><span class="res ${x.result}">${resFa(x.result)}</span><span class="code">${fnum(x.code)}</span></div>`).join(''):'<div class="empty">امروز پوزیشنی ثبت نشده</div>'}</div>`}).join('');
  $('#stratsX').innerHTML=arc.map(stratCard).join('');
  $('#archN').textContent=arc.length;
