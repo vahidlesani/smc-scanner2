@@ -35,6 +35,7 @@ Consequences encoded here (Viva bug-report of 2026-09-10 screenshots):
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
@@ -88,7 +89,44 @@ _ONE_NATURE = frozenset((
     "WEDGE_FALLING", "WEDGE_RISING", "TRIANGLE_ASCENDING", "TRIANGLE_DESCENDING",
     "FLAG_BULL", "FLAG_BEAR", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING",
     "HEAD_SHOULDERS", "INV_HEAD_SHOULDERS", "DOUBLE_TOP", "DOUBLE_BOTTOM",
+    # R31.7 audit P4: _structural_refine emits the LONG spelling — the short
+    # alias above never matched anything.
+    "INVERSE_HEAD_SHOULDERS",
 ))
+
+
+def alert_lineage_key(setup: str, symbol: str, trigger_tf: str, pattern_tf: str,
+                      side, direction: str, points, is_break: bool = True) -> str:
+    """R31.7: stable identity of one edge scenario across rescans (see
+    ``_build_candidate``). Empty when the edge has <2 timestamped pivots or
+    the kill switch is on."""
+    if _legacy317():
+        return ""
+    try:
+        ts = [str(p.get("timestamp") or p.get("ts") or "")[:16] for p in (points or [])]
+        ts = [t for t in ts if t]
+        if len(ts) < 2:
+            return ""
+        return "|".join((str(setup).upper(), str(symbol).upper(), str(trigger_tf).lower(),
+                         str(pattern_tf).lower(), str(side or ""), str(direction).upper(),
+                         "BRK" if is_break else "EDGE", ts[0], ts[1]))
+    except Exception:
+        return ""
+
+
+def _legacy317() -> bool:
+    """R31.7 kill switch: ``R317_LEGACY=1`` restores the pre-audit behaviour
+    of the behaviour-changing fixes (fresh-break gate, live-time line value,
+    structure-bias CHoCH). Pure bug fixes are not switchable."""
+    return os.getenv("R317_LEGACY", "0") == "1"
+
+
+# R31.7 audit P3: a special-formation label must agree with the break it
+# describes — a close UP through the flat line of a triple top is the
+# INVALIDATION of that top, not a "triple top" signal (and vice versa).
+_BEAR_FORMATIONS = frozenset(("HEAD_SHOULDERS", "TRIPLE_TOP", "DOUBLE_TOP"))
+_BULL_FORMATIONS = frozenset(("INVERSE_HEAD_SHOULDERS", "INV_HEAD_SHOULDERS",
+                              "TRIPLE_BOTTOM", "DOUBLE_BOTTOM"))
 
 PATTERN_FA = {
     "WEDGE_FALLING": "گوه نزولی (فالینگ‌وج)",
@@ -428,6 +466,14 @@ def _flagpole_strength(df: pd.DataFrame, line, side: str, n: int,
             return None
         if (pole > 0) != (side == "upper"):
             return None
+        # R31.7 audit P5: a flag consolidates SIDEWAYS or AGAINST its pole
+        # (E&M) and is brief. A channel drifting WITH the pole is a trend
+        # channel / wedge, never a flag.
+        drift = float(line.slope) * float(pts[-1] - pts[0])
+        if (pole > 0 and drift > 0.35 * height) or (pole < 0 and drift < -0.35 * height):
+            return None
+        if pts[-1] - pts[0] > 40:
+            return None
         return round(pole, 1)
     except Exception:
         return None
@@ -602,10 +648,32 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         "BROADENING": ("UNKNOWN", 25), "TRENDLINE": ("UNKNOWN", 30),
         "HEAD_SHOULDERS": ("REVERSAL", 70), "DOUBLE_TOP": ("REVERSAL", 70),
         "INV_HEAD_SHOULDERS": ("REVERSAL", 70), "DOUBLE_BOTTOM": ("REVERSAL", 70),
+        "INVERSE_HEAD_SHOULDERS": ("REVERSAL", 70),
     }
     _role9, _rolec9 = _ROLE9.get(str(pattern).upper(), ("UNKNOWN", 30))
     ev_ref9 = str(trigger_df["timestamp"].iloc[-1])
+    _legacy = _legacy317()
+    # R31.7 audit P6: the line is evaluated at the LIVE moment, not at the
+    # open of the last closed pattern bar (that lagged 1–2 pattern bars —
+    # on a sloped 4h line several tenths of an ATR, more than the 0.15-ATR
+    # READY band itself).
+    _x_live = float(n)
+    if not _legacy:
+        try:
+            _tp = pd.to_datetime(pattern_df["timestamp"])
+            _tt = pd.to_datetime(trigger_df["timestamp"])
+            _dt_p = (_tp.iloc[-1] - _tp.iloc[-2]).total_seconds()
+            _dt_t = (_tt.iloc[-1] - _tt.iloc[-2]).total_seconds()
+            _t_live = _tt.iloc[-1] + pd.Timedelta(seconds=_dt_t)
+            if _dt_p > 0:
+                _x_live = float(n) + min(3.0, max(0.0, (_t_live - _tp.iloc[-1]).total_seconds() / _dt_p))
+        except Exception:
+            _x_live = float(n)
+    _pattern0 = pattern
     for side, line in (("upper", upper), ("lower", lower)):
+        # R31.7 audit P2: the per-side structural/flag relabel must not leak
+        # into the other side's event (it used to overwrite `pattern`).
+        pattern = _pattern0
         if not _line_alive(line, n):
             continue
         direction = rules.get(side)
@@ -616,7 +684,7 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             # violation event — never a candidate.
             if str(pattern).upper() not in _ONE_NATURE:
                 continue
-            _ln9 = float(line.price_at(n))
+            _ln9 = float(line.price_at(_x_live))
             _cross9 = (live > _ln9) if side == "upper" else (live < _ln9)
             if not _cross9:
                 continue
@@ -638,7 +706,7 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                     "در خلافِ ماهیت الگو است. هیچ سیگنالی تأیید نمی‌شود؛ فقط هشدار."),
             })
             continue
-        line_now = float(line.price_at(n))
+        line_now = float(line.price_at(_x_live))
         if side == "upper":
             dist = (line_now - live) / atr_p
             crossed = live > line_now
@@ -655,6 +723,33 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         rejected_now = bool(wick_beyond and ((last_close <= line_now) if side == "upper"
                                              else (last_close >= line_now))) \
             or (dist <= 0.15 and not crossed)
+        if crossed and not _legacy:
+            # R31.7 audit P1 (why TECHCLASSIC «is silent» and the ones that
+            # appear are late): a break is only an event while it is FRESH —
+            # one of the last TC_FRESH_BARS (4) closed pattern bars was still
+            # inside the line — or while price hovers within 0.5 ATR of it;
+            # never a chase beyond TC_MAX_BEYOND_ATR (1.5).
+            # A line broken days ago re-emitted READY/BREAK on every scan,
+            # 3–5 ATR away; lifecycle then killed it as out-of-reach.
+            _fresh_bars = max(1, int(os.getenv("TC_FRESH_BARS", "4") or 4))
+            _inside_recent = False
+            for _kk in range(n, max(0, n - _fresh_bars) - 1, -1):
+                _ck = float(pattern_df["close"].iloc[_kk])
+                _lk = float(line.price_at(_kk))
+                if (_ck <= _lk) if side == "upper" else (_ck >= _lk):
+                    _inside_recent = True
+                    break
+            _beyond = -dist
+            if _beyond > float(os.getenv("TC_MAX_BEYOND_ATR", "1.5") or 1.5) \
+                    or not (_inside_recent or _beyond <= 0.5):
+                continue
+            # a BREAK needs a displacement candle IN the break direction that
+            # CLOSED beyond the line (a big red bar under a broken-up line
+            # was scored as an upside break)
+            _o = float(trigger_df["open"].iloc[-1])
+            _dir_ok = (last_close > _o) if side == "upper" else (last_close < _o)
+            _closed_beyond = (last_close > line_now) if side == "upper" else (last_close < line_now)
+            displacement = bool(displacement and _dir_ok and _closed_beyond)
         if crossed and displacement:
             state = STATE_BREAK
         elif crossed:
@@ -674,6 +769,7 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             height = max(float(pattern_df["high"].iloc[max(0, n - 40):n + 1].max()) - line_now, 1.5 * atr_p)
         height = min(height, 45.0 * atr_p)
         # ── E&M special formations & flag-pennant overlay (labels only) ─────
+        _base_pattern = pattern
         pattern, struct_note = _structural_refine(pattern_df, line, side, n, height, pattern)
         _fp = _flagpole_strength(pattern_df, line, side, n, atr_p, height)
         if _fp is not None:
@@ -770,10 +866,24 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                       f"→ سیگنالِ {('صعودی' if direction == 'LONG' else 'نزولی')} با هدفِ اندازه‌گیری‌شده"),
             "prob": "هیچ‌کدام ۱۰۰٪ نیست؛ همه احتمالی‌ست مگر تأییدِ کاملِ زنجیره",
         }
+        # R31.7 audit P3: once price has CROSSED the line against a special
+        # formation (close up through a triple top / H&S shoulder line, down
+        # through a triple bottom / IH&S), the formation is INVALIDATED — the
+        # break event keeps the base geometry name instead of advertising a
+        # bearish pattern on a LONG (or a bullish one on a SHORT).
+        if crossed and ev["state"] in (STATE_BREAK, STATE_READY):
+            _d3 = str(ev.get("direction") or "").upper()
+            if (ev["pattern"] in _BEAR_FORMATIONS and _d3 == "LONG") \
+                    or (ev["pattern"] in _BULL_FORMATIONS and _d3 == "SHORT"):
+                ev["formation_invalidated"] = ev["pattern"]
+                ev["pattern"] = _base_pattern
+                ev["pattern_fa"] = PATTERN_FA.get(_base_pattern, _base_pattern)
+                ev.pop("struct_note", None)
+                ev["event_id"] = f"{side}|{_base_pattern}|{ev['state']}|{ev_ref9}"
         events.append(ev)
     # V3 §27/§28: identity + lifecycle bookkeeping on every emitted event,
     # then exact-duplicate dedupe (same event_id only).
-    _meta9 = {"pattern": str(pattern), "pattern_tf": str(pattern_tf),
+    _meta9 = {"pattern": str(_pattern0), "pattern_tf": str(pattern_tf),
               "span": int(n - _start_idx)}
     for ev in events:
         ev.setdefault("pattern_id", pid)
@@ -1160,6 +1270,18 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         "tc_base": ev.get("base_box") or [],
         "public_code": generate_viva_public_code("TLBREAK", style),
     })
+    # R31.7 (why TECHCLASSIC was silent, cause #2): every scan minted a NEW
+    # random signal_id for the SAME broken edge; the zone (a sloped line)
+    # drifts every 15 minutes, so the lineage test (0.08 ATR) failed and the
+    # alert was re-created / superseded before any confirm-TF close. The
+    # lineage is the broken EDGE itself — identified by its defining pivots'
+    # timestamps, which do not move as the fit window slides.
+    _lk = alert_lineage_key("TECHCLASSIC", bundle.symbol, trigger_tf, ev.get("pattern_tf") or structure_tf,
+                            ev.get("side"), direction,
+                            ev.get("upper_points") if ev.get("side") == "upper" else ev.get("lower_points"),
+                            is_break)
+    if _lk:
+        candidate.metadata["alert_lineage_key"] = _lk
     # ── Viva 09-23 (round 20 ENTRY LAW): remember the MAJOR-pivot trendline
     # opposing this break (highest-TF validated 1d/4h/1h line on the break's
     # side) — confirmation must be a CLOSE beyond it, not just the tool line.

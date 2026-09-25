@@ -585,8 +585,52 @@ def line_price_at_time(line: ValidatedLine, timestamp) -> float:
     target = pd.Timestamp(timestamp).timestamp()
     if t1 <= t0:
         return line.price_at(line.last_index)
+    import os as _os
+    if _os.getenv("R317_LEGACY", "0") != "1":
+        # R31.7 audit T5: project the FITTED line (linear or log) by time.
+        # The old secant through the first/last touch PRICES ignored the fit
+        # (touches sit up to max_fit_residual off it) and the log calibration,
+        # so the trigger-TF break level differed from the drawn line.
+        try:
+            i0, i1 = float(first["index"]), float(last["index"])
+            if i1 > i0:
+                sec_per_bar = (t1 - t0) / (i1 - i0)
+                return float(line.price_at(i1 + (target - t1) / sec_per_bar))
+        except Exception:
+            pass
     price_per_second = (float(last["price"]) - float(first["price"])) / (t1 - t0)
     return float(last["price"]) + price_per_second * (target - t1)
+
+
+def breakout_is_fresh(trigger_df: pd.DataFrame, line: ValidatedLine, direction: str,
+                      lookback: int = 3, max_beyond_atr: float = 3.0) -> bool:
+    """R31.7 audit TB1: a TLBREAK break is an EVENT, not a state.
+
+    ``assess_projected_breakout`` accepted ANY close beyond the line — a line
+    broken two weeks earlier (price 7 ATR above it) re-qualified on every
+    green candle, producing LONG alerts whose POI sat 18% under the market
+    (BTC 1D, 2026-09-04). Fresh = one of the previous ``lookback`` trigger
+    closes was still on the inside of the line, and the current close is not
+    a chase (≤ ``max_beyond_atr`` beyond it)."""
+    try:
+        if trigger_df is None or len(trigger_df) < lookback + 2:
+            return True
+        atr = _atr(trigger_df)
+        is_long = str(direction).upper() == "LONG"
+        ts = trigger_df["timestamp"]
+        closes = trigger_df["close"].astype(float)
+        lv = line_price_at_time(line, ts.iloc[-1])
+        beyond = (float(closes.iloc[-1]) - lv) if is_long else (lv - float(closes.iloc[-1]))
+        if atr > 0 and beyond / atr > max_beyond_atr:
+            return False
+        for k in range(2, lookback + 2):
+            c = float(closes.iloc[-k])
+            lk = line_price_at_time(line, ts.iloc[-k])
+            if (c <= lk) if is_long else (c >= lk):
+                return True
+        return False
+    except Exception:
+        return True
 
 
 def _ema(values: pd.Series, span: int) -> pd.Series:

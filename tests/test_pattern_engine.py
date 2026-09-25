@@ -342,25 +342,50 @@ def test_head_shoulders_label_and_note():
     pat, trig = _flat_frames(keys_override=[
         (0, 84.3), (45, 99.4), (52, 80.0), (70, 108.0), (88, 78.0),
         (105, 99.4), (118, 92.0), (132, 99.4), (139, 84.0)])
+    # the fixture's live price sits 1.2 ATR ABOVE the shoulder line: that is
+    # the INVALIDATION of the H&S (R31.7 audit P3) — detected, but the LONG
+    # break event no longer advertises a bearish formation
     events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
+    assert events and events[0]["formation_invalidated"] == "HEAD_SHOULDERS"
+    assert events[0]["pattern"] != "HEAD_SHOULDERS"
+    assert events[0]["touches"] >= 3
+    # before the cross (price just under the shoulder line) the label stands
+    atr = float((pat["high"] - pat["low"]).tail(14).mean())
+    trig2 = trig.copy()
+    for col in ("open", "high", "low", "close"):
+        trig2[col] = trig2[col] - 1.35 * atr
+    events = [e for e in m.scan_edges(pat, trig2, "4h") if e["side"] == "upper"]
     assert events and events[0]["pattern"] == "HEAD_SHOULDERS"
     assert "گردن" in events[0].get("struct_note", "")
-    assert events[0]["touches"] >= 3
 
 
 def test_triple_top_label():
     m = _mod()
     pat, trig = _flat_frames()
     events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
+    # crossed upward = the triple top is invalidated (R31.7 audit P3)
+    assert events and events[0]["formation_invalidated"] == "TRIPLE_TOP"
+    atr = float((pat["high"] - pat["low"]).tail(14).mean())
+    trig2 = trig.copy()
+    for col in ("open", "high", "low", "close"):
+        trig2[col] = trig2[col] - 1.35 * atr
+    events = [e for e in m.scan_edges(pat, trig2, "4h") if e["side"] == "upper"]
     assert events and events[0]["pattern"] == "TRIPLE_TOP"
 
 
 def test_flag_relabels_small_channel_after_pole():
     m = _mod()
-    pat, trig = _flat_frames(l0=95.0, extra=[(35, 70.0)])
+    # R31.7 audit P5: a flag is BRIEF — the pole is followed by a short
+    # consolidation (the old fixture's 87-bar box after an 8-bar pole is a
+    # rectangle, not a flag)
+    pat, trig = _flat_frames(l0=95.0, extra=[(92, 70.0)],
+                             up_idx=(100, 115, 130), lo_idx=(107, 122, 136))
     events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
     assert events and events[0]["pattern"] == "FLAG_BULL"
     assert "پرچم" in events[0].get("struct_note", "")
+    pat, trig = _flat_frames(l0=95.0, extra=[(35, 70.0)])
+    events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
+    assert not events or events[0]["pattern"] != "FLAG_BULL"
 
 
 def test_broadening_megaphone():

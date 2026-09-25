@@ -64,6 +64,21 @@ def pivots(df: pd.DataFrame, left: int = 3, right: int = 3) -> Tuple[List[Dict],
 
 def structure_bias(df: pd.DataFrame, pivot_size: int = 3) -> Dict:
     ph, pl = pivots(df, pivot_size, pivot_size)
+    import os as _os
+    _legacy = _os.getenv("R317_LEGACY", "0") == "1"
+    if not _legacy:
+        # R31.7 audit T1b: `pivots` uses >= / <=, so an equal-high pair inside
+        # one window becomes TWO pivots; comparing a twin with itself made
+        # neither HH nor LH and pushed trending markets into the fallback.
+        def _dedup(pts):
+            out = []
+            for p in pts:
+                if out and abs(p["price"] - out[-1]["price"]) <= 1e-12 \
+                        and int(p["index"]) - int(out[-1]["index"]) <= pivot_size:
+                    continue
+                out.append(p)
+            return out
+        ph, pl = _dedup(ph), _dedup(pl)
     if len(ph) < 2 or len(pl) < 2:
         return {"bias": "NEUTRAL", "highs": ph, "lows": pl}
     hh = ph[-1]["price"] > ph[-2]["price"]
@@ -83,8 +98,22 @@ def structure_bias(df: pd.DataFrame, pivot_size: int = 3) -> Dict:
             bias = "BEARISH"
         else:
             bias = "NEUTRAL"
+    choch = False
+    if not _legacy:
+        # R31.7 audit T1 (CHoCH): pivots confirm `pivot_size` bars late, so
+        # a close THROUGH the last opposite swing (below the last HL in an
+        # uptrend / above the last LH in a downtrend) is a change of
+        # character NOW — the bias used to stay BULLISH/BEARISH until new
+        # pivots printed, i.e. trend filters kept green-lighting longs for
+        # several bars after the structure had already broken down.
+        close = float(df["close"].iloc[-1])
+        if bias == "BULLISH" and close < float(pl[-1]["price"]):
+            bias, choch = "BEARISH", True
+        elif bias == "BEARISH" and close > float(ph[-1]["price"]):
+            bias, choch = "BULLISH", True
     return {
         "bias": bias,
+        "choch": choch,
         "highs": ph,
         "lows": pl,
         "last_high": ph[-1],
@@ -148,14 +177,17 @@ def session_name(timestamp) -> str:
     else:
         ts = ts.tz_convert("UTC")
     hour = ts.hour
-    if 7 <= hour < 10:
-        return "LONDON"
-    if 13 <= hour < 17:
-        return "NEW_YORK"
-    if 0 <= hour < 3:
+    # R31.7 audit T4: NEW_YORK (13–17) was tested BEFORE the overlap (12–16),
+    # so LONDON_NY_OVERLAP could only ever be returned at 12:xx, London ended
+    # at 10:00 and 10–12 / 17–21 read «off session». Contiguous UTC blocks:
+    if 0 <= hour < 7:
         return "ASIA"
+    if 7 <= hour < 12:
+        return "LONDON"
     if 12 <= hour < 16:
         return "LONDON_NY_OVERLAP"
+    if 16 <= hour < 21:
+        return "NEW_YORK"
     return "OFF_SESSION"
 
 

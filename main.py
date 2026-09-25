@@ -182,6 +182,7 @@ _QUIET_RUN = 0
 # unresolved-chain / same-zone / 24h licence suppression. Their own detector
 # geometry, score, sanity and duplicate checks remain active.
 _STRUCTURAL_QUALITY_LANES = frozenset({"ALBROX", "TLBREAK", "TECHCLASSIC"})
+_DISCOVERY_TFS = ("1d", "4h", "1h", "30m", "15m", "5m")
 
 
 # ── Round-15 cost guard (Viva 09-21: «ببین استفاده الکی نداشته باشیم»).
@@ -285,7 +286,11 @@ def run_discovery_scan() -> Dict[str, int]:
         if _SHUTDOWN:
             break
         try:
-            bundle = get_market_bundle(symbol, ticker=metrics.get(symbol, {}))
+            # FIX (R31.5): 30m is part of the live bundle. R31.2 moved the
+            # PINVAL/PINWALLQ DAYTRADE trigger to 30m, but the default bundle
+            # never carried a 30m frame, so that stream silently produced
+            # nothing. 30m is resampled from the same 15m tape (no extra call).
+            bundle = get_market_bundle(symbol, _DISCOVERY_TFS, ticker=metrics.get(symbol, {}))
             # ── Round-15: no new closed candle on any detection timeframe and no
             # open chain on this symbol ⇒ nothing can be detected that the last
             # pass did not already see. (Guarded, fail-open, 15-min window.)
@@ -989,7 +994,8 @@ def _scenario_out_of_reach(candidate, price) -> bool:
         atr = float(md.get("atr") or 0) or 0.0
         if atr <= 0:
             return False
-        zone_mid = (float(candidate.entry_zone_bottom) + float(candidate.entry_zone_top)) / 2.0
+        from analysis.quality_filters import oor_reference
+        zone_mid = oor_reference(candidate)
         px = float(price)
         if candidate.direction == "LONG" and px < zone_mid:
             return False
@@ -1374,7 +1380,8 @@ def monitor_candidates() -> Dict[str, int]:
                 # chain alive for days.
                 if not candidate.metadata.get("technical_confirmation_complete") \
                         and _scenario_out_of_reach(candidate, current_price):
-                    _zone_mid = (float(candidate.entry_zone_bottom) + float(candidate.entry_zone_top)) / 2.0
+                    from analysis.quality_filters import oor_reference as _oor_ref
+                    _zone_mid = _oor_ref(candidate)
                     _atr_md = float((candidate.metadata or {}).get("atr") or 0) or 0.0
                     _far = abs(float(current_price) - _zone_mid) / _atr_md if _atr_md else 0.0
                     candidate.status = "CANCELLED"

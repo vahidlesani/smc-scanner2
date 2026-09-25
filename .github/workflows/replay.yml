@@ -1,0 +1,92 @@
+name: replay
+
+# R31.5 walk-forward replay of the live setups (review suggestion B1).
+# Runs only when the replay tooling changes on the review branch, or by hand.
+on:
+  push:
+    branches: ["arena/**"]
+    paths:
+      - "experiments/replay_*.py"
+      - ".github/workflows/replay.yml"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "replay window (days)"
+        default: "120"
+      end:
+        description: "last day (YYYY-MM-DD)"
+        default: "2026-09-24"
+
+permissions:
+  contents: read
+  checks: write
+
+env:
+  REPLAY_DAYS: ${{ github.event.inputs.days || '120' }}
+  REPLAY_END: ${{ github.event.inputs.end || '2026-09-24' }}
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        symbol: [BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT, ADAUSDT, LINKUSDT, AVAXUSDT, SUIUSDT, BNBUSDT]
+        # round 1: base,legacy · round 2: base,stopfloor,oor4,trend4h,combo
+        # round 3a (3e10dc3): base,prodfilters,trend4h · round 3b (e89991e): b4,trendb4
+        # round 4 (R31.6) ran base, prodsoft05, prodsoft10, oorentry (run 36125577189)
+        # round 5 (R31.7 audit fixes): new code vs R317_LEGACY=1, with and without prodsoft10
+        arm: [base, prodsoft10, legacy317, prodsoft10_legacy317]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt time-machine
+      - uses: actions/cache@v4
+        with:
+          path: experiments/data_cache/replay
+          key: klines-${{ matrix.symbol }}-${{ env.REPLAY_END }}-${{ env.REPLAY_DAYS }}
+      - name: replay
+        env:
+          PYTHONPATH: .
+        # arms (env toggles) are defined in replay_live_setups.ARMS
+        run: |
+          set -o pipefail
+          python experiments/replay_live_setups.py --symbol ${{ matrix.symbol }} \
+            --days $REPLAY_DAYS --end $REPLAY_END --arm ${{ matrix.arm }} --out out 2>&1 | tail -n 40
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replay-${{ matrix.symbol }}-${{ matrix.arm }}
+          path: out/
+          if-no-files-found: warn
+
+  report:
+    needs: replay
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          path: all
+      - run: PYTHONPATH=. python experiments/replay_report.py --in all --md report.md --csv trades.csv
+      - name: publish via Checks API
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python experiments/replay_publish.py report.md trades.csv fates.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: replay-report
+          path: |
+            report.md
+            trades.csv
+            fates.md

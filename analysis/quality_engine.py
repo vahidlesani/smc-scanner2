@@ -1,6 +1,7 @@
 """Orchestrates separate Swing/Scalp engines and candidate confirmation."""
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
@@ -183,6 +184,14 @@ def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
     except Exception as _mm_outer_exc:
         for candidate in candidates:
             candidate.metadata["money_management_error"] = str(_mm_outer_exc)[:180]
+
+    # R31.5 (opt-in, HTF_TREND_GATE=4h): against-trend candidates become
+    # DEAD_GATE (educational only). No-op when the env var is unset.
+    try:
+        from analysis.quality_filters import apply_trend_gate
+        apply_trend_gate(bundle, candidates)
+    except Exception:
+        pass
 
     # R29: non-blocking MTF candle and classical-pattern explanations.
     try:
@@ -420,6 +429,20 @@ def _project_watch_level(watch: dict, when) -> float:
     return y1 + (y1 - y0) / dt * (t - t1).total_seconds()
 
 
+# Review 09-25: the fast lane projects the fitted trendline PAST its second
+# anchor (same maths as main._watch_edge_at and the chart). Set
+# CONFIRM_TL_EXTRAPOLATE=0 to restore the 09-23 clamp (line flat at anchor B).
+_TL_EXTRAPOLATE = str(os.getenv("CONFIRM_TL_EXTRAPOLATE", "1")).strip().lower() not in {"0", "false", "no", "off"}
+
+# Metadata written by evaluate_confirmation that describes a *plan change* —
+# restored to its pre-call value whenever the evaluation ends in a reject.
+_REJECT_TRANSIENT_KEYS = (
+    "viva_entry_type", "internal_entry", "internal_wall", "internal_path_fa",
+    "internal_entry_note_fa", "stop_clamped", "stop_clamp_note",
+    "target_cap_note", "raw_structural_tp2", "technical_confirmation_complete",
+)
+
+
 def evaluate_confirmation(
     candidate: SignalCandidate, closed_df: pd.DataFrame,
     htf_closed_df: Optional[pd.DataFrame] = None,
@@ -429,7 +452,32 @@ def evaluate_confirmation(
     No live/incomplete candle can confirm a trade. A candidate score may gain one
     trigger point, but missing mandatory gates can never be compensated by score.
     """
+    # FIX (review 09-25): a REJECTED evaluation must not leave a rewritten
+    # plan behind. The internal-lane rewrite, the stop clamp and the TP2 cap
+    # used to mutate entry/SL/TP permanently even when a later gate rejected
+    # the bar — the next cycle then judged invalidation against a stop the
+    # member was never shown, and a breakout silently became an INTERNAL
+    # trade. Snapshot the plan and restore it on every reject.
+    _missing = object()
+    _plan0 = {k: getattr(candidate, k, None) for k in (
+        "planned_entry", "sl", "tp1", "tp2", "rr_tp1", "rr_tp2",
+        "status", "confirmed_at")}
+    _md0 = candidate.metadata if candidate.metadata is not None else {}
+    _transient0 = {k: _md0.get(k, _missing) for k in _REJECT_TRANSIENT_KEYS}
+
     def reject(code: str, message: str) -> Tuple[bool, SignalCandidate, str]:
+        for _k, _v in _plan0.items():
+            try:
+                setattr(candidate, _k, _v)
+            except Exception:
+                pass
+        if candidate.metadata is None:
+            candidate.metadata = {}
+        for _k, _v in _transient0.items():
+            if _v is _missing:
+                candidate.metadata.pop(_k, None)
+            else:
+                candidate.metadata[_k] = _v
         candidate.metadata["last_reject_code"] = code
         return False, candidate, message
 
@@ -533,13 +581,29 @@ def evaluate_confirmation(
         except Exception:
             _la = _lb = None
         def _edge_at(ts, static_edge: float) -> float:
-            if _la is not None and _lb is not None and _lb[0] != _la[0]:
-                _dt = (_lb[0] - _la[0]).total_seconds()
-                if _dt:
-                    _frac = max(0.0, min(1.0, (
-                        (pd.Timestamp(ts) - _la[0]).total_seconds() / _dt
-                    )))
-                    return float(_la[1] + (_lb[1] - _la[1]) * _frac)
+            # FIX (review 09-25): the line is evaluated at the bar's REAL
+            # timestamp on one tz plane and EXTRAPOLATED past its second
+            # anchor — exactly like main._watch_edge_at and the chart. The old
+            # code received the frame's integer row index as `ts` (so every
+            # bar was "1970" → clamped to the FIRST anchor's price) and also
+            # clamped frac to [0, 1], flattening every sloped line at the
+            # anchor. Result: TLBREAK fast-lane waited for a close beyond the
+            # oldest pivot instead of the line the member sees on the chart.
+            if _la is not None and _lb is not None:
+                try:
+                    _t, _a = _tz_match(ts, _la[0])
+                    _t2, _b = _tz_match(ts, _lb[0])
+                    _dt = (_b - _a).total_seconds()
+                    if _dt > 0:
+                        _frac = max(0.0, (_t - _a).total_seconds() / _dt)
+                        if not _TL_EXTRAPOLATE:
+                            # legacy 09-23 behaviour (env opt-in): flat at anchor B
+                            _frac = min(1.0, _frac)
+                        _v = float(_la[1] + (_lb[1] - _la[1]) * _frac)
+                        if _v > 0:
+                            return _v
+                except Exception:
+                    pass
             return static_edge
         _is_long = candidate.direction == "LONG"
         _buf = 0.10 * _atr
@@ -569,7 +633,11 @@ def evaluate_confirmation(
             # guard is a tick-scale epsilon (2% of the frame's own ATR) so a
             # mathematically equal close is not treated as a break.
             _f_buf = max(0.02 * _f_atr, 0.0)
-            for _ts, _r in _scan.iterrows():
+            _has_ts = "timestamp" in _scan.columns
+            for _ix, _r in _scan.iterrows():
+                # the row LABEL is a RangeIndex int in production frames —
+                # the bar's time lives in the "timestamp" column
+                _ts = _r["timestamp"] if _has_ts else _ix
                 _edge_t = _edge_at(_ts, _edge if _edge > 0 else _zone_edge)
                 _out = bool(float(_r["close"]) >= _edge_t + _f_buf) if _is_long \
                     else bool(float(_r["close"]) <= _edge_t - _f_buf)
@@ -1245,9 +1313,11 @@ def evaluate_confirmation(
         candidate.score = min(10, candidate.score + 1)
     if candidate.score < SETTINGS.execution_min_score:
         return reject("SCORE_LOW", f"امتیاز نهایی {candidate.score} کمتر از حد اجرای {SETTINGS.execution_min_score} است.")
-    candidate.status = "CONFIRMED"
-    candidate.confirmed_at = candidate.confirmed_at or iso_now()
-    candidate.metadata["technical_confirmation_complete"] = True
+    # FIX (review 09-25): CONFIRMED/technical_confirmation_complete are set
+    # only AFTER the counter-trend gate below. They used to be set first, so a
+    # COUNTER_TREND_TOUCH_ONLY reject left technical_confirmation_complete=True
+    # behind and main.monitor_candidates' «retry publication» branch published
+    # the rejected setup on the very next cycle.
     # ── Viva 09-19/20 counter-trend & MTF-zone confirmation laws ──────────
     # (a) A TOUCH is never a confirmation against the structure: counter
     #     setups need a closed structure break in the trade direction (close
@@ -1309,6 +1379,26 @@ def evaluate_confirmation(
     except Exception as _gexc:
         candidate.metadata["mtf_gate_error"] = str(_gexc)[:120]
 
+    # R31.5 (opt-in, MIN_STOP_FLOOR): a stop tighter than the TF floor is the
+    # most-hunted class in the replay — refuse the confirmation (plan restored).
+    try:
+        from analysis.quality_filters import stop_floor_violation
+        _sf_msg = stop_floor_violation(candidate)
+    except Exception:
+        _sf_msg = None
+    if _sf_msg:
+        return reject("STOP_BELOW_FLOOR", _sf_msg)
+    try:
+        from analysis.quality_filters import weak_confirm_bar
+        _wb_msg = weak_confirm_bar(candidate, closed_df)
+    except Exception:
+        _wb_msg = None
+    if _wb_msg:
+        return reject("WEAK_CONFIRM_BAR", _wb_msg)
+
+    candidate.status = "CONFIRMED"
+    candidate.confirmed_at = candidate.confirmed_at or iso_now()
+    candidate.metadata["technical_confirmation_complete"] = True
     # a confirmed scenario must never keep a stale reject code (the ETHFIUSDT
     # replay showed last_reject_code="INSIDE_PATTERN_NO_BREAK" on a CONFIRMED
     # row — the log then blamed a gate that had already been overruled).

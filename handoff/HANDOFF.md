@@ -1,3 +1,6 @@
+> **R31.4 — 2026-09-25 (code review, branch `arena/01a0d606-smc-scanner2`):** ۷ باگ مسیر ستاپ‌ها رفع شد — fast-lane خط روند از شمارهٔ ردیف به‌جای timestamp می‌خواند (سطح تأیید = پیوت اول؛ حالا خط امتداد می‌یابد، `CONFIRM_TL_EXTRAPOLATE=0` = clamp قدیم) · ریجکت ضدروند با retry انتشار دور زده می‌شد · reject دیگر entry/SL/TP را تغییر نمی‌دهد · ALBROX فقط شکست تازهٔ بیس · first-visit واقعی PINWALLQ · look-ahead تریلینگ R29 · UnboundLocal `_atr` در render_kit.
+> جزئیات + پیشنهادهای طراحی (replay آماری، کف R:R، حالت سقف استاپ، ...): `docs/REVIEW_2026-09-25.md`. تست‌ها: **470 passed / 1 skipped**. دیپلوی نشده.
+>
 > **R30 — 2026-09-24 (current working branch):** مرجع تصویری سبک CryptoCove دقیق شد: منظور فقط منطق هندسی/تشخیص و ترسیم الگوهاست، نه رنگ‌بندی. نمونه‌ها شامل کانال نزولی/ترندلاین و Bullish Rectangle هستند. موتور تشخیص مستقل از رندر است.
 > - **Spot horizons restored to six:** 4H/8H = کوتاه‌مدت، 12H/1D = میان‌مدت، 3D/1W = بلندمدت. Spot remains LONG-only for confirmation; opposite-side touches/breaks remain warnings.
 > - **MTF base architecture:** 5M and 15M are fetched directly; 1H/30M are resampled from 15M; 8H/12H are resampled from the 4H structural tape; 3D/1W are resampled from the 1D macro tape. 5M is never reconstructed from 15M. 4H/1D stay direct because reconstructing enough long history from 5M/15M would cost more API calls, not fewer.
@@ -147,3 +150,10 @@ HANDOFF.md — smc-scanner2 (VivaSignals Pro)
 - **ماژول فلو رایگان:** `analysis/onchain_free.py` — CoinGecko + alternative.me + DefiLlama، fail-open، فقط **ترتیب** لاین اسپات (سر واچ‌لیست ثابت، هشدارها اول) و یک خط لاگ زمینه؛ صف فیوچرز دست‌نخورده. تست: `tests/test_round16_onchain_free_priority.py`.
 - سوئیچ‌ها: `ONCHAIN_FREE_ENABLED` (پیش‌فرض on) · `ONCHAIN_CACHE_TTL_SECONDS` · `SPOT_FLOW_HEAD` (۶) · `TLBREAK_LOG_FIT_MIN_SPAN` (۰.۰۳).
 - وضعیت: ۴۰۴ تست سبز / ۱ اسکیپ · دیپلوی با commitSha انجام و لاگ تمیز · گزارش + پروف برای ویوا ارسال شد.
+
+## ۰۹-۲۵ — R31.4/R31.5 (برنچ `arena/01a0d606-smc-scanner2`، PR #5، دیپلوی نشده)
+- فیکس‌های A1 تا A12، از جمله استریم 30m که مرده بود و حالا پشت `PINVAL_30M_ENABLED` و پیش‌فرض خاموش است. بررسی کد: `docs/REVIEW_2026-09-25.md`.
+- هارنس replay: `experiments/replay_live_setups.py` و workflow `replay` (بازوها در `ARMS`). گزارش: `docs/REPLAY_2026-09-25.md`.
+- فیلترهای opt-in: `HTF_TREND_GATE=4h` و `MIN_STOP_FLOOR=1` در `analysis/quality_filters.py`. این دو با هم در replay ‎+0.028R‎ دادند (base ‎−0.024‎). قدم بعدی: paper forward با این دو. `MIN_CONFIRM_BAR` (B4) رد شده و نباید روشن شود. تست‌ها: **482 passed / 1 skipped**.
+- R31.6 (راند ۴): گیت نرم `HTF_TREND_BAND=1.0` اضافه شد. توصیهٔ paper حالا این است: `HTF_TREND_GATE=4h` + `HTF_TREND_BAND=1.0` + `MIN_STOP_FLOOR=1`، با ‎+0.042R‎ و ۶۳۴ معامله. هارنس حالا سرنوشت کاندیدها (`fates__*.jsonl`) و نتیجهٔ سایه را هم می‌نویسد. علت سکوت TECHCLASSIC و پیشنهاد راند ۵: `docs/REPLAY_2026-09-25.md` §۹.
+- R31.7: ممیزی موتورهای کندل، الگو، روند و چارت (`docs/AUDIT_2026-09-25b.md`). شکستِ کهنه، خطوطِ معلق، CHoCH و سشن اصلاح شدند و ۱۶ تست اضافه شد. ابزار: `experiments/chart_debug.py` و `REPLAY_CHARTS_DIR`، روی نمونهٔ کندلِ واقعیِ `experiments/sample_klines/`. کلید برگشت: `R317_LEGACY=1`.

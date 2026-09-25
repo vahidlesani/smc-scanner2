@@ -67,6 +67,7 @@ class Settings:
     core_v7_setups_enabled: bool = False
     # Pinbar-in-zone alerts (5m/15m/1h) — bullish 🔴/🟢 alert + verdict reply
     pinv_enabled: bool = True
+    pinval_30m_enabled: bool = False      # R31.5: DAYTRADE 30m pin stream (replay: negative) — opt-in
     albrox_enabled: bool = True
     albrox_symbols: str = ""
     # ALBROX spike/reclaim detection thresholds (env-tunable). The original
@@ -275,6 +276,7 @@ class Settings:
             candidate_monitor_seconds=_int("CANDIDATE_MONITOR_SECONDS", cls.candidate_monitor_seconds),
             core_v7_setups_enabled=_bool("CORE_V7_SETUPS_ENABLED", cls.core_v7_setups_enabled),
             pinv_enabled=_bool("PINVAL_ENABLED", cls.pinv_enabled),
+            pinval_30m_enabled=_bool("PINVAL_30M_ENABLED", cls.pinval_30m_enabled),
             albrox_enabled=_bool("ALBROX_ENABLED", cls.albrox_enabled),
             albrox_symbols=os.getenv("ALBROX_SYMBOLS", cls.albrox_symbols),
             albrox_min_spike_atr=_float("ALBROX_MIN_SPIKE_ATR", cls.albrox_min_spike_atr),

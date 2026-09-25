@@ -1384,6 +1384,16 @@ def monitor_confirmed_trades() -> List[Dict]:
             latest_checked = start
             for _cidx, candle in pending.iterrows():
                 latest_checked = _naive_timestamp(candle["timestamp"])
+                # FIX (review 09-25): the candle's position in `frame` is
+                # resolved HERE, before any trailing maths. The R29 block
+                # below used `'_pos' in locals()`, which was False before TP1
+                # (→ frame.tail(31): the trailing stop of an OLD pending candle
+                # was computed from FUTURE candles = look-ahead in results) and
+                # stale by one candle after TP1.
+                try:
+                    _pos = int(frame.index.get_loc(_cidx))
+                except Exception:
+                    _pos = len(frame) - 1
                 step = advance_ladder(ladder, float(candle["high"]), float(candle["low"]))
                 ladder = step["state"]
                 raw_events = list(step["events"])
@@ -1391,7 +1401,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                 # Before TP1 it may only ratchet structural room; NET-BE is impossible
                 # until TP1 is actually hit. After TP1 it includes fees/slippage.
                 try:
-                    _r29_frame = frame.iloc[max(0, int(_pos) - 30):int(_pos) + 1] if '_pos' in locals() and frame is not None else frame.tail(31)
+                    _r29_frame = frame.iloc[max(0, _pos - 30):_pos + 1]
                     _r29_candles = [{"open": float(r["open"]), "high": float(r["high"]),
                                      "low": float(r["low"]), "close": float(r["close"])}
                                     for _, r in _r29_frame.iterrows()]
@@ -1414,8 +1424,7 @@ def monitor_confirmed_trades() -> List[Dict]:
                         and int(ladder.get("hit_index") or 0) >= 1):
                     wcandles = []
                     try:
-                        _pos = frame.index.get_loc(_cidx)
-                        _win = frame.iloc[max(0, int(_pos) - 30):int(_pos) + 1]
+                        _win = frame.iloc[max(0, _pos - 30):_pos + 1]
                         wcandles = [{"open": float(r["open"]), "high": float(r["high"]),
                                      "low": float(r["low"]), "close": float(r["close"]),
                                      "volume": float(r["volume"] or 0.0)}
