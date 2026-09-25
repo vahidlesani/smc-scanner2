@@ -329,7 +329,7 @@ _FEED_SQL = """
            result, pnl_pct, score, trade_style, public_code, trigger_timeframe,
            created_at, closed_at, confirmed, partial_win, market_json,
            tp1_hit, tp1_hit_at, sl_moved_to_be, description, entry_conditions,
-           confirmations, setup_code, target_state_json
+           confirmations, setup_code, target_state_json, leverage, margin_usd
     FROM signals
     WHERE created_at >= {cutoff}
     ORDER BY created_at DESC
@@ -386,7 +386,7 @@ def _fetch_state() -> Dict[str, Any]:
                 (sid, symbol, source, fa, direction, entry, sl, tp1, tp2, result, pnl, score,
                  style, code, tf, created_at, closed_at, confirmed, partial_win, market_json,
                  tp1_hit, tp1_hit_at, sl_moved, description, entry_conditions, confirmations,
-                 setup_code, target_state_json) = r
+                 setup_code, target_state_json, leverage, margin_usd) = r
                 code = str(code or "")
                 is_spot = _row_is_spot(code, source, market_json)
                 try:
@@ -415,6 +415,8 @@ def _fetch_state() -> Dict[str, Any]:
                     market_intelligence=_mi_feed,
                     summary=str(description or fa or "")[:220],
                     telegram_text="",
+                    leverage=int(leverage or 0),
+                    margin=float(margin_usd or 0),
                 ))
                 try:
                     from database.bot_kv import get_json as _app_gj
