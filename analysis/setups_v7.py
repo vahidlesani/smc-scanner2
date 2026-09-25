@@ -914,13 +914,18 @@ def _base_candidate(
     relative_volume = float((bundle.ticker or {}).get("relative_volume", 1) or 1)
     score += 1 if market_ok and relative_volume >= 1.10 else 0
     score = min(10, max(0, int(score)))
+    # ALBROX/TLBREAK/TECHCLASSIC are structural pattern lanes. Their
+    # market-liquidity reading remains visible evidence/score, but a transient
+    # ticker/spread feed failure must not turn a valid structural pattern into
+    # a DEAD_GATE. This is intentionally scoped to these three setups only.
+    _structural_quality_lane = str(setup_code).upper() in {"ALBROX", "TLBREAK", "TECHCLASSIC"}
     gates = {
         "htf_alignment": context_aligned and lower_aligned and location_ok,
         special_gate_name: special_gate_value,
         "displacement": bool(impulse.get("valid")),
         "fresh_poi": poi.get("touches", 0) <= 1,
         "rr": rr_ok,
-        "market_liquidity": market_ok,
+        "market_liquidity": (market_ok if not _structural_quality_lane else True),
     }
     # Viva 2026-09-14 «ببین کجا موقعیت‌ها خفه می‌شن»: on LINE setups a
     # repeatedly touched trendline/wedge/triangle/channel side is a STRONGER
@@ -997,6 +1002,8 @@ def _base_candidate(
             "session": last_session,
             "public_code": public_code,
             "strategy_version": SETTINGS.strategy_version,
+            "quality_lane": _structural_quality_lane,
+            "market_liquidity_advisory": bool(_structural_quality_lane and not market_ok),
             # Historical visits affect freshness, never satisfy the future
             # retest requirement. Only candles after created_at may set this.
             "touched": False,
