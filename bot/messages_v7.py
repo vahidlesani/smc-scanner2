@@ -1356,7 +1356,11 @@ def _live_candle(candidate: SignalCandidate, chart_df) -> Optional[Dict[str, flo
         from data.fetcher import get_klines
         _md = getattr(candidate, "metadata", None) or {}
         tf = str(_md.get("chart_view_tf") or getattr(candidate, "trigger_timeframe", "15m") or "15m")
-        live = get_klines(getattr(candidate, "symbol", ""), tf, 3, closed_only=False, use_cache=True)
+        # r31 (Viva 09-26, «کندل‌ها هر ۱۵ دقیقه است؟ لایو واقعی نیست»): the
+        # forming-candle probe bypasses the klines cache — a 3-bar request is
+        # negligible and the live candle must carry the freshest intrabar
+        # price the venue has at render time.
+        live = get_klines(getattr(candidate, "symbol", ""), tf, 3, closed_only=False, use_cache=False)
         if live is None or getattr(live, "empty", True):
             return None
         row = live.iloc[-1]
@@ -1370,6 +1374,11 @@ def _live_candle(candidate: SignalCandidate, chart_df) -> Optional[Dict[str, flo
             last_closed = last_closed.tz_localize("UTC")
         if ts <= last_closed:
             return None  # the tape has already closed; nothing is forming
+        # r31 (Viva 09-26, «اگر چارت ساعت ۱:۵۷ اومده کندل لایو هم واقعا همون
+        # رو نشون بده»): the forming bucket stays open until the TF closes,
+        # so its bucket-open stamp would read hours old on 1H/4h charts. The
+        # displayed live candle is stamped with the EXACT render moment.
+        ts = datetime.now(timezone.utc)
         _vol = float(row["volume"]) if "volume" in getattr(live, "columns", []) else 0.0
         return {"timestamp": ts, "open": float(row["open"]), "high": float(row["high"]),
                 "low": float(row["low"]), "close": float(row["close"]), "volume": _vol}
@@ -1689,7 +1698,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         def _fmt_time(x, pos):
             i = int(round(float(x)))
             if 0 <= i < len(_times):
-                return pd.Timestamp(_times[i]).strftime("%m-%d\n%H:%M")
+                # r31 (Viva 09-26, «هنوز ساعت چارت روی محور زمان UTC است»):
+                # axis ticks render in TEHRAN wall time (UTC+3:30, no DST).
+                _tk = pd.Timestamp(_times[i])
+                try:
+                    if _tk.tzinfo is None:
+                        _tk = _tk.tz_localize("UTC")
+                    _tk = _tk.tz_convert("Asia/Tehran")
+                except Exception:
+                    pass
+                return _tk.strftime("%m-%d\n%H:%M")
             return ""
         _day_ticks = []
         _seen_days = set()
@@ -2352,14 +2370,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # ── Round 13: the forming candle is part of `frame` now (appended above),
         # so it is drawn by the candle painter itself — same body, same wicks,
         # same width. No dashed ghost, no «FORMING» label. The LIVE pill keeps
-        # carrying the live price with its clock (UTC, like the candle axis).
+        # carrying the live price with its clock (TEHRAN, like the axis — r31).
         _live_clock = ""
         try:
             _lt = pd.Timestamp(frame.index[-1])
             _lt = pd.Timestamp(_lt)
             if _lt.tzinfo is None:
                 _lt = _lt.tz_localize("UTC")
-            _live_clock = _lt.tz_convert("UTC").strftime("%H:%M UTC")
+            _live_clock = _lt.tz_convert("Asia/Tehran").strftime("%H:%M")
         except Exception:
             _live_clock = ""
         # Viva 09-23 («این قیمت نیاز به لیبل جداگانهٔ لایو روی چارت نداره؛ روی
@@ -2957,7 +2975,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _lt = pd.Timestamp(frame.index[-1])
             if _lt.tzinfo is None:
                 _lt = _lt.tz_localize("UTC")
-            _live_stamp = _lt.tz_convert("UTC").strftime("%m-%d %H:%M UTC")
+            # r31 (Viva 09-26): the LIVE stamp is Tehran wall time of the
+            # render moment — never a UTC quantised bucket.
+            _live_stamp = _lt.tz_convert("Asia/Tehran").strftime("%m-%d %H:%M")
             fig.canvas.draw()
             _xd = fig.transFigure.inverted().transform(
                 axes[2].transData.transform((len(frame) - 1, 0.0))
@@ -5636,7 +5656,7 @@ def send_technoclassic_preview(ev: dict) -> bool:
         # ── new ANCHOR: full alert, permanent, starts a fresh unique code ──
         badge, _ = _setup_badge(cand)
         # Viva 2026-09-12: the preview channel shares the ONE identifier
-        # engine — registry-backed unique VIVA-TECLASSIC-T##### codes. The old
+        # engine — registry-backed unique VIVA-TECHCLASSIC-T##### codes. The old
         # TC-SYM-tf-date mashup was not unique at all and broke the format law.
         try:
             from database.repository_v7 import reserve_public_code as _reserve

@@ -32,6 +32,10 @@ class VivaTLBreakConfig:
     require_alive: bool = False
     recency_bars: int = 40
     edge_atr: float = 8.0
+    # r31 (Viva 09-26, PYTH): a substantial line whose close-break is inside
+    # this many bars of the right edge stays admissible even when it died
+    # soon after its last defining pivot — the tradeable recognition window.
+    fresh_break_bars: int = 12
     min_score: float = 7.0
     retest_window_trigger_bars_daytrade: int = 16
     retest_window_trigger_bars_swing: int = 24
@@ -238,7 +242,15 @@ def fit_validated_line(
                     continue
                 if x1 - fx < 30:
                     continue
-                if break_at - x1 < 10:
+                # r31 calibration (Viva 09-26, «ترند ماژور ساعتها قبل شکسته
+                # اما سیستم بعلت رسم ترندلاین محلی هنوز منتظر شکست مونده»):
+                # dropping a MAJOR line just because it died soon after its
+                # last defining pivot made the fitter re-arm on a local pair
+                # and wait forever. A substantial line (3+ touches, 30+ span)
+                # whose break is FRESH stays admissible — the engine then
+                # recognises the break instead of watching a local line.
+                _fresh31 = int(getattr(cfg, "fresh_break_bars", 12) or 12)
+                if break_at - x1 < 10 and break_at < n - _fresh31:
                     continue
             elif cfg.require_alive:
                 # ALIVE line: touched price within the last 40 bars AND its
@@ -263,6 +275,11 @@ def fit_validated_line(
                 score *= 0.55
             if break_at is not None:
                 score *= 0.80  # a live trend outranks a finished one
+                # r31: a FRESH break of a substantial line IS the event —
+                # it must outrank the unbroken local pair so the engine
+                # recognises the real major break (PYTH 09-26).
+                if int(break_at) >= n - int(getattr(cfg, "fresh_break_bars", 12) or 12):
+                    score *= 1.6
             # spec §9 context_score: a line price actually sits near right
             # now is the line the chart must show (Viva 09-18: best-of-cands)
             _edge_now2 = float(10.0 ** (_ls * n + _li)) if (_ls or _li) else slope * n + intercept

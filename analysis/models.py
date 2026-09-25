@@ -126,10 +126,12 @@ def generate_viva_public_code(setup_code: str = "", style: str = "") -> str:
         "PINVAL": "PINWALL", "PINWALLQ": "PINWALLQ", "TLBREAK": "TLBREAK",
         "ALBROX": "ALBROX", "P1234": "P1234", "LSR": "LSR", "SDR": "SDR",
         "BOS1": "BOS", "IFVG": "IFVG", "TLR": "TLR",
-        # Viva 2026-09-12: TechnoClassic keeps its OWN family code
-        # «VIVA-TECLASSIC-T######» — different letter, unique digits reserved
-        # atomically by reserve_public_code (never the randomness).
-        "TECHCLASSIC": "TECLASSIC",
+        # Viva 2026-09-12: TechnoClassic keeps its OWN family code.
+        # r31 (Viva 09-26, screenshot PYTH T676953): «VIVA-TECLASSIC» was a
+        # 09-12 typo missing the H — the family code is «VIVA-TECHCLASSIC-T######»
+        # (different letter, unique digits reserved atomically by
+        # reserve_public_code, never the randomness).
+        "TECHCLASSIC": "TECHCLASSIC",
     }
     raw = "".join(ch for ch in str(setup_code).upper() if ch.isalnum())[:12]
     label = label_map.get(raw, raw or "SETUP")

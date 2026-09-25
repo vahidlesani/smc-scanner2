@@ -691,7 +691,17 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         rejected_now = bool(wick_beyond and ((last_close <= line_now) if side == "upper"
                                              else (last_close >= line_now))) \
             or (dist <= 0.15 and not crossed)
-        if crossed and displacement:
+        # r31 calibration (Viva 09-26, PYTH): when the fitted line is a
+        # substantial line whose close-break already happened within the
+        # fresh window, the break IS the event — recognise it now without
+        # demanding a fresh displacement bar (the break candle closed bars
+        # ago; waiting re-arms the engine on a weaker local line forever).
+        _bk31 = getattr(line, "break_index", None)
+        _fw31 = int(getattr(cfg, "fresh_break_bars", 12) or 12)
+        _fresh_bk31 = _bk31 is not None and 0 <= n - int(_bk31) <= _fw31
+        if _fresh_bk31:
+            state = STATE_BREAK
+        elif crossed and displacement:
             state = STATE_BREAK
         elif crossed:
             state = STATE_READY
@@ -740,6 +750,8 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             "approach_direction": approach_direction,
             "pattern_role": _role9, "role_confidence": _rolec9,
             "legality": "LEGAL",
+            "fresh_break_recognition": bool(_fresh_bk31),
+            "bars_since_break": (n - int(_bk31)) if _bk31 is not None else None,
             "event_id": f"{side}|{pattern}|{state}|{ev_ref9}",
             "upper_points": [dict(p) for p in (upper.points if upper else ())],
             "lower_points": [dict(p) for p in (lower.points if lower else ())],

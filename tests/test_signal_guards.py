@@ -151,7 +151,7 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         # the preview body is the FINAL-WARNING skeleton, registry-unique
         # T-code kept at the tail.
         import re as _re
-        assert _re.fullmatch(r"VIVA-TECLASSIC-T\d{6}", code), code
+        assert _re.fullmatch(r"VIVA-TECHCLASSIC-T\d{6}", code), code
         _hdr = cap.split("\n")
         assert _hdr[0] == "🏷 <b>VIVA __ TecnoClasic</b>"
         assert _hdr[1] == M.VIVA_SEP and "<code>" in cap
@@ -447,12 +447,12 @@ def test_viva_exact_format_detailed_and_compact():
 
 
 def test_teclassic_public_code_family():
-    """«VIVA-TECLASSIC-T000000» — the zeros become unique digits; own letter for
+    """«VIVA-TECHCLASSIC-T000000» — the zeros become unique digits; own letter for
     TechnoClassic, K stays for the rest."""
     import re
     from analysis.models import generate_viva_public_code
     tc = generate_viva_public_code("TECHCLASSIC", "SWING")
-    assert re.fullmatch(r"VIVA-TECLASSIC-T\d{6}", tc), tc
+    assert re.fullmatch(r"VIVA-TECHCLASSIC-T\d{6}", tc), tc
     digits = tc.rsplit("T", 1)[1]
     assert len(set(digits)) >= 2          # never a uniform block
     tlb = generate_viva_public_code("TLBREAK", "SWING")
