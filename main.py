@@ -328,6 +328,12 @@ def run_discovery_scan() -> Dict[str, int]:
                     pass
                 # Reserve before *any* public alert. A display code is a real
                 # position identity, not a random label that may later change.
+                # r32: publish-time score snapshot — the chart info box of
+                # lifecycle/legacy renders reads this when the row score is 0.
+                try:
+                    candidate.metadata["publish_score"] = int(candidate.score or 0)
+                except Exception:
+                    pass
                 try:
                     reserve_public_code(candidate)
                 except Exception as exc:

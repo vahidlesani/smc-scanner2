@@ -44,7 +44,10 @@ class VivaTLBreakConfig:
     min_pattern_bars_daytrade: int = 12
     max_pattern_bars_daytrade: int = 80
     min_pattern_bars_swing: int = 15
-    max_pattern_bars_swing: int = 90
+    # r32 (Viva 09-26, DASH 1D wedge missed while 1H fired): a wedge leg on
+    # the daily structure easily spans >90 bars — the old cap discarded it
+    # before scoring. 150 keeps the guard against runaway «patterns».
+    max_pattern_bars_swing: int = 150
     channel_parallel_tolerance_pct: float = 15.0
     triangle_apex_max_progress: float = 0.90
     # R16 phase 3 — log-space calibration. On a window whose price span is

@@ -1478,7 +1478,8 @@ def _clean_render_frame(df: pd.DataFrame, window: int = 150) -> pd.DataFrame:
 
 def _smart_y_window(c_lo: float, c_hi: float, atr: float,
                     ov_lo: Optional[float] = None,
-                    ov_hi: Optional[float] = None) -> Optional[tuple]:
+                    ov_hi: Optional[float] = None,
+                    recent_lo: Optional[float] = None) -> Optional[tuple]:
     """r28 SMART price zoom — «زوم در هر دو جهت جمع شدن و باز شدن … هوشمند».
 
     The candles own ~72% of the axis height: never the whole frame (WLD 1H —
@@ -1509,6 +1510,14 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
         yhi = max(yhi, c_hi + min(float(ov_hi) - c_hi, cap))
     if ov_lo is not None and math.isfinite(float(ov_lo)) and float(ov_lo) < c_lo:
         ylo = min(ylo, c_lo - min(c_lo - float(ov_lo), cap))
+    # r32 (Viva 09-26, LTC 1D: «کندل‌ها بالای چارت هستن … کمی زوم‌اوت کنه
+    # پایین‌تر بیاد»): months of dead history under a rising market must not
+    # shove the tool into a 2-cm strip at the top. The floor lifts to the
+    # RECENT structure (last ~40 bars) when that keeps every overlay visible.
+    if recent_lo is not None and math.isfinite(float(recent_lo)) and float(recent_lo) > ylo:
+        _lift = max(2.0 * _a, 0.06 * (yhi - ylo))
+        if float(recent_lo) - _lift > ylo and float(recent_lo) < yhi:
+            ylo = float(recent_lo) - _lift
     yr = max(yhi - ylo, 1e-12)
     return ylo - 0.05 * yr, yhi + 0.05 * yr
 
@@ -1728,7 +1737,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # old x=1.0 anchor sat ON the price-axis numbers — «لیو روی اعداد»).
         try:
             _live_px = float(frame["close"].iloc[-1])
-            _right_specs.append((float(_live_px), f" LIVE {_price(_live_px)} ", "#2b2f3a"))
+            # r32 (Viva 09-26): on CONFIRMED charts the live price moves to
+            # the bottom-right ledger — the in-panel LIVE pill crowded the
+            # tool column (LTC/BCH 09-26 screenshots).
+            if not confirmed:
+                _right_specs.append((float(_live_px), f" LIVE {_price(_live_px)} ", "#2b2f3a"))
         except Exception as _exc:
             print(f"Chart live-price tag warning: {_exc}")
         ax.tick_params(
@@ -2499,21 +2512,29 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # the pills ARE the tool, 09-23/24.)
             for _lvl, _items in _groups:
                 for label, level, color in _items:
-                    # Viva 09-16: solid guide lines read cleaner than dashes;
-                    # only the trailing stop keeps its own tight dash.
+                    # r32 (Viva 09-26, «با یک خطچین کمرنگ وصل بشه به عددش»):
+                    # every tool level is a FAINT DASHED connector from the
+                    # tool to its number/value on the price axis — the old
+                    # solid bars boxed the candles in.
                     _is_sl9 = str(label) == "SL"
-                    _dash = (0, (2, 2)) if _is_sl9 else "-"
-                    ax.hlines(level, tool_start, tool_end, color=color,
-                              linewidth=1.25 if _is_sl9 else 1.15,
-                              linestyles=_dash,
+                    ax.hlines(level, tool_start, count + 4.9, color=color,
+                              linewidth=1.25 if _is_sl9 else 1.0,
+                              linestyle=(0, (3, 2)), alpha=0.55,
                               zorder=9 if _is_sl9 else 8)
                 # Viva 09-24: numeric tags ride the column; the VALUES print ON
                 # the price axis in the TP line's own colour (or live in the
                 # confirmation message) — no big labels over candles/tool.
-                _right_specs.append((
-                    float(_lvl),
-                    "  ·  ".join(str(_lb) for _lb, _pc, _c in _items),
-                    _items[-1][2]))
+                # r32 (Viva 09-26, «ابزار لانگ فقط شماره داشته باشه …
+                # لیبل‌های اطراف ابزار لانگ و شورت رو بردار»): the column next
+                # to the tool carries ONLY the numeric TP ranks; ENTRY/
+                # FIRST STOP/SL/LIVE/analysis labels are gone from the panel —
+                # their VALUES light on the price axis in their own colour,
+                # and the words live in the bottom-right ledger.
+                if all(str(_lb).isdigit() for _lb, _pc, _c in _items):
+                    _right_specs.append((
+                        float(_lvl),
+                        "  ·  ".join(str(_lb) for _lb, _pc, _c in _items),
+                        _items[-1][2]))
                 for _lb, _pc, _c in _items:
                     if (str(_lb).isdigit() or str(_lb) in ("SL", "ENTRY", "FIRST STOP")):
                         _axis_tags.append((float(_pc), _price(_pc), _c))
@@ -2530,11 +2551,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # broken read-outs — a path that does not exist is not printed.
             _pathp8 = float(((candidate.metadata or {}).get("target_ladder") or {})
                             .get("path_pct") or 0.0)
+            # r32 (Viva 09-26, «SCORE 0/10 در باکس» vs «امتیاز ۹ در متن»):
+            # lifecycle/legacy rows can carry score=0 — show the publish-time
+            # snapshot, and print NO score line at all rather than a wrong 0.
+            _sc32 = (int(getattr(candidate, "score", 0) or 0)
+                     or int((candidate.metadata or {}).get("publish_score") or 0))
             info = (
                 f"{candidate.direction}  •  {_style_disp(candidate)}\n"
-                f"SETUP  {candidate.setup_code}\n"
-                f"SCORE  {candidate.score}/10"
+                f"SETUP  {candidate.setup_code}"
             )
+            if _sc32 > 0:
+                info += f"\nSCORE  {_sc32}/10"
             if _pathp8 >= 0.5:
                 info += f"\nPATH  {_pathp8:.2f}%  → 5 PARTS"
             _posi = ax.get_position()
@@ -2854,7 +2881,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _atr28 = float((frame["high"] - frame["low"]).tail(14).mean())
             _win28 = _smart_y_window(
                 float(frame["low"].min()), float(frame["high"].max()), _atr28,
-                min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None)
+                min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None,
+                recent_lo=float(frame["low"].tail(40).min()))
             if _win28:
                 ax.set_ylim(*_win28)
                 if confirmed:
@@ -2929,6 +2957,37 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         except Exception as exc:
             print(f"chip column clamp warning: {exc}")
         _render_corner_notes(ax, notes, frame, confirmed=confirmed, fig=fig)
+
+        # ── r32 (Viva 09-26): the bottom-right LEDGER ────────────────────
+        # «آقا پایین چارت سمت راست معمولا همیشه خالیه — اینتری و استاپ اولیه
+        # رو بنویس و تریلینگ استاپ اول خالی و تی پی ها و قیمت لایو رو هم بنویس»
+        # On hits the TOOL keeps its original face; the ledger row ticks.
+        if confirmed:
+            try:
+                _pl32 = ax.get_position()
+                _hit32 = int(ladder.get("hit_index") or (candidate.metadata or {}).get("hit_index") or 0)
+                _trail32 = float((candidate.metadata or {}).get("current_trailing_sl") or 0)
+                _orig32 = float((candidate.metadata or {}).get("original_sl")
+                                or (candidate.metadata or {}).get("publish_original_sl")
+                                or candidate.sl or 0)
+                _rows32 = [
+                    f"ورود: {_price(float(candidate.planned_entry))}",
+                    f"استاپ اولیه: {_price(_orig32)}" + (" ✓" if _hit32 > 0 or _trail32 > 0 else ""),
+                    f"تریلینگ استاپ: {_price(_trail32) if _trail32 > 0 else '—'}",
+                ]
+                for _r32, _lv32 in enumerate(ladder_targets, start=1):
+                    _rows32.append(f"TP{_r32}: {_price(float(_lv32))}"
+                                   + (" ✓" if _hit32 >= _r32 else ""))
+                _rows32.append(f"قیمت لایو: {_price(float(frame['close'].iloc[-1]))}")
+                fig.text(_pl32.x1 - 0.012, _pl32.y0 + 0.022,
+                         fa_chart("\n".join(_rows32)),
+                         ha="right", va="bottom", fontsize=7.2, linespacing=1.55,
+                         color=CHART_THEME["text"], zorder=26,
+                         bbox={"boxstyle": "round,pad=0.5",
+                               "facecolor": CHART_THEME["figure"],
+                               "edgecolor": CHART_THEME["grid"], "alpha": 0.9})
+            except Exception as _led_exc:
+                print(f"ledger warning: {_led_exc}")
 
         # Viva 2026-09-14 «تایم‌فریم پوزیشن یک‌ساعته‌ست، چارت ۴ ساعته میدی؟!» —
         # the title is ALWAYS the position's own trigger timeframe, on every
@@ -4307,6 +4366,24 @@ def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
         chain["tfc_text"] = text
         chain["tfc_result_label"] = ""
         _setup_chain_set_by_code(code, chain)
+        # r32 (Viva 09-26): «پیام تایید ۳۰ دقیقه و ۴ ساعته توی کانالهای
+        # کوتاه مدت و میان مدت هم بیان» — the 30m confirm mirrors into the
+        # MID family channel and the 4h confirm into the SHORT family
+        # channel. The primary keeps the chain + latest-result link; the
+        # mirror is a plain copy (no bookkeeping). Viva: if it reads well,
+        # we extend it to the other setups.
+        _tf32 = str(candidate.trigger_timeframe or "").strip().lower()
+        _mirror32 = ({"30m": CHAT_ID_SWING_MID, "4h": CHAT_ID_SWING_SHORT}
+                     .get(_tf32)) if not chat_override else None
+        if _mirror32 and str(_mirror32) != str(chat):
+            try:
+                _post_chart_then_text(chart, text, _mirror32,
+                                      label=_chart_label(symbol=candidate.symbol,
+                                                         code=code,
+                                                         title_fa="تأیید سیگنال"),
+                                      file_id=file_id)
+            except Exception as _mir_exc:
+                print(f"TF-channel mirror failed {code} → {_mirror32}: {_mir_exc}")
         return int(mid)
     except Exception as exc:
         print(f"TF-channel publish error {code}: {exc}")

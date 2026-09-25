@@ -1349,7 +1349,9 @@ def test_slot_never_emits_detached_continuation_2026_09_16():
     assert "ادامه" not in out
 
 
-def test_chart_pills_match_ladder_exits():
+def test_chart_pills_match_ladder_exits(monkeypatch):
+    import data.fetcher as _f
+    monkeypatch.setattr(_f, "get_klines", lambda *a, **k: None)
     """Viva 09-19: the confirmed chart must show EVERY ladder exit pill.
     Guards the de-indent regression that silently dropped TP1/TP2 pills."""
     import numpy as np
@@ -1397,10 +1399,12 @@ def test_chart_pills_match_ladder_exits():
     # tp1 تا tp5 مشخص بشه» — the tool tags are the bare numbers 1..5 (one
     # each, no big TP labels over the candles), ENTRY/FIRST STOP stay.
     joined = " | ".join(tags)
-    assert "ENTRY" in joined and "FIRST STOP" in joined
+    # r32 (Viva 09-26): the tool column carries ONLY the bare numbers 1..5 —
+    # ENTRY/FIRST STOP words moved to the price axis + bottom-right ledger.
+    assert "ENTRY" not in joined and "FIRST STOP" not in joined
     for i in range(1, 6):
         assert str(i) in tags, (i, joined)
-    assert joined.count("ENTRY") == 1 and tags.count("1") == 1
+    assert tags.count("1") == 1
     assert not any(t.startswith("TP") for t in tags), joined  # no big TP labels
 
 

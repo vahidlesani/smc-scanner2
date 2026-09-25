@@ -113,7 +113,11 @@ def test_wedge_upper_break_confirms_long_and_never_short():
 
 # ── Round-24: the numeric tool — «ابزار لانگ و شورت در ۵ ستاپ فقط با
 #    tp1 تا tp5 مشخص بشه» (no big labels over candles/tool) ─────────────────
-def test_tool_pills_are_bare_numbers_with_axis_values():
+def test_tool_pills_are_bare_numbers_with_axis_values(monkeypatch):
+    # r32: no network — a real live candle would spike the frame range and
+    # blow up the pill-grouping tolerance on this synthetic 100-tape.
+    import data.fetcher as _f
+    monkeypatch.setattr(_f, "get_klines", lambda *a, **k: None)
     import numpy as _np
     from datetime import datetime, timedelta, timezone
     import bot.messages_v7 as m7
@@ -156,7 +160,10 @@ def test_tool_pills_are_bare_numbers_with_axis_values():
     for i in range(1, 6):
         assert str(i) in joined, (i, joined)
     assert not any(t.strip().startswith("TP") for t in tags), joined
-    assert "ENTRY" in joined and "FIRST STOP" in joined
+    # r32 (Viva 09-26, «لیبل‌های اطراف ابزار رو بردار»): ENTRY/FIRST STOP
+    # pills are GONE from the tool column — numbers only; their values live
+    # on the price axis + the bottom-right ledger.
+    assert "ENTRY" not in joined and "FIRST STOP" not in joined
 
 
 # ── Round-24b: the broken-blue-line law — «آیا این خط آبی شناسایی شده

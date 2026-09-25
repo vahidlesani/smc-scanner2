@@ -35,6 +35,7 @@ Consequences encoded here (Viva bug-report of 2026-09-10 screenshots):
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import threading
 import time
@@ -733,6 +734,36 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             continue
         direction = (_canonical_direction or direction).upper()
         target = line_now + height if direction == "LONG" else line_now - height
+        # r32 (Viva 09-26; r28 leftover LTC-15m TC TARGET 70.824 < LIVE
+        # 71.15): a LONG target at/below the live price is not a target —
+        # the projection keeps a 1.5·ATR minimum beyond the market.
+        if direction == "LONG":
+            target = max(target, live + 1.5 * atr_p)
+        else:
+            target = min(target, live - 1.5 * atr_p)
+        # r32 (Viva 09-26, AERO 15m: entry/stop/TP inside ONE doji candle):
+        # the projection floor is 2× the last trigger candle's range — a
+        # «setup» whose whole geometry fits one candle is noise.
+        _lr32 = float(trigger_df["high"].iloc[-1]) - float(trigger_df["low"].iloc[-1])
+        if math.isfinite(_lr32) and _lr32 > 0:
+            height = max(height, 2.0 * _lr32)
+            target = line_now + height if direction == "LONG" else line_now - height
+            if direction == "LONG":
+                target = max(target, live + 1.5 * atr_p)
+            else:
+                target = min(target, live - 1.5 * atr_p)
+        # r32 (Viva 09-26, CHANNEL-TRADE law — APT 15m mid-channel): a
+        # channel BREAK must carry volume expansion; without it the engine
+        # is trading the middle of a range on a whisper.
+        if str(pattern).upper().startswith("CHANNEL") and state == STATE_BREAK:
+            try:
+                _v32 = trigger_df["volume"].astype(float)
+                _vm32 = float(_v32.tail(21).head(20).mean())
+                _vr32 = (float(_v32.iloc[-1]) / _vm32) if _vm32 > 0 else 0.0
+            except Exception:
+                _vr32 = 0.0
+            if _vr32 < 1.3:
+                continue
         pct = (target - live) / live * 100.0 if live else 0.0
         ev = {
             "pattern": pattern, "pattern_fa": PATTERN_FA.get(pattern, pattern),
