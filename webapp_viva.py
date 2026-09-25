@@ -360,6 +360,14 @@ def _ladder_hits(target_state_json: Any) -> tuple[bool, bool]:
 
 
 def _fetch_state() -> Dict[str, Any]:
+    # Short server-side snapshot cache: the dashboard polls frequently, but the
+    # underlying state is DB-heavy. This keeps refresh responsiveness while
+    # preventing duplicate full DB snapshots across tabs/clients.
+    global _STATE_CACHE
+    if not _demo_mode():
+        _now = time.monotonic()
+        if _STATE_CACHE["state"] is not None and _now - _STATE_CACHE["at"] < 8.0:
+            return _STATE_CACHE["state"]
     if _demo_mode():
         return _demo_payload()
     try:
@@ -571,9 +579,11 @@ def _fetch_state() -> Dict[str, Any]:
                 scanner["alive"] = bool(thr.is_alive())
         except Exception:
             pass
-        return dict(demo=False, feed=feed, chains=chains, live_positions=live_positions, analytics=analytics, hits=hits,
-                    control=control_state(), scanner=scanner,
-                    server_time=datetime.now(TEHRAN).strftime("%Y-%m-%d %H:%M"))
+        payload = dict(demo=False, feed=feed, chains=chains, live_positions=live_positions, analytics=analytics, hits=hits,
+                       control=control_state(), scanner=scanner,
+                       server_time=datetime.now(TEHRAN).strftime("%Y-%m-%d %H:%M"))
+        _STATE_CACHE.update(state=payload, at=time.monotonic())
+        return payload
     except Exception as exc:
         payload = _demo_payload()
         payload["db_error"] = str(exc)[:120]
@@ -635,7 +645,7 @@ def _candidate_from_row(row: dict) -> Any:
     )
 
 
-_CHART_CACHE: Dict[str, Any] = {"key": "", "png": b"", "at": 0.0}
+_CHART_CACHE: Dict[str, Any] = {}  # sid -> (png, monotonic); bounded below
 
 
 _TG_IMG_CACHE: Dict[str, Any] = {}   # file_id → (bytes, monotonic)
@@ -698,12 +708,15 @@ def _signal_chart_png(sid: str) -> Optional[bytes]:
         if fid:
             data = _tg_file_bytes(fid)
             if data:
-                _CHART_CACHE.update(key=sid, png=data, at=now)
+                if len(_CHART_CACHE) >= 48:
+                    _CHART_CACHE.pop(next(iter(_CHART_CACHE)))
+                _CHART_CACHE[sid] = (data, now)
                 return data
     except Exception:
         pass
-    if _CHART_CACHE["key"] == sid and _CHART_CACHE["png"] and now - _CHART_CACHE["at"] < 90:
-        return _CHART_CACHE["png"]
+    hit = _CHART_CACHE.get(sid)
+    if hit and now - hit[1] < 1800:
+        return hit[0]
     try:
         from database.db import db_cursor
         with db_cursor() as c:
@@ -729,7 +742,9 @@ def _signal_chart_png(sid: str) -> Optional[bytes]:
         from bot.messages_v7 import generate_chart
         png = generate_chart(df, cand, confirmed=bool(row.get("confirmed")))
         if png:
-            _CHART_CACHE.update(key=sid, png=png, at=now)
+            if len(_CHART_CACHE) >= 48:
+                _CHART_CACHE.pop(next(iter(_CHART_CACHE)))
+            _CHART_CACHE[sid] = (png, now)
         return png
     except Exception as exc:
         print(f"app chart render failed {sid}: {exc}")
@@ -951,6 +966,9 @@ def api_logout():
     return resp
 
 
+_STATE_CACHE: Dict[str, Any] = {"state": None, "at": 0.0}
+
+
 @viva_app.route("/app/api/state")
 def api_state():
     return jsonify(_fetch_state())
@@ -969,7 +987,9 @@ def api_chart(sid):
     png = _signal_chart_png(sid)
     if not png:
         return jsonify({"ok": False, "error": "chart-unavailable"}), 404
-    return send_file(io.BytesIO(png), mimetype="image/png", download_name=f"{sid}.png")
+    resp = make_response(send_file(io.BytesIO(png), mimetype="image/png", download_name=f"{sid}.png"))
+    resp.headers["Cache-Control"] = "private, max-age=1800"
+    return resp
 
 
 @viva_app.route("/app/api/control", methods=["POST"])
@@ -1603,6 +1623,6 @@ async function load(){
   STATE=await r.json();render()}catch(e){}
  setTimeout(()=>$('#refresh').classList.remove('on'),500);
 }
-load();setInterval(load,20000);
+load();setInterval(load,30000);
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/app/sw.js').catch(()=>{})}
 </script></body></html>"""
