@@ -201,34 +201,42 @@ def _mark_breakouts(df: pd.DataFrame, zones: List[Zone], direction_for_long: str
     # decisive breakout can be a candle or two before it. We measure each
     # candle's body against the ATR *prior* to that candle so a large breakout
     # cannot inflate its own denominator.
-    lookback = min(4, last_i)
+    lookback = min(6, last_i)
     for z in zones:
+        z.broken = False
+        z.flipped = False
+        # IMPORTANT: a valid breakout remains valid during the subsequent
+        # retest. The old code required the *current* close to remain beyond the
+        # zone's distal edge, so the first retest candle erased the flip and a
+        # bearish pin inside the retest could be misclassified as a fresh SHORT
+        # (or vice versa). Search the recent CLOSED candles for the actual
+        # breakout, then retain that polarity while the zone is being retested.
         if direction_for_long == "LONG" and z.side == "SUPPLY":
-            z.broken = last_close > z.distal
-            z.flipped = False
-            if z.broken:
-                for j in range(last_i, last_i - lookback - 1, -1):
-                    cc = float(closes.iloc[j]); oo = float(opens.iloc[j])
-                    if cc > z.distal and cc > oo:
-                        prev_atr = float(candle_displacement(df, max(0, j - 1), 0.0).get("atr", 0) or 0)
-                        if prev_atr <= 0:
-                            prev_atr = float(candle_displacement(df, j, 0.0).get("atr", 0) or 1.0)
-                        if abs(cc - oo) / prev_atr >= body_atr_min:
-                            z.flipped = True
-                            break
+            for j in range(last_i, max(-1, last_i - lookback - 1), -1):
+                cc = float(closes.iloc[j]); oo = float(opens.iloc[j])
+                if cc <= z.distal or cc <= oo:
+                    continue
+                prev_atr = float(candle_displacement(df, max(0, j - 1), 0.0).get("atr", 0) or 0)
+                if prev_atr <= 0:
+                    prev_atr = float(candle_displacement(df, j, 0.0).get("atr", 0) or 1.0)
+                if abs(cc - oo) / prev_atr >= body_atr_min:
+                    z.broken = True
+                    z.flipped = True
+                    z.last_index = max(z.last_index, j)
+                    break
         elif direction_for_long == "SHORT" and z.side == "DEMAND":
-            z.broken = last_close < z.distal
-            z.flipped = False
-            if z.broken:
-                for j in range(last_i, last_i - lookback - 1, -1):
-                    cc = float(closes.iloc[j]); oo = float(opens.iloc[j])
-                    if cc < z.distal and cc < oo:
-                        prev_atr = float(candle_displacement(df, max(0, j - 1), 0.0).get("atr", 0) or 0)
-                        if prev_atr <= 0:
-                            prev_atr = float(candle_displacement(df, j, 0.0).get("atr", 0) or 1.0)
-                        if abs(cc - oo) / prev_atr >= body_atr_min:
-                            z.flipped = True
-                            break
+            for j in range(last_i, max(-1, last_i - lookback - 1), -1):
+                cc = float(closes.iloc[j]); oo = float(opens.iloc[j])
+                if cc >= z.distal or cc >= oo:
+                    continue
+                prev_atr = float(candle_displacement(df, max(0, j - 1), 0.0).get("atr", 0) or 0)
+                if prev_atr <= 0:
+                    prev_atr = float(candle_displacement(df, j, 0.0).get("atr", 0) or 1.0)
+                if abs(cc - oo) / prev_atr >= body_atr_min:
+                    z.broken = True
+                    z.flipped = True
+                    z.last_index = max(z.last_index, j)
+                    break
 
 
 def evaluate_polarity(
