@@ -154,4 +154,5 @@ HANDOFF.md — smc-scanner2 (VivaSignals Pro)
 ## ۰۹-۲۵ — R31.4/R31.5 (برنچ `arena/01a0d606-smc-scanner2`، PR #5، دیپلوی نشده)
 - فیکس‌های A1 تا A12، از جمله استریم 30m که مرده بود و حالا پشت `PINVAL_30M_ENABLED` و پیش‌فرض خاموش است. بررسی کد: `docs/REVIEW_2026-09-25.md`.
 - هارنس replay: `experiments/replay_live_setups.py` و workflow `replay` (بازوها در `ARMS`). گزارش: `docs/REPLAY_2026-09-25.md`.
-- فیلترهای opt-in: `HTF_TREND_GATE=4h` و `MIN_STOP_FLOOR=1` در `analysis/quality_filters.py`. این دو با هم در replay ‎+0.028R‎ دادند (base ‎−0.024‎). قدم بعدی: paper forward با این دو. `MIN_CONFIRM_BAR` (B4) رد شده و نباید روشن شود. تست‌ها: **480 passed / 1 skipped**.
+- فیلترهای opt-in: `HTF_TREND_GATE=4h` و `MIN_STOP_FLOOR=1` در `analysis/quality_filters.py`. این دو با هم در replay ‎+0.028R‎ دادند (base ‎−0.024‎). قدم بعدی: paper forward با این دو. `MIN_CONFIRM_BAR` (B4) رد شده و نباید روشن شود. تست‌ها: **482 passed / 1 skipped**.
+- R31.6 (راند ۴): گیت نرم `HTF_TREND_BAND=1.0` اضافه شد. توصیهٔ paper حالا این است: `HTF_TREND_GATE=4h` + `HTF_TREND_BAND=1.0` + `MIN_STOP_FLOOR=1`، با ‎+0.042R‎ و ۶۳۴ معامله. هارنس حالا سرنوشت کاندیدها (`fates__*.jsonl`) و نتیجهٔ سایه را هم می‌نویسد. علت سکوت TECHCLASSIC و پیشنهاد راند ۵: `docs/REPLAY_2026-09-25.md` §۹.

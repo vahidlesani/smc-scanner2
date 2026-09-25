@@ -32,6 +32,9 @@ maxDD 13.6 R vs base 848 trades −0.024 R, maxDD 40.1 R.
   HTF_TREND_BAND=0.5  (R31.6, softens the trend gate) inside ±band·ATR14 of the
                       EMA50 the trend counts as neutral and does not block —
                       only a clear against-trend candidate is dead-gated.
+                      Round 4 (run 36125577189): gate+band 1.0+stop floor =
+                      n 634, +0.042R, maxDD 8.5, R' +0.010 (prodfilters: 585,
+                      +0.028, 13.6) — more signals AND better quality.
 
   OOR_REF=entry       (R31.6, diagnostic arm) OUT_OF_REACH distance is measured
                       from the planned ENTRY instead of the entry-zone middle. A

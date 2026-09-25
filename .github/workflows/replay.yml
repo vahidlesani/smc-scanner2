@@ -35,8 +35,8 @@ jobs:
         symbol: [BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT, ADAUSDT, LINKUSDT, AVAXUSDT, SUIUSDT, BNBUSDT]
         # round 1: base,legacy · round 2: base,stopfloor,oor4,trend4h,combo
         # round 3a (3e10dc3): base,prodfilters,trend4h · round 3b (e89991e): b4,trendb4
-        # round 4 (R31.6): candidate-fate diagnostics + soft trend band
-        arm: [base, prodsoft05, prodsoft10, oorentry]
+        # round 4 (R31.6) ran base, prodsoft05, prodsoft10, oorentry (run 36125577189)
+        arm: [base, prodsoft10]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
