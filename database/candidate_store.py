@@ -288,6 +288,17 @@ def is_material_update(previous: SignalCandidate, candidate: SignalCandidate) ->
     meaningfully changed (direction/setup/zone/structure)."""
     if previous.setup_code != candidate.setup_code or previous.direction != candidate.direction:
         return True
+    # R31.7: a keyed lineage (same broken edge, same pivots) is the SAME
+    # scenario while its sloped line merely drifts with time — only a move of
+    # a full ATR (the break zone genuinely relocated) replaces the alert.
+    # Replacing it on every 0.2-ATR drift restarted the confirmation clock:
+    # TECHCLASSIC/TLBREAK alerts died «superseded» before any confirm close.
+    _ok = str((previous.metadata or {}).get("alert_lineage_key") or "")
+    if _ok and _ok == str((candidate.metadata or {}).get("alert_lineage_key") or ""):
+        _atr = max(float(previous.metadata.get("atr", 0) or 0),
+                   float(candidate.metadata.get("atr", 0) or 0))
+        if _atr > 0:
+            return abs(float(previous.zone_mid) - float(candidate.zone_mid)) > 1.0 * _atr
     old_atr = float(previous.metadata.get("atr", 0) or 0)
     threshold = max(old_atr * 0.20, abs(previous.zone_mid) * 0.0005, 1e-12)
     if abs(previous.zone_mid - candidate.zone_mid) > threshold:

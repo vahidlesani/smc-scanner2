@@ -469,6 +469,16 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         candidate.mandatory_gates["viva_tlbreak_geometry"] = True
         candidate.strategy_fa = f"VIVA-TLBREAK | شکست {pattern} در انتظار Retest و BOS پنج‌دقیقه"
         from analysis.viva_tlbreak_state import VivaTLState
+        # R31.7: stable alert lineage = the broken line's defining pivots
+        try:
+            from analysis.pattern_engine import alert_lineage_key as _alk
+            _lk = _alk("TLBREAK", bundle.symbol, trigger_tf, refine_tf,
+                       "upper" if direction == "LONG" else "lower", direction,
+                       [dict(p) for p in line.points], True)
+            if _lk:
+                candidate.metadata["alert_lineage_key"] = _lk
+        except Exception:
+            pass
         candidate.metadata.update({
             "strategy_variant": "VIVA_TLBREAK",
             "viva_state_machine": VivaTLState(stage="S2_BREAKOUT").payload(),
