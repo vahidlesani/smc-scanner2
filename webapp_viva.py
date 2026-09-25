@@ -394,7 +394,7 @@ def _fetch_state() -> Dict[str, Any]:
                 except Exception:
                     _market_obj_feed = {}
                 _mi_feed = _market_obj_feed.get("market_intelligence") or {}
-                res = "WIN" if (result == "WIN" or partial_win) else str(result or "PENDING")
+                res = "WIN" if result == "WIN" else str(result or "PENDING")
                 _acc = spot if is_spot else fut
                 _acc["total"] += 1
                 if res == "WIN":
@@ -411,7 +411,7 @@ def _fetch_state() -> Dict[str, Any]:
                     pnl=(float(pnl) if pnl is not None else None), score=score,
                     style=style, code=code, tf=str(tf or "").upper(),
                     time=str(created_at or ""), spot=is_spot, confirmed=bool(confirmed),
-                    tp1_hit=tp1_hit, tp2_hit=tp2_hit,
+                    tp1_hit=tp1_hit, tp2_hit=tp2_hit, partial_win=bool(partial_win),
                     market_intelligence=_mi_feed,
                     summary=str(description or fa or "")[:220],
                     telegram_text="",
@@ -444,6 +444,8 @@ def _fetch_state() -> Dict[str, Any]:
                        SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) AS losses,
                        SUM(CASE WHEN result='PENDING' THEN 1 ELSE 0 END) AS pending,
                        AVG(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) AS avg_pnl,
+                       AVG(CASE WHEN result='WIN' THEN pnl_pct END) AS avg_win,
+                       AVG(CASE WHEN result='LOSS' THEN pnl_pct END) AS avg_loss,
                        MAX(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) AS best,
                        MIN(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) AS worst,
                        AVG(score) AS avg_score, MAX(created_at) AS last
@@ -453,7 +455,7 @@ def _fetch_state() -> Dict[str, Any]:
                 ORDER BY MAX(created_at) DESC
             """, (_today_start_utc(),))
             for r in c.fetchall():
-                (name, fa, total, wins, losses, pending, avg_pnl, best, worst, avg_score, last) = r
+                (name, fa, total, wins, losses, pending, avg_pnl, avg_win, avg_loss, best, worst, avg_score, last) = r
                 total, wins, losses = int(total or 0), int(wins or 0), int(losses or 0)
                 closed = wins + losses
                 last_iso = str(last or "")
@@ -464,6 +466,8 @@ def _fetch_state() -> Dict[str, Any]:
                     wins=wins, losses=losses, pending=int(pending or 0),
                     wr=(round(wins * 100.0 / closed, 1) if closed else 0.0),
                     avg_pnl=(round(float(avg_pnl), 2) if avg_pnl is not None else None),
+                    avg_win=(round(float(avg_win), 2) if avg_win is not None else None),
+                    avg_loss=(round(float(avg_loss), 2) if avg_loss is not None else None),
                     best=(round(float(best), 2) if best is not None else None),
                     worst=(round(float(worst), 2) if worst is not None else None),
                     avg_score=(round(float(avg_score), 1) if avg_score is not None else None),
@@ -476,7 +480,7 @@ def _fetch_state() -> Dict[str, Any]:
             for _setup in DEFAULT_SETUPS:
                 if _setup not in _known:
                     rows_active.append(dict(name=_setup, fa=_setup, total=0, wins=0, losses=0,
-                                            pending=0, wr=0.0, avg_pnl=None, best=None,
+                                            pending=0, wr=0.0, avg_pnl=None, avg_win=None, avg_loss=None, best=None,
                                             worst=None, avg_score=None, last="امروز بدون سیگنال", active=True))
             # ── hit notifications (TP/SL/close/confirm lifecycle feed)
             c.execute(f"""
