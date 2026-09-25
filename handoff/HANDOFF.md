@@ -173,3 +173,11 @@ Suite 484P/1skip. Bug file «باگهای 😵‍💫😵‍💫.txt» + 17 scre
 9. **30m/2h triggers** (config): TECHCLASSIC_PATTERN_TFS default = «30m,1h,2h,4h,1d» (Viva verdict: «۳۰ دقیقه و ۲ ساعته هم بد نیست، کیفیتی بهتر داره»). WATCH: CPU/scan-load on Railway with 2 extra pattern TFs.
 INFRA: repo slug = **vahidlesani/smc-scanner2** (github token in tokens.env is the vahidlesani PAT — query api.github.com/user/repos if remote lost again). pip wipe list: flask waitress mplfinance arabic-reshaper python-bidi.
 OPEN from bug file (next round): spot-pill «SCORE 0/10» vs text 8/10; AERO 15m one-candle entry/stop/TP sanity floor + PINWALL pin-bar validation; DASH 1D wedge miss (pattern-window zoom); mid-channel trade ban (APT) — CHANNEL-TRADE law not yet enforced in code; LTC-15m TARGET<LIVE class (RENDER leftover); re-measure post-r30 churn (complaint timestamps predated r29e deploy).
+
+## 09-26 round r31 — `1b5fa94` (LIVE boot_sha 1b5fa94db2df, boot 2026-09-25T22:45:10Z)
+Suite 490P/1skip. Screenshot round (PYTH T676953 + 2 TradingView):
+1. **TECHCLASSIC typo** (models.generate_viva_public_code label_map): «VIVA-TECLASSIC» → «VIVA-TECHCLASSIC» (born 09-12; tests re-anchored). New codes spell it right; old reserved codes keep their IDs.
+2. **Chart clocks = TEHRAN everywhere**: axis tick formatter + in-panel live pill + figure LIVE stamp all Asia/Tehran (UTC suffix gone).
+3. **Exact render-moment live candle** (_live_candle): forming candle displayed at datetime.now(UTC) (bucket-open read hours-old on 1H+) + probe bypasses klines cache (use_cache=False, 3-bar call) — «چارت ۱:۵۷ اومده ⟶ مهر ۰۱:۵۷».
+4. **Fresh-major-break recognition** (viva_tlbreak + pattern_engine): a substantial line (3+ touches, 30+ span) broken within `fresh_break_bars` (new cfg, default 12) is ADMITTED even when it died <10 bars after its last pivot; pattern_engine has a recognition branch (break_index fresh → STATE_BREAK without demanding a fresh displacement bar; ev gains fresh_break_recognition/bars_since_break). Ancient breaks stay history-only. Fixture lesson: pivot fixtures must be strictly-monotone sawtooths — plateaus crowd the pivot pool.
+OPEN (user asked «قبلی‌ها همه؟»): score-pill 0/10 vs text 8/10; AERO one-candle sanity floor; DASH 1D wedge miss; CHANNEL-TRADE mid-channel ban; LTC-15m TARGET<LIVE class; CPU watch with 30m/2h TFs; 0925b audited merge still queued.
