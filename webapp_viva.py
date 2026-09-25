@@ -1428,6 +1428,7 @@ function feedCard(s){
    <div class="pill stop"><i>استاپ</i><b>${fnum(s.sl)}</b></div>
    <div class="pill tp1 ${s.tp1_hit?'hit':''}"><i>TP1</i><b>${fnum(s.tp1)}${s.tp1_hit?' ✓':''}</b></div>
    <div class="pill tp2 ${s.tp2_hit?'hit':''}"><i>TP2</i><b>${fnum(s.tp2)}${s.tp2_hit?' ✓':''}</b></div></div>
+  <div class="live-meta"><div class="pill"><i>مارجین</i><b>${s.margin?`${Number(s.margin).toFixed(2)}`:"—"}</b></div><div class="pill"><i>اهرم</i><b>${s.leverage?s.leverage+"x":"—"}</b></div></div>
   <div class="thumb"><img loading="lazy" src="/app/api/chart/${encodeURIComponent(s.signal_id||'')}" alt="چارت ${fnum(s.symbol)}"></div>
   ${s.telegram_text?`<div class="explain">${s.telegram_text}</div>`:(s.summary?`<div class="sumline">${fnum(s.summary)}</div>`:"")}
   ${s.market_intelligence?miSummary(s.market_intelligence):''}
