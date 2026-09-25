@@ -384,6 +384,12 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         breakout = assess_projected_breakout(trigger_df, line, direction)
         if breakout is None or not breakout.passed:
             continue
+        # R31.7 audit TB1: stale breaks (line crossed long ago) never qualify
+        import os as _os317
+        if _os317.getenv("R317_LEGACY", "0") != "1":
+            from analysis.viva_tlbreak import breakout_is_fresh
+            if not breakout_is_fresh(trigger_df, line, direction):
+                continue
         geometry_ok, _geometry_pattern = pattern_geometry_ok(upper, lower, len(refine_df) - 1)
         pattern = classify_pattern_detailed(upper, lower, len(refine_df) - 1)
         # ── Viva 09-23/24 (wedge NATURE law, verbatim): «رایزینگ وج ماهیت

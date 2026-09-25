@@ -36,7 +36,8 @@ jobs:
         # round 1: base,legacy · round 2: base,stopfloor,oor4,trend4h,combo
         # round 3a (3e10dc3): base,prodfilters,trend4h · round 3b (e89991e): b4,trendb4
         # round 4 (R31.6) ran base, prodsoft05, prodsoft10, oorentry (run 36125577189)
-        arm: [base, prodsoft10]
+        # round 5 (R31.7 audit fixes): new code vs R317_LEGACY=1, with and without prodsoft10
+        arm: [base, prodsoft10, legacy317, prodsoft10_legacy317]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

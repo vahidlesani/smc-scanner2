@@ -75,6 +75,12 @@ ARMS: Dict[str, Dict[str, str]] = {
     "prodsoft05": {"HTF_TREND_GATE": "4h", "HTF_TREND_BAND": "0.5", "MIN_STOP_FLOOR": "1"},
     "prodsoft10": {"HTF_TREND_GATE": "4h", "HTF_TREND_BAND": "1.0", "MIN_STOP_FLOOR": "1"},
     "oorentry": {"OOR_REF": "entry"},
+    # R31.7 audit: the behaviour-changing fixes (fresh-break gates, live-time
+    # line value, fitted-line time projection, structure-bias CHoCH) are
+    # default-on; these arms switch them OFF to measure their effect.
+    "legacy317": {"R317_LEGACY": "1"},
+    "prodsoft10_legacy317": {"HTF_TREND_GATE": "4h", "HTF_TREND_BAND": "1.0",
+                             "MIN_STOP_FLOOR": "1", "R317_LEGACY": "1"},
 }
 
 TF_MIN = {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}
@@ -420,6 +426,31 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
     # would the unconfirmed plan have worked? Pure bookkeeping — the shadow
     # outcome looks ahead and never feeds any decision.
     fates: List[Dict] = []
+    # R31.7: optional chart dump (REPLAY_CHARTS_DIR) — renders the production
+    # chart for the first N alerts/confirmations of every setup|tf so charts
+    # can be reviewed on REAL candles in the exchange-blocked dev sandbox.
+    charts_dir = os.getenv("REPLAY_CHARTS_DIR", "")
+    charts_max = int(os.getenv("REPLAY_CHARTS_MAX", "3") or 3)
+    charts_n: Dict[str, int] = defaultdict(int)
+
+    def dump_chart(c, kind: str) -> None:
+        if not charts_dir:
+            return
+        key = f"{c.setup_code}_{str(c.trigger_timeframe).lower()}_{kind}"
+        if charts_n[key] >= charts_max:
+            return
+        charts_n[key] += 1
+        try:
+            from bot.messages_v7 import generate_chart
+            tf = str(c.trigger_timeframe).lower()
+            df = tape.closed(tf, t, 180)
+            png = generate_chart(df, c, confirmed=(kind == "confirmed"))
+            if png:
+                Path(charts_dir).mkdir(parents=True, exist_ok=True)
+                name = f"{tape.symbol}_{key}_{charts_n[key]}_{t:%m%d_%H%M}.png"
+                (Path(charts_dir) / name).write_bytes(png)
+        except Exception as exc:          # diagnostics only
+            print(f"[chart] {key}: {exc!r}")
     rej: Dict[str, Dict[str, int]] = {}
     snap: Dict[str, Dict] = {}
 
@@ -574,6 +605,7 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
             except Exception:
                 F(c, "ladder_error"); fate(c, "ladder_error"); continue
             F(c, "confirmed")
+            dump_chart(c, "confirmed")
             fate(c, "confirmed", {"conf_h": round((t - snap.get(c.signal_id, {}).get("t", t)).total_seconds() / 3600, 2)})
             confirmed_geo.append((t, c.direction, entry, float(c.sl), float(c.tp1 or 0)))
             last_conf_entry[(c.setup_code, trig)] = entry
@@ -672,6 +704,7 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
                 history.append({"setup": c.setup_code, "tf": trig, "t": t, "sid": c.signal_id,
                                 "zone": float(c.zone_mid)})
                 F(c, "tracked")
+                dump_chart(c, "alert")
         t += step
 
     traveller.stop()

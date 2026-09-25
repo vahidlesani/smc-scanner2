@@ -50,9 +50,13 @@ def _describe(tf: str, c: dict, prev: Optional[dict], direction: str, near_suppo
             names.append("Bullish Engulfing")
         if c["bear"] and prev["bull"] and c["body"] >= prev["body"] * 1.05 and c["open"] >= prev["close"] and c["close"] <= prev["open"]:
             names.append("Bearish Engulfing")
-    if c["lower_wick"] >= 2.0 * max(c["body"], 1e-12) and c["body_frac"] <= 0.35:
+    # R31.7 audit #6: a pin has ONE long wick — the opposite wick is capped
+    # (a long-legged doji used to be labelled bullish AND bearish pin).
+    if c["lower_wick"] >= 2.0 * max(c["body"], 1e-12) and c["body_frac"] <= 0.35 \
+            and c["upper_wick"] <= 0.30 * c["range"]:
         names.append("Bullish Pin Bar" if c["bull"] or c["close"] >= c["low"] + 0.55*c["range"] else "Lower-Wick Rejection")
-    if c["upper_wick"] >= 2.0 * max(c["body"], 1e-12) and c["body_frac"] <= 0.35:
+    if c["upper_wick"] >= 2.0 * max(c["body"], 1e-12) and c["body_frac"] <= 0.35 \
+            and c["lower_wick"] <= 0.30 * c["range"]:
         names.append("Bearish Pin Bar" if c["bear"] or c["close"] <= c["high"] - 0.55*c["range"] else "Upper-Wick Rejection")
     if not names:
         return None
@@ -60,7 +64,20 @@ def _describe(tf: str, c: dict, prev: Optional[dict], direction: str, near_suppo
     dir_fa = "لانگ" if direction == "LONG" else "شورت"
     label = " / ".join(dict.fromkeys(names))
     text = f"{tf.upper()}: {label}"
-    if near_support or near_resistance:
+    # R31.7 audit #7: the sentence used to call EVERY candle «قابل تفسیر برای
+    # سناریوی لانگ/شورت» — a Bearish Engulfing under a LONG included.
+    _bull = {"Bullish Engulfing", "Bullish Pin Bar", "Lower-Wick Rejection"}
+    _bear = {"Bearish Engulfing", "Bearish Pin Bar", "Upper-Wick Rejection"}
+    if "Marubozu" in names:
+        (_bull if c["bull"] else _bear).add("Marubozu")
+    _nb, _ns = any(x in _bull for x in names), any(x in _bear for x in names)
+    bias = "BULL" if _nb and not _ns else "BEAR" if _ns and not _nb else "NEUTRAL"
+    against = (bias == "BEAR" and direction == "LONG") or (bias == "BULL" and direction == "SHORT")
+    if (near_support or near_resistance) and against:
+        text += f" روی/نزدیک {focus}؛ این کندل خلافِ سناریوی {dir_fa} است — هشدار، نه تأیید."
+    elif (near_support or near_resistance) and bias == "NEUTRAL":
+        text += f" روی/نزدیک {focus}؛ کندلِ بی‌طرف/تردید — منتظر کندل بعدی."
+    elif near_support or near_resistance:
         text += f" روی/نزدیک {focus}؛ برای سناریوی {dir_fa} قابل تفسیر است."
     else:
         text += "؛ این الگو در تایم خودش دیده شده و به‌تنهایی تأیید نهایی نیست."
@@ -68,7 +85,7 @@ def _describe(tf: str, c: dict, prev: Optional[dict], direction: str, near_suppo
         "DIRECT" if tf in ("1d", "4h", "15m", "5m", "3m", "1m")
         else "RESAMPLED"
     )
-    return {"tf": tf, "pattern": label, "text": text,
+    return {"tf": tf, "pattern": label, "text": text, "bias": bias,
             "relevance": "ZONE" if (near_support or near_resistance) else "CONTEXT",
             "source": source}
 
@@ -86,9 +103,16 @@ def analyze_mtf_candles(bundle: Dict, direction: str, trigger_tf: str = "") -> D
             _d = d1.copy()
             _d["timestamp"] = pd.to_datetime(_d["timestamp"])
             _d = _d.set_index("timestamp").sort_index()
-            for tf, rule in (("3d", "3D"), ("1w", "7D")):
-                _a = _d.resample(rule, label="right", closed="right").agg(
-                    {"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna()
+            # R31.7 audit #5: daily rows are stamped with their OPEN time, so
+            # bins are left-closed/left-labelled; weekly candles start on
+            # MONDAY (exchange convention, not "7 days from the data start"),
+            # 3D bins are epoch-anchored (stable as the window slides), and
+            # an incomplete (still-forming) bucket is dropped.
+            for tf, rule, need, kw in (("3d", "3D", 3, {"origin": "epoch"}),
+                                       ("1w", "W-MON", 7, {})):
+                _rs = _d.resample(rule, label="left", closed="left", **kw)
+                _a = _rs.agg({"open":"first","high":"max","low":"min","close":"last","volume":"sum"})
+                _a = _a[_rs["close"].count().reindex(_a.index).fillna(0) >= need].dropna()
                 if len(_a) >= 8:
                     _a = _a.reset_index()
                     _bundle[tf] = _a

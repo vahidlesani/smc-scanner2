@@ -850,6 +850,32 @@ def send_photo(
     return mid
 
 
+def _frame_x_of_ts(index, ts_value) -> float:
+    """R31.7 (audit C1/C6): TRUE x of a pivot timestamp on a chart frame.
+
+    ``np.searchsorted`` (a) clamps a pivot older than the frame to x=0 — the
+    fit window (trigger tail 170) is longer than the chart lookback, so HTF
+    lines were re-anchored on the wrong bar and hung in the air, with their
+    first circle glued to the left edge — and (b) maps a lower-TF pivot that
+    sits INSIDE a display candle to the NEXT candle (1 bar right on every
+    stepped-up chart). This returns the containing bar, and extrapolates by
+    the median bar spacing outside the frame (negative x = before bar 0)."""
+    _t = pd.Timestamp(str(ts_value))
+    _idx = index
+    if len(_idx) == 0:
+        return 0.0
+    try:
+        _dt = float(np.median(np.diff(_idx.asi8))) if len(_idx) >= 2 else 0.0
+    except Exception:
+        _dt = 0.0
+    if _t < _idx[0]:
+        return float((_t.value - _idx[0].value) / _dt) if _dt > 0 else 0.0
+    _i = int(np.searchsorted(_idx, _t, side="right")) - 1
+    if _i >= len(_idx) - 1 and _dt > 0:
+        return float(len(_idx) - 1) + float(np.floor((_t.value - _idx[-1].value) / _dt))
+    return float(_i)
+
+
 def _pivot_line_fit(ax, frame, xs, ys):
     """Phase-3 (Viva 09-23 final ruling): on a LOG price axis whose visible
     span exceeds ~3%, pivot lines are fitted in LOG10 space — percentage-honest
@@ -1730,6 +1756,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 return float(fallback)
             return float(min(max(_x, 0.0), float(count)))
 
+        def _x_of_ts(ts_value) -> float:
+            return _frame_x_of_ts(frame.index, ts_value)
+
         # higher-context charts (TLBREAK 4h/1h or any 1d frame) render on a
         # log price axis so long-term trendline touches/breaks stay visible.
         notes = []
@@ -1927,6 +1956,51 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             notes.append((f"PAT 4H · {str(_htfp)}", CHART_THEME["muted"]))
         # pattern render commands: wedge / triangle / channel / flag / range
         from analysis.render_kit import line_xy as _line_xy, line_y as _line_y_cal
+        # R31.7 audit C4 (clutter): the setup's OWN validated lines (VIVA
+        # upper/lower pivots) are drawn later; a render-kit pattern edge that
+        # is the SAME line (same pivots, ≤0.35 ATR apart over its visible
+        # stretch) is not painted a second/third time — BTC 15m 09-08 showed
+        # three near-identical teal lines converging on one pivot.
+        _ref_lines8 = []
+        _ref_pivots8 = set()
+
+        def _pv_key(_price) -> str:
+            return f"{float(_price):.6g}"
+        try:
+            for _k8 in ("viva_upper_points", "viva_lower_points"):
+                _p8 = (candidate.metadata or {}).get(_k8) or []
+                _ref_pivots8.update(_pv_key(q["price"]) for q in _p8 if q.get("price") is not None)
+                if len(_p8) >= 2:
+                    _xx = [_x_of_ts(q.get("timestamp")) for q in _p8]
+                    _yy = [float(q["price"]) for q in _p8]
+                    if max(_xx) - min(_xx) > 1e-9:
+                        _a8r, _b8r = np.polyfit(_xx, _yy, 1)
+                        _ref_lines8.append(lambda x, a=float(_a8r), b=float(_b8r): a * x + b)
+        except Exception:
+            _ref_lines8 = []
+
+        def _dup_of_drawn(_lnq, _xa_q: float, _atr_q: float, _child: bool = False) -> bool:
+            # pivot sharing: a line built on the SAME swing points as a line
+            # already on the canvas (2 shared pivots; a child line: 1) is a
+            # redundant redraw of that structure
+            try:
+                _sh = sum(1 for q in (_lnq.get("points") or [])
+                          if _pv_key(q.get("price")) in _ref_pivots8)
+            except Exception:
+                _sh = 0
+            if _sh >= 2 or (_child and _sh >= 1):
+                return True
+            if _atr_q <= 0 or not _ref_lines8:
+                return False
+            _xs_q = (max(_xa_q, float(count) - 40.0), float(count))
+            for _f in _ref_lines8:
+                try:
+                    if all(abs(float(_line_y_cal(_lnq, _xq)) - _f(_xq)) <= 0.35 * _atr_q
+                           for _xq in _xs_q):
+                        return True
+                except Exception:
+                    continue
+            return False
         for _pat in ((candidate.metadata or {}).get("render_patterns") or []):
             if _pat.get("type") == "RANGE":
                 # anchored to its oldest tested pivot when it carries a time
@@ -1980,8 +2054,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _sl8 = float(_ln0["slope"]) / _tfscale
                 _pt8 = _ln0.get("points") or []
                 if _pt8:
-                    _x0f = float(np.searchsorted(
-                        frame.index, pd.Timestamp(str(_pt8[0].get("ts")))))
+                    _x0f = _x_of_ts(_pt8[0].get("ts"))
                     _ic8 = float(_pt8[0].get("price")) - _sl8 * _x0f
                 else:
                     _x0f = max(0.0, (float(_ln0.get("x0", 0))
@@ -2015,6 +2088,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _sl, _ic = float(_ln["slope"]), float(_ln["intercept"])
                 _xa = max(0.0, float(_ln.get("x0", 0)))
                 _xe = count + future - 0.5
+                if _dup_of_drawn(_ln, _xa, _atr9, bool(_pat.get("child"))):
+                    _flat8.append(False)
+                    _brk8.append(False)
+                    continue
+                # later pattern edges are compared against this one too
+                _ref_lines8.append(lambda x, _q=_ln: float(_line_y_cal(_q, x)))
+                try:
+                    _ref_pivots8.update(_pv_key(q.get("price")) for q in (_ln.get("points") or []))
+                except Exception:
+                    pass
                 _col8 = CHART_THEME["supply"] if _ln.get("side") == "HIGH" \
                     else CHART_THEME["demand"]
                 # Viva 09-18 (his AAVE ruling): a FLAT «trendline» is not a
@@ -2075,9 +2158,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             linestyle=(0, (2, 3)), solid_capstyle="butt")
                 _px8, _xs8 = [], []
                 for q in (_ln.get("points") or []):
-                    _qx = float(np.searchsorted(
-                        frame.index, pd.Timestamp(str(q.get("ts")))))
-                    if _qx <= _xend8 + 0.5:
+                    _qx = _x_of_ts(q.get("ts"))
+                    if 0.0 <= _qx <= _xend8 + 0.5:
                         _xs8.append(_qx); _px8.append(float(q.get("price")))
                 if _xs8:
                     ax.scatter(_xs8, _px8, s=30, color=CHART_THEME["panel"],
@@ -2245,17 +2327,23 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         if md.get("tl_a_ts") and md.get("tl_b_ts"):
             try:
                 idx = frame.index
-                xa = float(np.searchsorted(idx, pd.Timestamp(str(md["tl_a_ts"]))))
-                xb = float(np.searchsorted(idx, pd.Timestamp(str(md["tl_b_ts"]))))
-                xanc = float(np.searchsorted(idx, pd.Timestamp(str(md.get("tl_anchor_ts") or md["tl_b_ts"]))))
+                xa = _x_of_ts(md["tl_a_ts"])
+                xb = _x_of_ts(md["tl_b_ts"])
+                xanc = _x_of_ts(md.get("tl_anchor_ts") or md["tl_b_ts"])
                 pa, pb = float(md["tl_a_price"]), float(md["tl_b_price"])
                 if xb > xa:
                     slope = (pb - pa) / (xb - xa)
+                    # R31.7 C1: slope from the TRUE pivot x; the painted
+                    # segment starts at the frame edge on the same line
+                    if xa < 0:
+                        pa, xa = pa + slope * (0.0 - xa), 0.0
                     x_end = count + future - 0.5
                     ax.plot([xa, x_end], [pa, pa + slope * (x_end - xa)],
                             color=CHART_THEME["trend"], linewidth=1.65, alpha=0.92, zorder=8,
                             solid_capstyle="round", antialiased=True)
                     p_anc = float(md["tl_anchor_price"])
+                    if xanc < 0:
+                        p_anc, xanc = p_anc + slope * (0.0 - xanc), 0.0
                     ax.plot([xanc, x_end], [p_anc, p_anc + slope * (x_end - xanc)],
                             color=CHART_THEME["trend"], linewidth=1.35, alpha=0.75, zorder=8,
                             solid_capstyle="round", antialiased=True)
@@ -2561,7 +2649,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 if len(_up0) >= 2 and len(_lo0) >= 2:
                     try:
                         def _fitpts(pts):
-                            xs_ = [float(np.searchsorted(frame.index, pd.Timestamp(str(p.get("timestamp"))))) for p in pts]
+                            xs_ = [_x_of_ts(p.get("timestamp")) for p in pts]
                             ys_ = [float(p["price"]) for p in pts]
                             if not all(math.isfinite(v) for v in xs_ + ys_) \
                                     or max(xs_) - min(xs_) < 1e-9:
@@ -2578,8 +2666,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         continue
                     xs, ys = [], []
                     for point in points:
-                        ts = pd.Timestamp(str(point.get("timestamp")))
-                        x = float(np.searchsorted(frame.index, ts))
+                        x = _x_of_ts(point.get("timestamp"))
                         xs.append(x); ys.append(float(point["price"]))
                     if len(xs) < 2 or not all(math.isfinite(v) for v in xs + ys) \
                             or max(xs) - min(xs) < 1e-9:
@@ -2605,6 +2692,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         x0 = min(x0, x_left)
                     else:
                         x0 = 0.0
+                    x0 = max(0.0, x0)   # R31.7 C1: pivots may predate the frame
                     x1 = min(max(xs) + 0.15 * max(1.0, max(xs) - min(xs)), x_edge, count)
                     _xr = max(x1, min(x_edge, count))
                     ax.plot([x0, _xr], [_fy9(x0), _fy9(_xr)],
@@ -2613,7 +2701,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         ax.plot([count, x_edge], [_fy9(count), _fy9(x_edge)],
                                 color=color, linewidth=1.5, alpha=.72, zorder=6,
                                 linestyle=(0, (6, 4)), solid_capstyle="butt")
-                    ax.scatter(xs, ys, s=42, color=CHART_THEME["panel"], edgecolors=color, linewidths=1.7, zorder=9)
+                    _vis9 = [(x_, y_) for x_, y_ in zip(xs, ys) if x_ >= 0.0]
+                    if _vis9:
+                        ax.scatter([v[0] for v in _vis9], [v[1] for v in _vis9], s=42,
+                                   color=CHART_THEME["panel"], edgecolors=color, linewidths=1.7, zorder=9)
                     notes.append((f"{label} · {len(xs)} PIVOTS", color))
                 line = md.get("viva_breakout_line") or md.get("viva_break_line")
                 if line:
@@ -2677,14 +2768,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     try:
                         xs, ys = [], []
                         for point in watch_points:
-                            xs.append(float(np.searchsorted(frame.index, pd.Timestamp(str(point.get("timestamp"))))))
+                            xs.append(_x_of_ts(point.get("timestamp")))
                             ys.append(float(point["price"]))
                         if not all(math.isfinite(v) for v in xs + ys) or max(xs) - min(xs) < 1e-9:
                             raise ValueError("degenerate watch fit")
                         _modew, slope, intercept = _pivot_line_fit(ax, frame, xs, ys)
                         def _fyw(_xw, _s=slope, _b=intercept, _m=_modew):
                             return 10 ** (_s * _xw + _b) if _m == "log" else _s * _xw + _b
-                        ax.plot([xs[0], count + future - .5], [_fyw(xs[0]), _fyw(count + future - .5)], color=CHART_THEME["liquidity"], linewidth=1.25, linestyle=(0,(3,3)), alpha=.85, zorder=6)
+                        _xw0 = max(0.0, xs[0])
+                        ax.plot([_xw0, count + future - .5], [_fyw(_xw0), _fyw(count + future - .5)], color=CHART_THEME["liquidity"], linewidth=1.25, linestyle=(0,(3,3)), alpha=.85, zorder=6)
+                        _visw = [(x_, y_) for x_, y_ in zip(xs, ys) if x_ >= 0.0]
+                        xs, ys = [v[0] for v in _visw], [v[1] for v in _visw]
                         ax.scatter(xs, ys, s=22, color=CHART_THEME["panel"], edgecolors=CHART_THEME["liquidity"], linewidths=1.0, zorder=9)
                         notes.append(("2-PIVOT WATCH · NO ENTRY", CHART_THEME["liquidity"]))
                     except Exception:

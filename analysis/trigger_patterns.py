@@ -111,7 +111,10 @@ def multi_candle_trigger(
     for k in range(2, max_k + 1):
         window = df.tail(k)
         o, h, l, c = _aggregate(window)
-        if not (min(l, zone_low) <= zone_high and max(h, zone_high) >= zone_low):
+        # R31.7 audit #1: the old guard `min(l, zone_low) <= zone_high and
+        # max(h, zone_high) >= zone_low` was ALWAYS true (it compared the
+        # zone with itself) — a base far from the zone qualified.
+        if not (l <= zone_high and h >= zone_low):
             continue  # base did not trade the zone at all
         extreme = l if is_long else h
         # pin across the base (the classic "چند‌کندلی بیس پین‌باری" read)
@@ -131,12 +134,20 @@ def multi_candle_trigger(
         # aggregate body engulfs the previous equal-sized stretch of candles
         if len(df) >= 2 * k:
             prev_o, prev_h, prev_l, prev_c = _aggregate(df.iloc[-2 * k:-k])
-            if is_long and o <= prev_c and c >= prev_o and (c - o) > (prev_o - prev_c):
+            # R31.7 audit #2: an engulfing needs OPPOSITE colours and a real
+            # body — `(c - o) > (prev_o - prev_c)` was satisfied by a RED base
+            # after a green stretch (negative > more negative).
+            if is_long and prev_c < prev_o and c > o and o <= prev_c and c >= prev_o \
+                    and (c - o) > (prev_o - prev_c) and (c - o) >= min_body_atr * atr_value:
                 return AltTrigger("CLUSTER_ENGULF", k, extreme, fibo)
-            if not is_long and o >= prev_c and c <= prev_o and (o - c) > (prev_o - prev_c):
+            if not is_long and prev_c > prev_o and c < o and o >= prev_c and c <= prev_o \
+                    and (o - c) > (prev_c - prev_o) and (o - c) >= min_body_atr * atr_value:
                 return AltTrigger("CLUSTER_ENGULF", k, extreme, fibo)
         # structure break of the base window itself (close beyond prior highs)
-        prior = df.iloc[-(k + 1):-k] if len(df) > k else window.iloc[:-1]
+        # R31.7 audit #4: a structure break is measured against the prior
+        # SWING (≥3 bars before the base), not a single candle.
+        _span = max(3, k)
+        prior = df.iloc[max(0, len(df) - k - _span):-k] if len(df) > k else window.iloc[:-1]
         if len(prior) >= 1:
             if is_long and c > float(prior["high"].max()) and (c - o) >= min_body_atr * atr_value:
                 return AltTrigger("CLUSTER_BOS", k, extreme, fibo)
@@ -170,10 +181,13 @@ def multi_candle_trigger(
                 minutes = int(step_min * mult)
                 if len(df) < 2 * mult:
                     continue
-                bars = (indexed
-                        .resample(f"{minutes}min")
-                        .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
-                        .dropna(subset=["open", "close"]))
+                _rs = indexed.resample(f"{minutes}min", origin="epoch")
+                bars = _rs.agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+                # R31.7 audit #3: only COMPLETE higher-TF candles — the last
+                # bin usually holds 1–5 of its 6/12 bars (a still-forming
+                # candle read as a closed pin/doji), the first one likewise.
+                _cnt = _rs["close"].count()
+                bars = bars[_cnt.reindex(bars.index).fillna(0) >= mult].dropna(subset=["open", "close"])
                 if len(bars) < 2:
                     continue
                 for pos in (-1, -2):
