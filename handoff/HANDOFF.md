@@ -159,3 +159,17 @@ HANDOFF.md — smc-scanner2 (VivaSignals Pro)
 - **صف (به ترتیبِ توافق):** (۱) خواندنِ پاسِ اسپات از state (اگر send_fail بالا → سمتِ تلگرام)، (۲) ادغامِ ممیزی‌شدهٔ بقیهٔ audit-0925b (P2/P5/P6 + ۱۸تست — برنچ `arena/01a0d606`)، (۳) استاپِ ساختاری 4H + سقفِ قانونی (V3 §18 — BTC/DASH پرونده‌ها)، (۴) TP ساختاری (§19 — RENDER targetِ زیرِ قیمت)، (۵) Trailing v2: BE@TP1، خروجِ کامل بعد از تاچِ TP2 + خروجِ زودتر با الگوی برگشتیِ کندلیِ تایمِ کوتاه‌تر، (۶) بک‌تستِ Entry2، (۷) Material-Event Engine (پچ J)، (۸) 15m/30m=SCALP (تصمیمِ ویوا: DAYTRADE@30m بماند یا SCALP شود؟)، (۹) آپدیت-۵۱ ($18→$28).
 - **حکمِ برنچ‌ها:** `r30-spot-mtf-chart-handoff` = محتوا کامل در main (خالی). `feat/pinval-zone-polarity` + `exp/stage4-zone-policy` = بدون merge-base (ریپوی جدا — مرج ممنوع؛ ایده → پچِ دستیِ Direction). `arena/01a0d606` = عاملِ سوم — فقط R31.7b گرفته شد؛ بقیه در صفِ ممیزی.
 - **زیرساخت:** توکنِ GitHub ۰۹-۲۵ رِووک شد → توکنِ نو در tokens.env (هر چرخشِ کانتینر: `.git/config` + pip پاک — لیست: flask waitress mplfinance arabic-reshaper python-bidi). Railway token فقط project-scoped و لیستِ پروژه ممنوع → تأییدِ دیپلوی فقط `/health` → `boot_sha` (از r27b).
+
+## 09-26 round r30 — `6ddfb3a` (LIVE boot_sha 6ddfb3afd125, boot 2026-09-25T21:15:16Z)
+Suite 484P/1skip. Bug file «باگهای 😵‍💫😵‍💫.txt» + 17 screenshots → 8 laws shipped:
+1. **NO-SOFT-INVALIDATION** (quality_engine.is_invalidated): pre-confirm invalidation only from the PROTECTIVE side — sl inside the zone never fires (LTC 69.404-in-63.6..70.9 kill); confirmed chains keep lifecycle stop.
+2. **Builder clamp** (pattern_engine._build_candidate): break-stop clamped beyond zone edge (± buffer).
+3. **OROR break-guard** (main._scenario_out_of_reach): touched/live_break_bar/JUST_BROKE + price beyond zone in direction → never «out of reach» (LTC 6.56-ATR cancel during breakout); untouched runaway still cancels (09-21 law preserved).
+4. **Tombstones** (main._tombstone_write/_hit, KV `cancel_tombstones`, TTL 12h): cancelled scenario fingerprint (sym|setup|dir|zone-mid) blocks rediscovery — the invalidate→re-find→113-msg loop is dead. Tally counter: `dup` bucket reused.
+5. **Iran clock** (messages_v7): update caption clock Asia/Tehran + «به وقتِ ایران» (was UTC).
+6. **Update wording**: «از کندلِ هشدارِ اولیه N دقیقه می‌گذرد — این پیام همین حالا ارسال شده…» (never «arrived late»); r12 test re-anchored.
+7. **Final result text-only** (send_trade_close_event): no fresh render — verdict replies under the last TP anchor (Viva: «نتیجه نهایی نیاز به چارت لایو نداره»); CPU saved.
+8. **Atomic chart+text** (_post_chart_then_text + _chat_send_lock): per-chat lock — no more interleaved captions (charts detached from messages).
+9. **30m/2h triggers** (config): TECHCLASSIC_PATTERN_TFS default = «30m,1h,2h,4h,1d» (Viva verdict: «۳۰ دقیقه و ۲ ساعته هم بد نیست، کیفیتی بهتر داره»). WATCH: CPU/scan-load on Railway with 2 extra pattern TFs.
+INFRA: repo slug = **vahidlesani/smc-scanner2** (github token in tokens.env is the vahidlesani PAT — query api.github.com/user/repos if remote lost again). pip wipe list: flask waitress mplfinance arabic-reshaper python-bidi.
+OPEN from bug file (next round): spot-pill «SCORE 0/10» vs text 8/10; AERO 15m one-candle entry/stop/TP sanity floor + PINWALL pin-bar validation; DASH 1D wedge miss (pattern-window zoom); mid-channel trade ban (APT) — CHANNEL-TRADE law not yet enforced in code; LTC-15m TARGET<LIVE class (RENDER leftover); re-measure post-r30 churn (complaint timestamps predated r29e deploy).
