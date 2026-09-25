@@ -231,3 +231,32 @@ def test_lower_tf_pivot_maps_to_its_containing_candle():
     idx = pd.DatetimeIndex(pd.date_range("2026-09-01", periods=10, freq="4h"))
     # a 15m pivot at 09:45 lives in the 08:00 4h candle (x=2), not the next one
     assert _frame_x_of_ts(idx, "2026-09-01 09:45") == 2.0
+
+
+# ── TECHCLASSIC silence cause #2: alert lineage churn ──────────────────────
+def test_alert_lineage_key_is_stable_and_switchable(monkeypatch):
+    from analysis.pattern_engine import alert_lineage_key
+    pts = [{"timestamp": "2026-09-01 04:00:00", "price": 1.0},
+           {"timestamp": "2026-09-02 08:00:00", "price": 1.1}]
+    k1 = alert_lineage_key("TECHCLASSIC", "btcusdt", "15m", "4h", "upper", "LONG", pts)
+    k2 = alert_lineage_key("TECHCLASSIC", "BTCUSDT", "15M", "4H", "upper", "long", list(pts))
+    assert k1 and k1 == k2
+    assert alert_lineage_key("TECHCLASSIC", "BTCUSDT", "15m", "4h", "upper", "LONG", pts[:1]) == ""
+    monkeypatch.setenv("R317_LEGACY", "1")
+    assert alert_lineage_key("TECHCLASSIC", "BTCUSDT", "15m", "4h", "upper", "LONG", pts) == ""
+
+
+def test_keyed_lineage_drift_is_not_a_material_update():
+    from types import SimpleNamespace as NS
+    from database.candidate_store import is_material_update
+    old = NS(setup_code="TECHCLASSIC", direction="LONG", zone_mid=100.0,
+             metadata={"atr": 1.0, "alert_lineage_key": "K"})
+    drift = NS(setup_code="TECHCLASSIC", direction="LONG", zone_mid=100.6,
+               metadata={"atr": 1.0, "alert_lineage_key": "K"})
+    moved = NS(setup_code="TECHCLASSIC", direction="LONG", zone_mid=101.5,
+               metadata={"atr": 1.0, "alert_lineage_key": "K"})
+    unkeyed = NS(setup_code="TECHCLASSIC", direction="LONG", zone_mid=100.6, metadata={"atr": 1.0})
+    old_unkeyed = NS(setup_code="TECHCLASSIC", direction="LONG", zone_mid=100.0, metadata={"atr": 1.0})
+    assert not is_material_update(old, drift)          # sloped line drift: keep the alert
+    assert is_material_update(old, moved)              # zone relocated ≥1 ATR: replace
+    assert is_material_update(old_unkeyed, unkeyed)    # legacy rule unchanged (0.2 ATR)

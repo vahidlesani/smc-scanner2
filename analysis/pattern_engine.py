@@ -95,6 +95,25 @@ _ONE_NATURE = frozenset((
 ))
 
 
+def alert_lineage_key(setup: str, symbol: str, trigger_tf: str, pattern_tf: str,
+                      side, direction: str, points, is_break: bool = True) -> str:
+    """R31.7: stable identity of one edge scenario across rescans (see
+    ``_build_candidate``). Empty when the edge has <2 timestamped pivots or
+    the kill switch is on."""
+    if _legacy317():
+        return ""
+    try:
+        ts = [str(p.get("timestamp") or p.get("ts") or "")[:16] for p in (points or [])]
+        ts = [t for t in ts if t]
+        if len(ts) < 2:
+            return ""
+        return "|".join((str(setup).upper(), str(symbol).upper(), str(trigger_tf).lower(),
+                         str(pattern_tf).lower(), str(side or ""), str(direction).upper(),
+                         "BRK" if is_break else "EDGE", ts[0], ts[1]))
+    except Exception:
+        return ""
+
+
 def _legacy317() -> bool:
     """R31.7 kill switch: ``R317_LEGACY=1`` restores the pre-audit behaviour
     of the behaviour-changing fixes (fresh-break gate, live-time line value,
@@ -1251,6 +1270,18 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         "tc_base": ev.get("base_box") or [],
         "public_code": generate_viva_public_code("TLBREAK", style),
     })
+    # R31.7 (why TECHCLASSIC was silent, cause #2): every scan minted a NEW
+    # random signal_id for the SAME broken edge; the zone (a sloped line)
+    # drifts every 15 minutes, so the lineage test (0.08 ATR) failed and the
+    # alert was re-created / superseded before any confirm-TF close. The
+    # lineage is the broken EDGE itself — identified by its defining pivots'
+    # timestamps, which do not move as the fit window slides.
+    _lk = alert_lineage_key("TECHCLASSIC", bundle.symbol, trigger_tf, ev.get("pattern_tf") or structure_tf,
+                            ev.get("side"), direction,
+                            ev.get("upper_points") if ev.get("side") == "upper" else ev.get("lower_points"),
+                            is_break)
+    if _lk:
+        candidate.metadata["alert_lineage_key"] = _lk
     # ── Viva 09-23 (round 20 ENTRY LAW): remember the MAJOR-pivot trendline
     # opposing this break (highest-TF validated 1d/4h/1h line on the break's
     # side) — confirmation must be a CLOSE beyond it, not just the tool line.

@@ -686,6 +686,16 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
                     F(c, "pre_tp1_open"); continue
                 if c.signal_id in active:
                     F(c, "dup"); continue
+                # production find_similar/is_material_update on a keyed lineage
+                # (R31.7): the same broken edge keeps its ORIGINAL alert alive
+                _lk = str((c.metadata or {}).get("alert_lineage_key") or "")
+                if _lk:
+                    _hold = [a for a in active.values()
+                             if str((a.metadata or {}).get("alert_lineage_key") or "") == _lk]
+                    if _hold:
+                        from database.candidate_store import is_material_update
+                        if not is_material_update(_hold[0], c):
+                            F(c, "lineage_dup"); continue
                 # supersede an earlier unconfirmed alert of the same lineage
                 for sid in [s for s, a in active.items() if a.setup_code == c.setup_code
                             and str(a.trigger_timeframe).lower() == trig and a.direction == c.direction]:
