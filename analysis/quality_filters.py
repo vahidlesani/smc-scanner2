@@ -15,12 +15,19 @@ closed trades) found two filters that improved expectancy in BOTH halves
                       هانت میشه». A custom map may be passed instead of "1":
                       MIN_STOP_FLOOR="15m:1.0,1h:1.5".
 
-  MIN_CONFIRM_BAR=1   (review B4, round-2 candidate) the confirmation bar must
+  MIN_CONFIRM_BAR=1   (review B4) — REJECTED by the in-engine replay (round 3:
+                      −0.035 R alone, −0.001 R on top of the trend gate; the
+                      chain waits and enters later at a worse price). Kept only
+                      so the A/B stays reproducible — do NOT enable. The bar must
                       have a body ≥ 0.3 × mean range(14) of its frame AND close
                       beyond the previous bar's extreme in the trade direction.
                       A weak bar is rejected (plan restored) — the chain stays
                       alive and a later strong close may still confirm.
                       Custom body ratio: MIN_CONFIRM_BAR=0.4.
+
+In-engine replay round 3 (arm `prodfilters` = HTF_TREND_GATE=4h +
+MIN_STOP_FLOOR=1): 585 trades, WR 76%, +0.028 R (IS +0.017 / OOS +0.051),
+maxDD 13.6 R vs base 848 trades −0.024 R, maxDD 40.1 R.
 
 All are opt-in so the live behaviour does not change until Viva decides.
 """

@@ -154,4 +154,4 @@ HANDOFF.md — smc-scanner2 (VivaSignals Pro)
 ## ۰۹-۲۵ — R31.4/R31.5 (برنچ `arena/01a0d606-smc-scanner2`، PR #5، دیپلوی نشده)
 - فیکس‌های A1 تا A12، از جمله استریم 30m که مرده بود و حالا پشت `PINVAL_30M_ENABLED` و پیش‌فرض خاموش است. بررسی کد: `docs/REVIEW_2026-09-25.md`.
 - هارنس replay: `experiments/replay_live_setups.py` و workflow `replay` (بازوها در `ARMS`). گزارش: `docs/REPLAY_2026-09-25.md`.
-- فیلترهای opt-in: `HTF_TREND_GATE=4h` و `MIN_STOP_FLOOR=1` در `analysis/quality_filters.py`. قدم بعدی: paper forward با این دو، و بازوی `trend4h+B4`. تست‌ها: **479 passed / 1 skipped**.
+- فیلترهای opt-in: `HTF_TREND_GATE=4h` و `MIN_STOP_FLOOR=1` در `analysis/quality_filters.py`. این دو با هم در replay ‎+0.028R‎ دادند (base ‎−0.024‎). قدم بعدی: paper forward با این دو. `MIN_CONFIRM_BAR` (B4) رد شده و نباید روشن شود. تست‌ها: **480 passed / 1 skipped**.

@@ -34,8 +34,8 @@ jobs:
       matrix:
         symbol: [BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT, ADAUSDT, LINKUSDT, AVAXUSDT, SUIUSDT, BNBUSDT]
         # round 1: base,legacy · round 2: base,stopfloor,oor4,trend4h,combo
-        # round 3a (3e10dc3): base,prodfilters,trend4h · round 3b: b4,trendb4 (docs/REPLAY_2026-09-25.md)
-        arm: [b4, trendb4]
+        # round 3a (3e10dc3): base,prodfilters,trend4h · round 3b (e89991e): b4,trendb4
+        arm: [base, prodfilters]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
