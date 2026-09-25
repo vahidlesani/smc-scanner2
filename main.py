@@ -178,6 +178,11 @@ def _suppressed_edu_throttled(candidate) -> bool:
 
 _QUIET_RUN = 0
 
+# Structural quality lanes are exempt from the generic PinWall-oriented
+# unresolved-chain / same-zone / 24h licence suppression. Their own detector
+# geometry, score, sanity and duplicate checks remain active.
+_STRUCTURAL_QUALITY_LANES = frozenset({"ALBROX", "TLBREAK", "TECHCLASSIC"})
+
 
 # ── Round-15 cost guard (Viva 09-21: «ببین استفاده الکی نداشته باشیم»).
 # A symbol whose four detection timeframes produced no new CLOSED candle cannot
@@ -323,6 +328,7 @@ def run_discovery_scan() -> Dict[str, int]:
                     stats["errors"] += 1
                     print(f"Public-code reservation failed {candidate.signal_id}: {exc}")
                     continue  # fail closed; never publish an unreserved code
+                _quality_lane = str(getattr(candidate, "setup_code", "") or "").upper() in _STRUCTURAL_QUALITY_LANES
                 # ── Viva licence law (restated 2026-09-13, verbatim) ──────────
                 # 3 rotating licences per (symbol, trigger timeframe, setup).
                 # The next licence frees when the previous signal CONFIRMS;
@@ -330,7 +336,7 @@ def run_discovery_scan() -> Dict[str, int]:
                 # tuple is absorbed into it. Different setup or different
                 # trigger timeframe = fully independent. A new licence also
                 # needs >=2% price distance from the last CONFIRMED price.
-                if SETTINGS.chain_slot_gate_enabled:
+                if SETTINGS.chain_slot_gate_enabled and not _quality_lane:
                     try:
                         _trig = str(candidate.trigger_timeframe or "").lower()
                         live_chains = [
