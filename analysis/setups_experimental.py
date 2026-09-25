@@ -307,6 +307,14 @@ def _intrabar_base(bundle: MarketBundle, context_df, trigger_tf: str, direction:
     return {"bottom": lo, "top": hi, "kind": "INTRABAR_BASE", "bars": n_in}
 
 
+def _htf_frame(bundle):
+    """FIX (R31.5): `bundle.get("4h") or bundle.get("1h")` evaluated a
+    DataFrame's truth value → ValueError, swallowed by the caller's bare
+    except, so the pin/TL-watch charts silently lost their HTF zones."""
+    df = bundle.get("4h")
+    return df if df is not None else bundle.get("1h")
+
+
 def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
     """Live-paper adapter for isolated Viva-TLBREAK v1.
 
@@ -359,7 +367,7 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             try:  # CHART-8: the WATCH chart paints zones/patterns like every setup
                 from analysis.render_kit import enrich_render
                 enrich_render(candidate, trigger_df,
-                              htf_df=bundle.get("4h") or bundle.get("1h"))
+                              htf_df=_htf_frame(bundle))
             except Exception:
                 pass
             candidate.metadata.update({"strategy_variant":"VIVA_TLBREAK","viva_state":"S0_WATCH","viva_pattern":"TWO_PIVOT_WATCH","viva_watch_line":line_price,"viva_touch_count":2,"viva_watch_points":[dict(watch.first),dict(watch.last)],"public_code":generate_viva_public_code("TLBREAK", style),
@@ -751,6 +759,11 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         return None
     best = None
     for tf in PINVAL_TF_BY_STYLE.get(style, ("15m",)):
+        # R31.5: the 30m DAYTRADE pin stream had never actually run live (the
+        # bundle had no 30m frame). The replay measured it at −0.054 R/trade
+        # (n=328, 120d×10 symbols), so it stays OFF until Viva enables it.
+        if str(tf) == "30m" and not getattr(settings, "pinval_30m_enabled", False):
+            continue
         df = bundle.get(tf)
         if df is None or len(df) < 40:
             continue
@@ -1089,7 +1102,7 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             _pdf = bundle.get(str(best.trigger_timeframe or "").lower())
             if _pdf is not None:
                 enrich_render(best, _pdf,
-                              htf_df=bundle.get("4h") or bundle.get("1h"))
+                              htf_df=_htf_frame(bundle))
         except Exception:
             pass
     return best

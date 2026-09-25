@@ -46,3 +46,26 @@ def test_replay_tape_never_leaks_future_candles():
     assert pd.Timestamp(closed["timestamp"].iloc[-1]) + pd.Timedelta(hours=1) <= t
     # the forming bar only uses 5m bars already closed at t
     assert float(live["high"].iloc[-1]) <= float(tape.closed("5m", t, 12)["high"].max()) + 1e-12
+
+
+def test_htf_frame_helper_no_dataframe_truthiness():
+    from analysis.setups_experimental import _htf_frame
+    df4 = pd.DataFrame({"close": [1.0, 2.0]})
+    df1 = pd.DataFrame({"close": [3.0]})
+
+    class B:
+        def __init__(self, f):
+            self.f = f
+
+        def get(self, k):
+            return self.f.get(k)
+    assert _htf_frame(B({"4h": df4, "1h": df1})) is df4
+    assert _htf_frame(B({"1h": df1})) is df1
+
+
+def test_pinval_30m_stream_is_opt_in(monkeypatch):
+    from config import Settings
+    monkeypatch.delenv("PINVAL_30M_ENABLED", raising=False)
+    assert Settings.pinval_30m_enabled is False
+    from analysis import setups_experimental as exp
+    assert 'pinval_30m_enabled' in inspect.getsource(exp.detect_pinbar_zone)

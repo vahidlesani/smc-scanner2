@@ -54,6 +54,18 @@ import pandas as pd  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# Research arms (env applied before any project module reads settings).
+_FLOOR = "15m:1.2,30m:1.4,1h:1.6,4h:2.5,1d:4.0"
+ARMS: Dict[str, Dict[str, str]] = {
+    "base": {},
+    "legacy": {"CONFIRM_TL_EXTRAPOLATE": "0", "REPLAY_BUNDLE_30M": "0"},
+    "pin30": {"PINVAL_30M_ENABLED": "1"},
+    "stopfloor": {"REPLAY_STOP_FLOOR": _FLOOR},
+    "oor4": {"SCENARIO_OUT_OF_REACH_ATR": "4"},
+    "trend4h": {"REPLAY_TREND_GATE": "4h"},
+    "combo": {"REPLAY_STOP_FLOOR": _FLOOR, "REPLAY_TREND_GATE": "4h"},
+}
+
 TF_MIN = {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}
 # production get_market_bundle limits (main.py default call) — 30m is added by
 # the R31.5 fix; with REPLAY_BUNDLE_30M=0 the bundle mirrors the old live bug.
@@ -338,6 +350,9 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
     lic_cap = max(1, int(getattr(S, "chains_per_symbol_setup_24h", 3) or 3))
     lic_sep = float(getattr(S, "license_min_sep_pct", 0.02) or 0.0)
     quality_lanes = {"ALBROX", "TLBREAK", "TECHCLASSIC"}
+    stop_floor = {k: float(v) for k, v in (x.split(":") for x in
+                  os.getenv("REPLAY_STOP_FLOOR", "").split(",") if ":" in x)}
+    trend_gate = os.getenv("REPLAY_TREND_GATE", "").strip()
 
     Sim.tape = tape
     traveller = time_machine.travel(start.to_pydatetime().replace(tzinfo=timezone.utc), tick=False)
@@ -446,6 +461,12 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
             except Exception:
                 pass
             entry = float(c.planned_entry or 0)
+            widened = False
+            if stop_floor.get(trig) and entry > 0:
+                need = entry * stop_floor[trig] / 100.0
+                if abs(entry - float(c.sl)) < need:
+                    c.sl = entry - need if c.direction == "LONG" else entry + need
+                    widened = True
             cut = t - pd.Timedelta(hours=24)
             if any(g[0] >= cut and g[1] == c.direction and _near(entry, g[2], 0.0045)
                    and _near(c.sl, g[3], 0.0045) and _near(c.tp1, g[4], 0.012) for g in confirmed_geo):
@@ -474,6 +495,7 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
             tr.fill_deadline = t + pd.Timedelta(hours=float(expiry_hours_for(c.style, trig)))
             tr.feats = dict((c.metadata or {}).get("_rp_det") or {})
             tr.feats.update(confirmation_features(c, tape, t, ctf))
+            tr.feats["stop_widened"] = widened
             tr.lane = tr.feats.get("entry_type") or ("FAST" if tr.feats.get("fast_break") else "")
             trades.append(tr)
 
@@ -494,6 +516,15 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
                 F(c, "seen")
                 if c.score < S.educational_min_score:
                     F(c, "low_score"); continue
+                if trend_gate:
+                    d = tape.closed(trend_gate, t, 150)
+                    try:
+                        e = float(_ema(d["close"].astype(float), 50).iloc[-1])
+                        up = float(d["close"].iloc[-1]) > e
+                        if (c.direction == "LONG") != up:
+                            F(c, "trend_gate"); continue
+                    except Exception:
+                        pass
                 lane_q = str(c.setup_code).upper() in quality_lanes
                 if not lane_q:
                     holder = [a for a in active.values() if a.setup_code == c.setup_code
@@ -606,6 +637,8 @@ def main() -> None:
     ap.add_argument("--synthetic", action="store_true")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
+    for k, v in ARMS.get(a.arm, {}).items():
+        os.environ[k] = v
     if a.synthetic:
         base = synthetic_base(a.days + 170)
         tape = Tape("SYNTHUSDT", base)

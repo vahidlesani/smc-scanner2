@@ -33,7 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         symbol: [BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT, ADAUSDT, LINKUSDT, AVAXUSDT, SUIUSDT, BNBUSDT]
-        arm: [base, legacy]
+        arm: [base, stopfloor, oor4, trend4h, combo]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -48,10 +48,9 @@ jobs:
       - name: replay
         env:
           PYTHONPATH: .
-          # legacy = the pre-R31.4/R31.5 behaviour of the two toggleable fixes
-          CONFIRM_TL_EXTRAPOLATE: ${{ matrix.arm == 'legacy' && '0' || '1' }}
-          REPLAY_BUNDLE_30M: ${{ matrix.arm == 'legacy' && '0' || '1' }}
+        # arms (env toggles) are defined in replay_live_setups.ARMS
         run: |
+          set -o pipefail
           python experiments/replay_live_setups.py --symbol ${{ matrix.symbol }} \
             --days $REPLAY_DAYS --end $REPLAY_END --arm ${{ matrix.arm }} --out out 2>&1 | tail -n 40
       - uses: actions/upload-artifact@v4
