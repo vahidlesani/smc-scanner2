@@ -689,8 +689,9 @@ def _signal_chart_png(sid: str) -> Optional[bytes]:
     if _demo_mode():
         return _demo_chart_png()
     now = time.monotonic()
-    if _CHART_CACHE["key"] == sid and _CHART_CACHE["png"] and now - _CHART_CACHE["at"] < 90:
-        return _CHART_CACHE["png"]
+    # Telegram mirror is authoritative. Check it BEFORE the render cache so a
+    # fallback render created a moment earlier can never hide the exact
+    # Telegram image for the next 90 seconds.
     try:
         mirror = _app_mirror(sid, "chart") or {}
         fid = str(mirror.get("fid") or "")
@@ -701,6 +702,8 @@ def _signal_chart_png(sid: str) -> Optional[bytes]:
                 return data
     except Exception:
         pass
+    if _CHART_CACHE["key"] == sid and _CHART_CACHE["png"] and now - _CHART_CACHE["at"] < 90:
+        return _CHART_CACHE["png"]
     try:
         from database.db import db_cursor
         with db_cursor() as c:
