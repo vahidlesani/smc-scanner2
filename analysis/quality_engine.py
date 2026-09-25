@@ -215,9 +215,36 @@ def is_expired(candidate: SignalCandidate) -> bool:
 
 
 def is_invalidated(candidate: SignalCandidate, current_price: float) -> bool:
-    if candidate.direction == "LONG":
-        return current_price <= candidate.sl
-    return current_price >= candidate.sl
+    """r30 (Viva 09-26, «ابطال نمی‌تونه بین ناحیه باشه» + «موقع شکست نباید
+    ابطال بشه»): (1) an invalidation line INSIDE the entry zone is meaningless
+    — rallying INTO the zone (the whole point of a pre-confirm chain) crossed
+    it and murdered the scenario (LTC 69.404 inside 63.6-70.9). A pre-confirm
+    invalidation only counts when price CLOSES beyond a line that sits on the
+    PROTECTIVE side of the zone. (2) Once a chain is confirmed, the trade
+    lifecycle owns the stop — this gate steps aside."""
+    try:
+        px = float(current_price)
+        sl = float(candidate.sl or 0)
+        if sl <= 0:
+            return False
+        zb = float(candidate.entry_zone_bottom or 0)
+        zt = float(candidate.entry_zone_top or 0)
+        md = candidate.metadata or {}
+        if md.get("technical_confirmation_complete"):
+            if candidate.direction == "LONG":
+                return px <= sl
+            return px >= sl
+        if candidate.direction == "LONG":
+            if zb > 0 and sl >= zb:
+                return False
+            return px <= sl
+        if candidate.direction == "SHORT":
+            if zt > 0 and sl <= zt:
+                return False
+            return px >= sl
+        return False
+    except Exception:
+        return False
 
 
 def approaching_entry(candidate: SignalCandidate, current_price: float) -> Tuple[bool, float]:

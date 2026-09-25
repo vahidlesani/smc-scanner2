@@ -1208,6 +1208,20 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
                             is_break)
     if _lk:
         candidate.metadata["alert_lineage_key"] = _lk
+    # r30 (Viva 09-26): «ابطال نمی‌تونه بین ناحیه باشه» — the pre-confirm
+    # invalidation line must sit BEYOND the entry zone (protective side),
+    # never inside it; otherwise approaching the zone (the whole point)
+    # invalidates the scenario (LTC 69.404 inside 63.6-70.9).
+    try:
+        _zb30 = float(candidate.entry_zone_bottom)
+        _zt30 = float(candidate.entry_zone_top)
+        _sl30 = float(candidate.sl or 0)
+        if _sl30 > 0 and direction == "LONG" and _sl30 >= _zb30:
+            candidate.sl = round(_zb30 - buffer, 8)
+        elif _sl30 > 0 and direction == "SHORT" and 0 < _sl30 <= _zt30:
+            candidate.sl = round(_zt30 + buffer, 8)
+    except Exception:
+        pass
     # ── Viva 09-23 (round 20 ENTRY LAW): remember the MAJOR-pivot trendline
     # opposing this break (highest-TF validated 1d/4h/1h line on the break's
     # side) — confirmation must be a CLOSE beyond it, not just the tool line.

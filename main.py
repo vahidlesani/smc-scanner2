@@ -307,6 +307,12 @@ def run_discovery_scan() -> Dict[str, int]:
             stats["detected"] += len(candidates)
             for candidate in candidates:
                 _t(candidate)["seen"] += 1
+                # r30 anti-flood: this exact scenario was cancelled/expired
+                # recently — do NOT resurrect it as a «new» chain (the LTC
+                # invalidate→re-find→invalidate loop flooded 113 msgs/20min).
+                if _tombstone_hit(candidate):
+                    _t(candidate)["dup"] += 1
+                    continue
                 if candidate.score < SETTINGS.educational_min_score:
                     _t(candidate)["low_score"] += 1
                     continue
@@ -999,6 +1005,46 @@ def _watch_edge_at(candidate, ts) -> float:
                  else candidate.entry_zone_bottom)
 
 
+def _tombstone_key(candidate) -> str:
+    """r30 anti-flood tombstone: a CANCELLED/EXPIRED scenario fingerprint."""
+    try:
+        zm = (float(candidate.entry_zone_bottom) + float(candidate.entry_zone_top)) / 2.0
+        return "canceltomb|%s|%s|%s|%.4f" % (
+            candidate.symbol, candidate.setup_code, candidate.direction,
+            round(zm, 6))
+    except Exception:
+        return ""
+
+
+def _tombstone_write(candidate, hours: float = 12.0) -> None:
+    key = _tombstone_key(candidate)
+    if not key:
+        return
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        data = _g("cancel_tombstones", {}) or {}
+        data[key] = time.time()
+        # prune anything older than 24h
+        data = {k: v for k, v in data.items()
+                if time.time() - float(v) < 24 * 3600}
+        _s("cancel_tombstones", data)
+    except Exception as exc:
+        print(f"tombstone write skipped: {exc}")
+
+
+def _tombstone_hit(candidate, hours: float = 12.0) -> bool:
+    key = _tombstone_key(candidate)
+    if not key:
+        return False
+    try:
+        from database.bot_kv import get_json as _g
+        data = _g("cancel_tombstones", {}) or {}
+        ts = float(data.get(key) or 0)
+        return ts > 0 and time.time() - ts < hours * 3600
+    except Exception:
+        return False
+
+
 def _scenario_out_of_reach(candidate, price) -> bool:
     """Viva 09-21 («۵۱ آپدیت از ۱۸ دلار رفته ۲۸ دلار ربات هنوز منتظر مونده؟»).
 
@@ -1021,6 +1067,24 @@ def _scenario_out_of_reach(candidate, price) -> bool:
             return False
         if candidate.direction == "SHORT" and px > zone_mid:
             return False
+        # r30 (Viva 09-26, «موقع بریک نباید ابطال بشه — باید آپدیت و بعد
+        # تأیید بیاد»): a chain the market has ALREADY TOUCHED (or broken)
+        # that then ran beyond the zone in the scenario direction is a
+        # breakout in progress — the 09-21 close-out was for zones the
+        # market never came near, not for this. Monitor, alert the break,
+        # confirm on completion; never cancel success.
+        try:
+            _md30 = candidate.metadata or {}
+            _seen_it = bool(_md30.get("touched")) or bool(_md30.get("live_break_bar")) \
+                or str(_md30.get("tl_stage") or "") == "JUST_BROKE"
+            if _seen_it:
+                _zb = float(candidate.entry_zone_bottom); _zt = float(candidate.entry_zone_top)
+                if candidate.direction == "LONG" and px >= _zt:
+                    return False
+                if candidate.direction == "SHORT" and px <= _zb:
+                    return False
+        except Exception:
+            pass
         return abs(px - zone_mid) / atr > float(getattr(SETTINGS, "scenario_out_of_reach_atr", 2.0))
     except Exception:
         return False
@@ -1406,6 +1470,7 @@ def monitor_candidates() -> Dict[str, int]:
                     candidate.status = "CANCELLED"
                     candidate.metadata["cancel_reason"] = "OUT_OF_REACH"
                     update_candidate(candidate)
+                    _tombstone_write(candidate)
                     try:
                         cancel_staged_confirmation(candidate.signal_id)
                     except Exception:

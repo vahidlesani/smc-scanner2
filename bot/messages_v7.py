@@ -1328,8 +1328,11 @@ def _timing_lines(candidate: SignalCandidate) -> List[str]:
     late = _alert_lateness_minutes(candidate)
     if late >= STALE_WARN_MINUTES or md.get("stale_detection"):
         _late = int(md.get("stale_detection") or late)
-        rows.append(f"• ⚠️ این هشدار {_fa_num(_late)} دقیقه بعد از بسته‌شدن کندل منتشر شد؛ "
-                    "قبل از هر تصمیم، وضعیت لحظه‌ای بازار را ببین.")
+        # r30 (Viva 09-26): the old wording read as if THIS message arrived
+        # late — the delay belongs to the ORIGINAL alert candle, not to a
+        # message that is being sent right now.
+        rows.append(f"• ⏳ از کندلِ هشدارِ اولیه {_fa_num(_late)} دقیقه می‌گذرد — "
+                    "این پیام همین حالا ارسال شده؛ تصمیم فقط با قیمتِ لحظه‌ای.")
     return rows
 
 
@@ -3500,6 +3503,15 @@ def _send_photo_file_id(file_id: str, chat_id: str, label: str = "",
     return mid
 
 
+_CHAT_SEND_LOCKS: Dict[str, threading.Lock] = {}
+_CHAT_SEND_LOCKS_GUARD = threading.Lock()
+
+
+def _chat_send_lock(target) -> threading.Lock:
+    with _CHAT_SEND_LOCKS_GUARD:
+        return _CHAT_SEND_LOCKS.setdefault(str(target), threading.Lock())
+
+
 def _post_chart_then_text(chart, text: str, target, reply_to=None,
                           reply_markup=None, label: str = "", file_id: str = "") -> tuple:
     """Viva 2026-09-16 (verbatim ruling): «پیام مختصر رو بصورت کپشن نذار؛ اول
@@ -3509,17 +3521,22 @@ def _post_chart_then_text(chart, text: str, target, reply_to=None,
     split, never a detached caption tail, any length fits ONE message).
     The text message carries the chain (reply/markup) and its id is what the
     chain stores. Returns (photo_mid, text_mid)."""
-    photo_mid = 0
-    if file_id:
-        photo_mid = int(_send_photo_file_id(file_id, target, label=label,
-                                            reply_to_message_id=reply_to,
-                                            reply_markup=reply_markup) or 0)
-    elif chart:
-        photo_mid = int(send_photo(chart, label or "📊 چارت", target,
-                                   caption_limit=1024) or 0)
-    text_mid = int(send_message(text, target,
-                                reply_to_message_id=int(reply_to or 0) or None,
-                                reply_markup=reply_markup) or 0)
+    # r30 (Viva 09-26, «چارت میاد بعد پیامش چند پیام بعد»): the photo and its
+    # text must be ATOMIC per chat — a parallel send interleaving between them
+    # detached captions from their charts. One lock per chat serializes the
+    # pair; global pacing still applies inside the senders.
+    with _chat_send_lock(target):
+        photo_mid = 0
+        if file_id:
+            photo_mid = int(_send_photo_file_id(file_id, target, label=label,
+                                                reply_to_message_id=reply_to,
+                                                reply_markup=reply_markup) or 0)
+        elif chart:
+            photo_mid = int(send_photo(chart, label or "📊 چارت", target,
+                                       caption_limit=1024) or 0)
+        text_mid = int(send_message(text, target,
+                                    reply_to_message_id=int(reply_to or 0) or None,
+                                    reply_markup=reply_markup) or 0)
     return photo_mid, text_mid
 
 
@@ -3791,14 +3808,16 @@ def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
     # attached chart is LIVE up to the current candle — the «کندل مبدا» clock
     # below is the SIGNAL's origin, never the chart's age.
     try:
-        _now_clock = datetime.now(ZoneInfo("UTC")).strftime("%H:%M")
+        # r30 (Viva 09-26): «به تایم ایران چرا UTC میزنی» — Iran is fixed
+        # UTC+3:30, no DST; every user-facing clock is Tehran time.
+        _now_clock = datetime.now(ZoneInfo("Asia/Tehran")).strftime("%H:%M")
     except Exception:
         _now_clock = ""
     rows += [
         f"🏷 <b>{_e(badge)}</b>",
         VIVA_SEP,
         state_fa,
-        (f"📊 چارت پیوست: <b>لایو</b> — تا کندلِ جاری {_e(_now_clock)} UTC"
+        (f"📊 چارت پیوست: <b>لایو</b> — تا کندلِ جاری {_e(_now_clock)} به وقتِ ایران"
          if _now_clock else "📊 چارت پیوست: <b>لایو</b>"),
         "⛔ تأیید ورود نیست",
         VIVA_SEP,
@@ -5002,15 +5021,11 @@ def send_trade_close_event(event: dict) -> bool:
         f"━━━━━━━━━━━━━━━━━━\n📍 نتیجه: <b>{result_fa}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>"
     )
+    # r30 (Viva 09-26, «نتیجه نهایی نیاز به چارت لایو نداره»): the last TP/
+    # stop receipt already carries the live chart — the final verdict is a
+    # TEXT reply under that same anchor. No fresh render (CPU saved too).
     _view_note = ""
-    try:
-        candidate = _event_chart_candidate(event)
-        ladder = (candidate.metadata or {}).get("target_ladder") or {}
-        frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, *(ladder.get("targets") or []), (candidate.metadata or {}).get("current_trailing_sl", 0)])
-        chart = generate_chart(frame, candidate, confirmed=True) if frame is not None else None
-        _view_note = str((candidate.metadata or {}).get("chart_view_note") or "")
-    except Exception:
-        chart = None
+    chart = None
     if _view_note:
         text = text.replace("📌 <b>VIVAMON-Labs-Pro</b>",
                             f"{_view_note}\n📌 <b>VIVAMON-Labs-Pro</b>")

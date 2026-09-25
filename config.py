@@ -188,7 +188,9 @@ class Settings:
     technoclassic_cooldown_hours: float = 8.0
     technoclassic_symbols: str = ""
     # reality build (Viva bug report 2026-09-10)
-    technoclassic_pattern_tfs: str = "1h,4h,1d"
+    # r30 (Viva 09-26 verdict): «۳۰ دقیقه و ۲ ساعته هم بد نیست، خوبه —
+    # کیفیت بهتری داره» → 30m and 2h join the TechnoClassic pattern TFs.
+    technoclassic_pattern_tfs: str = "30m,1h,2h,4h,1d"
     technoclassic_reject_rate: float = 0.6
     technoclassic_stale_atr: float = 1.5
     technoclassic_htf_scoring: bool = True
