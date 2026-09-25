@@ -255,3 +255,11 @@
 - Labels-on-candles: zone chips' in-box chooser already avoided the candle envelope; the TOP-EDGE FALLBACK did not — it now walks the chip up in 0.035·yr steps (≤8) until clear of the envelope in its own x-range.
 - Backup-branch audit: r30-spot-mtf-chart-handoff content ALREADY fully in main (git diff empty on spot_engine); old 09-06/09-09 branches (pinval-zone-polarity, stage4-zone-policy) share NO merge base with main → direct merge forbidden (audit law); their zone-polarity ideas → future hand-ported patch. arena/01a0d606 branch = third agent's replay/floating-line fixes — queued for audited merge with approval.
 - tests/test_round29c_similarity_labels.py 3/3; suite 471P/1skip.
+
+## Round-29e — app SWR + confirmation-lineage rescue + funnel surface (his «هنداف بروز» round)
+- APP HANG («اپلیکیشن بالا نمیاد»): /app/api/state rebuilt INLINE on every 8s-TTL miss; one rebuild ≈60s on Railway → every poll spun. Fix: serve-while-revalidate (fresh≤8s instant; stale answered INSTANTLY + ONE bg thread rebuilds; cold boot builds once). SW shell cache bump viva-shell-r31→r29d (his browser drops the stale shell).
+- 2H/4H NO CONFIRMATIONS (since yesterday): cherry-picked R31.7b lineage fix — every rescan minted a NEW signal_id for the SAME broken edge (sloped line drifts 0.2 ATR/scan → 0.08-ATR lineage failed → alert re-created/superseded → confirm clock reset). Now alert_lineage_key = pivots' TIMESTAMPS (never move); keyed match only replaces on >1.0 ATR relocation; kill switch R317_LEGACY=1. Regression tests 2/2.
+- Cherry-pick discipline: their commit bundled audit-0925b P2/P5/P6 (live-time line value, flag drift gate, relabel leak) — NOT taken wholesale; first attempt replaced my pattern_engine (caught by suite: r26b/r29c source asserts red) → restored my file, hand-injected ONLY lineage (fns + _build_candidate hook). P2/P5/P6 + their 18-test audit = queued for full audited merge.
+- Funnel surfaced: payload.funnel = scan_summary KV in /app/api/state (per-cycle gate counters).
+- Railway wins today: heartbeat 12→3, render freeze, SWR single-rebuild, chart cache; state build off the request path.
+- Suite 473P/1skip.

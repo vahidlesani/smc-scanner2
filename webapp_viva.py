@@ -23,6 +23,7 @@ import hmac
 import io
 import json
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -360,14 +361,42 @@ def _ladder_hits(target_state_json: Any) -> tuple[bool, bool]:
 
 
 def _fetch_state() -> Dict[str, Any]:
+    """r29d SERVE-WHILE-REVALIDATE — «اپلیکیشن هنوز بالا نمیاد».
+
+    The old 8s snapshot cache rebuilt state INLINE on every miss, and one
+    rebuild costs ~60s on Railway — every poll past the TTL spun the browser
+    for a minute. Now: a fresh snapshot answers instantly; a STALE snapshot
+    answers INSTANTLY while one background thread rebuilds (at most one
+    concurrent rebuild — duplicate tabs no longer multiply DB/CPU work).
+    Cold boot still builds once inline (there is nothing to serve yet)."""
+    global _STATE_CACHE, _STATE_REBUILDING
+    if _demo_mode():
+        return _demo_payload()
+    _now = time.monotonic()
+    if _STATE_CACHE["state"] is not None and _now - _STATE_CACHE["at"] < 8.0:
+        return _STATE_CACHE["state"]
+    if _STATE_CACHE["state"] is not None:
+        if not _STATE_REBUILDING["flag"]:
+            _STATE_REBUILDING["flag"] = True
+
+            def _bg_rebuild():
+                try:
+                    _rebuild_state()
+                except Exception as _exc:
+                    print(f"state bg rebuild failed: {_exc}")
+                finally:
+                    _STATE_REBUILDING["flag"] = False
+
+            threading.Thread(target=_bg_rebuild, daemon=True).start()
+        return _STATE_CACHE["state"]
+    return _rebuild_state()
+
+
+def _rebuild_state() -> Dict[str, Any]:
     # Short server-side snapshot cache: the dashboard polls frequently, but the
     # underlying state is DB-heavy. This keeps refresh responsiveness while
     # preventing duplicate full DB snapshots across tabs/clients.
     global _STATE_CACHE
-    if not _demo_mode():
-        _now = time.monotonic()
-        if _STATE_CACHE["state"] is not None and _now - _STATE_CACHE["at"] < 8.0:
-            return _STATE_CACHE["state"]
     if _demo_mode():
         return _demo_payload()
     try:
@@ -601,6 +630,14 @@ def _fetch_state() -> Dict[str, Any]:
         payload = dict(demo=False, feed=feed, chains=chains, live_positions=live_positions, analytics=analytics, hits=hits,
                        control=control_state(), scanner=scanner,
                        server_time=datetime.now(TEHRAN).strftime("%Y-%m-%d %H:%M"))
+        # r29e: the discovery funnel (R31.1) is READABLE from the dashboard —
+        # «تا از قسمت داشبورد بتونم کنترل کنم نتایج رو»: which gate swallows
+        # candidates per cycle (dead_gate/quiet/liccap/low_score/...).
+        try:
+            from database.bot_kv import get_json as _gj9
+            payload["funnel"] = _gj9("scan_summary", {}) or {}
+        except Exception:
+            payload["funnel"] = {}
         _STATE_CACHE.update(state=payload, at=time.monotonic())
         return payload
     except Exception as exc:
@@ -958,6 +995,7 @@ def api_logout():
 
 
 _STATE_CACHE: Dict[str, Any] = {"state": None, "at": 0.0}
+_STATE_REBUILDING = {"flag": False}
 
 
 @viva_app.route("/app/api/state")
@@ -1024,7 +1062,7 @@ self.addEventListener('fetch', e => {
   if (url.pathname.startsWith('/app/api/')) return;         // live data: always network
   const hit = SHELL.find(([p]) => url.pathname === p);
   if (hit) {
-    e.respondWith(caches.open('viva-shell-r31').then(async c => {
+    e.respondWith(caches.open('viva-shell-r29d').then(async c => {
       const cached = await c.match(e.request);
       const fetchP = fetch(e.request).then(r => { c.put(e.request, r.clone()); return r; }).catch(() => cached);
       return cached || fetchP;
