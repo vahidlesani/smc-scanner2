@@ -182,6 +182,7 @@ _QUIET_RUN = 0
 # unresolved-chain / same-zone / 24h licence suppression. Their own detector
 # geometry, score, sanity and duplicate checks remain active.
 _STRUCTURAL_QUALITY_LANES = frozenset({"ALBROX", "TLBREAK", "TECHCLASSIC"})
+_DISCOVERY_TFS = ("1d", "4h", "1h", "30m", "15m", "5m")
 
 
 # ── Round-15 cost guard (Viva 09-21: «ببین استفاده الکی نداشته باشیم»).
@@ -285,7 +286,11 @@ def run_discovery_scan() -> Dict[str, int]:
         if _SHUTDOWN:
             break
         try:
-            bundle = get_market_bundle(symbol, ticker=metrics.get(symbol, {}))
+            # FIX (R31.5): 30m is part of the live bundle. R31.2 moved the
+            # PINVAL/PINWALLQ DAYTRADE trigger to 30m, but the default bundle
+            # never carried a 30m frame, so that stream silently produced
+            # nothing. 30m is resampled from the same 15m tape (no extra call).
+            bundle = get_market_bundle(symbol, _DISCOVERY_TFS, ticker=metrics.get(symbol, {}))
             # ── Round-15: no new closed candle on any detection timeframe and no
             # open chain on this symbol ⇒ nothing can be detected that the last
             # pass did not already see. (Guarded, fail-open, 15-min window.)

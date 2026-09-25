@@ -931,7 +931,11 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         # Viva 09-20 round 11: «فرمول ریسک به ریوارد … اصلا اهمیت نداره» and
         # «همه این تغییرات روی همه ستاپها» → the PINVAL R:R floors are gone
         # (the ratios are reported on the message only).
-        tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}.get(str(tf), 300)
+        # FIX (R31.5): 30m was missing → it fell back to 300s, and a 30m pin
+        # (age ≥ 1800s at its own close) could never pass the 2×TF freshness
+        # guard below — every DAYTRADE PINVAL was dropped at birth.
+        tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600,
+                      "4h": 14400, "1d": 86400}.get(str(tf), 300)
         # Legacy one-direction / one-zone band-aid filters. When the polarity
         # gate is active it already decides correct direction + zone polarity
         # (including valid SHORTs at supply and post-break flips), so these
