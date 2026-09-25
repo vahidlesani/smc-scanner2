@@ -31,6 +31,76 @@ def load(indir: str):
     return pd.DataFrame(rows), fun
 
 
+def load_fates(indir: str) -> pd.DataFrame:
+    rows = []
+    for p in glob.glob(os.path.join(indir, "**", "fates__*.jsonl"), recursive=True):
+        with open(p) as fh:
+            rows += [json.loads(x) for x in fh if x.strip()]
+    return pd.DataFrame(rows)
+
+
+def _codes(series) -> str:
+    tot: Dict[str, int] = defaultdict(int)
+    for d in series:
+        for k, v in (d or {}).items():
+            tot[k] += int(v)
+    s = sum(tot.values()) or 1
+    return ", ".join(f"{k} {100*v/s:.0f}%" for k, v in sorted(tot.items(), key=lambda x: -x[1])[:4])
+
+
+def _fate_row(key: str, g: pd.DataFrame, total: int) -> str:
+    tch = g[g["sh_touched"].astype(bool)]
+    dec = tch[tch["sh_outcome"].astype(int) != 0]
+    wr = 100.0 * (dec["sh_outcome"].astype(int) > 0).mean() if len(dec) else float("nan")
+    avg = tch["sh_r"].astype(float).mean() if len(tch) else float("nan")
+    dist = g["dist_atr"].astype(float).median() if "dist_atr" in g and g["dist_atr"].notna().any() else float("nan")
+    return (f"| {key} | {len(g)} | {100*len(g)/max(total,1):.0f}% | {g['alive_h'].astype(float).median():.1f} | "
+            f"{g['n_eval'].astype(float).median():.0f} | {dist:.1f} | {100*len(tch)/max(len(g),1):.0f}% | "
+            f"{wr:.0f}% | {avg:+.3f} | {_codes(g['rej'])} |")
+
+
+FHDR = ("| slice | n | share | alive h (med) | evals (med) | dist ATR (med) | shadow touched | "
+        "shadow TP1-first | shadow avgR | top reject codes |\n|---|---|---|---|---|---|---|---|---|---|")
+
+
+def fates_report(fd: pd.DataFrame) -> str:
+    """Why tracked scenarios die + what the unconfirmed plan would have done
+    (shadow = entry touched → TP1 before stop inside the expiry window; looks
+    ahead, diagnostic only)."""
+    L = ["# Candidate fates (R31.6 diagnostic)\n",
+         "shadow: after detection, was the planned entry touched within the expiry window, and did TP1 print "
+         "before the stop (same bar = stop)? shadow R = +TP1/R or −1, minus fee; 0 if neither. It ignores the "
+         "ladder, so it is a proxy for the quality of the plan, not a PnL.\n"]
+    for arm, a in fd.groupby("arm"):
+        a = a.copy()
+        a["key"] = a["setup"] + "|" + a["tf"]
+        L.append(f"\n## arm `{arm}`\n")
+        L.append("### setup|tf × fate\n")
+        L.append(FHDR)
+        for key, g in a.groupby("key"):
+            tot = len(g)
+            L.append(_fate_row(f"**{key}** all", g, tot))
+            for fz, h in g.groupby("fate"):
+                L.append(_fate_row(f"{key} · {fz}", h, tot))
+        tc = a[a["setup"] == "TECHCLASSIC"]
+        if not tc.empty:
+            L.append("\n### TECHCLASSIC kind × fate\n")
+            L.append(FHDR)
+            for (tf, kind), g in tc.groupby(["tf", "kind"]):
+                tot = len(g)
+                for fz, h in g.groupby("fate"):
+                    L.append(_fate_row(f"{tf} {kind} · {fz}", h, tot))
+            L.append("\n### TECHCLASSIC pattern (all TFs)\n")
+            L.append(FHDR)
+            for pt, g in tc.groupby("pattern"):
+                L.append(_fate_row(pt or "?", g, len(tc)))
+            L.append("\n### TECHCLASSIC confirm-edge source / major line TF\n")
+            L.append(FHDR)
+            for (es, mt), g in tc.groupby(["edge_src", "major_tf"]):
+                L.append(_fate_row(f"edge={es or 'tool'} major={mt or '-'}", g, len(tc)))
+    return "\n".join(L) + "\n"
+
+
 def stats(d: pd.DataFrame, col: str = R) -> Dict:
     d = d[d["state"] == "CLOSED"]
     n = len(d)
@@ -80,6 +150,7 @@ def main() -> None:
     ap.add_argument("--md", default="replay_report.md")
     ap.add_argument("--csv", default="replay_trades.csv")
     ap.add_argument("--is-frac", type=float, default=0.70)
+    ap.add_argument("--fates-md", default="fates.md")
     a = ap.parse_args()
     df, fun = load(a.indir)
     L: List[str] = ["# Replay report (R31.5)\n"]
@@ -199,6 +270,10 @@ def main() -> None:
     md = "\n".join(L) + "\n"
     with open(a.md, "w") as fh:
         fh.write(md)
+    fd = load_fates(a.indir)
+    if not fd.empty:
+        with open(a.fates_md, "w") as fh:
+            fh.write(fates_report(fd))
     if not df.empty:
         keep = ["arm", "symbol", "setup", "tf", "style", "dir", "lane", "score", "confirmed_at", "filled_at",
                 "closed_at", "state", "reason", "risk_pct", "tp1_pct", "tp1_r", "hit", "r_gross", "r_net",

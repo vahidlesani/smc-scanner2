@@ -126,3 +126,28 @@ def test_weak_confirm_bar_filter(monkeypatch):
     assert qf.weak_confirm_bar(_cand(), weak_body) is not None
     assert qf.weak_confirm_bar(_cand(), not_beyond) is not None
     assert qf.weak_confirm_bar(_cand("SHORT", sl=101.0), strong) is not None
+
+
+def test_trend_band_neutral_zone(monkeypatch):
+    from analysis import quality_filters as qf
+    n = 80
+    close = [100.0 + 0.01 * i for i in range(n)]          # hugging its EMA
+    df = pd.DataFrame({"close": close, "high": [c + 1 for c in close], "low": [c - 1 for c in close]})
+
+    class B:
+        def get(self, k):
+            return df if k == "4h" else None
+    assert qf.htf_trend_aligned(B(), "SHORT", band_atr=0.0) is False
+    assert qf.htf_trend_aligned(B(), "SHORT", band_atr=0.5) is None     # neutral → never blocks
+    monkeypatch.setenv("HTF_TREND_BAND", "0.5")
+    assert qf.htf_trend_aligned(B(), "SHORT") is None
+
+
+def test_oor_reference(monkeypatch):
+    from analysis import quality_filters as qf
+    c = _cand()
+    c.entry_zone_bottom, c.entry_zone_top, c.planned_entry = 96.0, 100.0, 100.0
+    monkeypatch.delenv("OOR_REF", raising=False)
+    assert qf.oor_reference(c) == 98.0
+    monkeypatch.setenv("OOR_REF", "entry")
+    assert qf.oor_reference(c) == 100.0

@@ -71,6 +71,10 @@ ARMS: Dict[str, Dict[str, str]] = {
     # top of the production trend gate
     "b4": {"MIN_CONFIRM_BAR": "1"},
     "trendb4": {"HTF_TREND_GATE": "4h", "MIN_CONFIRM_BAR": "1"},
+    # round 4 (R31.6): soft trend gate — neutral band around the 4h EMA50
+    "prodsoft05": {"HTF_TREND_GATE": "4h", "HTF_TREND_BAND": "0.5", "MIN_STOP_FLOOR": "1"},
+    "prodsoft10": {"HTF_TREND_GATE": "4h", "HTF_TREND_BAND": "1.0", "MIN_STOP_FLOOR": "1"},
+    "oorentry": {"OOR_REF": "entry"},
 }
 
 TF_MIN = {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}
@@ -99,6 +103,8 @@ class Tape:
         for tf, d in self.df.items():
             ts = pd.to_datetime(d["timestamp"]).values.astype("datetime64[ns]").astype(np.int64)
             self.close_ns[tf] = ts + TF_MIN[tf] * 60 * 10**9
+        self._h5 = self.df["5m"]["high"].astype(float).values
+        self._l5 = self.df["5m"]["low"].astype(float).values
         t15 = self.df["15m"]
         self._turn_cum = np.cumsum(t15["turnover"].fillna(t15["close"] * t15["volume"]).values)
 
@@ -115,6 +121,38 @@ class Tape:
         if tf in ("5m", "15m", "4h", "1d"):
             cols = cols + ["turnover"]
         return self.df[tf].iloc[max(0, i - int(n)):i][cols].reset_index(drop=True)
+
+    def first_hit(self, t: pd.Timestamp, direction: str, entry: float, sl: float, tp: float,
+                  hours: float) -> Dict:
+        """DIAGNOSTIC ONLY (looks ahead, never feeds a decision): after t, is
+        the entry touched inside `hours`, and does TP1 or the stop print first
+        (same 5m bar = stop, conservative)?"""
+        out = {"touched": False, "outcome": 0, "hours": None}
+        try:
+            i0 = self._idx("5m", t)
+            i1 = self._idx("5m", t + pd.Timedelta(hours=float(hours)))
+            hi, lo = self._h5[i0:i1], self._l5[i0:i1]
+            if len(hi) == 0 or not (entry > 0 and sl > 0 and tp > 0):
+                return out
+            touch = np.nonzero((lo <= entry) & (hi >= entry))[0]
+            if len(touch) == 0:
+                return out
+            k = int(touch[0])
+            hi, lo = hi[k:], lo[k:]
+            if str(direction).upper() == "LONG":
+                s_hit, t_hit = np.nonzero(lo <= sl)[0], np.nonzero(hi >= tp)[0]
+            else:
+                s_hit, t_hit = np.nonzero(hi >= sl)[0], np.nonzero(lo <= tp)[0]
+            si = int(s_hit[0]) if len(s_hit) else 10**9
+            ti = int(t_hit[0]) if len(t_hit) else 10**9
+            out["touched"] = True
+            if si == ti == 10**9:
+                return out
+            out["outcome"] = 1 if ti < si else -1
+            out["hours"] = round((k + min(si, ti)) * 5 / 60.0, 2)
+        except Exception:
+            pass
+        return out
 
     def forming(self, tf: str, t: pd.Timestamp) -> Optional[pd.DataFrame]:
         """The live (forming) candle at t, built from closed 5m bars."""
@@ -222,7 +260,8 @@ def out_of_reach(c, price, atr_mult) -> bool:
         atr = float((c.metadata or {}).get("atr") or 0)
         if atr <= 0 or price is None:
             return False
-        mid = (float(c.entry_zone_bottom) + float(c.entry_zone_top)) / 2.0
+        from analysis.quality_filters import oor_reference
+        mid = oor_reference(c)          # production reference (zone mid unless OOR_REF=entry)
         if c.direction == "LONG" and price < mid:
             return False
         if c.direction == "SHORT" and price > mid:
@@ -377,6 +416,52 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
     def F(c, key, n=1):
         funnel[f"{c.setup_code}|{str(c.trigger_timeframe).lower()}"][key] += n
 
+    # ── candidate-fate diagnostics (R31.6): why do tracked scenarios die, and
+    # would the unconfirmed plan have worked? Pure bookkeeping — the shadow
+    # outcome looks ahead and never feeds any decision.
+    fates: List[Dict] = []
+    rej: Dict[str, Dict[str, int]] = {}
+    snap: Dict[str, Dict] = {}
+
+    def note_eval(c):
+        code = str((c.metadata or {}).get("last_reject_code") or "NONE")
+        d = rej.setdefault(c.signal_id, {})
+        d[code] = d.get(code, 0) + 1
+
+    def fate(c, how: str, extra: Optional[Dict] = None):
+        sid = c.signal_id
+        sn = snap.pop(sid, None)
+        codes = rej.pop(sid, {})
+        if sn is None:
+            return
+        md = c.metadata or {}
+        tc = md.get("technoclassic") or {}
+        risk = abs(sn["entry"] - sn["sl"])
+        row = {"setup": c.setup_code, "tf": str(c.trigger_timeframe).lower(), "dir": c.direction,
+               "kind": str(tc.get("kind") or md.get("viva_entry_type") or ""),
+               "pattern": str(md.get("viva_pattern") or md.get("pattern_type") or "")[:24],
+               "fate": how, "t_det": str(sn["t"]), "alive_h": round((t - sn["t"]).total_seconds() / 3600, 2),
+               "n_eval": int(sum(codes.values())),
+               "rej": dict(sorted(codes.items(), key=lambda x: -x[1])[:4]),
+               "risk_pct": round(risk / sn["entry"] * 100, 3) if sn["entry"] else None,
+               "tp1_r": round(abs(sn["tp1"] - sn["entry"]) / risk, 3) if risk else None,
+               "edge_src": str(md.get("confirm_edge_source") or ""),
+               "major_tf": str(md.get("viva_major_break_line_tf") or "")}
+        sh = tape.first_hit(sn["t"], c.direction, sn["entry"], sn["sl"], sn["tp1"], sn["hours"])
+        fee_r = (2 * fee_pct / row["risk_pct"]) if row["risk_pct"] else 0.0
+        row.update({"sh_touched": sh["touched"], "sh_outcome": sh["outcome"], "sh_hours": sh["hours"],
+                    "sh_r": round((row["tp1_r"] or 0.0) - fee_r if sh["outcome"] > 0
+                                  else (-1.0 - fee_r if sh["outcome"] < 0 else 0.0), 4)})
+        try:
+            if price is not None and float((c.metadata or {}).get("atr") or 0) > 0:
+                mid = (float(c.entry_zone_bottom) + float(c.entry_zone_top)) / 2.0
+                row["dist_atr"] = round(abs(price - mid) / float(c.metadata["atr"]), 2)
+        except Exception:
+            pass
+        if extra:
+            row.update(extra)
+        fates.append(row)
+
     t = start
     step = pd.Timedelta(minutes=5)
     while t <= end:
@@ -443,9 +528,9 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
         for sid in list(active):
             c = active[sid]
             if qe.is_expired(c):
-                F(c, "expired"); del active[sid]; continue
+                F(c, "expired"); fate(c, "expired"); del active[sid]; continue
             if price is not None and qe.is_invalidated(c, price):
-                F(c, "invalidated"); del active[sid]; continue
+                F(c, "invalidated"); fate(c, "invalidated"); del active[sid]; continue
             trig = str(c.trigger_timeframe or "").lower()
             ctf = str((c.metadata or {}).get("confirm_tf") or trig).lower()
             if ctf not in TF_MIN:
@@ -455,12 +540,16 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
             pat = tape.closed(trig, t, 139) if ctf != trig else None
             if tape.is_close(ctf, t):
                 confirmed, c, _ = qe.evaluate_confirmation(c, tape.closed(ctf, t, 139), htf_closed_df=pat)
+                if not confirmed:
+                    note_eval(c)
             if not confirmed and late and late != ctf and late in TF_MIN and tape.is_close(late, t):
                 confirmed, c, _ = qe.evaluate_confirmation(c, tape.closed(late, t, 139), htf_closed_df=pat)
+                if not confirmed:
+                    note_eval(c)
             active[sid] = c
             if not confirmed:
                 if out_of_reach(c, price, oor_atr):
-                    F(c, "out_of_reach"); del active[sid]
+                    F(c, "out_of_reach"); fate(c, "out_of_reach"); del active[sid]
                 continue
             del active[sid]
             try:
@@ -477,14 +566,15 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
             cut = t - pd.Timedelta(hours=24)
             if any(g[0] >= cut and g[1] == c.direction and _near(entry, g[2], 0.0045)
                    and _near(c.sl, g[3], 0.0045) and _near(c.tp1, g[4], 0.012) for g in confirmed_geo):
-                F(c, "geo_dup"); continue
+                F(c, "geo_dup"); fate(c, "geo_dup"); continue
             try:
                 lad = build_ladder(entry, c.sl, c.direction, c.market, c.tp2, structural_tp1=c.tp1,
                                    fee_pct=ladder_fee, trigger_tf=trig,
                                    wall_level=float((c.metadata or {}).get("internal_wall") or 0.0))
             except Exception:
-                F(c, "ladder_error"); continue
+                F(c, "ladder_error"); fate(c, "ladder_error"); continue
             F(c, "confirmed")
+            fate(c, "confirmed", {"conf_h": round((t - snap.get(c.signal_id, {}).get("t", t)).total_seconds() / 3600, 2)})
             confirmed_geo.append((t, c.direction, entry, float(c.sl), float(c.tp1 or 0)))
             last_conf_entry[(c.setup_code, trig)] = entry
             tr = Trade()
@@ -567,20 +657,26 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
                 # supersede an earlier unconfirmed alert of the same lineage
                 for sid in [s for s, a in active.items() if a.setup_code == c.setup_code
                             and str(a.trigger_timeframe).lower() == trig and a.direction == c.direction]:
-                    F(active[sid], "superseded"); del active[sid]
+                    F(active[sid], "superseded"); fate(active[sid], "superseded"); del active[sid]
                 try:
                     c.metadata["_rp_det"] = detection_features(c, tape, t)
                 except Exception:
                     pass
                 active[c.signal_id] = c
+                try:
+                    snap[c.signal_id] = {"t": t, "entry": float(c.planned_entry or 0), "sl": float(c.sl or 0),
+                                         "tp1": float(c.tp1 or 0),
+                                         "hours": float(expiry_hours_for(c.style, trig))}
+                except Exception:
+                    pass
                 history.append({"setup": c.setup_code, "tf": trig, "t": t, "sid": c.signal_id,
                                 "zone": float(c.zone_mid)})
                 F(c, "tracked")
         t += step
 
     traveller.stop()
-    for c in active.values():
-        F(c, "open_at_end")
+    for c in list(active.values()):
+        F(c, "open_at_end"); fate(c, "open_at_end")
     rows = [tr.as_row(fee_pct, slip_pct) for tr in trades]
     out_dir.mkdir(parents=True, exist_ok=True)
     tag = f"{tape.symbol}__{arm}"
@@ -591,6 +687,10 @@ def run(tape: Tape, start: pd.Timestamp, end: pd.Timestamp, arm: str, out_dir: P
     summary = {"symbol": tape.symbol, "arm": arm, "start": str(start), "end": str(end),
                "scans": n_scans, "scan_sec": round(scan_time, 1),
                "funnel": {k: dict(v) for k, v in funnel.items()}, "trades": len(rows)}
+    with open(out_dir / f"fates__{tag}.jsonl", "w") as fh:
+        for r in fates:
+            r["arm"], r["symbol"] = arm, tape.symbol
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
     with open(out_dir / f"funnel__{tag}.json", "w") as fh:
         json.dump(summary, fh, ensure_ascii=False, indent=1)
     return summary

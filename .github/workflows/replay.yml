@@ -35,7 +35,8 @@ jobs:
         symbol: [BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT, ADAUSDT, LINKUSDT, AVAXUSDT, SUIUSDT, BNBUSDT]
         # round 1: base,legacy · round 2: base,stopfloor,oor4,trend4h,combo
         # round 3a (3e10dc3): base,prodfilters,trend4h · round 3b (e89991e): b4,trendb4
-        arm: [base, prodfilters]
+        # round 4 (R31.6): candidate-fate diagnostics + soft trend band
+        arm: [base, prodsoft05, prodsoft10, oorentry]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -80,10 +81,11 @@ jobs:
       - name: publish via Checks API
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python experiments/replay_publish.py report.md trades.csv
+        run: python experiments/replay_publish.py report.md trades.csv fates.md
       - uses: actions/upload-artifact@v4
         with:
           name: replay-report
           path: |
             report.md
             trades.csv
+            fates.md

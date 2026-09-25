@@ -45,6 +45,12 @@ def main() -> None:
     post("replay-report", "Walk-forward replay of live setups", parts[0][:LIMIT], "\n".join(parts[1:2]) or "-")
     for i, extra in enumerate(parts[2:], 2):
         post(f"replay-report-{i}", "report continued", "continued", extra)
+    fates_path = sys.argv[3] if len(sys.argv) > 3 else "fates.md"
+    if os.path.exists(fates_path):
+        fparts = list(chunks(open(fates_path).read(), LIMIT))
+        post("replay-fates", "Candidate fates (why scenarios die)", fparts[0], "\n".join(fparts[1:2]) or "-")
+        for i, extra in enumerate(fparts[2:], 2):
+            post(f"replay-fates-{i}", "fates continued", "continued", extra)
     if os.path.exists(csv_path):
         csv = open(csv_path).read()
         header, body = csv.split("\n", 1) if "\n" in csv else (csv, "")

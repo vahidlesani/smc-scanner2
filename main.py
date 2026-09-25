@@ -994,7 +994,8 @@ def _scenario_out_of_reach(candidate, price) -> bool:
         atr = float(md.get("atr") or 0) or 0.0
         if atr <= 0:
             return False
-        zone_mid = (float(candidate.entry_zone_bottom) + float(candidate.entry_zone_top)) / 2.0
+        from analysis.quality_filters import oor_reference
+        zone_mid = oor_reference(candidate)
         px = float(price)
         if candidate.direction == "LONG" and px < zone_mid:
             return False
@@ -1379,7 +1380,8 @@ def monitor_candidates() -> Dict[str, int]:
                 # chain alive for days.
                 if not candidate.metadata.get("technical_confirmation_complete") \
                         and _scenario_out_of_reach(candidate, current_price):
-                    _zone_mid = (float(candidate.entry_zone_bottom) + float(candidate.entry_zone_top)) / 2.0
+                    from analysis.quality_filters import oor_reference as _oor_ref
+                    _zone_mid = _oor_ref(candidate)
                     _atr_md = float((candidate.metadata or {}).get("atr") or 0) or 0.0
                     _far = abs(float(current_price) - _zone_mid) / _atr_md if _atr_md else 0.0
                     candidate.status = "CANCELLED"
