@@ -2991,6 +2991,9 @@ def build_educational_message(candidate: SignalCandidate) -> str:
         f"سطح ابطال سناریو: <b>{_price(candidate.sl)}</b>\n"
         + ("🛑 استاپ ساختاری دورتر از سقفِ این تایم‌فریم بود؛ طبق قانون ۰۹-۲۱ استاپ روی سقف "
            "تنظیم شد و سناریو حفظ شد.\n" if (candidate.metadata or {}).get("stop_clamped") else "")
+        + (f"🎯 <b>ورود دوم ریسکی PINWALL: {_price(float((candidate.metadata or {}).get('pinwall_entry2')))}</b>\n"
+           f"این ورود فقط برای PINWALL است؛ بعد از کلوز معتبر، نزدیک سویینگ محلی قرار می‌گیرد و استاپ اصلی پشت همان سویینگ می‌ماند.\n"
+           if candidate.setup_code in {"PINVAL","PINWALLQ"} and float((candidate.metadata or {}).get("pinwall_entry2") or 0) > 0 else "")
         +
         f"{VIVA_SEP}\n"
         + _confirm_rule_block(candidate) + "\n"
@@ -4209,6 +4212,7 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         VIVA_SEP,
         f"🎯 Entry: <b>{_price(candidate.planned_entry)}</b>",
         f"🛑 First Stop: <b>{_price(candidate.sl)}</b>",
+        *([f"🎯 PinWall Entry 2: <b>{_price(float((candidate.metadata or {}).get('pinwall_entry2')))}</b>"] if candidate.setup_code in {"PINVAL","PINWALLQ"} and float((candidate.metadata or {}).get("pinwall_entry2") or 0) > 0 else []),
         f"📈 Live Price: <b>{_price(float((candidate.metadata or {}).get('live_price') or candidate.planned_entry))}</b>",
         *[f"🏁 TP{i+1}: {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [50, 30, 20])))],
         # Viva 09-20 (third time, verbatim): «فرمول ریسک به ریوارد ... اصلا
