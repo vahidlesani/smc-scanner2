@@ -684,7 +684,12 @@ EXPERIMENTAL_DETECTORS = [detect_pattern_1234]
 SETUP_NAMES["PINVAL"] = "Valid Pinbar in Important Zone (alert)"
 SETUP_NAMES_FA["PINVAL"] = "پین‌بار معتبر در ناحیه مهم"
 
-PINVAL_TF_BY_STYLE = {"SWING": ("1h",), "DAYTRADE": ("15m",), "SCALP": ("5m",)}
+# PinWall/PINWALLQ primary trigger ladder.
+# DAYTRADE uses 30m as the primary trigger: it gives the zone/close more
+# structure and materially reduces the 15m noise that was dominating the feed.
+# 15m remains available to the other setup families (TLBREAK/TECHCLASSIC etc.);
+# this change is deliberately local to the PinWall family.
+PINVAL_TF_BY_STYLE = {"SWING": ("1h",), "DAYTRADE": ("30m",), "SCALP": ("5m",)}
 
 
 def _unmitigated_fvg_edge(df, direction: str, atr_v: float, lookback: int = 60):
