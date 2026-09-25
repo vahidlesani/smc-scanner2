@@ -86,7 +86,11 @@ def test_wedge_upper_break_confirms_long_and_never_short():
                 setup_code="PINVAL", setup_name="پین‌بار", strategy_fa="مدل وج",
                 score=9, status="PENDING", rr_tp1=1.5, rr_tp2=4.0,
                 trigger_timeframe="1d", mandatory_gates={"zone": True},
-                created_at=TS[140].isoformat())
+                # wall-clock-proof (r28): the fixture tape ends 2026-09-24; a
+                # default created_at=now() silently emptied `_bars_since_candidate`
+                # once the calendar moved past the last bar (NO_NEW_BAR at
+                # 09-25). The candidate is pinned BEFORE its own tape forever.
+                created_at="2026-09-20T00:00:00+00:00")
     long = SignalCandidate(
         direction="LONG", bias="BULLISH",
         entry_zone_bottom=zone_top - 0.0035, entry_zone_top=zone_top,

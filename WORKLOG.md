@@ -235,3 +235,10 @@
 - dashboard/app.py: _BOOT_SHA priority RAILWAY_GIT_COMMIT_SHA → COMMIT_SHA → BUILD_INFO file → "unknown"; /health now returns boot_sha + boot_at (legacy keys intact).
 - tests/test_health_fingerprint.py 2/2 (module-reload pattern for env pinning); suite 432P/1skip.
 - Note for future rounds: fresh containers wipe .git/config AND pip deps — reinstall list + remote rebuild from tokens.env (GITHUB_TOKEN rotated 09-24 after old ghp_ token revoked).
+
+## Round-28 — smart zoom + line locality + heartbeat cap (his 11-screenshot audit)
+- ROOT CAUSES (evidence): (1) y-finalize = min/max(candles ∪ entry ∪ SL ∪ TP) + 6% → DASH 1D stop 13.3 vs price 62 crammed candles into top ~14%; (2) no floor/occupancy → WLD 1H 80% fill on ~5-cent span; (3) TECHCLASSIC lines reused TLBREAK full-frame left-extension → RENDER 4H chart-edge «X»; (4) heartbeat 12/chain per candle with fresh countdown → hash never swallows + full re-render each (Railway CPU).
+- Fixes: _smart_y_window() (candle box = 72% of axis, floor max(4·ATR, 2.5% mid, 0.5·span), overlay extension capped 0.45·span/side, 5% pad) wired into generate_chart finalize; tc_clean lines pivot-local (≤15% lead-in), TLBREAK edge law untouched; max_chain_heartbeats 12→3 (env override).
+- Wall-clock-fragile fixture fixed: test_round23_model_law created_at pinned before its tape (NO_NEW_BAR after calendar roll).
+- tests/test_round28_smart_zoom.py 6/6; suite 438P/1skip.
+- Leftover spotted: DASH lifecycle FIRST STOP 13.297 (−79% from live) violates the stop-ceiling law (1d ≤ 8%) — separate round queued.

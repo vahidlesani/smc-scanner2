@@ -1464,6 +1464,43 @@ def _clean_render_frame(df: pd.DataFrame, window: int = 150) -> pd.DataFrame:
     return frame
 
 
+def _smart_y_window(c_lo: float, c_hi: float, atr: float,
+                    ov_lo: Optional[float] = None,
+                    ov_hi: Optional[float] = None) -> Optional[tuple]:
+    """r28 SMART price zoom — «زوم در هر دو جهت جمع شدن و باز شدن … هوشمند».
+
+    The candles own ~72% of the axis height: never the whole frame (WLD 1H —
+    80% fill on a ~5-cent span, patterns unreadable, tool looks stupid), and
+    never crammed into the top 5% because a far POI/stop dragged the axis
+    (DASH 1D — stop 13.3 vs price 62). Floors give structure room; entry/SL/TP
+    overlays may widen the window by at most 45% of the candle span per side —
+    beyond that they are CLIPPED, not obeyed. Returns (ylo, yhi) or None."""
+    try:
+        c_lo, c_hi = float(c_lo), float(c_hi)
+    except Exception:
+        return None
+    if not (math.isfinite(c_lo) and math.isfinite(c_hi)) or c_hi <= c_lo:
+        return None
+    span = c_hi - c_lo
+    mid = 0.5 * (c_lo + c_hi)
+    try:
+        _a = float(atr)
+    except Exception:
+        _a = 0.0
+    if not (math.isfinite(_a) and _a > 0):
+        _a = span / 10.0
+    floor = max(4.0 * _a, 0.025 * mid, 0.5 * span)
+    window = max(span, floor) / 0.72
+    ylo, yhi = mid - 0.5 * window, mid + 0.5 * window
+    cap = 0.45 * span
+    if ov_hi is not None and math.isfinite(float(ov_hi)) and float(ov_hi) > c_hi:
+        yhi = max(yhi, c_hi + min(float(ov_hi) - c_hi, cap))
+    if ov_lo is not None and math.isfinite(float(ov_lo)) and float(ov_lo) < c_lo:
+        ylo = min(ylo, c_lo - min(c_lo - float(ov_lo), cap))
+    yr = max(yhi - ylo, 1e-12)
+    return ylo - 0.05 * yr, yhi + 0.05 * yr
+
+
 def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool = False) -> Optional[bytes]:
     """Render a branded TradingView-inspired 1440×900 chart."""
     if df is None or df.empty:
@@ -2598,7 +2635,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _pmin = float(frame["low"].min())
                     _pmax = float(frame["high"].max())
                     x0 = min(xs)
-                    if abs(slope) > 1e-12:
+                    if md.get("tc_clean"):
+                        # r28 (his «ترندهای احمقانه وسط چارت»): TECHCLASSIC
+                        # pattern lines respect PIVOT LOCALITY — they start at
+                        # their own first pivot (at most 15% of the pivot span
+                        # of lead-in), never as a chart-edge diagonal crossing
+                        # the whole tape (the RENDER 4H «X»). TLBREAK keeps its
+                        # full-frame edge law — it is the setup he trusts here.
+                        x0 = max(0.0, min(xs) - 0.15 * max(1.0, max(xs) - min(xs)))
+                    elif abs(slope) > 1e-12:
                         _xa = _fx9(_pmax)
                         _xb = _fx9(_pmin)
                         x_left = max(0.0, min(_xa, _xb))
@@ -2740,17 +2785,28 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         if not _clean_zone_view:
             notes.extend(_draw_visible_fvgs(ax, frame, count))
 
-        # keep candle scale: long context lines may not stretch the y-axis
-        _ylo = float(frame["low"].min())
-        _yhi = float(frame["high"].max())
-        _ylo = min(_ylo, float(candidate.entry_zone_bottom), float(candidate.sl))
-        _yhi = max(_yhi, float(candidate.entry_zone_top), float(candidate.sl))
+        # ── r28: SMART price zoom — the candle box owns ~72% of the axis;
+        # overlays (entry/SL/TP) may stretch it at most 45% of the candle span
+        # per side. The old «min() of everything + 6%» let a far stop/POI cram
+        # DASH 1D into the top 5% and left WLD 1H over-filled with no pattern
+        # room. Long context lines may still not stretch the y-axis.
+        _ovs28 = [float(candidate.entry_zone_bottom), float(candidate.entry_zone_top),
+                  float(candidate.sl)]
         if confirmed:
             ladder_targets = list(((candidate.metadata or {}).get("target_ladder") or {}).get("targets") or [candidate.tp1, candidate.tp2])
-            _yhi = max(_yhi, *[float(v) for v in ladder_targets])
-            _ylo = min(_ylo, *[float(v) for v in ladder_targets])
-        _yr = max(_yhi - _ylo, 1e-9)
-        ax.set_ylim(_ylo - 0.06 * _yr, _yhi + 0.06 * _yr)
+            _ovs28 += [float(v) for v in ladder_targets]
+        _ovs28 = [v for v in _ovs28 if v is not None and math.isfinite(v) and v > 0]
+        _atr28 = float((frame["high"] - frame["low"]).tail(14).mean())
+        _win28 = _smart_y_window(
+            float(frame["low"].min()), float(frame["high"].max()), _atr28,
+            min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None)
+        if _win28:
+            ax.set_ylim(*_win28)
+        else:
+            _ylo = float(frame["low"].min())
+            _yhi = float(frame["high"].max())
+            _yr = max(_yhi - _ylo, 1e-9)
+            ax.set_ylim(_ylo - 0.06 * _yr, _yhi + 0.06 * _yr)
 
         # ── FINAL pill materialization (Viva 09-23/24): with the y-limits now
         # FINAL, allocate the label column and draw every pill — then widen

@@ -118,7 +118,8 @@ def test_the_fast_break_exemption_is_bounded():
 
 
 def test_the_per_candle_heartbeat_is_capped():
-    assert _get_settings().max_chain_heartbeats == 12
+    # r28 (Viva 09-25): «نباید اینقدر آپدیت‌های بی‌خاصیت بیاد» — 12 → 3
+    assert _get_settings().max_chain_heartbeats == 3
     src = io.open("main.py", encoding="utf-8").read()
     assert 'candidate.metadata.get("hb_count")' in src and "_hb_sent < _hb_max" in src
 

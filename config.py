@@ -158,7 +158,12 @@ class Settings:
     # runaway price must not keep a chain «waiting» for days.
     fast_break_max_chase_atr: float = 1.5      # exemption ceiling for fast breaks
     scenario_out_of_reach_atr: float = 2.0     # beyond this the premise is gone → close
-    max_chain_heartbeats: int = 12             # per-candle updates per chain
+    # r28 (Viva 09-25, «نباید اینقدر آپدیت‌های بی‌خاصیت بیاد»): the per-candle
+    # «🕐 این کندل بسته شد» heartbeat spammed every pending chain up to 12
+    # times — each with a fresh countdown (content-hash never swallowed it)
+    # and a full chart re-render (Railway CPU). Three reports per chain keep
+    # the confirm-after-close monitoring without the noise.
+    max_chain_heartbeats: int = 3              # per-candle updates per chain
     # Candidates born with a failing mandatory gate can never confirm. When
     # enabled, they are educational-only: they are not tracked for monitoring
     # and therefore never send Approaching messages or lock their symbol.
