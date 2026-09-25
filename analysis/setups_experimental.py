@@ -1091,6 +1091,44 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
     return best
 
 
+def _pin_first_visit(df, direction: str, atr_v: float, lookback: int = 30,
+                     approach_bars: int = 2, tol_atr: float = 0.25) -> bool:
+    """True when the pin's probe (low for LONG / high for SHORT) is the FIRST
+    visit of that price area inside `lookback` bars.
+
+    A prior bar whose low (LONG) reached within `tol_atr`×ATR of the probe —
+    or traded through it — means the zone was already tested; a re-tested
+    zone has less resting liquidity and earns no first-visit credit."""
+    try:
+        n = len(df)
+        if n < approach_bars + 3 or atr_v <= 0:
+            return False
+        pin = df.iloc[-1]
+        start = max(0, n - 1 - lookback)
+        end = n - 1 - approach_bars
+        if end <= start:
+            return True
+        prior = df.iloc[start:end]
+        close = float(pin["close"])
+        if direction == "LONG":
+            probe = float(pin["low"])
+            lows = prior["low"].astype(float)
+            if not bool((lows <= probe + tol_atr * atr_v).any()):
+                return True
+            # a sweep-and-reclaim of the prior visit's extreme is the
+            # liquidity-grab variant of a fresh visit — still credited
+            prior_min = float(lows.min())
+            return probe < prior_min - 0.05 * atr_v and close > prior_min
+        probe = float(pin["high"])
+        highs = prior["high"].astype(float)
+        if not bool((highs >= probe - tol_atr * atr_v).any()):
+            return True
+        prior_max = float(highs.max())
+        return probe > prior_max + 0.05 * atr_v and close < prior_max
+    except Exception:
+        return False
+
+
 def _pinwall_quality_score(df, direction: str, base: SignalCandidate) -> tuple[float, dict]:
     row = df.iloc[-1]; rng=max(float(row["high"])-float(row["low"]),1e-12); body=abs(float(row["close"])-float(row["open"]))
     is_long=direction=="LONG"; main_wick=(min(float(row["open"]),float(row["close"]))-float(row["low"])) if is_long else (float(row["high"])-max(float(row["open"]),float(row["close"])))
@@ -1105,8 +1143,15 @@ def _pinwall_quality_score(df, direction: str, base: SignalCandidate) -> tuple[f
     if body<.5*atr_v: anatomy+=8
     if opp_wick/rng>.15: anatomy=max(0,anatomy-6)
     md=base.metadata or {}; location=15.0 if md.get("pin_zone_kind") in {"FVG","FLIP","SD_FRESH","DEMAND","SUPPLY"} else 0.0
-    # Existing detector only emits fresh FVG/context candidates; award first-visit quality.
-    if not md.get("touched", False): location+=12
+    # FIX (review 09-25): «first visit» used to read md["touched"], which the
+    # detector ALWAYS sets False at detection time — so every pin got a free
+    # +12 and the 78-point bar was effectively 66. First visit is now measured
+    # on the tape: the pin's probe level must not have been visited by the
+    # earlier bars of the lookback (the 2 approach bars right before the pin
+    # are excluded — they are the leg INTO the zone, not a prior visit).
+    first_visit = _pin_first_visit(df, direction, atr_v)
+    md["pin_first_visit"] = bool(first_visit)
+    if first_visit: location+=12
     recent=df.iloc[max(0,len(df)-6):len(df)-1]; avg=float((recent["high"]-recent["low"]).mean()) if not recent.empty else 0
     context=12.0 if atr_v>0 and avg<.6*atr_v else 0.0
     if any(abs(float(r["close"])-float(r["open"]))<=.12*max(float(r["high"])-float(r["low"]),1e-12) for _,r in recent.tail(2).iterrows()): context+=8
@@ -1187,9 +1232,14 @@ def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]
     min_reclaim = float(getattr(settings, "albrox_min_reclaim_frac", 0.45))
     base_max_atr = float(getattr(settings, "albrox_base_max_atr", 2.5))
     ranges = df["high"] - df["low"]
-    atrs = ranges.rolling(14).mean()
+    # FIX (review 09-25): the spike is measured against the ATR of the bars
+    # BEFORE it — the old rolling window included the spike bar itself, which
+    # inflated its own yardstick.
+    atrs = ranges.rolling(14).mean().shift(1)
     # Search recent closed spike; enough post-spike candles must exist to form a base.
-    for spike_i in range(max(14, len(df)-40), len(df)-7):
+    # FIX (review 09-25): newest spike first — the old oldest-first loop
+    # returned the stalest qualifying spike in the 40-bar window.
+    for spike_i in range(len(df)-8, max(14, len(df)-40) - 1, -1):
         spike = df.iloc[spike_i]
         atr_i = float(atrs.iloc[spike_i] or 0)
         if atr_i <= 0 or float(ranges.iloc[spike_i]) < min_spike_atr * atr_i:
@@ -1217,6 +1267,19 @@ def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]
         broke = float(current["close"]) > base_high if direction == "LONG" else float(current["close"]) < base_low
         if not broke:
             continue
+        # FIX (review 09-25): the base break must be FRESH — the current
+        # closed candle has to be the FIRST close outside the base. The old
+        # check only compared the current close with the first 10 post-spike
+        # candles, so a base broken 20 bars earlier kept re-firing ALBROX far
+        # from its base (stop behind base_low → clamped, entry late). A close
+        # through the OPPOSITE side means the base failed: no setup.
+        _between = post.iloc[len(base):-1]
+        if not _between.empty:
+            _bc = _between["close"].astype(float)
+            if direction == "LONG" and (bool((_bc > base_high).any()) or bool((_bc < base_low).any())):
+                continue
+            if direction == "SHORT" and (bool((_bc < base_low).any()) or bool((_bc > base_high).any())):
+                continue
         poi = {"bottom": base_low, "top": base_high, "touches": 0, "type": "ALBROX SPIKE RECLAIM BASE"}
         context = structure_bias(context_df, 5)
         impulse = {"index": len(df)-1, "level": base_high if direction=="LONG" else base_low, "valid": True, "direction":"BULLISH" if direction=="LONG" else "BEARISH", "body_atr":abs(float(current["close"])-float(current["open"]))/max(base_atr,1e-12), "volume_ratio":1.0}

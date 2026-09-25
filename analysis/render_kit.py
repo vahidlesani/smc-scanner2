@@ -808,8 +808,12 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
             _ln = _p["lines"][0]
             _xe = float(_ln.get("x1", 0))
             _ye = line_y(_ln, _xe)
-            _atr = _atr(trigger_df)
-            _band = max(0.15 * _atr, 1e-9)
+            # FIX (review 09-25): `_atr = _atr(...)` made `_atr` a LOCAL name
+            # for the whole function → UnboundLocalError on every FLAG pattern,
+            # which aborted enrich_render before base_watch/base_gate/
+            # gate_ladder/htf_zones were applied (swallowed by the caller).
+            _flag_atr = _atr(trigger_df)
+            _band = max(0.15 * _flag_atr, 1e-9)
             md["render_zones"] = [{
                 "kind": "FLAG-LIMIT",
                 "bottom": _ye - _band, "top": _ye + _band,

@@ -1,3 +1,6 @@
+> **R31.4 — 2026-09-25 (code review, branch `arena/01a0d606-smc-scanner2`):** ۷ باگ مسیر ستاپ‌ها رفع شد — fast-lane خط روند از شمارهٔ ردیف به‌جای timestamp می‌خواند (سطح تأیید = پیوت اول؛ حالا خط امتداد می‌یابد، `CONFIRM_TL_EXTRAPOLATE=0` = clamp قدیم) · ریجکت ضدروند با retry انتشار دور زده می‌شد · reject دیگر entry/SL/TP را تغییر نمی‌دهد · ALBROX فقط شکست تازهٔ بیس · first-visit واقعی PINWALLQ · look-ahead تریلینگ R29 · UnboundLocal `_atr` در render_kit.
+> جزئیات + پیشنهادهای طراحی (replay آماری، کف R:R، حالت سقف استاپ، ...): `docs/REVIEW_2026-09-25.md`. تست‌ها: **470 passed / 1 skipped**. دیپلوی نشده.
+>
 > **R30 — 2026-09-24 (current working branch):** مرجع تصویری سبک CryptoCove دقیق شد: منظور فقط منطق هندسی/تشخیص و ترسیم الگوهاست، نه رنگ‌بندی. نمونه‌ها شامل کانال نزولی/ترندلاین و Bullish Rectangle هستند. موتور تشخیص مستقل از رندر است.
 > - **Spot horizons restored to six:** 4H/8H = کوتاه‌مدت، 12H/1D = میان‌مدت، 3D/1W = بلندمدت. Spot remains LONG-only for confirmation; opposite-side touches/breaks remain warnings.
 > - **MTF base architecture:** 5M and 15M are fetched directly; 1H/30M are resampled from 15M; 8H/12H are resampled from the 4H structural tape; 3D/1W are resampled from the 1D macro tape. 5M is never reconstructed from 15M. 4H/1D stay direct because reconstructing enough long history from 5M/15M would cost more API calls, not fewer.
