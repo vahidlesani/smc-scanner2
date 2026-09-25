@@ -67,6 +67,10 @@ ARMS: Dict[str, Dict[str, str]] = {
     # the production implementation of the two recommended filters
     # (analysis/quality_filters.py): trend = mandatory gate, stop floor = reject
     "prodfilters": {"HTF_TREND_GATE": "4h", "MIN_STOP_FLOOR": "1"},
+    # round 3: review B4 (strong confirmation bar) in-engine, alone and on
+    # top of the production trend gate
+    "b4": {"MIN_CONFIRM_BAR": "1"},
+    "trendb4": {"HTF_TREND_GATE": "4h", "MIN_CONFIRM_BAR": "1"},
 }
 
 TF_MIN = {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}

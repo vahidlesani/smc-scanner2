@@ -1388,6 +1388,13 @@ def evaluate_confirmation(
         _sf_msg = None
     if _sf_msg:
         return reject("STOP_BELOW_FLOOR", _sf_msg)
+    try:
+        from analysis.quality_filters import weak_confirm_bar
+        _wb_msg = weak_confirm_bar(candidate, closed_df)
+    except Exception:
+        _wb_msg = None
+    if _wb_msg:
+        return reject("WEAK_CONFIRM_BAR", _wb_msg)
 
     candidate.status = "CONFIRMED"
     candidate.confirmed_at = candidate.confirmed_at or iso_now()

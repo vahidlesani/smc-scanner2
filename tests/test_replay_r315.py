@@ -111,3 +111,18 @@ def test_trend_gate_marks_against_trend(monkeypatch):
     qf.apply_trend_gate(B(), [long_c, short_c])
     assert long_c.execution_ready is True
     assert short_c.mandatory_gates["htf_trend_4h"] is False and short_c.execution_ready is False
+
+
+def test_weak_confirm_bar_filter(monkeypatch):
+    from analysis import quality_filters as qf
+    rows = [{"open": 100, "high": 101, "low": 99, "close": 100.2}] * 15
+    strong = pd.DataFrame(rows + [{"open": 100.0, "high": 102.0, "low": 99.9, "close": 101.8}])
+    weak_body = pd.DataFrame(rows + [{"open": 100.9, "high": 101.5, "low": 100.5, "close": 101.1}])
+    not_beyond = pd.DataFrame(rows + [{"open": 99.5, "high": 101.0, "low": 99.4, "close": 100.8}])
+    monkeypatch.delenv("MIN_CONFIRM_BAR", raising=False)
+    assert qf.weak_confirm_bar(_cand(), weak_body) is None          # off by default
+    monkeypatch.setenv("MIN_CONFIRM_BAR", "1")
+    assert qf.weak_confirm_bar(_cand(), strong) is None
+    assert qf.weak_confirm_bar(_cand(), weak_body) is not None
+    assert qf.weak_confirm_bar(_cand(), not_beyond) is not None
+    assert qf.weak_confirm_bar(_cand("SHORT", sl=101.0), strong) is not None

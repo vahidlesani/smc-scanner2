@@ -15,7 +15,14 @@ closed trades) found two filters that improved expectancy in BOTH halves
                       هانت میشه». A custom map may be passed instead of "1":
                       MIN_STOP_FLOOR="15m:1.0,1h:1.5".
 
-Both are opt-in so the live behaviour does not change until Viva decides.
+  MIN_CONFIRM_BAR=1   (review B4, round-2 candidate) the confirmation bar must
+                      have a body ≥ 0.3 × mean range(14) of its frame AND close
+                      beyond the previous bar's extreme in the trade direction.
+                      A weak bar is rejected (plan restored) — the chain stays
+                      alive and a later strong close may still confirm.
+                      Custom body ratio: MIN_CONFIRM_BAR=0.4.
+
+All are opt-in so the live behaviour does not change until Viva decides.
 """
 from __future__ import annotations
 
@@ -97,3 +104,45 @@ def stop_floor_violation(candidate) -> Optional[str]:
         return None
     return (f"فاصلهٔ استاپ {risk_pct:.2f}% کمتر از کفِ {floor:.2f}% تایم {tf} است؛ "
             "استاپ‌های تنگ در replay بیشترین شکار را داشتند — تأیید صادر نشد.")
+
+
+def confirm_bar_min_body() -> float:
+    raw = str(os.getenv("MIN_CONFIRM_BAR", "") or "").strip().lower()
+    if not raw or raw in ("0", "false", "off", "no"):
+        return 0.0
+    if raw in ("1", "true", "on", "yes", "default"):
+        return 0.3
+    try:
+        v = float(raw)
+        return v if 0.0 < v < 5.0 else 0.0
+    except ValueError:
+        return 0.0
+
+
+def weak_confirm_bar(candidate, closed_df) -> Optional[str]:
+    """Persian reason when the confirmation bar (closed_df's last row) is weak."""
+    k = confirm_bar_min_body()
+    if k <= 0:
+        return None
+    try:
+        if closed_df is None or len(closed_df) < 3:
+            return None
+        last, prev = closed_df.iloc[-1], closed_df.iloc[-2]
+        rng = float((closed_df["high"].astype(float) - closed_df["low"].astype(float)).tail(14).mean())
+        if rng <= 0:
+            return None
+        body = abs(float(last["close"]) - float(last["open"])) / rng
+        if str(getattr(candidate, "direction", "")).upper() == "LONG":
+            beyond = float(last["close"]) > float(prev["high"])
+        else:
+            beyond = float(last["close"]) < float(prev["low"])
+    except Exception:
+        return None
+    if body >= k and beyond:
+        return None
+    why = []
+    if body < k:
+        why.append(f"بدنه {body:.2f}× میانگین دامنه (< {k:.2f})")
+    if not beyond:
+        why.append("کلوز فراتر از سقف/کف کندل قبل نیست")
+    return "کندل تأیید ضعیف است: " + " و ".join(why) + " — منتظر کلوز قوی‌تر می‌مانیم."
