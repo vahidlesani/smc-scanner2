@@ -242,3 +242,10 @@
 - Wall-clock-fragile fixture fixed: test_round23_model_law created_at pinned before its tape (NO_NEW_BAR after calendar roll).
 - tests/test_round28_smart_zoom.py 6/6; suite 438P/1skip.
 - Leftover spotted: DASH lifecycle FIRST STOP 13.297 (−79% from live) violates the stop-ceiling law (1d ≤ 8%) — separate round queued.
+
+## Round-29 — spot lane rescue + TP pill order + render freeze (his 11 screenshots + txt)
+- SPOT DEAD 2 DAYS: lane alive, found 48/pass, published 0 since R30 deploy. Fix: (1) _spot_stamp stamped BEFORE the send — one failed chart/Telegram try burned the (sym,tf,shape) for the window; marker now written ONLY after successful publish (commit flag). (2) zero_sent reason + counters (stamp_skip/send_fail/chart_fail/last_error/dur/budget) surfaced in /app/api/state — a dead sender can no longer masquerade as green «فعال».
+- TP PILL SCRAMBLE (SHIB 2,4,5,3,1): finalize allocated pills mid-out; crowded columns inverted numeric order. Allocation now strictly level-ascending → displayed stack always monotone with price (LONG 1→5 up, SHORT 1→5 down).
+- RENDER FREEZE («از اولین تأیید شکل و زوم عوض نشه»): first confirmed render freezes the smart price window in metadata; later renders reuse it verbatim (survives TF-bump); when live price escapes the box, window recomputes + re-freezes (the legal mutation, noted by the escape law).
+- Queue (told user): BTC structural 4H stop + saner targets = V3 §18/§19 slices; DASH stop 13.297 violation; patches A–M of the parallel agent await his approval; MTF TF-labeling (§ setup/confirmation/execution) queued.
+- Suite 468P/1skip.

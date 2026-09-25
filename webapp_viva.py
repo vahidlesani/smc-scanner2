@@ -576,13 +576,19 @@ def _fetch_state() -> Dict[str, Any]:
             _spot = _gj("spot_lane_status", {}) or {}
             _st = (_spot.get("stats") or {})
             _rs = str(_spot.get("reason") or "")
-            _fa = {"ok": "فعال", "no_spot_channel": "بدون کانال اسپوت (CHAT_ID_SPOT تنظیم نشده)",
+            _fa = {"ok": "فعال", "zero_sent": "فعال — اما ارسال صفر! (گزارش: " + str(_st.get("last_error") or "?")[:60] + ")",
+                   "no_spot_channel": "بدون کانال اسپوت (CHAT_ID_SPOT تنظیم نشده)",
                    "disabled": "خاموش", "import_failed": "خطای ایمپورت"}.get(
                 _rs, ("خطا" if _rs.startswith("import_failed") else (_rs or "هنوز پاس نگرفته")))
             scanner["spot"] = dict(
                 state=_fa, at=str(_spot.get("at") or ""),
                 symbols=int(_st.get("symbols") or 0), found=int(_st.get("found") or 0),
-                published=int(_st.get("published") or 0))
+                published=int(_st.get("published") or 0),
+                errors=int(_st.get("errors") or 0), alerts=int(_st.get("alerts") or 0),
+                stamp_skip=int(_st.get("stamp_skip") or 0),
+                send_fail=int(_st.get("send_fail") or 0),
+                chart_fail=int(_st.get("chart_fail") or 0),
+                dur_s=_st.get("dur_s") or "", last_error=str(_st.get("last_error") or "")[:120])
         except Exception:
             pass
         try:

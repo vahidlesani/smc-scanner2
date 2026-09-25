@@ -2790,23 +2790,50 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # per side. The old «min() of everything + 6%» let a far stop/POI cram
         # DASH 1D into the top 5% and left WLD 1H over-filled with no pattern
         # room. Long context lines may still not stretch the y-axis.
-        _ovs28 = [float(candidate.entry_zone_bottom), float(candidate.entry_zone_top),
-                  float(candidate.sl)]
+        # ── r29 RENDER-FREEZE («از اولین تأیید، شکل و زوم چارت عوض نشه»):
+        # the first confirmed render freezes the smart window into the
+        # candidate; later renders of the SAME chain reuse it verbatim — same
+        # shape, same zoom, comparable screenshots. The window is a PRICE
+        # window, so it even survives the TF-bump view. The only legal
+        # mutation is the escape he described: when live price has LEFT the
+        # frozen box (the tool-exit path — which itself bumps the view TF and
+        # notes it), the window is recomputed and re-frozen.
+        _froz28 = None
         if confirmed:
-            ladder_targets = list(((candidate.metadata or {}).get("target_ladder") or {}).get("targets") or [candidate.tp1, candidate.tp2])
-            _ovs28 += [float(v) for v in ladder_targets]
-        _ovs28 = [v for v in _ovs28 if v is not None and math.isfinite(v) and v > 0]
-        _atr28 = float((frame["high"] - frame["low"]).tail(14).mean())
-        _win28 = _smart_y_window(
-            float(frame["low"].min()), float(frame["high"].max()), _atr28,
-            min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None)
-        if _win28:
-            ax.set_ylim(*_win28)
+            try:
+                _fz = (candidate.metadata or {}).get("chart_zoom_frozen")
+                if _fz and len(_fz) == 2:
+                    _froz28 = (float(_fz[0]), float(_fz[1]))
+            except Exception:
+                _froz28 = None
+        _live28 = float(frame["close"].iloc[-1])
+        if _froz28 and _froz28[0] < _live28 < _froz28[1]:
+            ax.set_ylim(*_froz28)
         else:
-            _ylo = float(frame["low"].min())
-            _yhi = float(frame["high"].max())
-            _yr = max(_yhi - _ylo, 1e-9)
-            ax.set_ylim(_ylo - 0.06 * _yr, _yhi + 0.06 * _yr)
+            _ovs28 = [float(candidate.entry_zone_bottom), float(candidate.entry_zone_top),
+                      float(candidate.sl)]
+            if confirmed:
+                ladder_targets = list(((candidate.metadata or {}).get("target_ladder") or {}).get("targets") or [candidate.tp1, candidate.tp2])
+                _ovs28 += [float(v) for v in ladder_targets]
+            _ovs28 = [v for v in _ovs28 if v is not None and math.isfinite(v) and v > 0]
+            _atr28 = float((frame["high"] - frame["low"]).tail(14).mean())
+            _win28 = _smart_y_window(
+                float(frame["low"].min()), float(frame["high"].max()), _atr28,
+                min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None)
+            if _win28:
+                ax.set_ylim(*_win28)
+                if confirmed:
+                    try:
+                        _md29 = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+                        _md29["chart_zoom_frozen"] = [float(_win28[0]), float(_win28[1])]
+                        candidate.metadata = _md29
+                    except Exception:
+                        pass
+            else:
+                _ylo = float(frame["low"].min())
+                _yhi = float(frame["high"].max())
+                _yr = max(_yhi - _ylo, 1e-9)
+                ax.set_ylim(_ylo - 0.06 * _yr, _yhi + 0.06 * _yr)
 
         # ── FINAL pill materialization (Viva 09-23/24): with the y-limits now
         # FINAL, allocate the label column and draw every pill — then widen
@@ -2818,8 +2845,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _right_specs.sort(key=lambda t: float(t[0]))
             _b2 = 0.025 * _sp2
             _rows2: List[List[float]] = []
-            for _lvl2, _lab2, _col2 in sorted(
-                    _right_specs, key=lambda t: -abs(float(t[0]) - (_lo2 + _hi2) / 2.0)):
+            # r29 (Viva 09-25, «شماره‌گذاری TPها قاطی‌پاتی شده»): allocation
+            # used to run mid-out (nearest-to-mid first), so crowded tool
+            # columns pushed outer pills ACROSS their neighbours — SHIB 1H
+            # read 2,4,5,3,1 top→bottom. Levels now allocate strictly in
+            # ascending order: the displayed stack is always monotone with
+            # price (LONG 1→5 upward, SHORT 1→5 downward), never scrambled.
+            for _lvl2, _lab2, _col2 in sorted(_right_specs, key=lambda t: float(t[0])):
                 # clamp BEFORE allocating (the old order let a clamped pill
                 # land on an already-taken slot → ADA ENTRY×LIVE overlap)
                 _tgt2 = min(max(float(_lvl2), _lo2 + _b2), _hi2 - _b2)

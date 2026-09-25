@@ -615,8 +615,15 @@ def _spot_enabled() -> bool:
     return str(os.getenv("SPOT_ENGINE_ENABLED", "1")).strip().lower() in {"1", "true", "on", "yes"}
 
 
-def _spot_stamp(key: str, window_hours: float) -> bool:
-    """True when this exact spot signal was already published inside the window."""
+def _spot_stamp(key: str, window_hours: float, commit: bool = True) -> bool:
+    """True when this exact spot signal was already published inside the window.
+
+    r29 (Viva 09-25, «موتور اسپات از ۲ روز قبل هیچ فعالیتی نداره»): the old
+    call STAMPED BEFORE the send, so one failed chart/Telegram attempt burned
+    that (symbol, tf, shape) for the whole dedupe window — with sends failing
+    the lane went silent while `found` kept counting. The check is now
+    read-only (commit=False); the marker is written ONLY after a successful
+    publish."""
     try:
         from database.bot_kv import get_json as _g, set_json as _s
         now = time.time()
@@ -624,8 +631,9 @@ def _spot_stamp(key: str, window_hours: float) -> bool:
                 if now - float(v) < 24 * 3600 * max(1.0, float(window_hours) / 24.0)}
         if key in data:
             return True
-        data[key] = now
-        _s("spot_published", data)
+        if commit:
+            data[key] = now
+            _s("spot_published", data)
         return False
     except Exception:
         return False
@@ -787,16 +795,24 @@ def run_spot_scan() -> Dict[str, int]:
         key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"
                f"{(cand.metadata or {}).get('pattern_type')}")
         window = 72.0 if str(cand.trigger_timeframe) == "3d" else 36.0
-        if _spot_stamp(key, window):
+        if _spot_stamp(key, window, commit=False):
+            stats["stamp_skip"] = stats.get("stamp_skip", 0) + 1
             continue
         try:
             _bundle_for_chart = bundles.get(cand.symbol.upper())
             frame = (_bundle_for_chart.get(cand.trigger_timeframe)
                      if _bundle_for_chart is not None else None)
             chart = generate_chart(frame, cand, confirmed=True) if frame is not None else None
-            if tf_channel_publish_confirmed(cand, chart=chart, chat_override=CHAT_ID_SPOT):
+            if not chart:
+                stats["chart_fail"] = stats.get("chart_fail", 0) + 1
+                stats["last_error"] = f"chart None {cand.symbol}:{cand.trigger_timeframe}"
+            if chart and tf_channel_publish_confirmed(cand, chart=chart, chat_override=CHAT_ID_SPOT):
                 stats["published"] += 1
+                _spot_stamp(key, window)          # marker ONLY after success
                 _spot_daily_count()
+            elif chart:
+                stats["send_fail"] = stats.get("send_fail", 0) + 1
+                stats["last_error"] = f"publish returned 0 {cand.symbol} code={str((cand.metadata or {}).get('public_code') or cand.signal_id)[:28]}"
                 # round 16: a published signal CLOSES the ladder for its shape
                 try:
                     from analysis.spot_engine import spot_alert_mark_confirmed
@@ -810,6 +826,7 @@ def run_spot_scan() -> Dict[str, int]:
                     pass
         except Exception as exc:
             stats["errors"] += 1
+            stats["last_error"] = f"{type(exc).__name__}: {exc}"[:160]
             print(f"spot publish warning {cand.symbol}: {exc}")
     # ── round 16: the ladder — warnings are analysis, they never spend the
     # signal budget, but they carry their own daily cap and their own dedup.
@@ -843,10 +860,19 @@ def run_spot_scan() -> Dict[str, int]:
                 print(f"spot alert warning {aitem.get('symbol')}: {exc}")
     except ImportError as exc:
         print(f"spot ladder import failed: {exc}")
-    _spot_status_write("ok", stats)
-    print(f"🪙 SPOT pass finished in {time.monotonic() - started:.1f}s • "
+    stats["dur_s"] = round(time.monotonic() - started, 1)
+    stats["budget_left"] = _spot_daily_left()
+    if stats["found"] and not stats["published"] and not stats.get("alerts"):
+        # the lane LIVES but nothing reaches the channel — make that state
+        # loud in the app instead of a green «فعال» hiding a dead sender
+        _spot_status_write("zero_sent", stats)
+    else:
+        _spot_status_write("ok", stats)
+    print(f"🪙 SPOT pass finished in {stats['dur_s']}s • "
           f"symbols={stats['symbols']} found={stats['found']} "
-          f"published={stats['published']} budget_left={_spot_daily_left()}")
+          f"published={stats['published']} stamp_skip={stats.get('stamp_skip', 0)} "
+          f"send_fail={stats.get('send_fail', 0)} chart_fail={stats.get('chart_fail', 0)} "
+          f"errors={stats['errors']} budget_left={stats['budget_left']}")
     return stats
 
 
