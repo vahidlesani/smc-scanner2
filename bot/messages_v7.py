@@ -2283,6 +2283,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             zorder=7,
         )
         notes.append((f"FIRST STOP  {_price(candidate.sl)}", CHART_THEME["invalidation"]))
+        # PINWALL-specific second/risk entry: same candidate metadata and same
+        # chart coordinates used by Telegram, so WebApp mirrors the exact line.
+        try:
+            _pw_e2 = float((candidate.metadata or {}).get("pinwall_entry2") or 0.0)
+            if candidate.setup_code in {"PINVAL", "PINWALLQ"} and _pw_e2 > 0:
+                ax.hlines(_pw_e2, line_start, line_end,
+                          color=CHART_THEME["entry"], linewidth=1.05,
+                          linestyles=(0, (3, 2)), zorder=7)
+                notes.append((f"PINWALL ENTRY 2  {_price(_pw_e2)}", CHART_THEME["entry"]))
+        except Exception:
+            pass
         live_price = float(frame["close"].iloc[-1])
         # ── Round 13: the forming candle is part of `frame` now (appended above),
         # so it is drawn by the candle painter itself — same body, same wicks,
