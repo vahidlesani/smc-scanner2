@@ -891,6 +891,23 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         risk = abs(entry - sl)
         if risk <= 0:
             continue
+        # PINWALL-only execution refinement: after a valid directional break,
+        # place a second, earlier limit-entry zone just above the last valid
+        # local swing for LONG (below it for SHORT), while the structural stop
+        # remains beyond that swing + buffer. This is intentionally stored as
+        # PINWALL metadata so the rule does not leak into ALBROX/TLBREAK/etc.
+        pinwall_entry2 = 0.0
+        try:
+            if direction == "LONG" and _piv and _piv < entry:
+                pinwall_entry2 = float(_piv + 0.25 * (entry - _piv))
+            elif direction == "SHORT" and _piv and _piv > entry:
+                pinwall_entry2 = float(_piv - 0.25 * (_piv - entry))
+            if direction == "LONG" and not (sl < pinwall_entry2 < entry):
+                pinwall_entry2 = 0.0
+            if direction == "SHORT" and not (sl > pinwall_entry2 > entry):
+                pinwall_entry2 = 0.0
+        except Exception:
+            pinwall_entry2 = 0.0
         # Do not invent targets from fixed R multiples. Both targets must be
         # real opposing context pivots, otherwise this is an alert-only chart
         # with no executable trade and must not be published.
@@ -984,6 +1001,8 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             # PINVAL is now eligible for the same real confirmation lifecycle
             # as every other setup; it is not a verdict-only pseudo-signal.
             "alert_only": 0,
+            "pinwall_entry2": float(pinwall_entry2 or 0.0),
+            "pinwall_entry2_rule": "پس از کلوز معتبر، ورود دوم نزدیک سویینگ محلی؛ استاپ پشت همان سویینگ با بافر.",
         })
         if polarity_on and polarity is not None:
             active = polarity.active_zone
