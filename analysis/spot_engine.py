@@ -127,6 +127,54 @@ def _fresh(d: pd.DataFrame, tf: str) -> bool:
         return True
 
 
+def spot_risk_levels(close: float, upper: float, lower_vals: list,
+                     atr: float, path_abs: float, swing_low: float,
+                     df_highs=None) -> dict:
+    """r37 (Viva 09-26, «تارگت‌ها احمقانه است گاهی و استاپ هم احمقانه است»).
+
+    STOP — the invalidation is the MINOR SWING the breakout stands on. The
+    old code took min(swing, pattern lower edges) which dragged every stop to
+    the far pattern base and let the 10% cap print a mechanical «exactly
+    −10%» number (DOGE 0.08905). The 10% ceiling law is unchanged; the stop
+    just stops being gratuitously far.
+
+    TARGETS — rungs anchor on REAL resistance overhead (swing highs of the
+    last 120 bars inside 1.15×path); ATR floors keep TP1 honest when the
+    tape above is virgin air; the raw 0.2/0.6/1.0 fractions are only the
+    fallback. Output is always monotone tp1 < tp2 < tp3.
+
+      close      entry (the confirming close)
+      upper      the broken upper edge
+      lower_vals pattern line values at the break bar (context only now)
+      atr        ATR of the trigger TF (absolute price)
+      path_abs   measured-move path in PRICE units (already ≥ TF floor)
+      swing_low  minor swing low (absolute price)
+      df_highs   iterable of recent highs (defaults to nothing)
+    """
+    close = float(close)
+    path = float(path_abs)
+    atr = float(atr) if atr and atr > 0 else path / 4.0
+    # ── stop: the RAW minor swing (the caller applies its own buffer) ──
+    sl = float(swing_low)
+    if not (sl > 0 and sl < close):
+        sl = close * (1.0 - 0.02)
+    # ── targets: structural first ──
+    try:
+        _hs = sorted({float(v) for v in (df_highs or [])
+                      if close * 1.002 < float(v) <= close + 1.15 * path})
+    except Exception:
+        _hs = []
+    tp1 = min(_hs) if _hs else close + max(0.8 * atr, 0.2 * path)
+    tp1 = min(max(tp1, close + 0.6 * atr), close + 0.45 * path)
+    above = [r for r in _hs if r > tp1 * 1.005]
+    tp3 = max(above) if above else close + path
+    tp3 = min(max(tp3, tp1 + 0.8 * atr, close + 0.55 * path), close + 1.10 * path)
+    mids = [r for r in above if r < tp3 * 0.995]
+    tp2 = min(mids) if mids else 0.5 * (tp1 + tp3)
+    tp2 = min(max(tp2, tp1 + 0.15 * atr), tp3 - 0.01 * path)
+    return {"sl": float(sl), "targets": [float(tp1), float(tp2), float(tp3)]}
+
+
 def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                      buffer_pct: float = 0.10) -> List[dict]:
     """Confirmed spot setups for one symbol across 4h/8h/12h/1d/3d/1w.
@@ -184,18 +232,20 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 for _l in (pat.get("lines") or []):
                     from analysis.render_kit import line_y as _ly2
                     lower_vals.append(float(_ly2(_l, n)))
+                # r37: stop = minor swing − buffer (NOT the far pattern base,
+                # which only dragged every stop to the 10% cap); targets anchor
+                # on real overhead resistance — see spot_risk_levels.
                 sl_struct = _minor_swing_low(d)
-                if lower_vals:
-                    sl_struct = min(sl_struct, min(lower_vals))
-                sl = sl_struct * (1.0 - float(buffer_pct) / 100.0)
-                if sl >= close:
-                    sl = close * (1.0 - 0.02)
-                # targets: the shape's own measured move, never closer than the
-                # timeframe's band, always independent of the stop
                 measured = close + (upper - min(lower_vals)) if lower_vals else close * 1.06
                 floor_path = close * MIN_PATH_PCT_BY_TF.get(tf, 5.0) / 100.0
                 path = max(measured - close, floor_path)
-                targets = [close + path * f for f in (0.2, 0.6, 1.0)]
+                _risk = spot_risk_levels(
+                    close, upper, lower_vals, atr, path, sl_struct,
+                    df_highs=list(d["high"].tail(120)))
+                sl = _risk["sl"] * (1.0 - float(buffer_pct) / 100.0)
+                if sl >= close:
+                    sl = close * (1.0 - 0.02)
+                targets = _risk["targets"]
                 out.append({
                     "symbol": symbol.upper(), "tf": tf, "pattern": kind,
                     "horizon": ("SHORT" if tf in SPOT_SHORT_TFS else "MID" if tf in SPOT_MID_TFS else "LONG"),

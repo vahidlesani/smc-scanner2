@@ -23,8 +23,10 @@ def test_public_code_spells_techclassic():
 def test_chart_clocks_are_tehran():
     src = open(f"{REPO}/bot/messages_v7.py", encoding="utf-8").read()
     assert '_tk = _tk.tz_convert("Asia/Tehran")' in src            # axis ticks
-    assert '_live_clock = _lt.tz_convert("Asia/Tehran").strftime("%H:%M")' in src
-    assert '_live_stamp = _lt.tz_convert("Asia/Tehran").strftime("%m-%d %H:%M")' in src
+    # r37: LIVE-STAMP-NOW enforced for real — the clock is the Tehran render
+    # moment, not the candle bucket (bucket stamps froze on 12h/3d/1w spot).
+    assert ('_live_clock = datetime.now(ZoneInfo("Asia/Tehran")).strftime("%H:%M")' in src
+            and '_live_stamp = datetime.now(ZoneInfo("Asia/Tehran")).strftime("%m-%d %H:%M")' in src)
     assert '.strftime("%m-%d %H:%M UTC")' not in src
     assert '.strftime("%H:%M UTC")' not in src
 

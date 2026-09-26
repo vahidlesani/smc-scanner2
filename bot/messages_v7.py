@@ -1373,6 +1373,15 @@ def _live_candle(candidate: SignalCandidate, chart_df) -> Optional[Dict[str, flo
         if last_closed.tzinfo is None:
             last_closed = last_closed.tz_localize("UTC")
         if ts <= last_closed:
+            # r37 («ساعت لایو کندلش درست نیست»): 3d/1w spot candles are
+            # AGGREGATED from COMPLETED daily buckets only (round-15 law), so
+            # no forming bucket ever exists there and the LIVE stamp froze on
+            # the last close (ZEC/UNI 3d showed «09-22 03:30» on a 09-26
+            # render). For THOSE TFs only, synthesize the forming candle from
+            # a 1h probe. Any other TF keeps the r12 honesty law: a closed
+            # tape stays closed — no fabricated «live».
+            if str(tf).lower() in ("3d", "1w"):
+                return _synthetic_live_candle(candidate, chart_df)
             return None  # the tape has already closed; nothing is forming
         # r31 (Viva 09-26, «اگر چارت ساعت ۱:۵۷ اومده کندل لایو هم واقعا همون
         # رو نشون بده»): the forming bucket stays open until the TF closes,
@@ -1382,6 +1391,31 @@ def _live_candle(candidate: SignalCandidate, chart_df) -> Optional[Dict[str, flo
         _vol = float(row["volume"]) if "volume" in getattr(live, "columns", []) else 0.0
         return {"timestamp": ts, "open": float(row["open"]), "high": float(row["high"]),
                 "low": float(row["low"]), "close": float(row["close"]), "volume": _vol}
+    except Exception:
+        return None
+
+
+def _synthetic_live_candle(candidate, chart_df) -> Optional[Dict[str, float]]:
+    """r37 — a forming candle for TFs that have no bucket of their own.
+
+    3d/1w spot frames are aggregates of COMPLETED dailies (round 15: «no
+    partial bucket»), so the r31 live probe can never return a forming candle
+    for them and the chart's clock froze on the last close. A tiny 1h probe
+    (uncached) gives the CURRENT price; the synthetic candle opens at the
+    tape's last close so the wick honestly spans the move since."""
+    try:
+        from data.fetcher import get_klines
+        _sym = getattr(candidate, "symbol", "")
+        probe = get_klines(_sym, "1h", 2, closed_only=False, use_cache=False)
+        if probe is None or getattr(probe, "empty", True):
+            return None
+        px = float(probe.iloc[-1]["close"])
+        base = float(chart_df["close"].iloc[-1])
+        if not (math.isfinite(px) and px > 0 and math.isfinite(base) and base > 0):
+            return None
+        return {"timestamp": datetime.now(timezone.utc), "open": base,
+                "high": max(px, base), "low": min(px, base),
+                "close": px, "volume": 0.0}
     except Exception:
         return None
 
@@ -1479,15 +1513,23 @@ def _clean_render_frame(df: pd.DataFrame, window: int = 150) -> pd.DataFrame:
 def _smart_y_window(c_lo: float, c_hi: float, atr: float,
                     ov_lo: Optional[float] = None,
                     ov_hi: Optional[float] = None,
-                    recent_lo: Optional[float] = None) -> Optional[tuple]:
-    """r28 SMART price zoom — «زوم در هر دو جهت جمع شدن و باز شدن … هوشمند».
+                    recent_lo: Optional[float] = None,
+                    recent_hi: Optional[float] = None) -> Optional[tuple]:
+    """r37 SMART price zoom — «کندلها تا حد امکان در مرکز صفحه چارت قرار
+    بگیرند … ابزار نصفه نیمه رسم میشه».
 
-    The candles own ~72% of the axis height: never the whole frame (WLD 1H —
-    80% fill on a ~5-cent span, patterns unreadable, tool looks stupid), and
-    never crammed into the top 5% because a far POI/stop dragged the axis
-    (DASH 1D — stop 13.3 vs price 62). Floors give structure room; entry/SL/TP
-    overlays may widen the window by at most 45% of the candle span per side —
-    beyond that they are CLIPPED, not obeyed. Returns (ylo, yhi) or None."""
+    r28 kept candles at 72% but CLIPPED overlays beyond 45% of the span per
+    side — that is exactly the «نصفه ابزار» bug Viva re-reported 09-26 (TP
+    pills sliced, stop line amputated). Stops are now hard-bounded
+    (futures ≤2% / spot ≤10%) and ladders are TF-capped, so overlays can be
+    included IN FULL. r37 rules:
+      • the RECENT block (last ~40 bars) is CENTERED and owns ≥60% of the
+        panel — dead history may pad, never shove (keeps the r32 LTC law);
+      • entry/SL/TP/box overlays are included fully (the tool is never
+        half-drawn any more);
+      • a growth cap of max(base, 2.2× the full-frame span) still fights
+        pathological far levels (the r28 DASH 13.3-vs-62 case stays dead).
+    Returns (ylo, yhi) or None."""
     try:
         c_lo, c_hi = float(c_lo), float(c_hi)
     except Exception:
@@ -1502,22 +1544,25 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
         _a = 0.0
     if not (math.isfinite(_a) and _a > 0):
         _a = span / 10.0
-    floor = max(4.0 * _a, 0.025 * mid, 0.5 * span)
-    window = max(span, floor) / 0.72
-    ylo, yhi = mid - 0.5 * window, mid + 0.5 * window
-    cap = 0.45 * span
-    if ov_hi is not None and math.isfinite(float(ov_hi)) and float(ov_hi) > c_hi:
-        yhi = max(yhi, c_hi + min(float(ov_hi) - c_hi, cap))
-    if ov_lo is not None and math.isfinite(float(ov_lo)) and float(ov_lo) < c_lo:
-        ylo = min(ylo, c_lo - min(c_lo - float(ov_lo), cap))
-    # r32 (Viva 09-26, LTC 1D: «کندل‌ها بالای چارت هستن … کمی زوم‌اوت کنه
-    # پایین‌تر بیاد»): months of dead history under a rising market must not
-    # shove the tool into a 2-cm strip at the top. The floor lifts to the
-    # RECENT structure (last ~40 bars) when that keeps every overlay visible.
-    if recent_lo is not None and math.isfinite(float(recent_lo)) and float(recent_lo) > ylo:
-        _lift = max(2.0 * _a, 0.06 * (yhi - ylo))
-        if float(recent_lo) - _lift > ylo and float(recent_lo) < yhi:
-            ylo = float(recent_lo) - _lift
+    # the recent block is what the trade lives on — center THE IT
+    r_lo = float(recent_lo) if (recent_lo is not None and math.isfinite(float(recent_lo))) else c_lo
+    r_hi = float(recent_hi) if (recent_hi is not None and math.isfinite(float(recent_hi))) else c_hi
+    r_hi = max(r_hi, r_lo)
+    r_mid = 0.5 * (r_lo + r_hi)
+    r_span = max(r_hi - r_lo, 1e-12)
+    base = max(r_span / 0.60, 4.0 * _a, 0.025 * mid, 0.35 * span)
+    ylo, yhi = r_mid - 0.5 * base, r_mid + 0.5 * base
+    # r37: overlays included IN FULL — the half-drawn tool is a bug, not style
+    if ov_hi is not None and math.isfinite(float(ov_hi)) and float(ov_hi) > yhi:
+        yhi = float(ov_hi)
+    if ov_lo is not None and math.isfinite(float(ov_lo)) and float(ov_lo) < ylo:
+        ylo = float(ov_lo)
+    cap = max(base, 2.2 * span)
+    if (yhi - ylo) > cap:
+        ylo, yhi = r_mid - 0.5 * cap, r_mid + 0.5 * cap
+    # the recent block itself may never be cut by the growth cap
+    ylo = min(ylo, r_lo - 0.05 * cap)
+    yhi = max(yhi, r_hi + 0.05 * cap)
     yr = max(yhi - ylo, 1e-12)
     return ylo - 0.05 * yr, yhi + 0.05 * yr
 
@@ -1538,6 +1583,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         pass
     # ── the forming candle joins the tape as one more NORMAL candle (round 13)
     df, _live_row = _frame_with_live_candle(df, candidate)
+    # r37 (Viva 09-26, «اسپات ابزار لانگ و شورت نداره»): ONE early flag — the
+    # whole futures trade-tool (fills, dashed TP guides, numbered pills, axis
+    # tags, INFO box, bottom ledger) is skipped on spot; the chart keeps the
+    # CryptoCave signature instead: clean tape + shape lines + ONE green box
+    # above the shape's upper edge (no arrow).
+    _is_spot = (str((candidate.metadata or {}).get("market")
+                    or getattr(candidate, "market", "") or "").upper() == "SPOT"
+                or bool((candidate.metadata or {}).get("is_spot")))
     # Viva 09-17 cost ruling: one render per (alert, frame, state) — retries,
     # mirrors and cross-channel posts reuse the bytes from this cache. Round 13:
     # the state now includes the live price (see _chart_cache_key).
@@ -1558,6 +1611,36 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         or getattr(candidate, "trigger_timeframe", "15m") or "15m").lower()
         _lookback = {"1d": 96, "4h": 120, "2h": 132, "1h": 150,
                      "30m": 160, "15m": 164, "5m": 164}.get(_chart_tf, 164)
+        # r37 (Viva 09-26, «ترندهای ماژور و مینور مهم اصلا دیده نمیشن و رسم
+        # نمیشن»): the r33 identity pins a chain's geometry forever, but the
+        # render window is re-cut per render — when the fetch returns fewer
+        # bars than the stored anchors need, the lines clamp to x=0 and FLOAT
+        # over empty space (SEI 09-26). Widen the window (bounded by the
+        # fetched tape) so the stored anchors stay inside the picture.
+        _stored37 = None
+        try:
+            from database.bot_kv import get_json as _gj37
+            _stored37 = _gj37(f"render_identity:{candidate.signal_id}")
+            _min_ts37 = None
+            for _p37 in (_stored37 or {}).get("render_patterns") or []:
+                for _l37 in (_p37.get("lines") or []):
+                    for _pt37 in (_l37.get("points") or []):
+                        _t37 = str(_pt37.get("ts") or "")
+                        if _t37:
+                            _c37 = pd.Timestamp(_t37)
+                            if _c37.tzinfo is not None:
+                                _c37 = _c37.tz_localize(None)
+                            _min_ts37 = _c37 if _min_ts37 is None or _c37 < _min_ts37 else _min_ts37
+            if _min_ts37 is not None and len(df):
+                _dts37 = pd.DatetimeIndex(pd.to_datetime(df["timestamp"]))
+                if _dts37.tz is not None:
+                    _dts37 = _dts37.tz_localize(None)
+                _pos37 = int(_dts37.searchsorted(_min_ts37))
+                _need37 = len(df) - _pos37 + 10
+                if _need37 > _lookback:
+                    _lookback = max(_lookback, min(_need37, len(df), int(_lookback * 2.2)))
+        except Exception:
+            pass
         frame = _clean_render_frame(df, window=_lookback)
         # Viva 09-18 ruling (PINWALL/PINWALL-Q/ALBROX must paint trends too):
         # ABSOLUTE safety net — any candidate that reaches the chart without
@@ -1570,11 +1653,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # and reused across every zoom/update — never re-fitted per
                 # render (a refit on a shifted window picks new anchors and
                 # the line «changes shape»).
-                try:
-                    from database.bot_kv import get_json as _gj33
-                    _stored33 = _gj33(f"render_identity:{candidate.signal_id}")
-                except Exception:
-                    _stored33 = None
+                _stored33 = _stored37   # r37: already fetched for the window math
                 if _stored33:
                     candidate.metadata["render_patterns"] = _stored33.get("render_patterns") or []
                     candidate.metadata["render_zones"] = _stored33.get("render_zones") or []
@@ -1760,9 +1839,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _live_px = float(frame["close"].iloc[-1])
             # r32 (Viva 09-26): on CONFIRMED charts the live price moves to
             # the bottom-right ledger — the in-panel LIVE pill crowded the
-            # tool column (LTC/BCH 09-26 screenshots).
-            if not confirmed:
+            # tool column (LTC/BCH 09-26 screenshots). r37: spot has NO
+            # ledger (no tool), so its live price rides the ladder tag.
+            if (not confirmed) or _is_spot:
                 _right_specs.append((float(_live_px), f" LIVE {_price(_live_px)} ", "#2b2f3a"))
+                _right_slots.append(float(_live_px))   # r37: chips keep off the LIVE row
+                # (no axis tag for LIVE — it printed over the axis numbers)
         except Exception as _exc:
             print(f"Chart live-price tag warning: {_exc}")
         ax.tick_params(
@@ -2221,33 +2303,28 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _x8 = max(float(_a8.get("x0", 0)), float(_b8.get("x0", 0)))
                     _ya8 = float(_a8["slope"]) * _x8 + float(_a8["intercept"])
                     _yb8 = float(_b8["slope"]) * _x8 + float(_b8["intercept"])
-                    _h8 = abs(_ya8 - _yb8)
+                    # ── r37 (Viva 09-26, «فقط باکس سبز رنگ شبیه کریپتوکاو
+                    # بالای ضلع بالای الگو یا ترند به سمت بالا رسم میشه وسطش
+                    # هم فلش نمیخواد»): the box anchors at the shape's UPPER
+                    # edge AT THE LAST CANDLE (a rising wedge's edge at the
+                    # pattern's start x is its LOWEST point — that anchor made
+                    # the box crawl under price) and projects UP to the
+                    # structural target. No arrow inside it.
                     _lc8 = float(frame["close"].iloc[-1])
-                    _mean_sl8 = (float(_a8["slope"]) + float(_b8["slope"])) / 2
-                    # ── Round 16 (Viva 09-22): from the FIRST warning onward
-                    # the green box rides UP to the NEXT STRUCTURAL HIGH (+1%)
-                    # — his CryptoCove reference («تا سقف بعدی ساختاری و کمی
-                    # بالاترش رسم بشه») — instead of the raw pattern height.
+                    _up8 = max(float(_a8["slope"]) * (count - 1) + float(_a8["intercept"]),
+                               float(_b8["slope"]) * (count - 1) + float(_b8["intercept"]))
+                    _h8 = abs(float(_a8["slope"]) * (count - 1) + float(_a8["intercept"])
+                              - (float(_b8["slope"]) * (count - 1) + float(_b8["intercept"])))
                     _sbt8 = float((candidate.metadata or {}).get("spot_box_top") or 0.0)
-                    if _sbt8 > _lc8:
-                        _h8 = _sbt8 - _lc8
-                    if _h8 > 0 and _lc8 > 0:
-                        if _sbt8 > _lc8:
-                            _bt8, _tp8 = _lc8, _sbt8
-                        elif _mean_sl8 < 0:
-                            _bt8, _tp8 = _lc8, _lc8 + _h8
-                        else:
-                            _bt8, _tp8 = _lc8 - _h8, _lc8
-                        # keep the box INSIDE the visible panel (a 15%-tall
-                        # wedge must not paint over the header like a banner)
-                        _lo8 = float(frame["low"].min()); _hi8 = float(frame["high"].max())
-                        _pd8 = 0.03 * (_hi8 - _lo8)
-                        _bt8c = max(_bt8, _lo8 - _pd8); _tp8c = min(_tp8, _hi8 + _pd8)
-                        if (_tp8c - _bt8c) < 0.25 * _h8:
-                            _bt8c, _tp8c = _bt8, _tp8
-                        _clamp8 = _tp8c < _tp8 - 1e-12
-                        _label_clamp8 = _clamp8   # only the VALUE label clamps
-                        _bt8, _tp8 = _bt8c, _tp8c
+                    _bt8 = _up8
+                    _tp8 = max(_sbt8, _lc8 + _h8, _bt8 * 1.004)
+                    if _tp8 > _bt8 and _lc8 > 0:
+                        _h8 = _tp8 - _bt8
+                        # r37: NO panel clamp — the smart zoom now reserves
+                        # room for spot_box_top, so the box renders WHOLE (the
+                        # old clamp squashed it into a 2% sliver).
+                        _clamp8 = False
+                        _label_clamp8 = False
                         _bx0, _bx1 = count + 2, count + 2 + max(8, int(future * 0.55))
                         # Viva 09-23 polish: a box riding the chart's top edge
                         # keeps its value label INSIDE (va="top") — the label
@@ -2273,11 +2350,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                 color=CHART_THEME["demand"], linewidth=0.7,
                                 alpha=0.55, zorder=3)
                         _mx8 = (_bx0 + _bx1) / 2
-                        ax.annotate("", xy=(_mx8, _tp8), xytext=(_mx8, _bt8),
-                                    arrowprops=dict(arrowstyle="<->",
-                                                    color=CHART_THEME["text"],
-                                                    lw=0.7, alpha=0.8),
-                                    zorder=8)
+                        # r37: NO arrow inside the spot box — «وسطش هم فلش نمیخواد»
                         ax.text(_mx8, _yy8l if _va8l == "top" else _tp8,
                                 f"{_price(_h8)} ({_h8 / _lc8 * 100:.1f}%)",
                                 color=CHART_THEME["muted"], fontsize=6.5,
@@ -2302,14 +2375,22 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         _sbt9 = float((candidate.metadata or {}).get("spot_box_top") or 0.0)
                         if _sbt9 > _lc9:
                             _tp9 = _sbt9
-                        _h9 = _tp9 - _lc9
+                        # r37: the box anchors at the broken line's upper edge
+                        # (not the live price) and projects UP — never an arrow.
+                        try:
+                            _bt9 = float(_lns[0]["slope"]) * (count + 2) + float(_lns[0]["intercept"])
+                        except Exception:
+                            _bt9 = _lc9
+                        _bt9 = max(_bt9, _lc9)
+                        _tp9 = max(_tp9, _bt9 * 1.004)
+                        _h9 = _tp9 - _bt9
                         if _h9 > 0:
                             _bx0, _bx1 = count + 2, count + 2 + max(8, int(future * 0.55))
-                            ax.fill_between([_bx0, _bx1], _lc9, _tp9,
+                            ax.fill_between([_bx0, _bx1], _bt9, _tp9,
                                             color=CHART_THEME["demand"],
                                             alpha=0.30, linewidth=0, zorder=2)
                             ax.plot([_bx0, _bx0, _bx1, _bx1, _bx0],
-                                    [_lc9, _tp9, _tp9, _lc9, _lc9],
+                                    [_bt9, _tp9, _tp9, _bt9, _bt9],
                                     color=CHART_THEME["demand"], linewidth=0.7,
                                     alpha=0.55, zorder=3)
                             _mx9 = (_bx0 + _bx1) / 2
@@ -2317,38 +2398,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             _va9l, _yy9l = "bottom", _tp9
                             if _tp9 > float(frame["high"].max()) - 0.05 * _rng9l:
                                 _va9l, _yy9l = "top", _tp9 - 0.014 * _rng9l
-                            ax.annotate("", xy=(_mx9, _tp9), xytext=(_mx9, _lc9),
-                                        arrowprops=dict(arrowstyle="<->",
-                                                        color=CHART_THEME["text"],
-                                                        lw=0.7, alpha=0.8),
-                                        zorder=8)
+                            # r37: NO arrow inside the spot box
                             ax.text(_mx9, _yy9l, f"{_price(_h9)} ({_h9 / _lc9 * 100:.1f}%)",
                                     color=CHART_THEME["muted"], fontsize=6.5,
                                     ha="center", va=_va9l, zorder=9)
                 except Exception:
                     pass
-            if _lns:
-                _l0 = _lns[0]
-                _cy8 = float(_l0["slope"]) * count + float(_l0["intercept"])
-                # chips must never sit on top of each other (Viva 09-18)
-                _rng8 = float(frame["high"].max() - frame["low"].min()) or 1.0
-                for _yy8 in list(_chip_ys8):
-                    if abs(_cy8 - _yy8) < 0.035 * _rng8:
-                        _cy8 = _yy8 + 0.045 * _rng8
-                _fr_span8 = max(float(frame["high"].max() - frame["low"].min()), 1e-12)
-                # r23: clamp BEFORE the slot (the old order broke the gap it
-                # had just reserved) and reserve a chip-sized footprint so
-                # LIVE/pills can never print on the label again (TAO 15m)
-                _cy8 = min(max(_cy8, float(frame["low"].min()) + 0.06 * _fr_span8),
-                           float(frame["high"].max()) - 0.06 * _fr_span8)
-                _cy8 = _slot_alloc(_right_slots, _cy8, _fr_span8, step=0.056)
-                _right_texts.append(ax.text(count + 4.85, _cy8,
-                        str(_pat.get("label") or _pat.get("type")), color=CHART_THEME["text"],
-                        fontsize=7, va="center", ha="left", fontweight="bold",
-                        zorder=12, clip_on=False,
-                        bbox={"boxstyle": "round,pad=0.26",
-                              "facecolor": CHART_THEME["panel"],
-                              "edgecolor": "none", "alpha": 1.0}))
+            # r37 (Viva 09-26, «برچسب ترندلاین نمیخواد و اسم الگوها رو بزنی
+            # بردار»): the dark name pills on the right column — TRENDLINE,
+            # WEDGE_RISING, CHANNEL_ASCENDING, … — are GONE on every engine.
+            # The geometry itself (lines + pivots) still draws; the words live
+            # in the Telegram text, not over the chart.
 
         # TLBREAK: draw the dynamic channel/trendline + parallel bound with
         # thin solid lines (Viva's chart style) using pivot timestamps.
@@ -2412,11 +2472,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # carrying the live price with its clock (TEHRAN, like the axis — r31).
         _live_clock = ""
         try:
-            _lt = pd.Timestamp(frame.index[-1])
-            _lt = pd.Timestamp(_lt)
-            if _lt.tzinfo is None:
-                _lt = _lt.tz_localize("UTC")
-            _live_clock = _lt.tz_convert("Asia/Tehran").strftime("%H:%M")
+            # r37 (Viva 09-26, «ساعت لایو کندل اسپات درست نیست»): the LIVE
+            # clock is the RENDER moment in Tehran — never the candle bucket.
+            # On 12h/3d/1w buckets the old frame.index[-1] stamp read hours or
+            # DAYS old (DOGE 12h: 09-25 15:30 on a 05:15 render).
+            _live_clock = datetime.now(ZoneInfo("Asia/Tehran")).strftime("%H:%M")
         except Exception:
             _live_clock = ""
         # Viva 09-23 («این قیمت نیاز به لیبل جداگانهٔ لایو روی چارت نداره؛ روی
@@ -2456,7 +2516,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # a TP line is a rumor painted over someone's plan. (This also removes
         # the TP1-vs-entry-label collision he flagged on ATOM/XLM/BCH.)
 
-        if confirmed:
+        if confirmed and not _is_spot:
             # Viva 09-20 time-axis law: the LONG/SHORT position tool starts at
             # the REAL fill candle (fallback: the confirmation candle) and
             # extends to the live edge. It is never re-anchored to «the last
@@ -2762,6 +2822,32 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     try:
                         p_from = float(proj.get("from")); p_to = float(proj.get("to"))
                         d = str(proj.get("direction") or "LONG").upper()
+                        # ── r37 (Viva 09-26, «برخی از تارگت ها احمقانه هستن …
+                        # در روزانه در ena مثلا»): the raw measured move may
+                        # fantasise (+9.8% on a 15m chart, AERO 09-26). A
+                        # projection that outruns the trade's own ladder (or
+                        # the TF sanity band) is NOT drawn — the ladder pills
+                        # are the targets; a fantasy line only misleads.
+                        _lc37 = float(frame["close"].iloc[-1])
+                        _lad37 = [float(v) for v in ((candidate.metadata or {})
+                                   .get("target_ladder") or {}).get("targets") or []]
+                        _PROJ_CAP = {"15m": 0.05, "30m": 0.06, "1h": 0.08, "2h": 0.09,
+                                     "4h": 0.11, "8h": 0.12, "12h": 0.13, "1d": 0.15}
+                        _cap37 = _lc37 * _PROJ_CAP.get(_chart_tf, 0.15)
+                        if d == "LONG":
+                            _lim37 = min(max(_lad37) * 1.01, _lc37 + _cap37) if _lad37 else _lc37 + _cap37
+                            _insane37 = p_to > _lim37
+                        else:
+                            _lim37 = max(min(_lad37) * 0.99, _lc37 - _cap37) if _lad37 else _lc37 - _cap37
+                            _insane37 = p_to < _lim37
+                        if _insane37:
+                            proj = None
+                    except Exception:
+                        pass
+                if proj:
+                    try:
+                        p_from = float(proj.get("from")); p_to = float(proj.get("to"))
+                        d = str(proj.get("direction") or "LONG").upper()
                         col = CHART_THEME["demand"] if d == "LONG" else CHART_THEME["supply"]
                         if md.get("tc_clean"):
                             # family style (same as TLBREAK/ALBROX previews): dashed
@@ -2914,12 +3000,19 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             if confirmed:
                 ladder_targets = list(((candidate.metadata or {}).get("target_ladder") or {}).get("targets") or [candidate.tp1, candidate.tp2])
                 _ovs28 += [float(v) for v in ladder_targets]
+                # r37: the spot green box tops out at spot_box_top — zoom must
+                # keep the WHOLE box on the canvas
+                if _is_spot:
+                    _sbt28 = float((candidate.metadata or {}).get("spot_box_top") or 0.0)
+                    if _sbt28 > 0:
+                        _ovs28.append(_sbt28)
             _ovs28 = [v for v in _ovs28 if v is not None and math.isfinite(v) and v > 0]
             _atr28 = float((frame["high"] - frame["low"]).tail(14).mean())
             _win28 = _smart_y_window(
                 float(frame["low"].min()), float(frame["high"].max()), _atr28,
                 min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None,
-                recent_lo=float(frame["low"].tail(40).min()))
+                recent_lo=float(frame["low"].tail(40).min()),
+                recent_hi=float(frame["high"].tail(40).max()))
             if _win28:
                 ax.set_ylim(*_win28)
                 if confirmed:
@@ -3007,7 +3100,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # «آقا پایین چارت سمت راست معمولا همیشه خالیه — اینتری و استاپ اولیه
         # رو بنویس و تریلینگ استاپ اول خالی و تی پی ها و قیمت لایو رو هم بنویس»
         # On hits the TOOL keeps its original face; the ledger row ticks.
-        if confirmed:
+        if confirmed and not _is_spot:
             try:
                 _pl32 = ax.get_position()
                 _hit32 = int(ladder.get("hit_index") or (candidate.metadata or {}).get("hit_index") or 0)
@@ -3079,12 +3172,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # candle — drawn after the final xlim so the data→figure mapping is
         # exact, and ABOVE every axes (nothing can bury it).
         try:
-            _lt = pd.Timestamp(frame.index[-1])
-            if _lt.tzinfo is None:
-                _lt = _lt.tz_localize("UTC")
-            # r31 (Viva 09-26): the LIVE stamp is Tehran wall time of the
-            # render moment — never a UTC quantised bucket.
-            _live_stamp = _lt.tz_convert("Asia/Tehran").strftime("%m-%d %H:%M")
+            # r37: the figure LIVE stamp is Tehran wall time NOW — the candle
+            # bucket it used to read (frame.index[-1]) is days stale on 3d/1w
+            # spot charts (ZEC/UNI «09-22 03:30» on a 09-26 render).
+            _live_stamp = datetime.now(ZoneInfo("Asia/Tehran")).strftime("%m-%d %H:%M")
             fig.canvas.draw()
             _xd = fig.transFigure.inverted().transform(
                 axes[2].transData.transform((len(frame) - 1, 0.0))

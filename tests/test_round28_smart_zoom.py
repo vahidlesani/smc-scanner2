@@ -54,7 +54,10 @@ def test_wld_case_tight_span_gets_structure_room():
     assert span >= 4.0 * 0.008 * 0.98, "4×ATR floor"
     occ = 0.06 / span
     assert occ <= 0.80, (span, occ)
-    assert 0.40 <= ylo and yhi <= 0.51
+    # r37 (Viva 09-26, «کندلها تا حد امکان در مرکز صفحه چارت»): the window is
+    # now CENTERED on the candle block, so the pad is symmetric — ylo may sit
+    # a hair under the old one-sided 0.40 bound.
+    assert 0.39 <= ylo and yhi <= 0.51
 
 
 def test_nearby_levels_are_included_fully():
