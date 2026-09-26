@@ -24,7 +24,7 @@ def _src():
 def test_real_brand_logo_served_and_used():
     src = _src()
     assert '"brand-logo.png"' in src                      # safe-listed route
-    assert "assets/vivasignals-logo.png" in src           # the OWNER's real file
+    assert 'os.path.join(_BASE_DIR, "assets", "vivasignals-logo.png")' in src
     assert os.path.isfile(os.path.join(REPO, "assets", "vivasignals-logo.png"))
     # the placeholder emoji is gone from the shell header
     assert '<div class="logo">🎯</div>' not in src
