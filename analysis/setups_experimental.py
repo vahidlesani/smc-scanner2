@@ -1331,6 +1331,17 @@ def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]
                          "بیس حداقل‌های بروکس را دارد (۸+ کندل و دو ساق داخلی)؛ تأییدیه مسیر عادی را می‌رود.",
                          not _p3weak, 1, timeframe=trigger_tf),
         ]
+        # r41 (Viva 09-26: «همهٔ ستاپها همان تحلیل مولتی‌تایم‌فریم/ریفاین رو
+        # داشته باشن»): ALBROX was the only setup relying on the chart-time
+        # safety net (which has no HTF context) — wire the SAME enrich the
+        # other setups use: zones/patterns of the trigger TF + 4h/1h context.
+        try:  # CHART-8: zones/patterns + HTF context like every setup
+            from analysis.render_kit import enrich_render as _er41
+            _df41 = bundle.get(str(candidate.trigger_timeframe or "").lower())
+            _er41(candidate, _df41 if _df41 is not None else bundle.get("15m"),
+                  htf_df=bundle.get("4h") or bundle.get("1h"))
+        except Exception:
+            pass
         return candidate
     return None
 

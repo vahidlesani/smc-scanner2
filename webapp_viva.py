@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import threading
 import time
@@ -361,6 +362,41 @@ def _ladder_hits(target_state_json: Any) -> tuple[bool, bool]:
         return False, False
 
 
+def _ladder_view(target_state_json: Any) -> Dict[str, Any]:
+    """r41 — the publish-time ladder state VERBATIM for the app cards:
+    targets (floats), hit flags (hit_index OR per-pill flags), the TRAILING
+    stop (current_sl) and whether it has ratcheted off the original."""
+    out: Dict[str, Any] = {"targets": [], "hit_index": 0, "current_sl": None,
+                           "sl_moved": False}
+    try:
+        lad = json.loads(target_state_json or "{}") if isinstance(target_state_json, (str, bytes)) \
+            else (target_state_json or {})
+        if not isinstance(lad, dict):
+            return out
+        vals: List[float] = []
+        for _t in (lad.get("targets") or [])[:5]:
+            _v = _t.get("price") if isinstance(_t, dict) else _t
+            try:
+                _f = float(_v)
+                if math.isfinite(_f) and _f > 0:
+                    vals.append(_f)
+            except Exception:
+                continue
+        out["targets"] = vals
+        out["hit_index"] = int(lad.get("hit_index") or 0)
+        try:
+            _cur = float(lad.get("current_sl") or 0)
+            _org = float(lad.get("original_sl") or 0)
+            if _cur > 0:
+                out["current_sl"] = _cur
+                out["sl_moved"] = bool(_org > 0 and abs(_cur - _org) > 1e-12)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return out
+
+
 def _fetch_state() -> Dict[str, Any]:
     """r29d SERVE-WHILE-REVALIDATE — «اپلیکیشن هنوز بالا نمیاد».
 
@@ -432,8 +468,10 @@ def _rebuild_state() -> Dict[str, Any]:
                 elif res == "LOSS":
                     _acc["losses"] += 1
                 lh1, lh2 = _ladder_hits(target_state_json)
-                tp1_hit = bool(tp1_hit or lh1)
-                tp2_hit = bool(lh2)
+                _lv41 = _ladder_view(target_state_json)
+                tp1_hit = bool(tp1_hit or lh1 or _lv41["hit_index"] >= 1)
+                tp2_hit = bool(lh2 or _lv41["hit_index"] >= 2)
+                tp3_hit = bool(_lv41["hit_index"] >= 3)
                 feed.append(dict(
                     signal_id=str(sid or ""), symbol=symbol, source=source, strategy_fa=fa,
                     direction=direction, entry=_fmt_price(entry), sl=_fmt_price(sl),
@@ -441,7 +479,13 @@ def _rebuild_state() -> Dict[str, Any]:
                     pnl=(float(pnl) if pnl is not None else None), score=score,
                     style=style, code=code, tf=str(tf or "").upper(),
                     time=str(created_at or ""), spot=is_spot, confirmed=bool(confirmed),
-                    tp1_hit=tp1_hit, tp2_hit=tp2_hit, partial_win=bool(partial_win),
+                    tp1_hit=tp1_hit, tp2_hit=tp2_hit, tp3_hit=tp3_hit, partial_win=bool(partial_win),
+                    # r41 REAL-LIVE cards: the ladder's OWN targets (incl. TP3),
+                    # the trailing stop and whether it ratcheted — verbatim.
+                    ladder_targets=_lv41["targets"],
+                    current_sl=(_fmt_price(_lv41["current_sl"])
+                                if _lv41["current_sl"] else None),
+                    sl_moved=_lv41["sl_moved"],
                     market_intelligence=_mi_feed,
                     summary=str(description or fa or "")[:220],
                     telegram_text="",
@@ -684,11 +728,37 @@ def _event_fa(key: str) -> str:
 
 
 def _candidate_from_row(row: dict) -> Any:
-    """Rebuild the renderer's candidate from a `signals` row (live chart)."""
+    """Rebuild the renderer's candidate from a `signals` row (live chart).
+    r41 (Viva 09-26, «چرا نردبان اپ با تلگرام فرق داره؟ دقیقاً از دیتای
+    تلگرام استفاده کنه»): the render fallback used to rebuild a FAKE
+    two-pill ladder from the raw tp1/tp2 columns — different pills, different
+    zoom from the channel chart. The publish-time build_ladder state is
+    stored on the row (target_state_json): its targets/weights/entry/
+    original_sl ARE the Telegram tool — restore them VERBATIM; the real
+    entry-zone columns replace the ±0.1% synthetic zone."""
     from analysis.models import SignalCandidate
     is_spot = _row_is_spot(str(row.get("public_code") or ""), row.get("source"), row.get("market_json"))
-    entry = float(row.get("entry") or 0)
-    sl = float(row.get("sl") or 0)
+    # publish-time ladder state (the tool Telegram drew)
+    try:
+        _tsj = row.get("target_state_json")
+        _lad41 = json.loads(_tsj) if isinstance(_tsj, (str, bytes)) else (_tsj or {})
+    except Exception:
+        _lad41 = {}
+    if not isinstance(_lad41, dict):
+        _lad41 = {}
+    try:
+        _ltargets = [float(v) for v in (_lad41.get("targets") or [])
+                     if v is not None and math.isfinite(float(v)) and float(v) > 0]
+    except Exception:
+        _ltargets = []
+    try:
+        _lweights = [float(w) for w in (_lad41.get("weights") or []) if w is not None]
+    except Exception:
+        _lweights = []
+    _lentry = float(_lad41.get("entry") or 0)
+    _lsl = float(_lad41.get("original_sl") or 0)
+    entry = _lentry if _lentry > 0 else float(row.get("entry") or 0)
+    sl = _lsl if _lsl > 0 else float(row.get("sl") or 0)
     tp1 = float(row.get("tp1") or 0)
     tp2 = float(row.get("tp2") or entry * 1.02)
     def _rr(t: float) -> float:
@@ -696,13 +766,25 @@ def _candidate_from_row(row: dict) -> Any:
             return round(abs(t - entry) / max(1e-12, abs(entry - sl)), 2)
         except Exception:
             return 0.0
+    if _ltargets:
+        ladder_md = {"targets": _ltargets,
+                     "weights": _lweights or [40.0, 30.0, 30.0][:len(_ltargets)]}
+    else:
+        ladder_md = {"targets": [tp1, tp2], "weights": [40, 30, 30]}
     md = {
         "public_code": str(row.get("public_code") or ""),
         "market": "SPOT" if is_spot else "FUTURES",
-        "target_ladder": {"targets": [tp1, tp2], "weights": [40, 30, 30]},
+        "target_ladder": ladder_md,
         "tool_entry_ts": str(row.get("confirmed_at") or row.get("created_at") or ""),
         "confirm_tf": str(row.get("trigger_timeframe") or ""),
     }
+    try:
+        _ezb = float(row.get("entry_zone_bottom") or 0)
+        _ezt = float(row.get("entry_zone_top") or 0)
+    except Exception:
+        _ezb = _ezt = 0.0
+    if not (_ezb > 0 and _ezt > _ezb):
+        _ezb, _ezt = entry * 0.999, entry * 1.001
     return SignalCandidate(
         signal_id=str(row.get("signal_id") or ""), symbol=str(row.get("symbol") or ""),
         style=str(row.get("trade_style") or "SWING"),
@@ -710,7 +792,7 @@ def _candidate_from_row(row: dict) -> Any:
         setup_name=str(row.get("setup_code") or row.get("source") or ""),
         strategy_fa=str(row.get("strategy_fa") or ""), direction=str(row.get("direction") or "LONG"),
         score=int(row.get("score") or 0), status="CONFIRMED" if row.get("confirmed") else "WATCH",
-        entry_zone_bottom=entry * 0.999, entry_zone_top=entry * 1.001, planned_entry=entry,
+        entry_zone_bottom=_ezb, entry_zone_top=_ezt, planned_entry=entry,
         sl=sl, tp1=tp1, tp2=tp2, rr_tp1=_rr(tp1), rr_tp2=_rr(tp2),
         bias="BULL" if str(row.get("direction")) == "LONG" else "BEAR",
         trigger_timeframe=str(row.get("trigger_timeframe") or "4h"),
@@ -805,7 +887,8 @@ def _signal_chart_png(sid: str) -> Optional[bytes]:
         _cols39 = ["signal_id", "symbol", "source", "public_code", "market_json",
                    "direction", "entry", "sl", "tp1", "tp2", "score", "confirmed",
                    "trigger_timeframe", "trade_style", "setup_code",
-                   "created_at", "confirmed_at", "strategy_fa"]
+                   "created_at", "confirmed_at", "strategy_fa",
+                   "target_state_json", "entry_zone_bottom", "entry_zone_top"]
         with db_cursor() as c39:
             c39.execute(f"SELECT {', '.join(_cols39)} FROM signals WHERE signal_id=%s", (sid,))
             _r39 = c39.fetchone()
@@ -1068,6 +1151,73 @@ def api_state():
     return resp
 
 
+_VERSION_SQL = ("SELECT COUNT(*), COALESCE(MAX(created_at),''), "
+                "COALESCE(MAX(last_checked_at),''), COALESCE(MAX(confirmed_at),''), "
+                "COALESCE(MAX(closed_at),''), COALESCE(MAX(tp1_hit_at),'') FROM signals")
+
+
+@viva_app.route("/app/api/version")
+def api_version():
+    """r41 REAL-LIVE (Viva 09-26, «اپ لایو واقعی، بدون تاخیر») — a fingerprint
+    of the signals table from ONE cheap query; the shell polls it every 10s
+    and only pulls the heavy /app/api/state when something actually changed
+    (Railway CPU stays flat)."""
+    ver = ""
+    try:
+        from database.db import db_cursor
+        with db_cursor() as c41:
+            c41.execute(_VERSION_SQL)
+            r41 = c41.fetchone() or ()
+        ver = "|".join(str(x) for x in r41)
+    except Exception as _exc:
+        print(f"version probe failed: {_exc}")
+        ver = f"t{int(time.time())}"
+    resp = jsonify(version=ver)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+_PRICES_CACHE: Dict[str, Any] = {"at": 0.0, "data": {}}
+
+
+@viva_app.route("/app/api/prices")
+def api_prices():
+    """r41 LIVE card prices — one public ticker call per 10s (in-process
+    cache), fail-open to the last known values. Zero renderer/kline cost."""
+    syms = [s.strip().upper() for s in (request.args.get("symbols") or "").split(",")
+            if s.strip()][:24]
+    if not syms:
+        return jsonify(prices={})
+    now = time.monotonic()
+    data = dict(_PRICES_CACHE["data"] or {})
+    if not data or now - _PRICES_CACHE["at"] >= 10:
+        try:
+            import urllib.request
+            import urllib.parse
+            q = urllib.parse.quote(json.dumps(syms, separators=(",", ":")))
+            url = f"https://api.binance.com/api/v3/ticker/price?symbols={q}"
+            req = urllib.request.Request(url, headers={"User-Agent": "viva-app/1"})
+            with urllib.request.urlopen(req, timeout=6) as r41:
+                for row in (json.loads(r.read()) or []):
+                    _s = str(row.get("symbol") or "").upper()
+                    try:
+                        data[_s] = float(row.get("price") or 0)
+                    except Exception:
+                        pass
+            if data:
+                if len(_PRICES_CACHE["data"]) > 200:
+                    _PRICES_CACHE["data"] = {}
+                _PRICES_CACHE["data"].update(data)
+                _PRICES_CACHE["at"] = now
+        except Exception as _exc:
+            print(f"price probe failed: {_exc}")
+    out = {s: _PRICES_CACHE["data"].get(s) for s in syms
+           if _PRICES_CACHE["data"].get(s)}
+    resp = jsonify(prices=out)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @viva_app.route("/app/api/signal/<sid>")
 def api_signal(sid):
     d = _signal_detail(sid)
@@ -1101,7 +1251,7 @@ def pwa_manifest():
         "name": "VIVA SIGNALS PRO", "short_name": "VIVA",
         "description": "Professional crypto signals dashboard and Telegram mirror",
         "lang": "en", "dir": "ltr",
-        "version": "R39",
+        "version": "R41",
         "start_url": "/app", "scope": "/",
         "display": "standalone", "orientation": "portrait",
         "theme_color": "#0d1017", "background_color": "#0d1017",
@@ -1127,7 +1277,7 @@ self.addEventListener('fetch', e => {
   if (url.pathname.startsWith('/app/api/')) return;         // live data: always network
   const hit = SHELL.find(([p]) => url.pathname === p);
   if (hit) {
-    e.respondWith(caches.open('viva-shell-r39').then(async c => {
+    e.respondWith(caches.open('viva-shell-r41').then(async c => {
       const cached = await c.match(e.request);
       const fetchP = fetch(e.request).then(r => { c.put(e.request, r.clone()); return r; }).catch(() => cached);
       return cached || fetchP;
@@ -1229,7 +1379,7 @@ APP_HTML = """<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0a0f1a">
 <meta name="application-name" content="VIVA SIGNALS PRO">
-<meta name="app-version" content="R39">
+<meta name="app-version" content="R41">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="VIVA">
@@ -1523,6 +1673,9 @@ function eqSvg(pts){
 function sigCard(x){
  const dir=x.spot?'up':(x.direction==='SHORT'?'dn':'up');
  const res=x.result,pc=(x.pnl!==null&&x.pnl!==undefined)?((x.pnl>0?'+':'')+x.pnl+'%'):'';
+ const t3=(x.ladder_targets&&x.ladder_targets[2])?x.ladder_targets[2]:null;
+ const slv=x.current_sl||x.sl;
+ const lv=x.live;
  return `<div class="scard" onclick="openDetail('${x.signal_id}')">
   <div class="sr1"><div class="sico ${dir}">${dir==='up'?'📈':'📉'}</div>
    <div><div class="sym">${fnum(x.symbol)}</div><div class="ssub">${fnum(x.source)} • ${ago(x.time)}</div></div>
@@ -1530,9 +1683,61 @@ function sigCard(x){
     <span>Score ${fnum(x.score)}/10 ${x.pnl_usd!=null?`• <b class="${x.pnl_usd>=0?'grn':'red'}">${money(x.pnl_usd)}</b>`:''}</span></div></div>
   <div class="spills">
    <div class="spill"><span>ENTRY</span><b>${fnum(x.entry)}</b></div>
-   <div class="spill"><span>SL</span><b class="red">${fnum(x.sl)}</b></div>
+   <div class="spill"><span>${x.sl_moved?'SL TRAIL':'SL'}</span><b class="${x.sl_moved?'amb':'red'}">${fnum(slv)}</b></div>
    <div class="spill"><span>TP1${x.tp1_hit?' ✓':''}</span><b class="grn">${fnum(x.tp1)}</b></div>
+   <div class="spill"><span>TP2${x.tp2_hit?' ✓':''}</span><b class="grn">${fnum(x.tp2)}</b></div>
+   ${t3?`<div class="spill"><span>TP3${x.tp3_hit?' ✓':''}</span><b class="grn">${fnum(t3)}</b></div>`:''}
+   ${lv?`<div class="spill"><span>LIVE</span><b style="color:#e7edf6">${fnum(lv)}</b></div>`:''}
   </div></div>`;
+}
+function toast(msg){
+ let t=document.getElementById('vivaToast');
+ if(!t){t=document.createElement('div');t.id='vivaToast';
+  t.style.cssText='position:fixed;bottom:86px;left:50%;transform:translateX(-50%);background:#1a2230;color:#e7edf6;border:1px solid rgba(232,182,76,.4);border-radius:14px;padding:10px 18px;font-size:12px;z-index:99;box-shadow:0 10px 30px rgba(0,0,0,.5);transition:opacity .3s;opacity:0;pointer-events:none';
+  document.body.appendChild(t);}
+ t.textContent=msg;t.style.opacity='1';
+ clearTimeout(t._h);t._h=setTimeout(function(){t.style.opacity='0'},4000);
+}
+function fireTouch(k,x,msg){
+ const key=x.signal_id+':'+k;if(TOUCH[key])return;TOUCH[key]=1;
+ if(('Notification'in window)&&Notification.permission==='granted'){try{new Notification('VIVA · '+fnum(x.symbol),{body:msg})}catch(e){}}
+ toast(fnum(x.symbol)+' · '+msg);
+}
+async function pollPrices(){
+ try{
+  const act=(STATE.feed||[]).filter(x=>x.result==='PENDING');
+  if(!act.length)return;
+  const syms=[...new Set(act.map(x=>x.symbol))].slice(0,24);
+  const r=await fetch('/app/api/prices?symbols='+encodeURIComponent(syms.join(',')));
+  if(r.status===401){location.href='/app/login';return}
+  if(!r.ok)return;
+  const j=await r.json();const P=j.prices||{};
+  let dirty=false;
+  act.forEach(x=>{
+   const px=P[x.symbol];if(!px)return;
+   x.live=px;dirty=true;
+   const L=x.direction!=='SHORT';
+   const tps=[[1,x.tp1,x.tp1_hit],[2,x.tp2,x.tp2_hit],[3,(x.ladder_targets&&x.ladder_targets[2]),x.tp3_hit]];
+   tps.forEach(t=>{
+     const n=t[0],lv=t[1],hit=t[2];
+     if(!lv||hit)return;
+     const crossed=L?(px>=parseFloat(lv)):(px<=parseFloat(lv));
+     if(crossed)fireTouch('tp'+n,x,'هدف '+n+' ('+lv+') تاچ شد ✓');
+   });
+   if(x.sl&&x.result==='PENDING'){
+     const s=L?(px<=parseFloat(x.sl)):(px>=parseFloat(x.sl));
+     if(s)fireTouch('stop',x,'استاپ ('+x.sl+') خورد');
+   }
+  });
+  if(dirty)render();
+ }catch(e){}
+}
+let VER='';
+async function pollV(){
+ try{const r=await fetch('/app/api/version');if(r.status===401){location.href='/app/login';return}
+  const j=await r.json();
+  if(j.version&&j.version!==VER){const first=!VER;VER=j.version;if(!first)load();}
+ }catch(e){}
 }
 function render(){
  if(!STATE)return;
@@ -1713,7 +1918,7 @@ function openDetail(sid){
   <div class="ssub" style="margin-top:8px">🕓 ${ago(x.time)} • ${tehran(x.time)}</div>`;
 }
 function closeSheet(){document.getElementById('sheetbg').style.display='none';document.getElementById('sheet').classList.remove('on')}
-load();setInterval(load,60000);
+load();setInterval(pollV,10000);setInterval(pollPrices,10000);setInterval(load,300000);let TOUCH={};
 /* r39 (Viva 09-26, «اپ آپدیت نمیشه»): on resume the PWA used to sit on the
    frozen snapshot until the next 60s tick — refresh the moment it returns. */
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)load()});

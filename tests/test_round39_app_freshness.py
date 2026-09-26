@@ -34,9 +34,14 @@ def test_chart_renders_as_fallback_when_mirror_misses(monkeypatch):
     monkeypatch.setattr(W, "_demo_mode", lambda: False)
     monkeypatch.setattr(W, "_app_mirror", lambda sid, kind: None)
 
+    # r41: the row now carries target_state_json + the real entry zone —
+    # the fallback candidate restores the PUBLISH-TIME ladder verbatim.
     row = ["viva-tech-T1", "PROOFUSDT", "TECHCLASSIC", "VIVA-TECHCLASSIC-T1",
            "{}", "LONG", 1.0, 0.985, 1.02, 1.04, 8, True, "4h", "DAYTRADE",
-           "TECHCLASSIC", "2026-09-26 06:00", "2026-09-26 06:05", "تکنوکلاسیک"]
+           "TECHCLASSIC", "2026-09-26 06:00", "2026-09-26 06:05", "تکنوکلاسیک",
+           '{"entry":1.0,"original_sl":0.985,"targets":[1.0167,1.0233,1.03],'
+           '"weights":[40.0,30.0,30.0],"current_sl":1.0,"hit_index":0}',
+           0.998, 1.0025]
 
     class _Cur:
         def execute(self, *a, **k):
@@ -109,7 +114,10 @@ def test_shell_and_state_are_no_store():
 def test_js_refreshes_on_resume():
     src = _src()
     assert "visibilitychange" in src and "pageshow" in src
-    assert "setInterval(load,60000)" in src
+    # r41: the 60s blind poll grew into the version-probe live loop
+    assert "setInterval(pollV,10000)" in src
+    assert "setInterval(pollPrices,10000)" in src
+    assert "setInterval(load,300000)" in src
 
 
 # ── 3. About copy fixes ─────────────────────────────────────────────────
