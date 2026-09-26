@@ -3070,8 +3070,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _tr9 = _mtr9.blended_transform_factory(ax.transAxes, ax.transData)
                 for _lv9, _pv9, _cv9 in _axis_tags:
                     _yv9 = min(max(_lv9, _lo2), _hi2)
-                    ax.text(1.004, _yv9, _pv9, transform=_tr9, color=_cv9,
-                            fontsize=6.3, va="center", ha="left", zorder=13,
+                    # r39b: sit the tag BELOW the ladder number, not ON it —
+                    # the old 1.004/center printed «159.9210.00» mash-ups.
+                    ax.text(1.052, _yv9, _pv9, transform=_tr9, color=_cv9,
+                            fontsize=6.3, va="top", ha="right", zorder=13,
                             clip_on=False,
                             bbox={"boxstyle": "round,pad=0.22",
                                   "facecolor": CHART_THEME["panel"],
