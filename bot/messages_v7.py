@@ -1891,7 +1891,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         "text": zone_name, "color": zone_text_color}]
         # CHART-8 unified kit: every setup stores detect→render commands in
         # metadata; the renderer obeys them (fallback: detect on this frame).
+        # r35 CryptoCave-clean (defined HERE — the first use site; the FVG
+        # gate below reuses it): spot charts draw no POI zone boxes.
+        _spot_clean35 = str((candidate.metadata or {}).get("market") or "").upper() == "SPOT"
         _rz = (candidate.metadata or {}).get("render_zones")
+        if _spot_clean35:
+            _rz = []                    # CryptoCave-clean: no POI boxes on spot
         if _rz is None:
             try:
                 from analysis.render_kit import detect_zones as _dz8
@@ -2865,7 +2870,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # the engine still sees every zone/FVG/candle; the chart shows only the
         # most actionable structural zones so the geometry remains readable.
         notes = _setup_stickers(candidate, confirmed) + notes
-        if not _clean_zone_view:
+        # r35 (Viva 09-26, «نتیجه دقیقا شبیه کریپتوکاو: فقط یک باکس سبز از
+        # بالای ترند بالا»): SPOT charts drop the FVG/IFVG strips and the
+        # POI zone boxes — the measured green box + the shape's own lines
+        # + the trade tool carry the picture. Both-side touches/breaks stay
+        # in the TEXT (the ladder already announces every side).
+        if not _clean_zone_view and not _spot_clean35:
             notes.extend(_draw_visible_fvgs(ax, frame, count))
 
         # ── r28: SMART price zoom — the candle box owns ~72% of the axis;
@@ -4295,7 +4305,39 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
         w = weights[i - 1] if i - 1 < len(weights) else 0
         tag = "ℹ️" if i >= 4 else f"{w:.0f}%"
         rows.append(f"• TP{i}: <b>{_price(tgt)}</b> · {dist:.2f}٪ فاصله · {tag}")
-    return head + "\n".join(rows) + "\n\n" + result_line + "\n\n📌 <b>VIVAMON-Labs-Pro</b>"
+    # r35 (Viva 09-26): the on-chain REFERENCE block on spot cards — the
+    # free witness engine (CoinGecko + Fear&Greed + DefiLlama) was already
+    # built and running fail-open; the card now SHOWS it, 4 lines max,
+    # house separators + emojis, never a gate.
+    _onchain35 = ""
+    if _is_spot:
+        try:
+            from analysis.onchain_free import market_snapshot, symbol_stats
+            _lines35 = []
+            _snap35 = market_snapshot() or {}
+            _dex35 = _snap35.get("dex") or {}
+            if _dex35.get("change_1d_pct") is not None:
+                _lines35.append(f"🌊 موج DEX ۲۴ساعته بازار: {_dex35['change_1d_pct']:+.1f}٪")
+            _fng35 = _snap35.get("fear_greed") or {}
+            if _fng35.get("value"):
+                _lbl35 = f" ({_fng35.get('label')})" if _fng35.get("label") else ""
+                _lines35.append(f"🧭 شاخص ترس و طمع: {_fng35['value']}{_lbl35}")
+            _st35 = (symbol_stats([str(candidate.symbol)]) or {}).get(
+                str(candidate.symbol).upper()) or {}
+            if _st35:
+                _chg35 = _st35.get("change_24h_pct")
+                _bits35 = [f"گردش ۲۴ساعته {_st35.get('volume_24h', 0)/1e6:.0f}M$"]
+                if _st35.get("market_cap"):
+                    _bits35.append(f"مارکت‌کپ {_st35['market_cap']/1e9:.1f}B$")
+                if _chg35 is not None:
+                    _bits35.append(f"تغییر ۲۴س {_chg35:+.1f}٪")
+                _lines35.append("📊 " + str(candidate.symbol) + ": " + " · ".join(_bits35))
+            if _lines35:
+                _onchain35 = ("\n━━━━━━━━━━━━━━\n📡 <b>رفرنس آنچین</b> — فقط زمینه، هرگز شرطِ سیگنال نیست\n"
+                              + "\n".join(f"• {x}" for x in _lines35[:4]) + "\n\n")
+        except Exception:
+            _onchain35 = ""
+    return head + "\n".join(rows) + "\n\n" + result_line + _onchain35 + "\n📌 <b>VIVAMON-Labs-Pro</b>"
 
 
 _SPOT_ALERT_TITLE = {

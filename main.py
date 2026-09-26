@@ -655,7 +655,11 @@ def _spot_daily_left() -> int:
     """Daily publication budget for the spot channel."""
     try:
         from database.bot_kv import get_json as _g, set_json as _s
-        cap = max(1, int(os.getenv("SPOT_MAX_PER_DAY", "2") or 2))
+        # r35 (Viva 09-26, «گیت‌های خفه‌کننده روی اسپات نباشه»): the old cap
+        # of 2/day left the lane at found 48 / published 0. The dedup stamps
+        # (per symbol+tf+pattern) and the alert stage cooldowns remain the
+        # anti-spam layer; the budget is only the last line now.
+        cap = max(1, int(os.getenv("SPOT_MAX_PER_DAY", "16") or 16))
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         data = _g("spot_daily", {}) or {}
         if str(data.get("date")) != today:
@@ -684,7 +688,7 @@ def _spot_alert_daily_left() -> int:
     budget («بقیه فقط هشدار ها و تحلیل های مختصر بشه», but never a spam faucet)."""
     try:
         from database.bot_kv import get_json as _g, set_json as _s
-        cap = max(0, int(os.getenv("SPOT_ALERT_MAX_PER_DAY", "8") or 8))
+        cap = max(0, int(os.getenv("SPOT_ALERT_MAX_PER_DAY", "30") or 30))
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         data = _g("spot_alert_daily", {}) or {}
         if str(data.get("date")) != today:
