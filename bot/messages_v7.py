@@ -5216,9 +5216,13 @@ def _pick_view_tf(candidate: SignalCandidate, now: Optional[pd.Timestamp] = None
 
 def _escape_note(base: str, view: str, escaped: int) -> str:
     """His ordered one/two-line explanation — in the MESSAGE, never on the chart."""
+    # r45 (Viva 09-26, «توی پرانتز ... تایم تریگر رو»): the explanation now
+    # carries the trigger TF in parentheses, mirroring the chart-title stamp
+    # «1H (TRIG 15M)» — message and picture say the same thing.
     return (
         f"🕒 پس از خروج {_fa_num(int(escaped))} کندل از ابزار، این پوزیشن در "
-        f"تایم فریم {_TF_FA.get(view, view.upper())} نمایش داده شده است.\n"
+        f"تایم فریم {_TF_FA.get(view, view.upper())} نمایش داده شده است "
+        f"(تایم تریگر: {_TF_FA.get(base, base.upper())}).\n"
         "ابزار روی محور زمان جابه‌جا نشده؛ ورود، استاپ و TPها روی همان زمان و "
         "قیمت اولیه‌اند و حرکت قیمت روی همان ابزار دیده می‌شود."
     )
@@ -5277,7 +5281,8 @@ def _lifecycle_view_plan(candidate: SignalCandidate,
         return _view8, 0, (
             f"ابزار لانگ/شورت روی تایم {base.upper()} کش می‌آمد "
             f"(حدود {_span_bars} کندل) — همان ابزار با همان شکل، "
-            f"روی تایم {_view8.upper()} نمایش داده شده است.")
+            f"روی تایم {_TF_FA.get(_view8, _view8.upper())} نمایش داده شده است "
+            f"(تایم تریگر: {_TF_FA.get(base, base.upper())}).")
     view = _pick_view_tf(candidate, now=now)
     if view == base:
         return base, escaped, ""
