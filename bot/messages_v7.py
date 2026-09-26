@@ -3005,18 +3005,21 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _orig32 = float((candidate.metadata or {}).get("original_sl")
                                 or (candidate.metadata or {}).get("publish_original_sl")
                                 or candidate.sl or 0)
+                # r34 (Viva 09-26 night): ENGLISH abbreviations — «اگر با فونت
+                # خوانا و خوش‌خط فارسی نمی‌تونی روی چارت بنویسی، گوشه پایین با
+                # entry و مخفف انگلیسی بنویس» — readable, beautiful, NOT big.
                 _rows32 = [
-                    f"ورود: {_price(float(candidate.planned_entry))}",
-                    f"استاپ اولیه: {_price(_orig32)}" + (" ✓" if _hit32 > 0 or _trail32 > 0 else ""),
-                    f"تریلینگ استاپ: {_price(_trail32) if _trail32 > 0 else '—'}",
+                    f"ENTRY  {_price(float(candidate.planned_entry))}",
+                    f"INITIAL STOP  {_price(_orig32)}" + ("  ✓" if _hit32 > 0 or _trail32 > 0 else ""),
+                    f"TRAILING  {_price(_trail32) if _trail32 > 0 else '—'}",
                 ]
                 for _r32, _lv32 in enumerate(ladder_targets, start=1):
-                    _rows32.append(f"TP{_r32}: {_price(float(_lv32))}"
-                                   + (" ✓" if _hit32 >= _r32 else ""))
-                _rows32.append(f"قیمت لایو: {_price(float(frame['close'].iloc[-1]))}")
+                    _rows32.append(f"TP{_r32}  {_price(float(_lv32))}"
+                                   + ("  ✓" if _hit32 >= _r32 else ""))
+                _rows32.append(f"LIVE  {_price(float(frame['close'].iloc[-1]))}")
                 fig.text(_pl32.x1 - 0.012, _pl32.y0 + 0.022,
-                         fa_chart("\n".join(_rows32)),
-                         ha="right", va="bottom", fontsize=7.2, linespacing=1.55,
+                         "\n".join(_rows32),
+                         ha="right", va="bottom", fontsize=7.6, linespacing=1.5,
                          color=CHART_THEME["text"], zorder=26,
                          bbox={"boxstyle": "round,pad=0.5",
                                "facecolor": CHART_THEME["figure"],

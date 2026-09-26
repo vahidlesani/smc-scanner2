@@ -32,8 +32,9 @@ def test_publish_score_snapshot_written_at_discovery():
 def test_tool_pills_numeric_only_and_ledger_exists():
     src = open(f"{REPO}/bot/messages_v7.py", encoding="utf-8").read()
     assert "if all(str(_lb).isdigit() for _lb, _pc, _c in _items):" in src
-    assert "استاپ اولیه" in src and "تریلینگ استاپ" in src and "قیمت لایو" in src
-    assert "fa_chart" in src  # Persian shaping on the figure
+    # r34: ENGLISH abbreviations in the bottom-right ledger (Viva 09-26)
+    assert "ENTRY  " in src and "INITIAL STOP  " in src and "TRAILING  " in src
+    assert "LIVE  " in src and "fontsize=7.6" in src
     # LIVE pill no longer drawn on confirmed charts
     seg = src[src.index("if not confirmed:"):]
     assert " LIVE " in src  # still exists for unconfirmed
@@ -100,3 +101,18 @@ def test_target_clamp_direction_math():
     live, atr = 71.15, 0.5
     assert max(70.824, live + 1.5 * atr) == live + 0.75  # LTC case fixed
     assert min(70.9, 71.15 - 1.5 * atr) == 70.4          # SHORT symmetric
+
+
+# ── r34: the app results board — leverage/margin PnL math ────────────────
+def test_webapp_results_board_math_and_wiring():
+    src = open(f"{REPO}/webapp_viva.py", encoding="utf-8").read()
+    # per-row leverage math on the feed rows
+    assert "pnl_lev=(round(float(pnl) * float(leverage or 0), 2)" in src
+    assert "pnl_usd=(round(float(margin_usd or 0) * float(pnl or 0)" in src
+    # board payload + render
+    assert "usd_total" in src and 'id="resultsBoard"' in src
+    assert "کنترل نتایج" in src
+    # math sanity: 2.8% price × 10× lev on $100 margin = $28
+    price_pct, lev, margin = 2.8, 10, 100
+    assert round(margin * price_pct * lev / 100.0, 2) == 28.0
+    assert round(price_pct * lev, 1) == 28.0

@@ -321,6 +321,7 @@ def _demo_payload() -> Dict[str, Any]:
              pnl=None, time=iso_ago(hours=1)),
     ]
     return dict(demo=True, feed=feed, chains=chains, live_positions=chains, analytics=analytics, hits=hits,
+                results=dict(rows=[], usd_total=0, usd_win=0, usd_loss=0),
                 control=control_state(), scanner=dict(alive=True, mode="نمایشی"),
                 server_time=datetime.now(TEHRAN).strftime("%Y-%m-%d %H:%M"))
 
@@ -446,6 +447,14 @@ def _rebuild_state() -> Dict[str, Any]:
                     telegram_text="",
                     leverage=int(leverage or 0),
                     margin=float(margin_usd or 0),
+                    # r34 (Viva: «سود زیان باید به‌ازای لوریج اعلام بشه») —
+                    # price move %, margin move % (= price × lev) and the
+                    # dollar PnL on the trade's own margin.
+                    pnl_lev=(round(float(pnl) * float(leverage or 0), 2)
+                             if pnl is not None else None),
+                    pnl_usd=(round(float(margin_usd or 0) * float(pnl or 0)
+                                   * float(leverage or 0) / 100.0, 2)
+                             if pnl is not None else None),
                 ))
                 try:
                     from database.bot_kv import get_json as _app_gj
@@ -598,6 +607,16 @@ def _rebuild_state() -> Dict[str, Any]:
             avg_pnl=float(summary.get("avg_pnl") or 0.0),
         ))
         scanner = dict(alive=True, mode="")
+        # r34: the RESULTS CONTROL board — same-day closed trades with the
+        # leverage-adjusted PnL the user asked to steer by.
+        _crows = [x for x in feed if x.get("result") in ("WIN", "LOSS")]
+        _usd = [(x, float(x.get("pnl_usd") or 0)) for x in _crows]
+        results = dict(
+            rows=_crows,
+            usd_total=round(sum(u for _, u in _usd), 2),
+            usd_win=round(sum(u for x, u in _usd if x["result"] == "WIN"), 2),
+            usd_loss=round(sum(u for x, u in _usd if x["result"] == "LOSS"), 2),
+        )
         # ── Viva 09-23/24 («چرا اسپات رو فعال نمیکنی؟؟»): the spot lane's
         # real state is visible in the app — reason + last pass, from KV.
         try:
@@ -628,6 +647,7 @@ def _rebuild_state() -> Dict[str, Any]:
         except Exception:
             pass
         payload = dict(demo=False, feed=feed, chains=chains, live_positions=live_positions, analytics=analytics, hits=hits,
+                       results=results,
                        control=control_state(), scanner=scanner,
                        server_time=datetime.now(TEHRAN).strftime("%Y-%m-%d %H:%M"))
         # r29e: the discovery funnel (R31.1) is READABLE from the dashboard —
@@ -1245,6 +1265,12 @@ main{padding:12px 12px 8px;max-width:680px;margin:0 auto}
 .sf .tile{text-align:right;padding:12px}
 .sf .tile small{display:block;margin-bottom:3px}
 details.archive{margin:6px 0}
+.rtiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0}
+.rtiles .tile b{font-size:15px}
+.rtable{width:100%;border-collapse:collapse;font-size:11.5px;background:var(--chip);border:1px solid var(--line2);border-radius:10px;overflow:hidden}
+.rtable th{background:var(--panel);color:var(--muted);padding:7px 5px;font-weight:600;white-space:nowrap}
+.rtable td{padding:7px 5px;border-top:1px solid var(--line2);text-align:center;white-space:nowrap}
+.up{color:var(--long)} .dn{color:var(--short)}
 details.archive summary{cursor:pointer;font-size:11.5px;color:var(--muted);background:var(--chip);border:1px dashed var(--line2);border-radius:10px;padding:8px 12px;list-style:none}
 details.archive summary::-webkit-details-marker{display:none}
 details.archive .strat{opacity:.75}
@@ -1364,6 +1390,8 @@ nav .bdg{position:absolute;top:0;left:18%;background:var(--short);color:#fff;fon
 
 <section class="page on" id="page-feed">
   <div class="sect"><h2>🔔 هشدارهای امروز</h2><small>فقط امروز • کارت + چارت</small></div>
+  <h3 class="sec">🎛 کنترل نتایج — PnL به‌ازای لوریج و مارجین</h3>
+  <div id="resultsBoard"></div>
   <div id="feed"></div>
   <div class="sect"><h2>⛓ زنجیره‌های رصد فعال</h2><small id="chainsN"></small></div>
   <div id="chains"></div>
@@ -1481,7 +1509,7 @@ function feedCard(s){
   ${s.telegram_text?`<div class="explain">${s.telegram_text}</div>`:(s.summary?`<div class="sumline">${fnum(s.summary)}</div>`:"")}
   ${s.market_intelligence?miSummary(s.market_intelligence):''}
   <div class="ftr"><span class="code">${fnum(s.code)}</span>
-   <span class="res ${s.result}">${resFa(s.result)}${s.pnl!==null&&s.pnl!==undefined?` ${s.pnl>0?'+':''}${s.pnl}%`:''}</span>
+   <span class="res ${s.result}">${resFa(s.result)}${s.pnl!==null&&s.pnl!==undefined?` ${s.pnl>0?'+':''}${s.pnl}%`:''}${s.pnl_usd!=null?` · <b class="${s.pnl_usd>=0?'up':'dn'}">$${Number(s.pnl_usd).toFixed(2)}</b>`:''}</span>
    <span class="time">${tehran(s.time)}</span></div></div>`}
 function liveCard(p){
  const dir=p.spot?'LONG':(p.direction||'');
@@ -1546,6 +1574,14 @@ function render(){
  if(hits.length){nB.textContent=hits.length;nB.style.display='block';hB.textContent=hits.length;hB.style.display='inline'}
  else{nB.style.display='none';hB.style.display='none'}
  $('#hits').innerHTML=hits.length?hits.map(hitCard).join(''):'<div class="empty">برخوردی ثبت نشده</div>';
+ const rb=STATE.results||{rows:[],usd_total:0,usd_win:0,usd_loss:0};const rr=rb.rows||[];
+ $('#resultsBoard').innerHTML=`<div class="rtiles">
+  <div class="tile ${rb.usd_total>=0?'green':'red'}"><b>$${(rb.usd_total||0).toFixed(2)}</b><span>PnL خالص امروز (مارجین)</span></div>
+  <div class="tile green"><b>$${(rb.usd_win||0).toFixed(2)}</b><span>سودها</span></div>
+  <div class="tile red"><b>$${(rb.usd_loss||0).toFixed(2)}</b><span>باخت‌ها</span></div></div>`
+ +(rr.length?`<table class="rtable"><thead><tr><th>سیگنال</th><th>نتیجه</th><th>قیمت</th><th>اهرم</th><th>PnL مارجین</th><th>PnL دلاری</th><th>مارجین</th></tr></thead><tbody>`
+  +rr.map(x=>`<tr><td><b>${fnum(x.symbol)}</b> <span class="mini">${fnum(x.code)}</span><br><span class="mini">${fnum(x.source)}</span></td><td><span class="res ${x.result}">${resFa(x.result)}</span></td><td>${x.pnl!=null?(x.pnl>0?'+':'')+x.pnl+'%':'—'}</td><td>${x.leverage?x.leverage+'×':'—'}</td><td>${x.pnl_lev!=null?(x.pnl_lev>0?'+':'')+x.pnl_lev+'%':'—'}</td><td class="${x.pnl_usd>=0?'up':'dn'}">${x.pnl_usd!=null?'$'+Number(x.pnl_usd).toFixed(2):'—'}</td><td>${x.margin?'$'+Number(x.margin).toFixed(0):'—'}</td></tr>`).join('')
+  +`</tbody></table>`:'<div class="empty">امروز نتیجهٔ بسته‌ای ثبت نشده</div>');
  const a=STATE.analytics||{},sm=a.summary||{};
  $('#sumTiles').innerHTML=`
   <div class="tile gold"><b>${sm.total??'—'}</b><span>کل سیگنال‌ها</span></div>
