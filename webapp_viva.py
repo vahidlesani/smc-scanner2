@@ -482,7 +482,7 @@ def _rebuild_state() -> Dict[str, Any]:
                     tp1_hit=tp1_hit, tp2_hit=tp2_hit, tp3_hit=tp3_hit, partial_win=bool(partial_win),
                     # r41 REAL-LIVE cards: the ladder's OWN targets (incl. TP3),
                     # the trailing stop and whether it ratcheted — verbatim.
-                    ladder_targets=_lv41["targets"],
+                    ladder_targets=[_fmt_price(_t43) for _t43 in _lv41["targets"]],
                     current_sl=(_fmt_price(_lv41["current_sl"])
                                 if _lv41["current_sl"] else None),
                     sl_moved=_lv41["sl_moved"],
@@ -1008,6 +1008,10 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
         row = dict(zip(cols, rows[0]))
         res = "WIN" if (row.get("result") == "WIN" or row.get("partial_win")) else str(row.get("result") or "PENDING")
         lh1, lh2 = _ladder_hits(row.get("target_state_json"))
+        # r43: the detail ladder shows the SAVED three-pill ladder (same
+        # numbers Telegram published); the legacy tp1/tp2 columns are only a
+        # two-row fallback for pre-r40 rows.
+        _lv43 = _ladder_view(row.get("target_state_json"))
         try:
             conf = json.loads(row.get("confirmations") or "[]")
             if not isinstance(conf, list):
@@ -1073,8 +1077,11 @@ def _signal_detail(sid: str) -> Optional[Dict[str, Any]]:
             summary=str(row.get("description") or row.get("strategy_fa") or ""),
             entry_conditions=str(row.get("entry_conditions") or ""),
             confirmations=[str(x) for x in conf],
-            ladder=[dict(price=_fmt_price(row.get("tp1")), hit=bool(row.get("tp1_hit") or lh1)),
-                    dict(price=_fmt_price(row.get("tp2")), hit=lh2)],
+            ladder=([dict(price=_fmt_price(_t), hit=(_lv43["hit_index"] > _i))
+                     for _i, _t in enumerate(_lv43["targets"])]
+                    if len(_lv43["targets"]) >= 3 else
+                    [dict(price=_fmt_price(row.get("tp1")), hit=bool(row.get("tp1_hit") or lh1)),
+                     dict(price=_fmt_price(row.get("tp2")), hit=lh2)]),
             hit_log=hit_log,
             messages=_messages,
             timeline=timeline,
@@ -1651,6 +1658,7 @@ nav button.on .tiline{width:16px;height:2.5px;border-radius:2px;background:var(-
 let STATE=null,FILTER='ALL',PEND={paused:null,setups:null},NOTIF=new Set();
 
 function fnum(v){return (v===null||v===undefined||v==='')?'—':String(v);}
+function pf(v){return parseFloat(String(v).replace(/,/g,''))}
 function tehran(iso){try{const d=new Date(iso);return isNaN(d)?fnum(iso):d.toLocaleTimeString('fa-IR',{hour:'2-digit',minute:'2-digit'});}catch(e){return fnum(iso)}}
 function ago(iso){try{const s=(Date.now()-new Date(iso).getTime())/1e3;if(!isFinite(s))return fnum(iso);
  if(s<3600)return Math.max(1,Math.round(s/60))+'m ago';if(s<86400)return Math.round(s/3600)+'h ago';return Math.round(s/86400)+'d ago'}catch(e){return fnum(iso)}}
@@ -1686,7 +1694,8 @@ function eqSvg(pts){
 function sigCard(x){
  const dir=x.spot?'up':(x.direction==='SHORT'?'dn':'up');
  const res=x.result,pc=(x.pnl!==null&&x.pnl!==undefined)?((x.pnl>0?'+':'')+x.pnl+'%'):'';
- const t3=(x.ladder_targets&&x.ladder_targets[2])?x.ladder_targets[2]:null;
+ const L43=(x.ladder_targets||[]);
+ const p1=L43[0]||x.tp1,p2=L43[1]||x.tp2,t3=L43[2]||null;
  const slv=x.current_sl||x.sl;
  const lv=x.live;
  return `<div class="scard" onclick="openDetail('${x.signal_id}')">
@@ -1697,8 +1706,8 @@ function sigCard(x){
   <div class="spills">
    <div class="spill"><span>ENTRY</span><b>${fnum(x.entry)}</b></div>
    <div class="spill"><span>${x.sl_moved?'SL TRAIL':'SL'}</span><b class="${x.sl_moved?'amb':'red'}">${fnum(slv)}</b></div>
-   <div class="spill"><span>TP1${x.tp1_hit?' ✓':''}</span><b class="grn">${fnum(x.tp1)}</b></div>
-   <div class="spill"><span>TP2${x.tp2_hit?' ✓':''}</span><b class="grn">${fnum(x.tp2)}</b></div>
+   <div class="spill"><span>TP1${x.tp1_hit?' ✓':''}</span><b class="grn">${fnum(p1)}</b></div>
+   <div class="spill"><span>TP2${x.tp2_hit?' ✓':''}</span><b class="grn">${fnum(p2)}</b></div>
    ${t3?`<div class="spill"><span>TP3${x.tp3_hit?' ✓':''}</span><b class="grn">${fnum(t3)}</b></div>`:''}
    ${lv?`<div class="spill"><span>LIVE</span><b style="color:#e7edf6">${fnum(lv)}</b></div>`:''}
   </div></div>`;
@@ -1734,11 +1743,11 @@ async function pollPrices(){
    tps.forEach(t=>{
      const n=t[0],lv=t[1],hit=t[2];
      if(!lv||hit)return;
-     const crossed=L?(px>=parseFloat(lv)):(px<=parseFloat(lv));
+     const crossed=L?(px>=pf(lv)):(px<=pf(lv));
      if(crossed)fireTouch('tp'+n,x,'هدف '+n+' ('+lv+') تاچ شد ✓');
    });
    if(x.sl&&x.result==='PENDING'){
-     const s=L?(px<=parseFloat(x.sl)):(px>=parseFloat(x.sl));
+     const s=L?(px<=pf(x.sl)):(px>=pf(x.sl));
      if(s)fireTouch('stop',x,'استاپ ('+x.sl+') خورد');
    }
   });
