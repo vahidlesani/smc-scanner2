@@ -1082,7 +1082,7 @@ self.addEventListener('fetch', e => {
   if (url.pathname.startsWith('/app/api/')) return;         // live data: always network
   const hit = SHELL.find(([p]) => url.pathname === p);
   if (hit) {
-    e.respondWith(caches.open('viva-shell-r29d').then(async c => {
+    e.respondWith(caches.open('viva-shell-r36').then(async c => {
       const cached = await c.match(e.request);
       const fetchP = fetch(e.request).then(r => { c.put(e.request, r.clone()); return r; }).catch(() => cached);
       return cached || fetchP;
@@ -1176,15 +1176,15 @@ document.getElementById('pw').addEventListener('keydown',e=>{if(e.key==='Enter')
 </script></body></html>"""
 
 
-APP_HTML = """<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
+APP_HTML = """<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0d1017">
+<meta name="theme-color" content="#0a0f1a">
 <meta name="application-name" content="VIVA SIGNALS PRO">
-<meta name="app-version" content="R31">
+<meta name="app-version" content="R36">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="VIVA">
-<title>VIVA SIGNALS PRO</title>
+<title>VivaSignals Pro — SMC Scanner v7</title>
 <link rel="manifest" href="/app/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/app/icons/apple-touch-icon.png">
 <link rel="icon" href="/app/favicon.png">
@@ -1192,503 +1192,422 @@ APP_HTML = """<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-
 @font-face{font-family:Vazirmatn;src:url(/app/fonts/Vazirmatn-Regular.woff2) format('woff2');font-weight:400;font-display:swap}
 @font-face{font-family:Vazirmatn;src:url(/app/fonts/Vazirmatn-Bold.woff2) format('woff2');font-weight:700;font-display:swap}
 :root{
- --bg:#0b0e14;--panel:#141924;--panel2:#1a212e;--line:rgba(232,182,76,.15);--line2:#232b3a;
- --gold:#e8b64c;--gold2:#c9962f;--text:#ece7dd;--muted:#8b93a1;
- --long:#1fae7c;--short:#e5484d;--tp1:#2fbf9b;--tp2:#4c8dff;--stop:#e5484d;--entry:#98a2b3;
- --amber:#e2a336;--chip:#1d2532;
+ --bg:#0a0f1a;--card:#101a2c;--card2:#0d1524;--line:#1d2a42;--line2:#16223a;
+ --tx:#e7edf6;--mut:#8b9cb5;--grn:#2ce5a7;--red:#ff5c66;--amb:#ffb020;--blu:#4c8dff;--tea:#19d3c5;
  --sat:env(safe-area-inset-top,0px);--sab:env(safe-area-inset-bottom,0px);
 }
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{height:100%}
-body{background:radial-gradient(900px 420px at 80% -8%,#141b28 0%,var(--bg) 60%);color:var(--text);
- font-family:Vazirmatn,Segoe UI,Tahoma,sans-serif;font-size:14px;padding-bottom:calc(74px + var(--sab))}
-/* ── header ── */
-header{position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:10px;padding:calc(10px + var(--sat)) 14px 10px;
- background:rgba(11,14,20,.88);backdrop-filter:blur(16px);border-bottom:1px solid var(--line)}
-.hamb{background:none;border:0;color:var(--gold);cursor:pointer;padding:4px;display:flex}
-header img{width:34px;height:34px;border-radius:9px}
-.ht{flex:1;min-width:0}
-.ht b{display:block;font-size:14.5px;letter-spacing:.05em;color:var(--gold)}
-.ht span{font-size:10.5px;color:var(--muted)}
-.live{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted);background:var(--chip);padding:5px 9px;border-radius:20px;border:1px solid var(--line2)}
-.dot{width:7px;height:7px;border-radius:50%;background:var(--long);animation:pulse 1.8s infinite}
-@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(31,174,124,.55)}70%{box-shadow:0 0 0 7px rgba(31,174,124,0)}100%{box-shadow:0 0 0 0 rgba(31,174,124,0)}}
-main{padding:12px 12px 8px;max-width:680px;margin:0 auto}
-.page{display:none}.page.on{display:block}
-.demo{margin:0 0 10px;text-align:center;font-size:11px;color:var(--amber);background:rgba(226,163,54,.08);border:1px dashed rgba(226,163,54,.4);border-radius:10px;padding:6px}
-.sect{display:flex;align-items:center;justify-content:space-between;margin:14px 2px 8px}
-.sect h2{font-size:13px;color:var(--gold);letter-spacing:.04em}
-.sect small{color:var(--muted);font-size:10.5px}
-/* ── cards ── */
-.card{background:linear-gradient(180deg,var(--panel) 0%,#121722 100%);border:1px solid var(--line2);border-radius:18px;padding:13px 14px;margin-bottom:10px;box-shadow:0 10px 28px rgba(0,0,0,.32);cursor:pointer;transition:transform .12s}
-.card:active{transform:scale(.985);border-color:var(--line)}
-.row1{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.sym{font-size:15.5px;font-weight:800;letter-spacing:.02em}
-.badge{font-size:10px;font-weight:700;color:var(--gold);border:1px solid rgba(232,182,76,.4);background:rgba(232,182,76,.07);padding:2.5px 8px;border-radius:8px}
-.chip{font-size:10px;font-weight:700;padding:2.5px 8px;border-radius:8px}
-.chip.LONG{color:#39d9a4;background:rgba(31,174,124,.12);border:1px solid rgba(31,174,124,.35)}
-.chip.SHORT{color:#ff7b80;background:rgba(229,72,77,.12);border:1px solid rgba(229,72,77,.35)}
-.chip.SPOT{color:#9db7ff;background:rgba(76,141,255,.12);border:1px solid rgba(76,141,255,.35)}
-.chip.score{color:var(--text);background:var(--chip);border:1px solid var(--line2)}
-.hitflag{font-size:9.5px;font-weight:800;color:var(--tp1);background:rgba(47,191,155,.12);border:1px solid rgba(47,191,155,.4);padding:2px 7px;border-radius:8px}
-.pills{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px}
-.pill{display:flex;align-items:center;justify-content:space-between;background:#0f141d;border:1px solid var(--line2);border-radius:10px;padding:7px 10px}
-.pill i{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.04em}
-.pill b{font-size:12px;font-weight:700}
-.pill.entry i{color:var(--entry)} .pill.stop i{color:var(--stop)}
-.pill.tp1 i{color:var(--tp1)} .pill.tp2 i{color:var(--tp2)}
-.pill.hit{border-color:rgba(47,191,155,.45)}
-.ftr{display:flex;align-items:center;justify-content:space-between;margin-top:9px}
-.code{font-size:10.5px;color:var(--muted);font-family:ui-monospace,Menlo,monospace;direction:ltr}
-.time{font-size:10.5px;color:var(--muted)}
-.res{font-size:10px;font-weight:800;padding:3px 9px;border-radius:8px}
-.res.PENDING{color:var(--amber);background:rgba(226,163,54,.1);border:1px solid rgba(226,163,54,.35)}
-.res.WIN{color:#39d9a4;background:rgba(31,174,124,.12);border:1px solid rgba(31,174,124,.4)}
-.res.LOSS{color:#ff7b80;background:rgba(229,72,77,.12);border:1px solid rgba(229,72,77,.4)}
-.res.CANCELLED{color:var(--muted);background:var(--chip);border:1px solid var(--line2)}
-.chain .row1{margin-bottom:8px}
-.upd{font-size:10.5px;color:var(--amber);background:rgba(226,163,54,.08);border:1px solid rgba(226,163,54,.3);padding:2px 8px;border-radius:8px}
-.thumb{width:100%;margin-top:10px;border-radius:13px;overflow:hidden;background:#0d1017;border:1px solid var(--line2);aspect-ratio:16/9}\n.thumb img{width:100%;height:100%;object-fit:cover;display:block}\n.livegrid{display:grid;gap:10px}\n.livebar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}\n.liveprice{font-size:13px;color:var(--text)}\n.live-meta{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}\n.live-meta .pill{padding:6px 8px}\n.graph{height:130px;display:flex;align-items:flex-end;gap:6px;padding:12px 8px 6px;background:#0f141d;border:1px solid var(--line2);border-radius:14px;margin-top:8px}\n.graph .bar{flex:1;min-width:4px;border-radius:4px 4px 1px 1px;background:var(--gold);opacity:.85}\n.graph .bar.loss{background:var(--short)} .graph .bar.win{background:var(--long)}\n.explain{font-size:11.5px;line-height:1.9;color:#c9cfda;margin-top:8px;background:#0f141d;border:1px solid var(--line2);border-radius:12px;padding:9px 11px}\n.explain b{color:var(--gold)}\n.sumline{font-size:11.5px;color:#b9c0cc;line-height:1.8;margin-top:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-/* ── perf ── */
-.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
-.tile{background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:11px 8px;text-align:center}
-.tile b{display:block;font-size:17px}
-.tile span{font-size:10px;color:var(--muted)}
-.tile.gold b{color:var(--gold)} .tile.green b{color:#39d9a4} .tile.red b{color:#ff7b80}
-.wr{height:6px;background:#0b0e14;border-radius:6px;margin-top:8px;overflow:hidden;border:1px solid var(--line2)}
-.wr i{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--gold2),var(--gold));transition:width .7s}
-.strat{margin-bottom:8px}
-.strat .nm{font-size:13px;font-weight:700;flex:1}
-.mini{font-size:10px;color:var(--muted)}
-.pnlp{color:#39d9a4}.pnln{color:#ff7b80}
-.sf{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px}
-.sf .tile{text-align:right;padding:12px}
-.sf .tile small{display:block;margin-bottom:3px}
-details.archive{margin:6px 0}
-.rtiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0}
-.rtiles .tile b{font-size:15px}
-.rtable{width:100%;border-collapse:collapse;font-size:11.5px;background:var(--chip);border:1px solid var(--line2);border-radius:10px;overflow:hidden}
-.rtable th{background:var(--panel);color:var(--muted);padding:7px 5px;font-weight:600;white-space:nowrap}
-.rtable td{padding:7px 5px;border-top:1px solid var(--line2);text-align:center;white-space:nowrap}
-.up{color:var(--long)} .dn{color:var(--short)}
-details.archive summary{cursor:pointer;font-size:11.5px;color:var(--muted);background:var(--chip);border:1px dashed var(--line2);border-radius:10px;padding:8px 12px;list-style:none}
-details.archive summary::-webkit-details-marker{display:none}
-details.archive .strat{opacity:.75}
-/* ── hits ── */
-.hitc{display:flex;align-items:center;gap:11px}
-.hico{width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
-.hico.tp1,.hico.tp2{background:rgba(47,191,155,.13);border:1px solid rgba(47,191,155,.4)}
-.hico.sl{background:rgba(229,72,77,.13);border:1px solid rgba(229,72,77,.4)}
-.hico.win{background:rgba(31,174,124,.15);border:1px solid rgba(31,174,124,.45)}
-.hico.loss{background:rgba(229,72,77,.13);border:1px solid rgba(229,72,77,.4)}
-.hico.confirm{background:rgba(76,141,255,.13);border:1px solid rgba(76,141,255,.4)}
-.hb{flex:1;min-width:0}
-.hb b{font-size:13px;display:block}
-.hb span{font-size:10.5px;color:var(--muted)}
-.hright{text-align:left}
-/* ── control ── */
-.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:12px 2px;border-bottom:1px solid var(--line2)}
-.toggle-row:last-child{border-bottom:0}
-.tl b{font-size:13.5px;display:block}
-.tl span{font-size:10.5px;color:var(--muted)}
-.sw{position:relative;width:46px;height:26px;border-radius:20px;background:#232b38;border:1px solid var(--line2);cursor:pointer;transition:.25s;flex-shrink:0}
-.sw::after{content:'';position:absolute;top:2px;right:2px;width:20px;height:20px;border-radius:50%;background:#8b93a1;transition:.25s}
-.sw.on{background:rgba(31,174,124,.25);border-color:rgba(31,174,124,.5)}
-.sw.on::after{background:#39d9a4;transform:translateX(-19px)}
-.master .sw{width:56px;height:30px}.master .sw::after{width:24px;height:24px}
-.master .sw.on::after{transform:translateX(-25px)}
-.hint{font-size:10.5px;color:var(--muted);line-height:1.9;margin-top:10px}
-.btn{width:100%;margin-top:14px;background:linear-gradient(135deg,var(--gold),var(--gold2));border:0;color:#171207;font-weight:800;font-family:inherit;font-size:14px;border-radius:13px;padding:12px;cursor:pointer}
-.statline{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
-.stat{font-size:10.5px;color:var(--muted);background:var(--chip);border:1px solid var(--line2);border-radius:9px;padding:5px 10px}
-.stat b{color:var(--text)}
-/* ── drawer ── */
-.backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(3px);opacity:0;pointer-events:none;transition:.25s;z-index:80}
-.backdrop.on{opacity:1;pointer-events:auto}
-.drawer{position:fixed;top:0;bottom:0;right:-88%;width:82%;max-width:320px;z-index:90;background:linear-gradient(180deg,#141924,#0e1219);
- border-left:1px solid var(--line);transition:right .28s cubic-bezier(.2,.8,.25,1);display:flex;flex-direction:column;box-shadow:-24px 0 60px rgba(0,0,0,.5)}
-.drawer.on{right:0}
-.dr-h{padding:calc(18px + var(--sat)) 18px 16px;border-bottom:1px solid var(--line2);display:flex;align-items:center;gap:12px}
-.dr-h img{width:48px;height:48px;border-radius:13px;box-shadow:0 6px 18px rgba(232,182,76,.22)}
-.dr-h b{display:block;font-size:14.5px;color:var(--gold);letter-spacing:.05em}
-.dr-h span{font-size:10.5px;color:var(--muted)}
-.dr-body{flex:1;overflow-y:auto;padding:10px}
-.dr-item{display:flex;align-items:center;gap:12px;padding:12px 12px;border-radius:12px;color:#c9cfda;cursor:pointer;font-size:13.5px;border:1px solid transparent}
-.dr-item:active{background:rgba(232,182,76,.06)}
-.dr-item.on{background:rgba(232,182,76,.09);border-color:rgba(232,182,76,.22);color:var(--gold)}
-.dr-item svg{width:20px;height:20px;flex-shrink:0}
-.dr-item .cnt{margin-right:auto;font-size:10px;background:var(--short);color:#fff;border-radius:10px;padding:1.5px 7px;font-weight:800}
-.dr-sep{height:1px;background:var(--line2);margin:8px 12px}
-.dr-f{padding:12px 16px calc(14px + var(--sab));border-top:1px solid var(--line2);font-size:10.5px;color:var(--muted);line-height:2}
-.dr-f b{color:#39d9a4}
-.dr-f .out{color:#ff7b80;cursor:pointer}
-/* ── bottom nav ── */
-nav{position:fixed;bottom:0;right:0;left:0;z-index:60;display:flex;background:rgba(11,14,20,.94);backdrop-filter:blur(18px);border-top:1px solid var(--line);padding:8px 10px calc(8px + var(--sab))}
-nav button{flex:1;background:none;border:0;color:var(--muted);font-family:inherit;font-size:10.5px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;padding:4px;position:relative}
-nav button svg{width:21px;height:21px}
-nav button.on{color:var(--gold)}
-nav .bdg{position:absolute;top:0;left:18%;background:var(--short);color:#fff;font-size:9px;font-weight:800;border-radius:9px;padding:1px 5px}
-.empty{text-align:center;color:var(--muted);font-size:12px;padding:26px 0}
-.refresh{position:fixed;top:calc(8px + var(--sat));left:12px;z-index:70;font-size:10px;color:var(--muted);background:rgba(11,14,20,.7);padding:3px 8px;border-radius:8px;opacity:0;transition:.3s}
-.refresh.on{opacity:1}
-/* ── detail page ── */
-.dpage{position:fixed;inset:0;z-index:100;background:var(--bg);overflow-y:auto;display:none}
-.dpage.on{display:block}
-.dhead{position:sticky;top:0;display:flex;align-items:center;gap:10px;padding:calc(10px + var(--sat)) 12px 10px;background:rgba(11,14,20,.92);backdrop-filter:blur(16px);border-bottom:1px solid var(--line);z-index:5}
-.backb{background:none;border:0;color:var(--gold);cursor:pointer;padding:4px;display:flex}
-.dbody{padding:12px 12px 30px;max-width:680px;margin:0 auto}
-.chartbox{background:#fff;border-radius:16px;overflow:hidden;border:1px solid var(--line2);box-shadow:0 14px 40px rgba(0,0,0,.4)}
-.chartbox img{display:block;width:100%;height:auto}
-.chartload{display:flex;align-items:center;justify-content:center;height:220px;color:var(--muted);font-size:12px;gap:8px}
-.spin{width:16px;height:16px;border:2px solid var(--line2);border-top-color:var(--gold);border-radius:50%;animation:sp 1s linear infinite}
-@keyframes sp{to{transform:rotate(360deg)}}
-.dsec{margin-top:12px}
-.dsec h3{font-size:12.5px;color:var(--gold);margin-bottom:8px;letter-spacing:.03em}
-.prose{font-size:12.5px;line-height:2;color:#c9cfda;background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:12px 14px}
-.prose.tgmsg{white-space:pre-wrap;word-break:break-word;font-size:13px}
-.prose.tgmsg b{color:#fff}
-.prose.tgmsg i,.prose.tgmsg code{color:#8ab4ff}
-.conf{display:flex;align-items:center;gap:8px;font-size:12px;color:#c9cfda;padding:6px 2px}
-.conf svg{width:15px;height:15px;color:var(--long);flex-shrink:0}
-.tl{position:relative;padding-right:18px}
-.tl::before{content:'';position:absolute;right:5px;top:6px;bottom:6px;width:2px;background:var(--line2);border-radius:2px}
-.tli{position:relative;padding:7px 0}
-.tli::before{content:'';position:absolute;right:-17px;top:13px;width:9px;height:9px;border-radius:50%;background:var(--gold);box-shadow:0 0 0 3px rgba(232,182,76,.15)}
-.tli b{font-size:12.5px;display:block}
-.tli span{font-size:10.5px;color:var(--muted)}
-.sk{background:linear-gradient(100deg,var(--panel) 40%,#1c2432 50%,var(--panel) 60%);background-size:200% 100%;animation:sh 1.4s infinite;border-radius:14px;height:14px;margin-bottom:8px}
-@keyframes sh{to{background-position:-200% 0}}
-</style></head><body>
-<div class="refresh" id="refresh">به‌روزرسانی…</div>
+body{background:var(--bg);color:var(--tx);font-family:Vazirmatn,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:14px;padding-bottom:calc(72px + var(--sab))}
+header{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:10px;padding:calc(10px + var(--sat)) 14px 10px;background:rgba(10,15,26,.92);backdrop-filter:blur(14px);border-bottom:1px solid var(--line2)}
+.logo{width:38px;height:38px;border-radius:12px;background:radial-gradient(120% 120% at 30% 20%,#123c33 0%,#0c2230 70%);border:1px solid #1f4a44;display:grid;place-items:center;font-size:17px}
+.ht{flex:1;min-width:0}.ht b{display:block;font-size:15px}.ht span{font-size:10.5px;color:var(--mut)}
+.hbtn{width:36px;height:36px;border-radius:11px;background:var(--card);border:1px solid var(--line);color:var(--grn);display:grid;place-items:center;font-size:15px;cursor:pointer}
+.hbtn.busy{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+main{max-width:640px;margin:0 auto;padding:14px 12px 10px}
+.page{display:none}.page.on{display:block;animation:fade .18s ease}@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+h1.pg{font-size:22px;font-weight:800;margin:2px 2px 10px}
+.sub{color:var(--mut);font-size:11.5px;margin:-8px 2px 12px}
+.sect{display:flex;align-items:center;justify-content:space-between;margin:18px 2px 8px}
+.sect h2{font-size:12px;font-weight:800;letter-spacing:.09em;color:var(--mut)}
+.sect a{color:var(--tea);font-size:12px;font-weight:700;text-decoration:none;cursor:pointer}
+.card{background:var(--card);border:1px solid var(--line2);border-radius:16px;padding:14px;margin-bottom:10px}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+.tile{background:var(--card);border:1px solid var(--line2);border-radius:16px;padding:13px 14px}
+.tile span{display:block;font-size:9.5px;font-weight:800;letter-spacing:.08em;color:var(--mut)}
+.tile b{display:block;font-size:24px;font-weight:800;margin-top:6px}
+.tile i{font-style:normal;font-size:10.5px;color:var(--mut)}
+.grn{color:var(--grn)}.red{color:var(--red)}.amb{color:var(--amb)}.blu{color:var(--blu)}
+.bar{height:5px;border-radius:99px;background:var(--line2);overflow:hidden;margin:9px 0 2px}
+.bar>div{height:100%;border-radius:99px;background:var(--grn)}
+/* equity + donut */
+.eq{display:flex;align-items:flex-start;justify-content:space-between}
+.eq b.t{font-size:16px}.eq span{font-size:9.5px;font-weight:800;letter-spacing:.08em;color:var(--mut);display:block}
+.eqfoot{display:flex;justify-content:space-between;color:var(--mut);font-size:10.5px;margin-top:6px}
+.donutwrap{display:flex;align-items:center;gap:16px;margin-top:6px}
+.dlegend{flex:1}
+.dlegend .row{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:4px 0}
+.dlegend .row b{margin-left:auto}
+.dotk{width:11px;height:11px;border-radius:4px}
+.minitrack{height:4px;border-radius:99px;background:var(--line2);margin-top:4px}.minitrack>div{height:100%;border-radius:99px}
+/* signal cards */
+.fchips{display:flex;gap:7px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none}
+.fchips::-webkit-scrollbar{display:none}
+.fchip{flex:0 0 auto;font-size:11.5px;font-weight:700;color:var(--mut);background:var(--card);border:1px solid var(--line2);border-radius:99px;padding:7px 13px;cursor:pointer}
+.fchip.on{background:var(--grn);color:#042115;border-color:var(--grn)}
+.scard{background:var(--card);border:1px solid var(--line2);border-radius:16px;padding:12px 13px;margin-bottom:10px;cursor:pointer}
+.scard:active{transform:scale(.99)}
+.sr1{display:flex;align-items:center;gap:9px}
+.sico{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;font-size:15px;background:var(--card2);border:1px solid var(--line2)}
+.sico.up{color:var(--grn)}.sico.dn{color:var(--red)}
+.sym{font-size:15px;font-weight:800}.ssub{font-size:10.5px;color:var(--mut)}
+.sres{margin-left:auto;text-align:right}
+.sres b{font-size:14px}.sres span{display:block;font-size:10px;color:var(--mut)}
+.tag{font-size:9.5px;font-weight:800;padding:2px 8px;border-radius:8px;letter-spacing:.05em}
+.tag.WIN{color:var(--grn);background:rgba(44,229,167,.12)}.tag.LOSS{color:var(--red);background:rgba(255,92,102,.12)}
+.tag.PENDING{color:var(--amb);background:rgba(255,176,32,.12)}.tag.BREAKEVEN{color:var(--amb);background:rgba(255,176,32,.12)}
+.spills{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}
+.spill{background:var(--card2);border:1px solid var(--line2);border-radius:11px;padding:7px 9px}
+.spill span{display:block;font-size:9px;font-weight:800;letter-spacing:.06em;color:var(--mut)}
+.spill b{font-size:12px}
+/* strategies */
+.strat{background:var(--card);border:1px solid var(--line2);border-radius:16px;padding:14px;margin-bottom:10px}
+.strat .r1{display:flex;align-items:center;gap:9px}
+.strat .r1 b{font-size:16px;letter-spacing:.03em}
+.strat .r1 .fa{font-size:10.5px;color:var(--mut)}
+.scoreb{margin-left:auto;font-size:12px;font-weight:800;color:var(--amb);background:rgba(255,176,32,.1);border:1px solid rgba(255,176,32,.35);padding:3px 9px;border-radius:9px}
+.caret{color:var(--mut);cursor:pointer;font-size:12px}
+.st3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:11px}
+.st3>div{background:var(--card2);border:1px solid var(--line2);border-radius:11px;padding:8px;text-align:center}
+.st3 span{font-size:9px;font-weight:800;letter-spacing:.07em;color:var(--mut);display:block}
+.st3 b{font-size:16px}
+.kv{display:flex;justify-content:space-between;font-size:12px;padding:7px 0;border-bottom:1px solid var(--line2)}
+.kv:last-child{border-bottom:0}.kv span{color:var(--mut)}
+/* alerts */
+.note{font-size:12.5px;padding:11px;border-radius:12px;border:1px solid var(--line2);background:var(--card2);color:var(--mut);line-height:1.7}
+.note.bad{color:#ff9ba1;border-color:rgba(255,92,102,.35)}
+.note.ok{color:#7df0c8;border-color:rgba(44,229,167,.35)}
+.empty{text-align:center;color:var(--mut);font-size:12.5px;padding:26px 10px;background:var(--card);border:1px solid var(--line2);border-radius:16px}
+/* control */
+.rtable{width:100%;border-collapse:collapse;font-size:11px}
+.rtable th{color:var(--mut);font-size:9px;letter-spacing:.07em;text-align:right;padding:6px 6px;border-bottom:1px solid var(--line2)}
+.rtable td{padding:8px 6px;border-bottom:1px solid var(--line2);text-align:right;white-space:nowrap}
+.twrap{overflow-x:auto}
+.sw{position:relative;width:42px;height:24px;border-radius:99px;background:var(--line2);border:0;cursor:pointer;transition:.15s;flex:0 0 auto}
+.sw.on{background:var(--grn)}
+.sw::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.15s}
+.sw.on::after{left:21px}
+.crow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line2)}
+.crow b{font-size:12.5px}.crow span{font-size:10px;color:var(--mut);display:block}
+.funchip{font-size:10px;color:var(--mut);background:var(--card2);border:1px solid var(--line2);border-radius:8px;padding:3px 8px;display:inline-block;margin:3px 3px 0 0}
+/* tabs */
+nav{position:fixed;bottom:0;left:0;right:0;z-index:45;display:grid;grid-template-columns:repeat(5,1fr);background:rgba(10,15,26,.96);backdrop-filter:blur(14px);border-top:1px solid var(--line2);padding:6px 4px calc(6px + var(--sab))}
+nav button{background:none;border:0;color:var(--mut);font-family:inherit;font-size:9.5px;font-weight:700;display:grid;justify-items:center;gap:3px;cursor:pointer;padding:4px 0;border-radius:10px}
+nav button svg{width:20px;height:20px}
+nav button.on{color:var(--grn)}
+nav button.on .tiline{width:16px;height:2.5px;border-radius:2px;background:var(--grn)}
+.tiline{width:16px;height:2.5px;border-radius:2px;background:transparent}
+/* detail sheet */
+.sheetbg{position:fixed;inset:0;background:rgba(2,6,14,.6);backdrop-filter:blur(3px);z-index:60;display:none}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:61;background:#0e1626;border:1px solid var(--line);border-radius:22px 22px 0 0;padding:16px 16px calc(18px + var(--sab));transform:translateY(105%);transition:transform .22s ease;max-height:88vh;overflow-y:auto}
+.sheet.on{transform:translateY(0)}
+.sh1{display:flex;align-items:center;gap:10px}
+.sh1 .sym{font-size:18px}.sh1 .code{font-size:10.5px;color:var(--mut);display:block}
+.xbtn{margin-left:auto;width:34px;height:34px;border-radius:11px;background:var(--card);border:1px solid var(--line);color:var(--tx);font-size:14px;cursor:pointer}
+.shtags{display:flex;gap:7px;margin:12px 0}
+.shtags .tag{font-size:10.5px;padding:5px 11px}
+.dtiles{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:12px 0}
+.dtile{background:var(--card);border:1px solid var(--line2);border-radius:14px;padding:11px 12px}
+.dtile span{font-size:10px;color:var(--mut);display:flex;align-items:center;gap:6px}
+.dtile b{font-size:16px;display:block;margin-top:5px}
+.drow{display:flex;justify-content:space-between;align-items:center;background:var(--card);border:1px solid var(--line2);border-radius:13px;padding:12px 14px;margin-bottom:8px;font-size:13px}
+.drow span{color:var(--mut)}.drow b{font-weight:800}
+.dchart{border:1px solid var(--line2);border-radius:14px;overflow:hidden;margin:10px 0}
+.dchart img{width:100%;display:block;background:#fff}
+.explain{font-size:12px;color:#c9d4e4;line-height:1.9;border-top:1px dashed var(--line);padding-top:9px;margin-top:9px;direction:rtl;text-align:right}
+.demo{margin:0 0 10px;text-align:center;font-size:11px;color:var(--amb);background:rgba(255,176,32,.07);border:1px dashed rgba(255,176,32,.4);border-radius:10px;padding:6px}
+</style>
+</head><body>
 <header>
- <button class="hamb" onclick="drawer(true)" aria-label="منو"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg></button>
- <img src="/app/icons/icon-192.png" alt="">
- <div class="ht"><b>VIVA SIGNALS PRO</b><span>فید زنده • رصد سیگنال • کنترل</span></div>
- <div class="live"><span class="dot" id="dot"></span><span id="clock">—</span></div>
+ <div class="logo">🎯</div>
+ <div class="ht"><b>VivaSignals Pro</b><span>SMC Scanner v7</span></div>
+ <div class="hbtn" id="liveIco" title="live">📶</div>
+ <div class="hbtn" id="refreshBtn" title="refresh">⟳</div>
 </header>
-
-<div class="backdrop" id="backdrop" onclick="drawer(false)"></div>
-<aside class="drawer" id="dr">
- <div class="dr-h">
-  <img src="/app/icons/icon-192.png" alt="">
-  <div><b>VIVA SIGNALS PRO</b><span>پنل مدیریت سیگنال‌ها</span></div>
- </div>
- <div class="dr-body">
-  <div class="dr-item on" data-p="feed" onclick="go('feed')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>فید زندهٔ سیگنال‌ها</div>
-  <div class="dr-item" data-p="hits" onclick="go('hits')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1"/></svg>اعلان برخوردها <span class="cnt" id="hitsBdg" style="display:none"></span></div>
-  <div class="dr-item" data-p="perf" onclick="go('perf')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>عملکرد ستاپ‌ها</div>
-  <div class="dr-item" data-p="ctrl" onclick="go('ctrl')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h10M18 8h2M4 16h2M10 16h10"/><circle cx="16" cy="8" r="2"/><circle cx="8" cy="16" r="2"/></svg>کنترل ربات</div>
-  <div class="dr-sep"></div>
-  <div class="dr-item" onclick="go('about')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></svg>درباره و راهنما</div>
-  <div class="dr-item" onclick="logout()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg><span style="color:#ff7b80">خروج از حساب</span></div>
- </div>
- <div class="dr-f">موتور اسکن: <b id="engState">—</b><br>لاین اسپات: <b id="spotState">—</b><br>زمان سرور: <span id="srvT">—</span> • نسخهٔ ۲٫۰</div>
-</aside>
-
 <main>
-<div class="demo" id="demo" style="display:none">حالت نمایشی — متصل به دیتابیس زنده نیست</div>
+ <div class="demo" id="demoBar" style="display:none">حالت نمایشی — دادهٔ زندهٔ متصل نیست</div>
 
-<section class="page on" id="page-feed">
-  <div class="sect"><h2>🔔 هشدارهای امروز</h2><small>فقط امروز • کارت + چارت</small></div>
-  <h3 class="sec">🎛 کنترل نتایج — PnL به‌ازای لوریج و مارجین</h3>
-  <div id="resultsBoard"></div>
-  <div id="feed"></div>
-  <div class="sect"><h2>⛓ زنجیره‌های رصد فعال</h2><small id="chainsN"></small></div>
-  <div id="chains"></div>
-</section>
-<section class="page" id="page-live">
-  <div class="sect"><h2>🟢 پوزیشن‌های لایو</h2><small>تأییدشده‌های امروز</small></div>
-  <div class="livegrid" id="livePositions"></div>
-</section>
-
-<section class="page" id="page-hits">
-  <div class="sect"><h2>🎯 اعلان برخوردها</h2><small>TP / استاپ / نتیجهٔ نهایی</small></div>
-  <div id="hits"></div>
-</section>
-
-<section class="page" id="page-perf">
-  <div class="tiles" id="sumTiles"></div>
-  <div class="sect"><h2>🏆 ستاپ‌های فعال</h2><small>۳۰ روز اخیر</small></div>
-  <div id="stratsA"></div>
-  <div class="sect"><h2>📊 نمودار نتایج پنج ستاپ</h2><small>تعداد برد/باخت امروز</small></div>
-  <div class="graph" id="perfGraph"></div>
-  <div class="sect"><h2>🧾 پوزیشن‌های هر ستاپ</h2><small>برد / باخت / در جریان</small></div>
-  <div id="setupBreakdown"></div>
-  <details class="archive" id="archBox">
-    <summary>🗄 ستاپ‌های خاموش‌شده — آمار قدیمی (<span id="archN">۰</span>)</summary>
-    <div id="stratsX" style="margin-top:8px"></div>
-  </details>
-  <div class="sect"><h2>💎 اسپات در برابر فیوچرز</h2></div>
-  <div class="sf" id="sf"></div>
-</section>
-
-<section class="page" id="page-ctrl">
-  <div class="sect"><h2>🎛 کنترل انتشار</h2><small id="ctrlSaved"></small></div>
-  <div class="card master" style="cursor:default">
-    <div class="toggle-row">
-      <div class="tl"><b>توقف کل سیگنال‌های جدید</b><span>مانیتور زنجیره‌های باز ادامه دارد؛ فقط انتشارِ جدید متوقف می‌شود</span></div>
-      <div class="sw" id="swPause" onclick="flipPause()"></div>
-    </div>
+ <section class="page on" id="pg-home">
+  <h1 class="pg">Overview</h1><div class="sub">SMC Scanner Dashboard v7</div>
+  <div class="tiles" id="homeTiles"></div>
+  <div class="card">
+   <div class="eq"><div><span>EQUITY CURVE</span><b class="t" id="eqTitle">—</b></div>
+    <div style="text-align:right"><span>CUMULATIVE PNL</span><b class="t grn" id="eqCum">—</b></div></div>
+   <div id="eqSvg" style="margin-top:8px"></div>
+   <div class="eqfoot"><span id="eqN">—</span><span id="eqBest">—</span><span id="eqWorst">—</span></div>
   </div>
-  <div class="sect"><h2>⚙️ ستاپ‌ها</h2><small>روشن/خاموش هر ستاپ</small></div>
-  <div class="card" style="cursor:default" id="setups"></div>
-  <button class="btn" onclick="saveCtrl()">ذخیرهٔ تنظیمات کنترل</button>
-  <div class="statline" id="botstat"></div>
-  <p class="hint">راهنما: «توقف کل» کلید اضطراری است — هیچ سیگنال جدیدی منتشر نمی‌شود تا وقتی خاموشش کنی. خاموش‌کردن یک ستاپ فقط مانع انتشارِ همان ستاپ می‌شود. تغییرات تا ۵ ثانیه بعد روی ربات اعمال می‌شود.</p>
-</section>
-
-<section class="page" id="page-about">
-  <div class="sect"><h2>📖 دربارهٔ اپ</h2></div>
-  <div class="card" style="cursor:default">
-   <p class="hint" style="margin:0">
-    <b style="color:var(--gold)">VIVA SIGNALS PRO</b> — آینهٔ کامل کانال تلگرام + داشبورد عملکرد + کنترل از راه دور.<br>
-    • فید زنده = همهٔ سیگنال‌هایی که به کانال می‌روند، با چارت و اعدادِ همان سیگنال.<br>
-    • روی هر کارت بزن → صفحهٔ رصد همان سیگنال: چارتِ زندهٔ ربات، توضیحات، شرایط ورود، تأییدها و تایم‌لاین کامل.<br>
-    • تب «اعلان برخوردها» = TP1/TP2، استاپ و نتیجهٔ نهایی هر معامله به‌ترتیب زمان.<br>
-    • «عملکرد ستاپ‌ها» فقط ستاپ‌های ۳۰ روز اخیر را مقایسه می‌کند؛ ستاپ‌های خاموش در آرشیو هستند.<br>
-    • نصب روی آیفون: Share ← Add to Home Screen. نصب اندروید: فایل APK.<br>
-    • امنیت: کل اپ پشت رمز مدیر است؛ نشست ۳۰ روز معتبر است.
-   </p>
+  <div class="card">
+   <b style="font-size:15px">🥧 Result Distribution</b>
+   <div class="donutwrap"><div id="donut"></div><div class="dlegend" id="dLegend"></div></div>
   </div>
-</section>
+  <div class="sect"><h2>TOP STRATEGIES</h2><a onclick="go('strategies')">See all ›</a></div>
+  <div id="topStrats"></div>
+  <div class="sect"><h2>RECENT SIGNALS</h2><a onclick="go('signals')">See all ›</a></div>
+  <div id="recentSigs"></div>
+ </section>
+
+ <section class="page" id="pg-signals">
+  <h1 class="pg">Signals</h1><div class="sub" id="sigCount">—</div>
+  <div class="fchips" id="fchips"></div>
+  <div id="sigList"></div>
+ </section>
+
+ <section class="page" id="pg-strategies">
+  <h1 class="pg">Strategies</h1><div class="sub">عملکرد هر ستاپ — برد / باخت / میانگین</div>
+  <div id="stratList"></div>
+  <div class="sect"><h2>ARCHIVE (low activity)</h2></div>
+  <div id="stratArch"></div>
+ </section>
+
+ <section class="page" id="pg-alerts">
+  <h1 class="pg">Alerts</h1><div class="sub" id="alertSub">All caught up</div>
+  <div class="card">
+   <b style="font-size:14.5px">🔗 Notification Settings</b>
+   <div class="note" id="noteState" style="margin-top:10px">…</div>
+   <button id="noteBtn" class="hbtn" style="width:auto;padding:9px 14px;border-radius:11px;font-size:12px;font-weight:700;margin-top:10px">Enable notifications</button>
+  </div>
+  <div class="sect"><h2>ALERT HISTORY</h2></div>
+  <div id="hitList"></div>
+ </section>
+
+ <section class="page" id="pg-control">
+  <h1 class="pg">🎛 کنترل نتایج</h1><div class="sub">PnL به‌ازای لوریج و مارجین — همان امروز</div>
+  <div class="tiles" id="ctlTiles"></div>
+  <div class="card"><b style="font-size:13px">معاملاتِ بستهٔ امروز</b><div class="twrap" id="ctlTable" style="margin-top:8px"></div></div>
+  <div class="card"><b style="font-size:13px">کنترل انتشار</b><div id="ctlSwitches" style="margin-top:6px"></div></div>
+  <div class="card"><b style="font-size:13px">فانل اسکن</b><div id="ctlFunnel" style="margin-top:6px"></div></div>
+ </section>
 </main>
 
-<!-- ── صفحات داخلی (جزئیات سیگنال) ── -->
-<div class="dpage" id="detail">
- <div class="dhead">
-  <button class="backb" onclick="closeDetail()" aria-label="بازگشت"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
-  <div class="ht"><b id="dTitle">—</b><span id="dSub">رصد زندهٔ سیگنال</span></div>
-  <span class="res PENDING" id="dRes">—</span>
- </div>
- <div class="dbody" id="dBody"></div>
-</div>
+<div class="sheetbg" id="sheetbg" onclick="closeSheet()"></div>
+<div class="sheet" id="sheet"></div>
 
 <nav>
- <button class="on" data-p="feed" onclick="go('feed')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>فید زنده</button>
- <button data-p="live" onclick="go('live')" style="position:relative"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>پوزیشن‌ها<span class="bdg" id="liveBdg" style="display:none"></span></button>
- <button data-p="hits" onclick="go('hits')" style="position:relative"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>برخوردها<span class="bdg" id="navBdg" style="display:none"></span></button>
- <button data-p="perf" onclick="go('perf')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>عملکرد</button>
- <button data-p="ctrl" onclick="go('ctrl')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h10M18 8h2M4 16h2M10 16h10"/><circle cx="16" cy="8" r="2"/><circle cx="8" cy="16" r="2"/></svg>کنترل</button>
+ <button data-t="home" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>Home<span class="tiline"></span></button>
+ <button data-t="signals"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h2l2-7 3 14 3-9 2 2h4"/></svg>Signals<span class="tiline"></span></button>
+ <button data-t="strategies"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>Strategies<span class="tiline"></span></button>
+ <button data-t="alerts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>Alerts<span class="tiline"></span></button>
+ <button data-t="control"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h13M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>Control<span class="tiline"></span></button>
 </nav>
 
 <script>
-const $=q=>document.querySelector(q);
-let STATE=null;
-const fnum=v=>{if(v===null||v===undefined||v==='')return '—';return String(v)};
-function tehran(iso){try{const d=new Date(iso);if(isNaN(d))return iso||'';return d.toLocaleString('fa-IR',{timeZone:'Asia/Tehran',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return iso||''}}
-function resFa(r){return {PENDING:'در جریان',WIN:'برد ✦',LOSS:'باخت',CANCELLED:'ابطال'}[r]||r}
-function miSummary(mi){
- if(!mi||mi.status!=='OK')return '';
- const ob=mi.orderbook||{},de=mi.derivatives||{},lm=mi.liquidity_map||{},oc=mi.onchain||{};
- const b=Number(ob.imbalance_1_pct||0),bias=b>=0.18?'برتری خرید':b<=-0.18?'برتری فروش':'تعادل';
- const oi=Number(de.oi_change_2h_pct||0),fr=Number(de.funding_rate||0);
- const chain=oc.status==='OK'&&oc.network?' • زنجیره: '+fnum(oc.network):'';
- return '<div class="mi"><div class="mihead">📡 <b>تحلیل کمکی جریان بازار</b><span>کمکی و بدون دخالت در ستاپ</span></div><div class="migrid"><span>دفتر سفارشات: <b>'+bias+'</b></span><span>نقدینگی: <b>'+fnum(lm.bias||'—')+'</b></span><span>تغییر OI دو ساعت: <b>'+(oi>0?'+':'')+oi.toFixed(2)+'٪</b></span><span>فاندینگ: <b>'+(fr*100).toFixed(4)+'٪</b>'+chain+'</span></div></div>';
+let STATE=null,FILTER='ALL',PEND={paused:null,setups:null},NOTIF=new Set();
+
+function fnum(v){return (v===null||v===undefined||v==='')?'—':String(v);}
+function tehran(iso){try{const d=new Date(iso);return isNaN(d)?fnum(iso):d.toLocaleTimeString('fa-IR',{hour:'2-digit',minute:'2-digit'});}catch(e){return fnum(iso)}}
+function ago(iso){try{const s=(Date.now()-new Date(iso).getTime())/1e3;if(!isFinite(s))return fnum(iso);
+ if(s<3600)return Math.max(1,Math.round(s/60))+'m ago';if(s<86400)return Math.round(s/3600)+'h ago';return Math.round(s/86400)+'d ago'}catch(e){return fnum(iso)}}
+function money(v){return '$'+Number(v).toFixed(2)}
+function resTag(r){const m={WIN:'WIN',LOSS:'LOSS',PENDING:'PENDING'};return `<span class="tag ${m[r]||'BREAKEVEN'}">${fnum(m[r]||'BE')}</span>`}
+
+async function load(){
+ try{const r=await fetch('/app/api/state');if(r.status===401){location.href='/app/login';return}
+  STATE=await r.json();render();}catch(e){}
 }
-function drawer(on){$('#dr').classList.toggle('on',on);$('#backdrop').classList.toggle('on',on)}
-function go(p){drawer(false);document.querySelectorAll('.page').forEach(x=>x.classList.remove('on'));$('#page-'+p).classList.add('on');
- document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.p===p));
- document.querySelectorAll('.dr-item').forEach(d=>d.classList.toggle('on',d.dataset.p===p));window.scrollTo(0,0)}
-function logout(){fetch('/app/logout',{method:'POST'}).finally(()=>location.href='/app/login')}
-function feedCard(s){
- const dir=s.spot?'LONG':(s.direction||'');
- return `<div class="card" onclick="openDetail('${(s.signal_id||'').replace(/'/g,'')}')">
-  <div class="row1"><span class="sym">${fnum(s.symbol)}</span>
-   <span class="badge">${fnum(s.source)}</span>
-   ${dir?`<span class="chip ${dir}">${dir==='LONG'?'خرید 🟢':'فروش 🔴'}</span>`:''}
-   ${s.spot?'<span class="chip SPOT">اسپات</span>':''}
-   ${s.tf?`<span class="chip score">${fnum(s.tf)}</span>`:''}
-   ${s.score?`<span class="chip score">★ ${s.score}/10</span>`:''}</div>
-  <div class="pills">
-   <div class="pill entry"><i>ورود</i><b>${fnum(s.entry)}</b></div>
-   <div class="pill stop"><i>استاپ</i><b>${fnum(s.sl)}</b></div>
-   <div class="pill tp1 ${s.tp1_hit?'hit':''}"><i>TP1</i><b>${fnum(s.tp1)}${s.tp1_hit?' ✓':''}</b></div>
-   <div class="pill tp2 ${s.tp2_hit?'hit':''}"><i>TP2</i><b>${fnum(s.tp2)}${s.tp2_hit?' ✓':''}</b></div></div>
-  <div class="live-meta"><div class="pill"><i>مارجین</i><b>${s.margin?`${Number(s.margin).toFixed(2)}`:"—"}</b></div><div class="pill"><i>اهرم</i><b>${s.leverage?s.leverage+"x":"—"}</b></div></div>
-  <div class="thumb"><img loading="lazy" src="/app/api/chart/${encodeURIComponent(s.signal_id||'')}" alt="چارت ${fnum(s.symbol)}"></div>
-  ${s.telegram_text?`<div class="explain">${s.telegram_text}</div>`:(s.summary?`<div class="sumline">${fnum(s.summary)}</div>`:"")}
-  ${s.market_intelligence?miSummary(s.market_intelligence):''}
-  <div class="ftr"><span class="code">${fnum(s.code)}</span>
-   <span class="res ${s.result}">${resFa(s.result)}${s.pnl!==null&&s.pnl!==undefined?` ${s.pnl>0?'+':''}${s.pnl}%`:''}${s.pnl_usd!=null?` · <b class="${s.pnl_usd>=0?'up':'dn'}">$${Number(s.pnl_usd).toFixed(2)}</b>`:''}</span>
-   <span class="time">${tehran(s.time)}</span></div></div>`}
-function liveCard(p){
- const dir=p.spot?'LONG':(p.direction||'');
- return `<div class="card" onclick="openDetail('${(p.signal_id||'').replace(/'/g,'')}')">
-  <div class="livebar"><div><span class="sym">${fnum(p.symbol)}</span> <span class="badge">${fnum(p.badge)}</span></div>
-   <span class="chip ${dir}">${dir==='LONG'?'لانگ 🟢':'شورت 🔴'}</span></div>
-  <div class="live-meta">
-   <div class="pill entry"><i>ورود</i><b>${fnum(p.zone)}</b></div>
-   <div class="pill stop"><i>استاپ</i><b>${fnum(p.sl||'—')}</b></div>
-   <div class="pill tp1"><i>TP1</i><b>${fnum(p.tp1||'—')}</b></div>
-   <div class="pill tp2"><i>TP2</i><b>${fnum(p.tp2||'—')}</b></div>
-  </div>
-  <div class="statline"><span class="stat">لوریج: <b>${fnum(p.leverage)}×</b></span>
-   <span class="stat">مارجین: <b>${fnum(p.margin)}</b></span>
-   <span class="stat">وضعیت: <b>LIVE</b></span></div>
-  <div class="thumb"><img loading="lazy" src="/app/api/chart/${encodeURIComponent(p.signal_id||'')}" alt="چارت پوزیشن"></div>
-  <div class="ftr"><span class="code">${fnum(p.code)}</span><span class="time">${fnum(p.tf)}</span></div>
- </div>`}
-function chainCard(c){
- const dir=c.spot?'LONG':(c.direction||'');
- return `<div class="card chain" onclick="openDetail('${(c.signal_id||'').replace(/'/g,'')}')">
-  <div class="row1"><span class="sym">${fnum(c.symbol)}</span>
-   <span class="badge">${fnum(c.badge)}</span>
-   ${dir?`<span class="chip ${dir}">${dir==='LONG'?'خرید 🟢':'فروش 🔴'}</span>`:''}
-   ${c.spot?'<span class="chip SPOT">اسپات</span>':''}
-   ${c.tf?`<span class="chip score">${fnum(c.tf)}</span>`:''}
-   ${c.score?`<span class="chip score">★ ${c.score}/10</span>`:''}</div>
-  <div class="row1"><span class="mini">ناحیه: ${fnum(c.zone)}</span>
-   ${c.updates?`<span class="upd">آپدیت ${c.updates}</span>`:''}</div>
-  <div class="ftr"><span class="code">${fnum(c.code)}</span><span class="res PENDING">${fnum(c.status)}</span></div></div>`}
-const HITMETA={tp1:['🎯','هدف اول هیت شد'],tp2:['🎯','هدف دوم هیت شد'],sl:['🛑','استاپ هیت شد'],win:['✅','برد'],loss:['❌','باخت'],confirm:['⚡','تأیید جدید']};
-function hitCard(h){const [ic,label]=HITMETA[h.kind]||['•',''];
- return `<div class="card" style="cursor:default"><div class="hitc">
-  <div class="hico ${h.kind}">${ic}</div>
-  <div class="hb"><b>${fnum(h.symbol)} — ${label}</b><span>${fnum(h.detail)} • ${fnum(h.code)}</span></div>
-  <div class="hright"><b class="${(h.pnl??0)>=0?'pnlp':'pnln'}">${h.pnl!==null&&h.pnl!==undefined?((h.pnl>0?'+':'')+h.pnl+'%'):''}</b><br><span class="time">${tehran(h.time)}</span></div>
- </div></div>`}
-function stratCard(r){return `
- <div class="card strat" style="cursor:default">
-  <div class="row1"><span class="nm">${fnum(r.fa)}</span><span class="badge">${fnum(r.name)}</span>
-   ${r.avg_score?`<span class="chip score">★ ${r.avg_score}</span>`:''}</div>
-  <div class="row1"><span class="mini">${r.wins}W / ${r.losses}L / ${r.pending} باز • بهترین ${r.best??'—'}% • بدترین ${r.worst??'—'}% • ${r.last||''}</span>
-   <span style="flex:1"></span><b class="${(r.avg_pnl??0)>=0?'pnlp':'pnln'}">${r.avg_pnl!==null&&r.avg_pnl!==undefined?(r.avg_pnl>0?'+':'')+r.avg_pnl+'%':'—'}</b></div>
-  <div class="wr"><i style="width:${Math.max(2,Math.min(100,r.wr||0))}%"></i></div>
-  <div class="mini" style="margin-top:3px">وین‌ریت ${r.wr}% از ${r.wins+r.losses} سیگنال بسته‌شده</div></div>`}
+function closed(){return (STATE.feed||[]).filter(x=>x.result==='WIN'||x.result==='LOSS')}
+function equitySeries(){
+ const rows=closed().slice().reverse();
+ const usd=rows.every(x=>x.pnl_usd!==null&&x.pnl_usd!==undefined);
+ let c=0;const pts=rows.map(x=>{c+=usd?Number(x.pnl_usd||0):Number(x.pnl||0);return {v:c,w:x.result==='WIN'}});
+ return {pts,usd};
+}
+function donutSvg(w,l,b){
+ const tot=Math.max(1,w+l+b),C=2*Math.PI*38;
+ const seg=(v,off,col)=>{const f=C*v/tot;return `<circle cx="60" cy="60" r="38" fill="none" stroke="${col}" stroke-width="14" stroke-dasharray="${f} ${C-f}" stroke-dashoffset="${-off}" transform="rotate(-90 60 60)"/>`};
+ return `<svg width="120" height="120" viewBox="0 0 120 120"><circle cx="60" cy="60" r="38" fill="none" stroke="#16223a" stroke-width="14"/>`
+  +seg(w,0,'#2ce5a7')+seg(l,w,'#ff5c66')+seg(b,w+l,'#ffb020')
+  +`<text x="60" y="58" text-anchor="middle" fill="#e7edf6" font-size="20" font-weight="800">${w+l+b}</text><text x="60" y="74" text-anchor="middle" fill="#8b9cb5" font-size="9">Trades</text></svg>`;
+}
+function eqSvg(pts){
+ if(!pts.length)return '<div class="empty">هنوز معاملهٔ بسته‌ای امروز نیست</div>';
+ const W=300,H=110,P=6,vs=pts.map(p=>p.v),mn=Math.min(...vs,0),mx=Math.max(...vs,1);
+ const X=i=>P+i*(W-2*P)/Math.max(1,pts.length-1),Y=v=>H-P-(v-mn)*(H-2*P)/(mx-mn||1);
+ const poly=pts.map((p,i)=>`${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join(' ');
+ const dots=pts.map((p,i)=>`<circle cx="${X(i).toFixed(1)}" cy="${Y(p.v).toFixed(1)}" r="2.4" fill="${p.w?'#2ce5a7':'#ff5c66'}"/>`).join('');
+ return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto"><line x1="0" y1="${H-P}" x2="${W}" y2="${H-P}" stroke="#16223a" stroke-dasharray="3 4"/><polyline points="${poly}" fill="none" stroke="#2ce5a7" stroke-width="2"/>${dots}</svg>`;
+}
+function sigCard(x){
+ const dir=x.spot?'up':(x.direction==='SHORT'?'dn':'up');
+ const res=x.result,pc=(x.pnl!==null&&x.pnl!==undefined)?((x.pnl>0?'+':'')+x.pnl+'%'):'';
+ return `<div class="scard" onclick="openDetail('${x.signal_id}')">
+  <div class="sr1"><div class="sico ${dir}">${dir==='up'?'📈':'📉'}</div>
+   <div><div class="sym">${fnum(x.symbol)}</div><div class="ssub">${fnum(x.source)} • ${ago(x.time)}</div></div>
+   <div class="sres"><b class="${res==='WIN'?'grn':res==='LOSS'?'red':'amb'}">${pc||resTag(res)}</b>
+    <span>Score ${fnum(x.score)}/10 ${x.pnl_usd!=null?`• <b class="${x.pnl_usd>=0?'grn':'red'}">${money(x.pnl_usd)}</b>`:''}</span></div></div>
+  <div class="spills">
+   <div class="spill"><span>ENTRY</span><b>${fnum(x.entry)}</b></div>
+   <div class="spill"><span>SL</span><b class="red">${fnum(x.sl)}</b></div>
+   <div class="spill"><span>TP1${x.tp1_hit?' ✓':''}</span><b class="grn">${fnum(x.tp1)}</b></div>
+  </div></div>`;
+}
 function render(){
  if(!STATE)return;
- $('#demo').style.display=STATE.demo?'block':'none';
- $('#clock').textContent=STATE.server_time||'—';
- $('#srvT').textContent=STATE.server_time||'—';
- $('#engState').textContent=(STATE.scanner&&STATE.scanner.alive)?'فعال ✅':'خاموش ⛔';
- const spotScan=(STATE.scanner&&STATE.scanner.spot)||null,spE=$('#spotState');
- if(spE)spE.textContent=spotScan?`${spotScan.state}${spotScan.published?` • ${spotScan.published} انتشار`:''}${spotScan.found?` • ${spotScan.found} کشف`:''}${spotScan.at?` • ${tehran(spotScan.at)}`:''}`:'—';
- $('#dot').style.background=(STATE.scanner&&STATE.scanner.alive)?'#1fae7c':'#e5484d';
- const chains=STATE.chains||[],feed=STATE.feed||[],hits=STATE.hits||[],live=STATE.live_positions||[];
- $('#chains').innerHTML=chains.length?chains.map(chainCard).join(''):'<div class="empty">زنجیرهٔ فعالی نیست</div>';
- $('#feed').innerHTML=feed.length?feed.map(feedCard).join(''):'<div class="empty">هشدار امروز ثبت نشده</div>';
- $('#livePositions').innerHTML=live.length?live.map(liveCard).join(''):'<div class="empty">پوزیشن لایوی برای امروز ثبت نشده</div>';
- const lB=$('#liveBdg'); if(live.length){lB.textContent=live.length;lB.style.display='block'}else{lB.style.display='none'}
- $('#chainsN').textContent=chains.length?`${chains.length} فعال`:'';
- const nB=$('#navBdg'),hB=$('#hitsBdg');
- if(hits.length){nB.textContent=hits.length;nB.style.display='block';hB.textContent=hits.length;hB.style.display='inline'}
- else{nB.style.display='none';hB.style.display='none'}
- $('#hits').innerHTML=hits.length?hits.map(hitCard).join(''):'<div class="empty">برخوردی ثبت نشده</div>';
- const rb=STATE.results||{rows:[],usd_total:0,usd_win:0,usd_loss:0};const rr=rb.rows||[];
- $('#resultsBoard').innerHTML=`<div class="rtiles">
-  <div class="tile ${rb.usd_total>=0?'green':'red'}"><b>$${(rb.usd_total||0).toFixed(2)}</b><span>PnL خالص امروز (مارجین)</span></div>
-  <div class="tile green"><b>$${(rb.usd_win||0).toFixed(2)}</b><span>سودها</span></div>
-  <div class="tile red"><b>$${(rb.usd_loss||0).toFixed(2)}</b><span>باخت‌ها</span></div></div>`
- +(rr.length?`<table class="rtable"><thead><tr><th>سیگنال</th><th>نتیجه</th><th>قیمت</th><th>اهرم</th><th>PnL مارجین</th><th>PnL دلاری</th><th>مارجین</th></tr></thead><tbody>`
-  +rr.map(x=>`<tr><td><b>${fnum(x.symbol)}</b> <span class="mini">${fnum(x.code)}</span><br><span class="mini">${fnum(x.source)}</span></td><td><span class="res ${x.result}">${resFa(x.result)}</span></td><td>${x.pnl!=null?(x.pnl>0?'+':'')+x.pnl+'%':'—'}</td><td>${x.leverage?x.leverage+'×':'—'}</td><td>${x.pnl_lev!=null?(x.pnl_lev>0?'+':'')+x.pnl_lev+'%':'—'}</td><td class="${x.pnl_usd>=0?'up':'dn'}">${x.pnl_usd!=null?'$'+Number(x.pnl_usd).toFixed(2):'—'}</td><td>${x.margin?'$'+Number(x.margin).toFixed(0):'—'}</td></tr>`).join('')
-  +`</tbody></table>`:'<div class="empty">امروز نتیجهٔ بسته‌ای ثبت نشده</div>');
- const a=STATE.analytics||{},sm=a.summary||{};
- $('#sumTiles').innerHTML=`
-  <div class="tile gold"><b>${sm.total??'—'}</b><span>کل سیگنال‌ها</span></div>
-  <div class="tile green"><b>${sm.wins??'—'}</b><span>برد</span></div>
-  <div class="tile red"><b>${sm.losses??'—'}</b><span>باخت</span></div>
-  <div class="tile gold"><b>%${sm.winrate??'—'}</b><span>وین‌ریت کل</span></div>
-  <div class="tile gold"><b>${sm.avg_pnl??'—'}%</b><span>میانگین PnL</span></div>
-  <div class="tile"><b>${(a.rows_active||[]).length}</b><span>ستاپ فعال</span></div>`;
- const act=a.rows_active||[],arc=a.rows_archive||[];
- $('#stratsA').innerHTML=act.length?act.map(stratCard).join(''):'<div class="empty">ستاپ فعالی در ۳۰ روز اخیر نیست</div>';
- const setupRows=['PINVAL','PINWALLQ','ALBROX','TLBREAK','TECHCLASSIC'];
- $('#perfGraph').innerHTML=setupRows.map(k=>{const r=act.find(x=>String(x.name).toUpperCase()===k)||{wins:0,losses:0,total:0,avg_pnl:0,best:0,worst:0};const total=Math.max(1,(r.wins||0)+(r.losses||0));const wp=Math.round((r.wins||0)/total*100);const lp=100-wp;return `<div class="card"><div class="row1"><span class="nm">${k}</span><span class="mini">${r.total||0} معامله</span></div><div class="graph"><div class="pie" style="background:conic-gradient(var(--long) 0 ${wp}%,var(--short) ${wp}% 100%)"></div><div class="pieLegend"><div><span class="legendDot"></span><b>${r.wins||0}</b> برد • ${wp}%</div><div><span class="legendDot loss"></span><b>${r.losses||0}</b> باخت • ${lp}%</div><div>میانگین برد: <b>${r.avg_win==null?'—':r.avg_win+'%'}</b></div><div>میانگین باخت: <b>${r.avg_loss==null?'—':r.avg_loss+'%'}</b></div><div>خالص میانگین: <b>${r.avg_pnl==null?'—':r.avg_pnl+'%'}</b></div></div></div></div>`}).join('');
- $('#setupBreakdown').innerHTML=setupRows.map(k=>{const rows=feed.filter(x=>String(x.source||'').toUpperCase()===k);return `<div class="card"><div class="row1"><span class="nm">${k}</span><span class="mini">${rows.length} پوزیشن امروز</span></div>${rows.length?rows.map(x=>`<div class="ftr" onclick="openDetail('${(x.signal_id||'').replace(/'/g,'')}')" style="cursor:pointer"><span><b>${fnum(x.symbol)}</b> • ${fnum(x.direction)}</span><span class="res ${x.result}">${resFa(x.result)}</span><span class="code">${fnum(x.code)}</span></div>`).join(''):'<div class="empty">امروز پوزیشنی ثبت نشده</div>'}</div>`}).join('');
- $('#stratsX').innerHTML=arc.map(stratCard).join('');
- $('#archN').textContent=arc.length;
- $('#archBox').style.display=arc.length?'block':'none';
- const spotStats=a.spot||{},fu=a.futures||{};
- $('#sf').innerHTML=`
-  <div class="tile"><small>💎 اسپات</small><b style="color:#39d9a4">%${spotStats.wr??'—'}</b><span>${spotStats.wins??0}W / ${spotStats.losses??0}L از ${spotStats.total??0}</span></div>
-  <div class="tile"><small>⚡ فیوچرز</small><b style="color:#4c8dff">%${fu.wr??'—'}</b><span>${fu.wins??0}W / ${fu.losses??0}L از ${fu.total??0}</span></div>`;
- renderCtrl();
- const sc=STATE.scanner||{};
- $('#botstat').innerHTML=`<span class="stat">موتور اسکن: <b>${sc.alive?'فعال ✅':'خاموش ⛔'}</b></span>
-  <span class="stat">زمان سرور: <b>${STATE.server_time||'—'}</b></span>
-  ${sc.mode?`<span class="stat">${sc.mode}</span>`:''}`;
+ if(STATE.demo)document.getElementById('demoBar').style.display='block';
+ const feed=STATE.feed||[],cl=closed();
+ const wins=cl.filter(x=>x.result==='WIN').length,loss=cl.filter(x=>x.result==='LOSS').length;
+ const be=cl.length-wins-loss;
+ const pend=feed.filter(x=>x.result==='PENDING').length;
+ const usdAll=(STATE.results||{}).usd_total;
+ const usdOk=cl.every(x=>x.pnl_usd!==null&&x.pnl_usd!==undefined)&&cl.length>0;
+ const cum=usdOk?money(usdAll):((cl.reduce((a,x)=>a+Number(x.pnl||0),0)).toFixed(2)+'%');
+ const avg=cl.length?(cl.reduce((a,x)=>a+Number(x.pnl||0),0)/cl.length).toFixed(2)+'%':'—';
+ const wr=cl.length?Math.round(wins*100/cl.length*10)/10:'—';
+ document.getElementById('homeTiles').innerHTML=`
+  <div class="tile"><span>TOTAL SIGNALS</span><b>${feed.length}</b><i>${pend} pending</i></div>
+  <div class="tile"><span>WIN RATE</span><b class="grn">${wr}${wr==='—'?'':'%'}</b><i>${wins}W / ${loss}L</i></div>
+  <div class="tile"><span>AVG PNL</span><b class="grn">${avg}</b><i>Per trade</i></div>
+  <div class="tile"><span>CUM PNL</span><b class="${String(cum).startsWith('-')?'red':'grn'}">${cum}</b><i>All closed</i></div>`;
+ // equity
+ const eq=equitySeries();
+ document.getElementById('eqTitle').textContent=cl.length?`${cl.length} closed trades`:'—';
+ document.getElementById('eqCum').textContent=cum;
+ document.getElementById('eqSvg').innerHTML=eqSvg(eq.pts);
+ const best=cl.reduce((a,x)=>Math.max(a,Number(x.pnl||0)),0),worst=cl.reduce((a,x)=>Math.min(a,Number(x.pnl||0)),0);
+ document.getElementById('eqN').textContent=`${cl.length} closed`;
+ document.getElementById('eqBest').textContent=`Best: +${best.toFixed(2)}%`;
+ document.getElementById('eqWorst').textContent=`Worst: ${worst.toFixed(2)}%`;
+ // donut
+ document.getElementById('donut').innerHTML=donutSvg(wins,loss,be);
+ const pc=v=>Math.round(v*100/Math.max(1,cl.length)*10)/10;
+ document.getElementById('dLegend').innerHTML=`
+  <div class="row"><span class="dotk" style="background:#2ce5a7"></span>Wins<b class="grn">${wins} (${pc(wins)}%)</b></div>
+  <div class="minitrack"><div style="width:${pc(wins)}%;background:#2ce5a7"></div></div>
+  <div class="row"><span class="dotk" style="background:#ff5c66"></span>Losses<b class="red">${loss} (${pc(loss)}%)</b></div>
+  <div class="minitrack"><div style="width:${pc(loss)}%;background:#ff5c66"></div></div>
+  <div class="row"><span class="dotk" style="background:#ffb020"></span>Breakeven<b class="amb">${be} (${pc(be)}%)</b></div>
+  <div class="minitrack"><div style="width:${pc(be)}%;background:#ffb020"></div></div>`;
+ // top strategies
+ const acts=(STATE.analytics&&STATE.analytics.rows_active)||[];
+ const top=acts.slice().sort((a,b)=>(b.wr||0)-(a.wr||0)).slice(0,3);
+ document.getElementById('topStrats').innerHTML=top.length?top.map(r=>`
+  <div class="card" onclick="go('strategies')">
+   <div class="sr1"><div><div class="sym" style="font-size:14px">${fnum(r.name)}</div><div class="ssub">${fnum(r.fa)}</div></div>
+   <b class="grn" style="margin-left:auto;font-size:16px">${fnum(r.wr)}%</b></div>
+   <div class="ssub" style="margin-top:7px">Total: ${fnum(r.total)} · <b class="grn">${fnum(r.wins)}W</b> · <b class="red">${fnum(r.losses)}L</b> · <span class="grn">${r.avg_pnl!=null?'+'+r.avg_pnl:'0'}%</span></div>
+  </div>`).join(''):'<div class="empty">ستاپِ فعالی امروز نیست</div>';
+ // recent signals
+ document.getElementById('recentSigs').innerHTML=feed.length?feed.slice(0,5).map(sigCard).join(''):'<div class="empty">هشدار امروز ثبت نشده</div>';
+ // signals tab
+ const counts={ALL:feed.length,PENDING:pend,WIN:wins,LOSS:loss,SPOT:feed.filter(x=>x.spot).length};
+ document.getElementById('sigCount').textContent=`${feed.length} total signals`;
+ document.getElementById('fchips').innerHTML=Object.keys(counts).map(k=>
+  `<button class="fchip ${FILTER===k?'on':''}" onclick="setFilter('${k}')">${k} ${counts[k]}</button>`).join('');
+ const list=feed.filter(x=>FILTER==='ALL'||(FILTER==='SPOT'?x.spot:x.result===FILTER));
+ document.getElementById('sigList').innerHTML=list.length?list.map(sigCard).join(''):'<div class="empty">موردی در این فیلتر نیست</div>';
+ // strategies
+ document.getElementById('stratList').innerHTML=acts.length?acts.map((r,i)=>`
+  <div class="strat"><div class="r1"><div><b>${fnum(r.name)}</b><div class="fa">${fnum(r.fa)}</div></div>
+   <span class="scoreb">★ ${r.avg_score!=null?r.avg_score:'—'}</span><span class="caret" onclick="tgl(${i})">▼</span></div>
+   <div class="bar"><div style="width:${fnum(r.wr)}%"></div></div>
+   <div class="ssub" style="margin-top:4px">Win Rate <b class="grn">${fnum(r.wr)}%</b></div>
+   <div class="st3" id="st3-${i}" style="display:none">
+    <div><span>TOTAL</span><b>${fnum(r.total)}</b></div><div><span>WINS</span><b class="grn">${fnum(r.wins)}</b></div>
+    <div><span>LOSSES</span><b class="red">${fnum(r.losses)}</b></div>
+    <div><span>AVG WIN</span><b class="grn">${r.avg_win!=null?'+'+r.avg_win+'%':'—'}</b></div>
+    <div><span>AVG LOSS</span><b class="red">${r.avg_loss!=null?r.avg_loss+'%':'—'}</b></div>
+    <div><span>NET AVG</span><b>${r.avg_pnl!=null?'+'+r.avg_pnl+'%':'—'}</b></div>
+    <div><span>BEST</span><b class="grn">${r.best!=null?'+'+r.best+'%':'—'}</b></div>
+    <div><span>WORST</span><b class="red">${r.worst!=null?r.worst+'%':'—'}</b></div>
+    <div><span>LAST</span><b style="font-size:11px">${fnum(r.last)}</b></div>
+   </div></div>`).join(''):'<div class="empty">داده‌ای نیست</div>';
+ const arch=(STATE.analytics&&STATE.analytics.rows_archive)||[];
+ document.getElementById('stratArch').innerHTML=arch.length?arch.map(r=>`
+  <div class="card"><div class="sr1"><div><div class="sym" style="font-size:13px">${fnum(r.name)}</div><div class="ssub">${fnum(r.fa)}</div></div>
+  <b style="margin-left:auto;font-size:13px" class="${(r.wr||0)>=50?'grn':'red'}">${fnum(r.wr)}%</b></div>
+  <div class="ssub" style="margin-top:5px">${fnum(r.total)} trades • last ${fnum(r.last)}</div></div>`).join(''):'<div class="empty">—</div>';
+ // alerts
+ renderAlerts();
+ // control
+ const rb=STATE.results||{rows:[],usd_total:0,usd_win:0,usd_loss:0};
+ document.getElementById('ctlTiles').innerHTML=`
+  <div class="tile"><span>PnL خالص امروز</span><b class="${(rb.usd_total||0)>=0?'grn':'red'}">${money(rb.usd_total||0)}</b><i>مارجین</i></div>
+  <div class="tile"><span>سودها</span><b class="grn">${money(rb.usd_win||0)}</b><i>—</i></div>`;
+ document.getElementById('ctlTiles').innerHTML+=`
+  <div class="tile"><span>باخت‌ها</span><b class="red">${money(rb.usd_loss||0)}</b><i>—</i></div>
+  <div class="tile"><span>وضعیت اسکنر</span><b style="font-size:15px" class="${(STATE.scanner||{}).alive?'grn':'red'}">${(STATE.scanner||{}).alive?'فعال':'خاموش'}</b><i>${fnum((STATE.server_time||''))}</i></div>`;
+ const rr=(rb.rows||[]);
+ document.getElementById('ctlTable').innerHTML=rr.length?`<table class="rtable"><tr><th>SYMBOL</th><th>RES</th><th>PRICE</th><th>LEV</th><th>MARGIN PNL</th><th>USD</th></tr>`+
+  rr.map(x=>`<tr><td><b>${fnum(x.symbol)}</b><br><span style="color:var(--mut);font-size:9px">${fnum(x.code)}</span></td>
+   <td>${resTag(x.result)}</td><td>${x.pnl!=null?(x.pnl>0?'+':'')+x.pnl+'%':'—'}</td><td>${x.leverage?x.leverage+'×':'—'}</td>
+   <td>${x.pnl_lev!=null?(x.pnl_lev>0?'+':'')+x.pnl_lev+'%':'—'}</td>
+   <td class="${x.pnl_usd>=0?'grn':'red'}">${x.pnl_usd!=null?money(x.pnl_usd):'—'}</td></tr>`).join('')+'</table>'
+  :'<div class="empty">امروز نتیجهٔ بسته‌ای ثبت نشده</div>';
+ // switches
+ const c=(STATE.control||{}),base=Object.assign({},c.setups||{},PEND.setups||{});
+ let html=`<div class="crow"><div style="flex:1"><b>توقف کل انتشار</b><span>master pause</span></div>
+  <button class="sw ${(PEND.paused===null?!!c.paused:PEND.paused)?'on':''}" onclick="flipPause()"></button></div>`;
+ html+=Object.keys(base).map(k=>`<div class="crow"><div style="flex:1"><b>${fnum(k)}</b><span>${base[k]?'منتشر می‌شود':'مکث‌شده'}</span></div>
+  <button class="sw ${base[k]?'on':''}" onclick="flipSetup('${k}')"></button></div>`).join('');
+ document.getElementById('ctlSwitches').innerHTML=html;
+ // funnel
+ const fn=(STATE.funnel||{}).tally||{};
+ document.getElementById('ctlFunnel').innerHTML=Object.keys(fn).map(k=>{
+  const t=fn[k]||{};return `<b style="font-size:11px;color:var(--tx)">${k}</b><div>`+
+   Object.keys(t).filter(kk=>typeof t[kk]==='number'&&t[kk]>0).map(kk=>`<span class="funchip">${kk}: ${t[kk]}</span>`).join('')+'</div>';
+ }).join('')||'<span class="ssub">—</span>';
+ // notify on new hits
+ if(('Notification'in window)&&Notification.permission==='granted'){
+  (STATE.hits||[]).forEach(h=>{if(!NOTIF.has(h.code+h.kind)){NOTIF.add(h.code+h.kind);
+   try{new Notification('VIVA · '+fnum(h.symbol),{body:fnum(h.detail||h.kind)})}catch(e){}}});
+ }
 }
-/* ── صفحهٔ جزئیات سیگنال ── */
-let CUR=null;
-async function openDetail(sid){
- if(!sid)return;
- $('#detail').classList.add('on');document.body.style.overflow='hidden';
- $('#dBody').innerHTML=`<div class="chartbox"><div class="chartload"><div class="spin"></div> در حال آماده‌سازی چارت زندهٔ ربات…</div></div>
-  <div class="dsec"><div class="sk" style="width:60%"></div><div class="sk"></div><div class="sk" style="width:80%"></div></div>`;
- $('#dTitle').textContent='…';$('#dRes').textContent='—';
- try{
-  const [d,cr]=await Promise.all([
-    fetch('/app/api/signal/'+encodeURIComponent(sid)).then(r=>r.ok?r.json():null),
-    fetch('/app/api/chart/'+encodeURIComponent(sid)).then(r=>r.ok?r.blob():null).catch(()=>null)
-  ]);
-  if(!d){$('#dBody').innerHTML='<div class="empty">این سیگنال پیدا نشد</div>';return}
-  CUR=d;
-  $('#dTitle').textContent=`${fnum(d.symbol)} • ${fnum(d.tf)}`;
-  $('#dRes').className='res '+d.result;$('#dRes').textContent=resFa(d.result)+(d.pnl!==null&&d.pnl!==undefined?` ${d.pnl>0?'+':''}${d.pnl}%`:'');
-  const dir=d.spot?'LONG':(d.direction||'');
-  const confirmTxt=Array.isArray(d.confirmations)?d.confirmations:[];
-  let chart='';
-  if(cr){const url=URL.createObjectURL(cr);chart=`<div class="chartbox"><img src="${url}" alt="چارت ${fnum(d.symbol)}"></div>`}
-  else chart=`<div class="chartbox"><div class="chartload">چارت این سیگنال در دسترس نیست (نماد/دادهٔ زنده پیدا نشد)</div></div>`;
-  $('#dBody').innerHTML=`
-   <div class="row1" style="margin-bottom:10px"><span class="sym" style="font-size:17px">${fnum(d.symbol)}</span>
-    <span class="badge">${fnum(d.source)}</span>
-    ${dir?`<span class="chip ${dir}">${dir==='LONG'?'خرید 🟢':'فروش 🔴'}</span>`:''}
-    ${d.spot?'<span class="chip SPOT">اسپات</span>':''}
-    ${d.score?`<span class="chip score">★ ${d.score}/10</span>`:''}</div>
-   ${chart}
-   <div class="pills" style="margin-top:12px">
-    <div class="pill entry"><i>ورود</i><b>${fnum(d.entry)}</b></div>
-    <div class="pill stop"><i>استاپ</i><b>${fnum(d.sl)}${d.sl_moved_to_be?' (BE)':''}</b></div>
-    <div class="pill tp1 ${d.tp1_hit?'hit':''}"><i>TP1</i><b>${fnum(d.tp1)}${d.tp1_hit?' ✓':''}</b></div>
-    <div class="pill tp2 ${d.tp2_hit?'hit':''}"><i>TP2</i><b>${fnum(d.tp2)}${d.tp2_hit?' ✓':''}</b></div></div>
-   ${(d.hit_log&&d.hit_log.length)?`<div class="dsec"><h3>🎯 رویدادهای قیمتی</h3>${d.hit_log.map(h=>`<div class="conf" style="${h.ok?'':'color:#ef5350'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="${h.ok?'M20 6L9 17l-5-5':'M18 6L6 18M6 6l12 12'}"/></svg><b>${h.label}</b><span>${tehran(h.time)}</span></div>`).join('')}</div>`:''}
-   ${(d.messages&&d.messages.compact)?`<div class="dsec"><h3>📨 پیام مختصر (همان پیام کانال)</h3><div class="prose tgmsg">${d.messages.compact}</div></div>`:''}
-   ${(d.messages&&(d.messages.confirmed||d.messages.confirm))?`<div class="dsec"><h3>✅ پیام کانفرمد (همان پیام کانال)</h3><div class="prose tgmsg">${d.messages.confirmed||d.messages.confirm}</div></div>`:''}
-   ${d.summary?`<div class="dsec"><h3>📝 توضیحات</h3><div class="prose">${fnum(d.summary)}</div></div>`:''}
-   ${d.market_intelligence?miSummary(d.market_intelligence):''}
-   ${(d.classic_patterns&&d.classic_patterns.length)?`<div class="dsec"><h3>📐 الگوهای کلاسیک و منطق شکست</h3>${d.classic_patterns.map(x=>`<div class="explain">${fnum(x)}</div>`).join('')}</div>`:''}
-   ${(d.mtf_candles&&d.mtf_candles.items&&d.mtf_candles.items.length)?`<div class="dsec"><h3>🕯️ خوانش کندلی مولتی‌تایم‌فریم</h3>${d.mtf_candles.items.map(x=>`<div class="explain"><b>${fnum(x.tf)}</b> — ${fnum(x.text)}</div>`).join('')}</div>`:''}
-   ${d.management?`<div class="dsec"><h3>💰 مدیریت پوزیشن</h3><div class="pills"><div class="pill"><i>لوریج</i><b>${fnum(d.management.leverage)}×</b></div><div class="pill"><i>مارجین</i><b>$${fnum(d.management.margin)}</b></div><div class="pill stop"><i>تریلینگ فعلی</i><b>${fnum(d.management.trailing_sl)}</b></div><div class="pill"><i>TP هیت‌شده</i><b>${fnum(d.management.hit_index)}</b></div></div><div class="explain">تریلینگ یک‌طرفه و غیرقابل‌برگشت است؛ بعد از TP1 کف سود خالص فعال می‌شود.</div></div>`:''}
-   ${d.entry_conditions?`<div class="dsec"><h3>⚖️ شرط ورود / تأیید</h3><div class="prose">${fnum(d.entry_conditions)}</div></div>`:''}
-   ${confirmTxt.length?`<div class="dsec"><h3>✅ تأییدها</h3>${confirmTxt.map(c=>`<div class="conf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>${fnum(c)}</div>`).join('')}</div>`:''}
-   ${(d.timeline||[]).length?`<div class="dsec"><h3>🕒 تایم‌لاین زندگی سیگنال</h3><div class="tl">${d.timeline.map(t=>`<div class="tli"><b>${fnum(t.fa)}</b><span>${tehran(t.time)}</span></div>`).join('')}</div></div>`:''}
-   <div class="dsec mini">شناسه: <span class="code">${fnum(d.code)}</span> • ثبت: ${tehran(d.created_at)} ${d.confirmed_at?'• تأیید: '+tehran(d.confirmed_at):''} ${d.closed_at?'• بستن: '+tehran(d.closed_at):''}</div>`;
- }catch(e){$('#dBody').innerHTML='<div class="empty">خطا در دریافت جزئیات</div>'}
+function tgl(i){const el=document.getElementById('st3-'+i);el.style.display=el.style.display==='none'?'grid':'none'}
+function setFilter(f){FILTER=f;render()}
+function renderAlerts(){
+ const hits=STATE.hits||[];
+ const el=document.getElementById('noteState');
+ if(!('Notification'in window)){el.className='note bad';el.textContent='مرورگر شما Notification ندارد.';document.getElementById('noteBtn').style.display='none'}
+ else if(Notification.permission==='granted'){el.className='note ok';el.textContent='Notifications enabled — هشدارهای جدید همین‌جا و به‌صورت نوتیف می‌آیند.';document.getElementById('noteBtn').style.display='none'}
+ else if(Notification.permission==='denied'){el.className='note bad';el.textContent='Notifications are blocked. Please enable them in your browser settings to receive alerts.';document.getElementById('noteBtn').style.display='none'}
+ else{el.className='note';el.textContent='برای دریافت هشدار، اجازهٔ نوتیفیکیشن را بده.'}
+ document.getElementById('hitList').innerHTML=hits.length?hits.map(h=>`
+  <div class="card"><div class="sr1"><div class="sico up">🔔</div>
+   <div><div class="sym" style="font-size:13.5px">${fnum(h.symbol)}</div><div class="ssub">${fnum(h.kind)} • ${fnum(h.time)}</div></div>
+   ${h.pnl!=null?`<b class="grn" style="margin-left:auto">${h.pnl>0?'+':''}${h.pnl}%</b>`:''}</div>
+   <div class="ssub" style="margin-top:6px">${fnum(h.detail)}</div></div>`).join('')
+  :'<div class="empty">🔕 No alerts yet.<br>Signal notifications will appear here.</div>';
 }
-function closeDetail(){$('#detail').classList.remove('on');document.body.style.overflow=''}
-/* ── control ── */
-let PEND={paused:null,setups:null};
-function renderCtrl(){
- const c=(STATE&&STATE.control)||{};
- const paused=PEND.paused===null?!!c.paused:PEND.paused;
- $('#swPause').classList.toggle('on',paused);
- const sw=Object.assign({},c.setups||{});
- if(PEND.setups)Object.assign(sw,PEND.setups);
- const names=Object.keys(sw).concat(['TLBREAK','ALBROX','PINWALLQ','PINVAL','TECHCLASSIC','SPOT']);
- const uniq=[...new Set(names)];
- $('#setups').innerHTML=uniq.map(k=>`
-  <div class="toggle-row"><div class="tl"><b>${k}</b><span>${sw[k]===false?'خاموش — منتشر نمی‌شود':'فعال'}</span></div>
-   <div class="sw ${sw[k]===false?'':'on'}" data-k="${k}" onclick="flipSetup('${k}',this)"></div></div>`).join('');
- $('#ctrlSaved').textContent=c.updated_at?`آخرین ذخیره: ${c.updated_at}`:'';
+function askNote(){
+ if(!('Notification'in window))return;
+ Notification.requestPermission().then(()=>renderAlerts());
 }
-function flipPause(){PEND.paused=!(PEND.paused===null?!!(STATE.control||{}).paused:PEND.paused);renderCtrl()}
-function flipSetup(k,el){const cur=!(el.classList.contains('on'));PEND.setups=PEND.setups||{};
- const base=Object.assign({},(STATE.control||{}).setups||{},PEND.setups);base[k]=cur;PEND.setups=base;renderCtrl()}
-async function saveCtrl(){
- const body={};
- if(PEND.paused!==null)body.paused=PEND.paused;
- if(PEND.setups)body.setups=PEND.setups;
- if(!Object.keys(body).length)return;
+document.getElementById('noteBtn').onclick=askNote;
+function go(t){
+ document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
+ document.getElementById('pg-'+t).classList.add('on');
+ document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+ window.scrollTo(0,0);
+}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>go(b.dataset.t));
+document.getElementById('refreshBtn').onclick=()=>{const b=document.getElementById('refreshBtn');b.classList.add('busy');load().finally(()=>setTimeout(()=>b.classList.remove('busy'),500))};
+/* control api */
+function renderCtrl(){render()}
+function flipPause(){PEND.paused=!(PEND.paused===null?!!(STATE.control||{}).paused:PEND.paused);render()}
+function flipSetup(k){const base=Object.assign({},(STATE.control||{}).setups||{},PEND.setups||{});base[k]=!base[k];PEND.setups=base;render()}
+document.addEventListener('change',()=>{});
+async function pushControl(){
+ const body={paused:PEND.paused,setups:PEND.setups};
  const r=await fetch('/app/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
- if(r.ok){const j=await r.json();STATE.control=j.control;PEND={paused:null,setups:null};renderCtrl();
-  $('#ctrlSaved').textContent='✅ ذخیره شد — روی ربات اعمال می‌شود'}}
-async function load(){
- $('#refresh').classList.add('on');
- try{const r=await fetch('/app/api/state');if(r.status===401){location.href='/app/login';return}
-  STATE=await r.json();render()}catch(e){}
- setTimeout(()=>$('#refresh').classList.remove('on'),500);
+ if(r.ok){const j=await r.json();STATE.control=j.control;PEND={paused:null,setups:null};render()}
 }
-load();setInterval(load,30000);
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/app/sw.js').catch(()=>{})}
+setInterval(()=>{if(PEND.paused!==null||PEND.setups)pushControl()},700);
+/* detail sheet */
+function openDetail(sid){
+ const x=(STATE.feed||[]).find(z=>z.signal_id===sid);if(!x)return;
+ const dir=x.spot?'LONG':(x.direction||'LONG');
+ document.getElementById('sheetbg').style.display='block';
+ document.getElementById('sheet').classList.add('on');
+ document.getElementById('sheet').innerHTML=`
+  <div class="sh1"><div class="sico ${dir==='SHORT'?'dn':'up'}">${dir==='SHORT'?'📉':'📈'}</div>
+   <div><span class="sym">${fnum(x.symbol)}</span><span class="code">${fnum(x.code)}</span></div>
+   <button class="xbtn" onclick="closeSheet()">✕</button></div>
+  <div class="shtags">${resTag(x.result)}<span class="tag PENDING">${fnum(x.source)}</span><span class="tag PENDING">${fnum(x.tf)}</span>${x.spot?'<span class="tag PENDING">SPOT</span>':''}</div>
+  <div class="dtiles">
+   <div class="dtile"><span>◎ Entry</span><b>${fnum(x.entry)}</b></div>
+   <div class="dtile"><span>🛡 Stop Loss</span><b class="red">${fnum(x.sl)}</b></div>
+   <div class="dtile"><span>◎ TP1${x.tp1_hit?' ✓':''}</span><b class="grn">${fnum(x.tp1)}</b></div>
+   <div class="dtile"><span>◎ TP2${x.tp2_hit?' ✓':''}</span><b class="grn">${fnum(x.tp2)}</b></div>
+  </div>
+  <div class="drow"><span>⭐ Score</span><b class="amb">${fnum(x.score)}/10</b></div>
+  <div class="drow"><span>⚡ Leverage</span><b>${x.leverage?fnum(x.leverage)+'×':'—'}</b></div>
+  <div class="drow"><span>💵 Margin</span><b>${x.margin?'$'+Number(x.margin).toFixed(0):'—'}</b></div>
+  <div class="drow"><span>PnL (قیمت)</span><b class="${(x.pnl||0)>=0?'grn':'red'}">${x.pnl!=null?(x.pnl>0?'+':'')+x.pnl+'%':'—'}</b></div>
+  ${x.pnl_lev!=null?`<div class="drow"><span>PnL (مارجین)</span><b class="${x.pnl_lev>=0?'grn':'red'}">${(x.pnl_lev>0?'+':'')+x.pnl_lev}%</b></div>`:''}
+  ${x.pnl_usd!=null?`<div class="drow"><span>PnL (دلاری)</span><b class="${x.pnl_usd>=0?'grn':'red'}">${money(x.pnl_usd)}</b></div>`:''}
+  <div class="dchart"><img loading="lazy" src="/app/api/chart/${encodeURIComponent(sid)}" alt="chart ${fnum(x.symbol)}" onerror="this.style.display='none';this.parentNode.insertAdjacentHTML('beforeend','<div class=empty style=border:0;background:none>📊 نمودار این سیگنال در دسترس نیست</div>')"></div>
+  ${x.telegram_text?`<div class="explain">${x.telegram_text}</div>`:(x.summary?`<div class="explain">${fnum(x.summary)}</div>`:'')}
+  <div class="ssub" style="margin-top:8px">🕓 ${ago(x.time)} • ${tehran(x.time)}</div>`;
+}
+function closeSheet(){document.getElementById('sheetbg').style.display='none';document.getElementById('sheet').classList.remove('on')}
+load();setInterval(load,60000);
 </script></body></html>"""
+

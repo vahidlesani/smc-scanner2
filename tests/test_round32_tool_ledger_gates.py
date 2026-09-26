@@ -109,8 +109,8 @@ def test_webapp_results_board_math_and_wiring():
     # per-row leverage math on the feed rows
     assert "pnl_lev=(round(float(pnl) * float(leverage or 0), 2)" in src
     assert "pnl_usd=(round(float(margin_usd or 0) * float(pnl or 0)" in src
-    # board payload + render
-    assert "usd_total" in src and 'id="resultsBoard"' in src
+    # board payload + render (r36: Control tab replaces the old resultsBoard)
+    assert "usd_total" in src and 'id="ctlTable"' in src and 'id="ctlTiles"' in src
     assert "کنترل نتایج" in src
     # math sanity: 2.8% price × 10× lev on $100 margin = $28
     price_pct, lev, margin = 2.8, 10, 100
