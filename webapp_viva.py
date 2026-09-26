@@ -1082,7 +1082,7 @@ self.addEventListener('fetch', e => {
   if (url.pathname.startsWith('/app/api/')) return;         // live data: always network
   const hit = SHELL.find(([p]) => url.pathname === p);
   if (hit) {
-    e.respondWith(caches.open('viva-shell-r36').then(async c => {
+    e.respondWith(caches.open('viva-shell-r38').then(async c => {
       const cached = await c.match(e.request);
       const fetchP = fetch(e.request).then(r => { c.put(e.request, r.clone()); return r; }).catch(() => cached);
       return cached || fetchP;
@@ -1097,9 +1097,13 @@ self.addEventListener('fetch', e => {
 
 @viva_app.route("/app/icons/<path:name>")
 def pwa_icon(name):
-    safe = {"icon-192.png", "icon-512.png", "apple-touch-icon.png", "favicon.png"}
+    safe = {"icon-192.png", "icon-512.png", "apple-touch-icon.png", "favicon.png",
+            "brand-logo.png"}
     if name not in safe:
         return "", 404
+    if name == "brand-logo.png":
+        return send_file(os.path.join(_BASE_DIR, "assets", "vivasignals-logo.png"),
+                         mimetype="image/png")
     return send_file(os.path.join(_ICON_DIR, name), mimetype="image/png")
 
 
@@ -1180,7 +1184,7 @@ APP_HTML = """<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0a0f1a">
 <meta name="application-name" content="VIVA SIGNALS PRO">
-<meta name="app-version" content="R36">
+<meta name="app-version" content="R38">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="VIVA">
@@ -1199,7 +1203,7 @@ APP_HTML = """<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{background:var(--bg);color:var(--tx);font-family:Vazirmatn,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:14px;padding-bottom:calc(72px + var(--sab))}
 header{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:10px;padding:calc(10px + var(--sat)) 14px 10px;background:rgba(10,15,26,.92);backdrop-filter:blur(14px);border-bottom:1px solid var(--line2)}
-.logo{width:38px;height:38px;border-radius:12px;background:radial-gradient(120% 120% at 30% 20%,#123c33 0%,#0c2230 70%);border:1px solid #1f4a44;display:grid;place-items:center;font-size:17px}
+.logo{width:38px;height:38px;border-radius:12px;object-fit:cover;background:#0d1524;border:1px solid rgba(232,182,76,.45);display:grid;place-items:center;font-size:17px}
 .ht{flex:1;min-width:0}.ht b{display:block;font-size:15px}.ht span{font-size:10.5px;color:var(--mut)}
 .hbtn{width:36px;height:36px;border-radius:11px;background:var(--card);border:1px solid var(--line);color:var(--grn);display:grid;place-items:center;font-size:15px;cursor:pointer}
 .hbtn.busy{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
@@ -1280,7 +1284,7 @@ h1.pg{font-size:22px;font-weight:800;margin:2px 2px 10px}
 .crow b{font-size:12.5px}.crow span{font-size:10px;color:var(--mut);display:block}
 .funchip{font-size:10px;color:var(--mut);background:var(--card2);border:1px solid var(--line2);border-radius:8px;padding:3px 8px;display:inline-block;margin:3px 3px 0 0}
 /* tabs */
-nav{position:fixed;bottom:0;left:0;right:0;z-index:45;display:grid;grid-template-columns:repeat(5,1fr);background:rgba(10,15,26,.96);backdrop-filter:blur(14px);border-top:1px solid var(--line2);padding:6px 4px calc(6px + var(--sab))}
+nav{position:fixed;bottom:0;left:0;right:0;z-index:45;display:grid;grid-template-columns:repeat(6,1fr);background:rgba(10,15,26,.96);backdrop-filter:blur(14px);border-top:1px solid var(--line2);padding:6px 4px calc(6px + var(--sab))}
 nav button{background:none;border:0;color:var(--mut);font-family:inherit;font-size:9.5px;font-weight:700;display:grid;justify-items:center;gap:3px;cursor:pointer;padding:4px 0;border-radius:10px}
 nav button svg{width:20px;height:20px}
 nav button.on{color:var(--grn)}
@@ -1305,11 +1309,24 @@ nav button.on .tiline{width:16px;height:2.5px;border-radius:2px;background:var(-
 .dchart img{width:100%;display:block;background:#fff}
 .explain{font-size:12px;color:#c9d4e4;line-height:1.9;border-top:1px dashed var(--line);padding-top:9px;margin-top:9px;direction:rtl;text-align:right}
 .demo{margin:0 0 10px;text-align:center;font-size:11px;color:var(--amb);background:rgba(255,176,32,.07);border:1px dashed rgba(255,176,32,.4);border-radius:10px;padding:6px}
+.hero{display:flex;align-items:center;gap:12px;background:linear-gradient(135deg,#101a2c 0%,#0d2033 60%,#0e2436 100%);border:1px solid rgba(232,182,76,.28);border-radius:18px;padding:14px;margin:2px 0 12px}
+.hero img{width:52px;height:52px;border-radius:14px;object-fit:cover;border:1px solid rgba(232,182,76,.5)}
+.hero b{display:block;font-size:16.5px;letter-spacing:.03em;color:#e9d9a8}
+.hero span{display:block;font-size:10.5px;color:var(--mut);margin-top:3px}
+.about-hero{display:grid;justify-items:center;gap:6px;background:linear-gradient(160deg,#101a2c 0%,#0e2436 100%);border:1px solid rgba(232,182,76,.3);border-radius:18px;padding:20px 14px;margin:2px 0 12px;text-align:center}
+.about-hero img{width:74px;height:74px;border-radius:18px;object-fit:cover;border:1px solid rgba(232,182,76,.5)}
+.about-hero b{font-size:18px;color:#e9d9a8;letter-spacing:.04em}
+.about-hero span{font-size:11px;color:var(--mut)}
+.ab-sec{font-size:13.5px;font-weight:800;color:var(--amb);margin-bottom:8px}
+.ab-fa{font-size:13px;line-height:2;color:#dbe4f0;text-align:right}
+.ab-en{font-size:12.5px;line-height:1.8;color:#9fb2cb;direction:ltr;text-align:left}
+.ab-chip{display:inline-block;font-size:10.5px;font-weight:700;color:#e9d9a8;background:rgba(232,182,76,.08);border:1px solid rgba(232,182,76,.35);border-radius:99px;padding:4px 11px;margin:3px 3px 0 0}
+.ab-foot{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line);font-size:10.5px;color:var(--mut);text-align:center;letter-spacing:.04em}
 </style>
 </head><body>
 <header>
- <div class="logo">🎯</div>
- <div class="ht"><b>VivaSignals Pro</b><span>SMC Scanner v7</span></div>
+ <img class="logo" src="/app/icons/brand-logo.png" alt="VIVA">
+ <div class="ht"><b>VIVA-MON.labs</b><span>VivaSignals Pro · SMC Scanner v7</span></div>
  <div class="hbtn" id="liveIco" title="live">📶</div>
  <div class="hbtn" id="refreshBtn" title="refresh">⟳</div>
 </header>
@@ -1317,6 +1334,10 @@ nav button.on .tiline{width:16px;height:2.5px;border-radius:2px;background:var(-
  <div class="demo" id="demoBar" style="display:none">حالت نمایشی — دادهٔ زندهٔ متصل نیست</div>
 
  <section class="page on" id="pg-home">
+  <div class="hero">
+   <img src="/app/icons/brand-logo.png" alt="VIVA">
+   <div><b>VIVA-MON.labs</b><span>Macro &amp; Political-Economy Strategy · SMC Scanner v7</span></div>
+  </div>
   <h1 class="pg">Overview</h1><div class="sub">SMC Scanner Dashboard v7</div>
   <div class="tiles" id="homeTiles"></div>
   <div class="card">
@@ -1359,6 +1380,38 @@ nav button.on .tiline{width:16px;height:2.5px;border-radius:2px;background:var(-
   <div id="hitList"></div>
  </section>
 
+ <section class="page" id="pg-about">
+  <h1 class="pg">About</h1><div class="sub">معرفی — ویوا و پروژه</div>
+  <div class="about-hero">
+   <img src="/app/icons/brand-logo.png" alt="VIVA-MON.labs">
+   <b>VIVA-MON.labs</b>
+   <span>VivaSignals Pro · SMC Scanner v7</span>
+  </div>
+
+  <div class="card">
+   <div class="ab-sec">👑 معرفی — وحید لساتی «ویوا»</div>
+   <p class="ab-fa">کارشناس و تحلیلگر اقتصاد کلان و استراتژیست اقتصاد سیاسی؛ تریدر و فعال بازارهای مالی. تحصیلات آکادمیک در رشتهٔ مدیریت بانکی از دانشگاه شاهرود. فعال از سال ۱۳۹۶ در بازارهای مالی سهام و کریپتو — با نام مستعار <b>«ویوا»</b>.</p>
+   <div class="ab-en">Macro-economics analyst &amp; political-economy strategist. Trader and financial-markets professional. Academic background in Banking Management — Shahroud University. Active in equities and crypto markets since 2017, known as <b>“Viva”</b>.</div>
+   <div style="margin-top:10px">
+    <span class="ab-chip">📊 تحلیل کلان</span><span class="ab-chip">📈 تریدر</span><span class="ab-chip">🏦 مدیریت بانکی</span><span class="ab-chip">⚡ از ۱۳۹۶</span>
+   </div>
+  </div>
+
+  <div class="card">
+   <div class="ab-sec">⚙️ دربارهٔ پروژه · About the Project</div>
+   <div class="ab-en">VIVA-MON.labs is the private research &amp; signal engine behind the VivaSignals channels: a self-hosted Smart-Money-Concepts scanner that watches hundreds of crypto pairs across twelve timeframes, validates every setup through a multi-stage quality gate, and publishes only high-confidence, fully-managed trade plans — with live tracking, lifecycle updates and an honest, audited results ledger.</div>
+   <p class="ab-fa" style="margin-top:8px">در گیتهاب، موتور اسکنر و اپلیکیشن به‌صورت خصوصی نگهداری می‌شود: معماری ماژولار (موتورهای ستاپ، مدیریت معامله، رندر چارت و اپ PWA)، تست‌محور با بیش از ۵۰۰ تست خودکار، و چرخهٔ انتشار کنترل‌شده.</p>
+   <div class="ab-en" style="margin-top:6px">The GitHub repository (private) hosts the scanner engine and this app: modular setup engines, trade management, a deterministic chart renderer and the PWA you are using — test-driven with 500+ automated tests and a controlled release chain.</div>
+  </div>
+
+  <div class="card">
+   <div class="ab-sec">©️ مالکیت معنوی · Intellectual Property</div>
+   <p class="ab-fa">تمامی حقوق معنوی، مالکیت فکری و نشان تجاری «VIVA-MON.labs»، «VivaSignals»، لوگوی لوزی طلایی، اپلیکیشن VivaSignals Pro و مخزن گیتهابِ این پروژه، انحصاراً متعلق به <b>وحید لساتی (ویوا)</b> است. هرگونه بازانتشار، بازتولید یا بهره‌برداری تجاری از سیگنال‌ها، چارت‌ها، متن‌ها و کدهای این مجموعه، بدون اجازهٔ کتبی مالک، ممنوع است و پیگرد قانونی دارد.</p>
+   <div class="ab-en" style="margin-top:8px">All intellectual property rights, trademarks and branding of <b>VIVA-MON.labs</b> and <b>VivaSignals</b> — including the golden-diamond logo, the VivaSignals Pro application and the project's GitHub repository — are the exclusive property of <b>Vahid Lesani (“Viva”)</b>. Redistribution, reproduction or commercial use of any signal, chart, text or code from this project without the owner's written consent is strictly prohibited.</div>
+   <div class="ab-foot">© 2026 VIVA-MON.labs · Vahid Lesani — All rights reserved</div>
+  </div>
+ </section>
+
  <section class="page" id="pg-control">
   <h1 class="pg">🎛 کنترل نتایج</h1><div class="sub">PnL به‌ازای لوریج و مارجین — همان امروز</div>
   <div class="tiles" id="ctlTiles"></div>
@@ -1377,6 +1430,7 @@ nav button.on .tiline{width:16px;height:2.5px;border-radius:2px;background:var(-
  <button data-t="strategies"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>Strategies<span class="tiline"></span></button>
  <button data-t="alerts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>Alerts<span class="tiline"></span></button>
  <button data-t="control"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h13M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>Control<span class="tiline"></span></button>
+ <button data-t="about"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c.8-4 3.5-6 7-6s6.2 2 7 6"/></svg>About<span class="tiline"></span></button>
 </nav>
 
 <script>
