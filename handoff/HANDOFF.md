@@ -290,3 +290,4 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
 - «اسپات قالب مختصر فیوچرز» → `send_spot_alert`: دو پاراگراف هندسه/معنا در «یک» خط تحلیل ادغام شد؛ شاهد حجم یک‌خطی ماند.
 - تست: `tests/test_round42_laws.py` ×7؛ مجموع 574P/1skip؛ انکر r35 به فرم ادغام‌شده به‌روز شد.
 - **مانع:** `.railway_token` → Unauthorized (rotated?)؛ ریل‌وی می‌خواهد توکن تازه از Account Settings → Tokens. تا آن موقع لایو روی r41d (`25a85da`) می‌ماند.
+- **افزودهٔ ۲۶ سپتامبر شب:** توکن Railway چرخید → `.railway_token` (محلی، هرگز کامیت نمی‌شود) = Team/Workspace token؛ نکته: `whoami` با توکن تیمی همیشه Unauthorized می‌دهد — تشخیصِ اشتباه نده؛ اعتبارسنجی درست = کوئری GraphQL `projects{edges{node{id name}}}` → پروژهٔ «gleaming-sparkle» (d040648e). دیپلوی با push به گیت‌هاب خودکار است؛ توکن فقط برای `railway up` دستی/SSH لازم است.
