@@ -291,3 +291,9 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
 - تست: `tests/test_round42_laws.py` ×7؛ مجموع 574P/1skip؛ انکر r35 به فرم ادغام‌شده به‌روز شد.
 - **مانع:** `.railway_token` → Unauthorized (rotated?)؛ ریل‌وی می‌خواهد توکن تازه از Account Settings → Tokens. تا آن موقع لایو روی r41d (`25a85da`) می‌ماند.
 - **افزودهٔ ۲۶ سپتامبر شب:** توکن Railway چرخید → `.railway_token` (محلی، هرگز کامیت نمی‌شود) = Team/Workspace token؛ نکته: `whoami` با توکن تیمی همیشه Unauthorized می‌دهد — تشخیصِ اشتباه نده؛ اعتبارسنجی درست = کوئری GraphQL `projects{edges{node{id name}}}` → پروژهٔ «gleaming-sparkle» (d040648e). دیپلوی با push به گیت‌هاب خودکار است؛ توکن فقط برای `railway up` دستی/SSH لازم است.
+
+## r44 (2026-09-26 نیمه‌شب) — قانون «هر چارتی تایمِ خودش»
+- گزارش او: چارتِ هشدار ابتدایی کندل ۱ ساعته داشت ولی تیترش «15M» (تایم تریگر) می‌زد.
+- ریشه: تیترِ روی خودِ چارت (`_tf_disp`) همیشه از فیلد `trigger_timeframe` پر می‌شد؛ نوارِ واقعیِ رندرشده هیچ‌وقت خوانده نمی‌شد (گلوگاه: مرحلهٔ بالاتر «عدم تغییر ابزار» / span).
+- رفع: `_infer_chart_tf` تایمِ واقعی را از فاصلهٔ میانهٔ کندل‌های همان فریمی که به رندرر می‌رسد می‌خواند (شامل 3d/1w تجمیعی اسپات)؛ `_chart_tf_token` مُهر تیتر می‌سازد — تایم خودِ چارت، و اگر با تریگر فرق داشت: «1H (TRIG 15M)». مسیرهای lifecycle (chart_view_tf) همچنان برنده‌اند.
+- تست: `tests/test_round44_chart_tf_law.py` ×7؛ انکر ۰۹-۱۴ در test_signal_guards به فرم r44 به‌روز شد (قصد قدیمی: تایمِ الگو هرگز تیتر را نسازد — محفوظ). مجموع 587P/1skip.

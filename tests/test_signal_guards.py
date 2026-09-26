@@ -1181,7 +1181,10 @@ def test_link_chain_laws_2026_09_14():
     assert mn.count("attach_results_link(") >= 3
     # 6) The chart title is the TRIGGER TF — pattern TF is only a PAT note.
     assert "_tf_disp = (md.get(\"tl_context_tf\")" not in src
-    assert "_tf_disp = str(candidate.trigger_timeframe" in src
+    # r44 (Viva 09-26, «هر چارتی تایم خودش رو باید بگیره»): the title stamp
+    # names the DRAWN tape TF — trigger rides in parentheses on step-ups.
+    # The pattern TF still never overrides the title (the old 09-14 intent).
+    assert "_tf_disp = _chart_tf_token(candidate, frame)" in src
     # 7) Unconfirmed charts carry NO target/TP chips (zone+invalidation+trend).
     assert "EXPECTED MOVE" not in src
     # 8) Settlement: fee-only round trip (no invented slippage cut).

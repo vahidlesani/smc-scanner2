@@ -1583,6 +1583,56 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
     return ylo - 0.05 * yr, yhi + 0.05 * yr
 
 
+def _infer_chart_tf(frame, candidate) -> str:
+    """r44 (Viva 09-26, «هر چارتی تایم خودش رو باید بگیره»): the timeframe a
+    chart STAMPS must be read from the tape actually passed to the renderer —
+    never assumed from the trigger field. The median candle spacing maps onto
+    the venue TF ladder; unknown/rare spacings (aggregated 3d/1w spot tapes)
+    resolve against an extended map; anything still unknown falls back to the
+    trigger TF. Fail-open everywhere."""
+    base = str(getattr(candidate, "trigger_timeframe", "15m") or "15m").lower()
+    try:
+        ts = pd.DatetimeIndex(pd.to_datetime(frame["timestamp"]))
+        if len(ts) >= 3:
+            deltas = pd.Series(ts).diff().dt.total_seconds().div(60.0)
+            deltas = deltas[deltas > 0]
+            med = float(deltas.median()) if len(deltas) else 0.0
+            if med > 0:
+                try:
+                    from database.repository_v7 import TF_MINUTES as _TFM44
+                except Exception:
+                    _TFM44 = {}
+                ladder = {"1m": 1.0, "3m": 3.0, "5m": 5.0, "15m": 15.0, "30m": 30.0,
+                          "1h": 60.0, "2h": 120.0, "4h": 240.0, "1d": 1440.0,
+                          "3d": 4320.0, "1w": 10080.0}
+                ladder.update({k: float(v) for k, v in (_TFM44 or {}).items()})
+                best, _bd = base, float("inf")
+                for _name, _mins in ladder.items():
+                    _d = abs(float(_mins) - med)
+                    if _d < _bd:
+                        best, _bd = _name, _d
+                if _bd <= 0.25 * med:
+                    return best
+    except Exception:
+        pass
+    return base
+
+
+def _chart_tf_token(candidate, frame) -> str:
+    """r44 — the on-chart TF stamp: the picture's OWN timeframe; when a
+    no-tool-change / span step-up lifted the render above the trigger TF, the
+    trigger rides in parentheses («1H (TRIG 15M)») so a member can tell the
+    trigger TF from the displayed tape at one glance. On-chart text stays
+    English (ledger law)."""
+    trig = str(getattr(candidate, "trigger_timeframe", "") or "").upper()
+    md = getattr(candidate, "metadata", None) or {}
+    drawn = str(md.get("chart_view_tf") or _infer_chart_tf(frame, candidate)
+                or trig).upper()
+    if not trig or drawn == trig:
+        return drawn or trig
+    return f"{drawn} (TRIG {trig})"
+
+
 def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool = False) -> Optional[bytes]:
     """Render a branded TradingView-inspired 1440×900 chart."""
     if df is None or df.empty:
@@ -3149,14 +3199,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 print(f"ledger warning: {_led_exc}")
 
         # Viva 2026-09-14 «تایم‌فریم پوزیشن یک‌ساعته‌ست، چارت ۴ ساعته میدی؟!» —
-        # the title is ALWAYS the position's own trigger timeframe, on every
-        # setup. The pattern timeframe is a PAT reference in the subline and
-        # can never override the title or the tape underneath it.
-        _tf_disp = str(candidate.trigger_timeframe or md.get("pin_tf") or "").upper()
+        # the pattern timeframe is a PAT reference in the subline and can
+        # never override the title or the tape underneath it.
+        # r44 (Viva 09-26, «اگر تایم ۱ ساعته چارت رو میسازه همون تایم ۱
+        # ساعته بخوره» + «کنارش داخل پرانتز بزنه مثلا ۱۵ دقیقه»): the stamp
+        # names the tape the picture ACTUALLY DRAWS (read from the candle
+        # spacing itself); when a no-tool-change step-up lifted the render
+        # above the trigger TF, the trigger rides in parentheses.
+        _tf_disp = _chart_tf_token(candidate, frame)
         fig.text(
             0.055,
             0.952,
-            f"{candidate.symbol}  •  {str(_tf_disp).upper()}  •  {_style_disp(candidate)}  •  {candidate.direction}",
+            f"{candidate.symbol}  •  {_tf_disp}  •  {_style_disp(candidate)}  •  {candidate.direction}",
             color=CHART_THEME["text"],
             fontsize=14,
             fontweight="bold",
