@@ -798,7 +798,7 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
     # Viva 09-18 (his CRV note): the higher-TF pattern must be ANNOUNCED on
     # the trigger chart — «وج باید در ۴ ساعته یا روزانه پیدا بشه و اعلام بشه».
     try:
-        _hp = detect_patterns(htf_df.tail(170),
+        _hp = detect_patterns(htf_df.tail(240),
                               getattr(candidate, "direction", ""),
                               log_axis=_chart_will_be_log(candidate, htf_df)) \
             if htf_df is not None and len(htf_df) >= 60 else []

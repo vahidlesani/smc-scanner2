@@ -1098,6 +1098,35 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                               htf_df=bundle.get("4h") or bundle.get("1h"))
         except Exception:
             pass
+        # r40 SETUP-CONSOLIDATION (Viva 09-26, «هر چیز خوب PINWALL-QUALITY در
+        # PINWAL کلاسیک ادغام بشه؛ فقط PINWALL LEGACY بمونه»): the Q lane's
+        # four-component quality audit (anatomy / location / context / HTF
+        # polarity) now rides ON the classic pin as EVIDENCE + metadata — the
+        # separate PINWALLQ candidate is no longer emitted (its detector list
+        # is empty below), legacy PINWALLQ rows keep rendering as history.
+        try:
+            _qdf = bundle.get(str(best.trigger_timeframe or "").lower())
+            if _qdf is not None and len(_qdf) >= 20:
+                _qscore, _qdetails = _pinwall_quality_score(_qdf, best.direction, best)
+                best.metadata["pinwall_quality"] = _qdetails
+                _comp_max = {"anatomy": 30.0, "location": 27.0, "context": 20.0, "bias": 10.0}
+                _comp_fa = {
+                    "anatomy": ("کیفیت آناتومی پین", "نسبت شدو به دامنه، محل کلوز و اندازهٔ بدنه نسبت به ATR."),
+                    "location": ("کیفیت ناحیه و مکان", "نوع ناحیهٔ پین (FVG/فلیپ/عرضه-تقاضای تازه/ناحیهٔ کلیدی) و تازگی لمس."),
+                    "context": ("کامپرشن و کانتکست کندلی", "فشردگی ۵ کندل اخیر نسبت به ATR و کندل‌های دوجی‌مانندِ پیش از پین."),
+                    "bias": ("همسویی بایاس تایم بالاتر", "داوری گیت قطبیت ناحیه — نه جهت خودِ پین."),
+                }
+                for _k in ("anatomy", "location", "context", "bias"):
+                    _v = float(_qdetails.get(_k) or 0.0)
+                    _t, _d = _comp_fa[_k]
+                    best.evidence = list(best.evidence or []) + [EvidenceItem(
+                        f"pinq_{_k}", _t,
+                        f"{_d} امتیاز جزء: {_v:g} از {_comp_max[_k]:g} ({_v / _comp_max[_k]:.0%}).",
+                        _v >= 0.6 * _comp_max[_k], 2, timeframe=best.trigger_timeframe)]
+                if _qscore >= float(getattr(get_settings(), "pinwall_quality_min_score", 78.0)):
+                    best.score = min(10, best.score + 1)
+        except Exception:
+            pass
     return best
 
 
@@ -1174,7 +1203,11 @@ def detect_pinwall_quality(bundle: MarketBundle, style: str) -> Optional[SignalC
     return candidate
 
 
-PINWALL_QUALITY_DETECTORS=[detect_pinwall_quality]
+# r40 SETUP-CONSOLIDATION (Viva 09-26): PINWALLQ is no longer emitted — its
+# quality audit was merged INTO the classic pin (detect_pinbar_zone) and the
+# surviving setup is PINWALL LEGACY (PINVAL) only. The detector function and
+# every legacy display branch stay: old PINWALLQ rows must keep rendering.
+PINWALL_QUALITY_DETECTORS: list = []
 
 def _albrox_spike_context(df: np.ndarray | object) -> dict | None:
     # Placeholder marker; detector below works with pandas dataframes.

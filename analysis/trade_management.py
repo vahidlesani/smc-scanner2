@@ -459,14 +459,12 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
                  fee_pct: float = 0.0, trigger_tf: str = "",
                  wall_level: Optional[float] = None,
                  ltf_df=None, ltf_cap_pct: float = 0.0) -> Dict:
-    """Five-pill exit ladder — the ORIGINAL approved tool shape (Viva
-    09-19/20 revisit): five equal price segments entry→final, TP1 distance
-    exactly as before (no 1R floor), exits 40/30/30 on TP1..TP3, TP4/TP5
-    information-only (zero weight).
-
-      • After TP1 the stop moves to NET breakeven (entry plus the round-trip
-        fee/slippage allowance — professional point 5), after each later
-        target to just beyond the previous target (5 ticks).
+    """Three-pill exit ladder — r40 (Viva 09-26, verbatim: «TP4 و TP5 رو حذف
+    کن»): the path entry→final is split into THREE equal segments, exits
+    40/30/30 land on TP1..TP3 and the ladder stops there. TP1 distance keeps
+    the structural/LTF snap rules; after TP1 the stop moves to NET breakeven
+    (entry plus the round-trip fee/slippage allowance — professional point 5),
+    after each later target to just beyond the previous target (5 ticks).
       • Between targets a formula-based protection floor trails the stop
         (band_trailing) — adaptive ratios, ratchet-only, never loosens.
       • The position closes when the exit weight is exhausted (TP3) or the
@@ -514,7 +512,9 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
         _path = _limit
     final_price = entry + sign * _path
     dist = abs(final_price - entry)
-    step = _path / 5.0                      # the five-part split
+    # r40 (Viva 09-26): THREE equal parts — TP4/TP5 are removed from the
+    # ladder; the third pill IS the final target.
+    step = _path / 3.0
     tp1 = entry + sign * step
     # a structural first level may SNAP the first pill, but only when it is
     # within ±20% of the five-part step (a deeper level is a different trade,
@@ -543,8 +543,8 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
     except Exception:
         pass
     targets = []
-    for i in range(5):
-        _lv = tp1 + sign * min(step, max(0.4 * step, abs(final_price - tp1) / 4.0)) * i
+    for i in range(3):
+        _lv = entry + sign * step * (i + 1)
         if sign > 0:
             _lv = min(_lv, final_price)
         else:

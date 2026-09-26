@@ -1230,10 +1230,10 @@ def test_zec_protected_exit_settlement_is_win():
                        trigger_tf="15m")
     # Round-11 doctrine: the only level (1112.07 = 2.1%) sits below the 15m
     # band floor (3%) and there is no previous extreme in the ladder call, so
-    # the path is the band middle (4%) split in five → TP1 = entry − 0.8%.
-    assert abs(lad["targets"][0] - 1127.32) < 0.05
-    assert lad["weights"] == [40.0, 30.0, 30.0, 0.0, 0.0]
-    step = advance_ladder(lad, 1131.0, 1124.8)               # TP1 printed (round-10 path)
+    # the path is the band middle (4%); r40: split in three → TP1 = entry − 1.33%.
+    assert abs(lad["targets"][0] - (1136.41 - 0.04 * 1136.41 / 3.0)) < 0.05
+    assert lad["weights"] == [40.0, 30.0, 30.0]
+    step = advance_ladder(lad, 1131.0, 1121.0)               # TP1 printed (round-10 path)
     assert step["state"]["hit_index"] == 1
     assert abs(step["state"]["current_sl"] - 1136.36) < 1e-6  # entry −5 ticks (short)
     step2 = advance_ladder(step["state"], 1136.40, 1136.30)  # trail executes
@@ -1395,14 +1395,13 @@ def test_chart_pills_match_ladder_exits(monkeypatch):
     finally:
         m7._level_tag = orig
     # Round-22 law: ONE pill per level (the old 3%-merge produced mega-chips).
-    # Round-24 refinement — Viva 09-24: «ابزار لانگ و شورت در ۵ ستاپ فقط با
-    # tp1 تا tp5 مشخص بشه» — the tool tags are the bare numbers 1..5 (one
-    # each, no big TP labels over the candles), ENTRY/FIRST STOP stay.
+    # r40 (Viva 09-26): TP4/TP5 removed — the tool tags are the bare numbers
+    # 1..3 (one each, no big TP labels over the candles).
     joined = " | ".join(tags)
-    # r32 (Viva 09-26): the tool column carries ONLY the bare numbers 1..5 —
+    # r32 (Viva 09-26): the tool column carries ONLY the bare numbers —
     # ENTRY/FIRST STOP words moved to the price axis + bottom-right ledger.
     assert "ENTRY" not in joined and "FIRST STOP" not in joined
-    for i in range(1, 6):
+    for i in range(1, 4):
         assert str(i) in tags, (i, joined)
     assert tags.count("1") == 1
     assert not any(t.startswith("TP") for t in tags), joined  # no big TP labels

@@ -36,15 +36,15 @@ def _candles(rows):
 def test_ladder_gaps_are_uniform_and_never_balloon():
     # his bug: a structural TP1 close to the entry used to be followed by a
     # much larger TP1→TP2 jump. Round-10 doctrine: the path is the valid
-    # ceiling of the trigger TF, split into five EQUAL parts.
+    # ceiling of the trigger TF; r40: split into THREE EQUAL parts.
     lad = build_ladder(100.0, 98.5, "LONG", {"tick_size": 0.001}, 106.0,
                        structural_tp1=100.4, trigger_tf="1h")
     tg = [float(t) for t in lad["targets"]]
     gaps = [round(tg[i + 1] - tg[i], 6) for i in range(len(tg) - 1)]
-    assert len(tg) == 5 and lad["weights"] == [40.0, 30.0, 30.0, 0.0, 0.0]
+    assert len(tg) == 3 and lad["weights"] == [40.0, 30.0, 30.0]
     assert max(gaps) - min(gaps) < 1e-9, gaps
     # 106 is 6% away — above the 1h ceiling → clamped to 105 (5% path)
-    assert abs(tg[-1] - 105.0) < 1e-9 and abs(tg[0] - 101.0) < 1e-9
+    assert abs(tg[-1] - 105.0) < 1e-9 and abs(tg[0] - (100.0 + 5.0 / 3.0)) < 1e-9
     assert abs(lad["path_pct"] - 5.0) < 1e-9
 
 
@@ -54,21 +54,21 @@ def test_ladder_floor_side_mirrors_the_same_spacing():
     tg = [float(t) for t in lad["targets"]]
     gaps = [round(tg[i] - tg[i + 1], 6) for i in range(len(tg) - 1)]
     assert max(gaps) - min(gaps) < 1e-9
-    assert abs(tg[0] - 99.0) < 1e-9 and abs(tg[-1] - 95.0) < 1e-9   # 5% cap below entry
+    assert abs(tg[0] - (100.0 - 5.0 / 3.0)) < 1e-9 and abs(tg[-1] - 95.0) < 1e-9   # 5% cap below entry
 
 
-def test_ladder_five_pills_survive_a_deep_structural_tp1():
+def test_ladder_three_pills_survive_a_deep_structural_tp1():
     # a level farther than the TF ceiling cannot stretch the ladder (the old
     # cramped-ladder pathology: TP1 4.5% away with 0.1% pills after it)
     lad = build_ladder(0.1951, 0.2005, "SHORT", {"tick_size": 0.00001}, 0.1862,
                        structural_tp1=0.1862, trigger_tf="15m")
     tg = [float(t) for t in lad["targets"]]
-    assert len(tg) == 5 and len(set(round(t, 8) for t in tg)) == 5
-    assert all(tg[i] > tg[i + 1] for i in range(4))
+    assert len(tg) == 3 and len(set(round(t, 8) for t in tg)) == 3
+    assert all(tg[i] > tg[i + 1] for i in range(2))
     # 0.1862 is 4.56% away → INSIDE the 15m band (3–5%), so it IS the path
     assert abs(lad["path_pct"] - 4.5618) < 0.001
-    assert abs(tg[0] - (0.1951 - 0.1951 * 0.0456176 / 5)) < 1e-6   # TP1 = 1/5 of the path
-    assert abs(tg[2] - (0.1951 - 3 * 0.1951 * 0.0456176 / 5)) < 1e-6
+    assert abs(tg[0] - (0.1951 - 0.1951 * 0.0456176 / 3)) < 1e-6   # TP1 = 1/3 of the path
+    assert abs(tg[2] - 0.1862) < 1e-6   # r40: TP3 IS the final level
 
 
 def test_round10_path_doctrine_examples():
@@ -82,7 +82,7 @@ def test_round10_path_doctrine_examples():
     # 4h: a valid floor 5.5% away is in-band → used
     assert abs(tf_target_distance(100.0, "4h", structural_level=94.5) - 5.5) < 1e-9
     lad = build_ladder(100.0, 103.0, "SHORT", {"tick_size": 0.001}, 94.5, trigger_tf="4h")
-    assert abs(lad["targets"][0] - 98.9) < 1e-9 and abs(lad["targets"][-1] - 94.5) < 1e-9
+    assert abs(lad["targets"][0] - (100.0 - 5.5 / 3.0)) < 1e-9 and abs(lad["targets"][-1] - 94.5) < 1e-9
     # 15m round 11: a level only 1% away is the NEXT structure, not a target
     # → with no previous extreme the band middle (4%) is used
     assert abs(tf_target_distance(100.0, "15m", structural_level=99.0) - 4.0) < 1e-9
@@ -98,7 +98,7 @@ def test_round10_path_doctrine_examples():
     lad2 = build_ladder(100.0, 98.6, "LONG", {"tick_size": 0.001}, 0.0,
                         trigger_tf="15m", wall_level=104.0)
     assert abs(lad2["path_pct"] - 4.0) < 1e-9
-    assert abs(lad2["targets"][2] - 102.4) < 1e-9          # TP3 = 60% of the way, under the wall
+    assert abs(lad2["targets"][-1] - 104.0) < 1e-9         # r40: TP3 IS the wall
     assert lad2["targets"][-1] <= 104.0
 
 
@@ -154,15 +154,15 @@ def test_internal_long_from_the_range_floor_gets_structural_stop_and_targets():
     assert internal["entry"] == 99.30
     assert internal["sl"] < 99.0                       # stop BEHIND the channel floor
     assert 99.0 < internal["tp1"] < internal["tp2"] < 103.0   # targets under the ceiling
-    # round-10 doctrine: the PATH is entry→wall, TP1 = one fifth of it
+    # round-10 doctrine: the PATH is entry→wall; r40: TP1 = one third of it
     _path = internal["tp2"] - internal["entry"]
-    assert abs((internal["tp1"] - internal["entry"]) - _path / 5.0) < 1e-9
+    assert abs((internal["tp1"] - internal["entry"]) - _path / 3.0) < 1e-9
     assert cand.metadata.get("internal_wall") == 103.0
     # …and the ladder built from it exits before the wall
     lad = build_ladder(internal["entry"], internal["sl"], "LONG", {"tick_size": 0.001},
                        internal["tp2"], trigger_tf="15m",
                        wall_level=cand.metadata.get("internal_wall"))
-    assert lad["targets"][2] < 103.0                    # TP3 (60% of path) under the ceiling
+    assert lad["targets"][0] < 103.0 and lad["targets"][1] < 103.0   # TP1/TP2 under the ceiling
     assert "کانال" in str(cand.metadata.get("internal_entry_note_fa"))
     assert ok is True, reason
 
@@ -188,7 +188,7 @@ def _flat_window():
 def test_protection_phase_reverse_pin_arms_the_reentry():
     lad = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
     armed = __import__("analysis.trade_management", fromlist=["x"]).advance_ladder(
-        lad, 102.1, 100.1)["state"]
+        lad, 103.5, 100.1)["state"]
     win = _flat_window()
     win[-1] = {"open": 100.0, "high": 101.2, "low": 99.9, "close": 99.95, "volume": 100.0}
     scan = smart_exit_scan("LONG", win, armed)
@@ -214,12 +214,12 @@ def test_protection_phase_reverse_pin_arms_the_reentry():
     assert "قفل" in plan["note_fa"]
     # no pullback into the zone → no signal
     far = _flat_window()
-    far[-1] = {"open": 104.0, "high": 104.5, "low": 103.8, "close": 104.2, "volume": 100.0}
+    far[-1] = {"open": 105.2, "high": 105.7, "low": 105.0, "close": 105.4, "volume": 100.0}
     assert reentry_setup("LONG", far, armed, atr=1.0) is None
     # and a TP-hit-only ladder (not closed by protection) never re-enters
     lad2 = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
     st2 = __import__("analysis.trade_management", fromlist=["x"]).advance_ladder(
-        lad2, 102.1, 100.1)["state"]
+        lad2, 103.5, 100.1)["state"]
     st2["closed"] = True
     st2["close_reason"] = "LADDER_COMPLETE"
     assert reentry_setup("LONG", pull, st2, atr=1.0) is None

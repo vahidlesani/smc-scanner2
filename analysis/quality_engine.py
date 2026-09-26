@@ -689,6 +689,34 @@ def evaluate_confirmation(
                     continue
                 _tnow = pd.Timestamp(str(_row20["timestamp"]))
                 _lvl = _project_watch_level(_ln, _tnow)
+                # r40 CONFIRM-GATE (Viva 09-26, «لانگ روی ترندی که رو به پایین
+                # شکسته تأیید نشه» / SEI·POL 09-26): the old relevance filter
+                # below skipped lines price had ALREADY walked away from —
+                # exactly the freshly-broken ones. Scan the last 6 closed bars
+                # FIRST: a close through the line AGAINST the trade direction
+                # vetoes the confirmation outright, no matter where price sits
+                # now. Closing through in the trade's OWN direction (the
+                # break/retest lane) stays allowed.
+                try:
+                    for _bi in range(max(1, len(closed_df) - 6), len(closed_df)):
+                        _brow = closed_df.iloc[_bi]
+                        _blvl = _project_watch_level(_ln, pd.Timestamp(str(_brow["timestamp"])))
+                        _bcl = float(_brow["close"])
+                        _bs6 = str(_ln.get("side") or "").upper()
+                        if _atr20 > 0 and candidate.direction == "LONG" and _bs6 == "LOW" \
+                                and _bcl < _blvl - 0.10 * _atr20:
+                            return reject("BREAK_SIDE_MISMATCH", (
+                                f"ترند/خط حمایتی {_blvl:.8g} در ۶ کندل اخیر رو به پایین "
+                                f"با کلوز {_bcl:.8g} شکسته شده؛ طبق قانون، لانگ روی "
+                                "ساختارِ شکسته‌شده به پایین تأیید نمی‌شود."))
+                        if _atr20 > 0 and candidate.direction == "SHORT" and _bs6 == "HIGH" \
+                                and _bcl > _blvl + 0.10 * _atr20:
+                            return reject("BREAK_SIDE_MISMATCH", (
+                                f"ترند/خط مقاومتی {_blvl:.8g} در ۶ کندل اخیر رو به بالا "
+                                f"با کلوز {_bcl:.8g} شکسته شده؛ طبق قانون، شورت روی "
+                                "ساختارِ شکسته‌شده به بالا تأیید نمی‌شود."))
+                except Exception:
+                    pass
                 # only lines that are still RELEVANT to the live price may veto
                 # (a dead line projected far away is history, not context)
                 # relevant = the line is still within a few ATR of the price
@@ -741,8 +769,15 @@ def evaluate_confirmation(
         _pattern_kind20 in {"RANGE", "RECTANGLE", "CHANNEL"}
         or _pattern_kind20.startswith("CHANNEL_")
     )
+    # r40 CONFIRM-GATE (Viva 09-26, «داخل رنج/کانال فقط ابروکس و PINVAL اجازهٔ
+    # تأیید دارند»): the INTERNAL edge-entry lane is a RANGE trade, not a
+    # breakout — only the pin family (PINVAL/PINWALLQ legacy) and ALBROX may
+    # take it. TECHCLASSIC/TLBREAK inside a range fall through to the
+    # containment gate and are rejected (INSIDE_PATTERN_NO_BREAK).
+    _internal_setup_ok = str(getattr(candidate, "setup_code", "") or "").upper() in {
+        "ALBROX", "PINVAL", "PINWALLQ"}
     if (_band_lo20 is not None and _band_hi20 is not None
-            and _internal_allowed20
+            and _internal_allowed20 and _internal_setup_ok
             and str(_md20.get("viva_entry_type") or "").upper() != "INTERNAL"):
         try:
             _w20 = max(_band_hi20 - _band_lo20, 1e-12)
@@ -780,7 +815,7 @@ def evaluate_confirmation(
                         "direction": "LONG", "entry": _close20,
                         "sl": _sl_base - _buf20i,
                         "wall": float(_band_hi20),
-                        "tp1": _close20 + _path / 5.0 if _path > 0 else _wall,
+                        "tp1": _close20 + _path / 3.0 if _path > 0 else _wall,
                         "tp2": _wall,
                         "pattern": str(_band20.get("kind") or "RANGE"),
                     }
@@ -801,7 +836,7 @@ def evaluate_confirmation(
                         "direction": "SHORT", "entry": _close20,
                         "sl": _sl_base + _buf20i,
                         "wall": float(_band_lo20),
-                        "tp1": _close20 - _path / 5.0 if _path > 0 else _wall,
+                        "tp1": _close20 - _path / 3.0 if _path > 0 else _wall,
                         "tp2": _wall,
                         "pattern": str(_band20.get("kind") or "RANGE"),
                     }
@@ -813,10 +848,10 @@ def evaluate_confirmation(
                                    for k, v in _internal_plan.items()}
         _md20["internal_wall"] = float(_internal_plan.get("wall") or 0.0)
         _md20["internal_path_fa"] = (
-            f"هدف: تا کف الگو ({_internal_plan['tp2']:.8g}) — خروج در TP1..TP3 یعنی "
-            f"۶۰٪ مسیر، پیش از رسیدن به ضلع مقابل." if _internal_plan["direction"] == "SHORT" else
-            f"هدف: تا سقف الگو ({_internal_plan['tp2']:.8g}) — خروج در TP1..TP3 یعنی "
-            f"۶۰٪ مسیر، پیش از رسیدن به ضلع مقابل.")
+            f"هدف: تا کف الگو ({_internal_plan['tp2']:.8g}) — نردبان سه‌پله‌ای، "
+            f"TP3 روی ضلع مقابل." if _internal_plan["direction"] == "SHORT" else
+            f"هدف: تا سقف الگو ({_internal_plan['tp2']:.8g}) — نردبان سه‌پله‌ای، "
+            f"TP3 روی ضلع مقابل.")
         _md20["internal_entry_note_fa"] = (
             f"ورود از کف {_internal_plan['pattern']} با تأیید کندل بسته‌شده؛ استاپ پشت "
             "کانال با بافر و اهداف زیر سقف کانال." if _internal_plan["direction"] == "LONG" else

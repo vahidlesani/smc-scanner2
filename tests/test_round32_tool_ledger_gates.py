@@ -46,8 +46,12 @@ def test_tool_lines_are_faint_dashed_connectors():
     assert 'linestyle=(0, (3, 2)), alpha=0.55' in src
 
 
-# ── 3. smart zoom lifts dead history (LTC 1D) ─────────────────────────────
+# ── 3. smart zoom (r40 CHART-FILL supersedes the r32 LTC lift) ────────────
 def test_smart_zoom_recent_structure_floor():
+    """r32 used to LIFT dead June history (ylo>50). r40 CHART-FILL (Viva
+    09-26: «کندل‌ها از لبهٔ چپ تا کندل لایو، بالا تا پایین») makes the WHOLE
+    tape a hard bound instead — an early bar may never render invisible, so
+    the window now includes the full rise and the ladder above it."""
     import bot.messages_v7 as mv
     # 96 daily bars rising 40 → 80; recent 40-bar low ≈ 68; TP ladder to 84
     n = 96
@@ -60,10 +64,8 @@ def test_smart_zoom_recent_structure_floor():
     assert win is not None
     ylo, yhi = win
     assert yhi > 84.0                      # ladder fully inside
-    assert ylo > 50.0, f"dead June history must be lifted, got {ylo}"
-    # candles (68-80) no longer crammed: they occupy the upper-middle,
-    # with real headroom above for the ladder
-    assert (80.0 - ylo) / (yhi - ylo) < 0.85
+    assert ylo <= min(lows), f"every candle visible edge to edge, got {ylo}"
+    assert yhi >= max(highs)               # nothing sticks out above the tape
 
 
 # ── 4. engine gates ────────────────────────────────────────────────────────

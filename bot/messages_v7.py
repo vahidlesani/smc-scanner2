@@ -1529,7 +1529,16 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
         half-drawn any more);
       • a growth cap of max(base, 2.2× the full-frame span) still fights
         pathological far levels (the r28 DASH 13.3-vs-62 case stays dead).
-    Returns (ylo, yhi) or None."""
+    Returns (ylo, yhi) or None.
+
+    r40 CHART-FILL (Viva 09-26, «زوم هوشمند رو کالیبره بکن»): the WHOLE
+    rendered tape is a HARD bound now. The r37 base only guaranteed the
+    recent-40 block, so early bars of a pumping frame rendered INVISIBLE
+    below/above the window — the left half of the price panel looked EMPTY
+    while volume painted full (SEI/POL 09-26). Candles may never be cut by
+    the zoom; when volatility is high the axis simply grows (shorter
+    candles) so the L/S tool still fits — nothing sticks out.
+    """
     try:
         c_lo, c_hi = float(c_lo), float(c_hi)
     except Exception:
@@ -1557,9 +1566,16 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
         yhi = float(ov_hi)
     if ov_lo is not None and math.isfinite(float(ov_lo)) and float(ov_lo) < ylo:
         ylo = float(ov_lo)
+    # r40 CHART-FILL: the whole tape is a hard bound — an early candle may
+    # never fall outside the window (the invisible-left-half bug).
+    ylo = min(ylo, c_lo)
+    yhi = max(yhi, c_hi)
     cap = max(base, 2.2 * span)
     if (yhi - ylo) > cap:
         ylo, yhi = r_mid - 0.5 * cap, r_mid + 0.5 * cap
+        # the cap shrinks the OVERLAY stretch only — candles stay hard bounds
+        ylo = min(ylo, c_lo)
+        yhi = max(yhi, c_hi)
     # the recent block itself may never be cut by the growth cap
     ylo = min(ylo, r_lo - 0.05 * cap)
     yhi = max(yhi, r_hi + 0.05 * cap)
@@ -2649,7 +2665,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             if _sc32 > 0:
                 info += f"\nSCORE  {_sc32}/10"
             if _pathp8 >= 0.5:
-                info += f"\nPATH  {_pathp8:.2f}%  → 5 PARTS"
+                info += f"\nPATH  {_pathp8:.2f}%  → 3 PARTS"
             _posi = ax.get_position()
             fig.text(
                 _posi.x0 + 0.012,

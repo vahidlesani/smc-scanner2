@@ -47,11 +47,15 @@ def test_spot_case_tool_fully_inside_and_candles_centered():
     assert win is not None
     ylo, yhi = win
     assert ylo <= 0.0890 and yhi >= 0.1050, "the tool may never be clipped again"
+    # r40 CHART-FILL: the whole tape is a hard bound — nothing renders invisible
+    assert ylo <= 0.075 and yhi >= 0.105, "every candle visible, nothing sticks out"
     r_mid = 0.5 * (0.0900 + 0.0990)
     w_mid = 0.5 * (ylo + yhi)
     assert abs(r_mid - w_mid) <= 0.25 * (yhi - ylo), "recent block drifts off-center"
+    # r40: candles may get shorter when the frame is wide — the user accepted
+    # «خیلی ریز بودن کندل‌ها اشکال نداره» in exchange for full fill.
     occ = (0.0990 - 0.0900) / (yhi - ylo)
-    assert occ >= 0.35, (occ,)
+    assert occ >= 0.25, (occ,)
 
 
 def test_far_level_case_still_fights_the_basement():

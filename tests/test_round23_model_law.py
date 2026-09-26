@@ -155,9 +155,9 @@ def test_tool_pills_are_bare_numbers_with_axis_values(monkeypatch):
     finally:
         m7._level_tag = orig
     joined = " | ".join(tags)
-    # bare numbers 1..5 (near-identical levels may share one pill — the r22
-    # _tol grouping); NO big TPxx/percent labels anywhere on the tool.
-    for i in range(1, 6):
+    # bare numbers 1..3 (r40: TP4/TP5 removed; near-identical levels may
+    # share one pill — the r22 _tol grouping); NO big TPxx labels on the tool.
+    for i in range(1, 4):
         assert str(i) in joined, (i, joined)
     assert not any(t.strip().startswith("TP") for t in tags), joined
     # r32 (Viva 09-26, «لیبل‌های اطراف ابزار رو بردار»): ENTRY/FIRST STOP

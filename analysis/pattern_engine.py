@@ -304,7 +304,13 @@ def _line_alive(line, n) -> bool:
         if line is None or int(getattr(line, "touch_count", 0)) < 3:
             return False
         age = n - int(line.last_index)
-        if age > max(6, int(0.30 * n)):          # dead edge nobody touched lately
+        # r40 (Viva 09-26, «پیوتها و سوئینگهای معتبر قدیمیتر از ۵۰ کندل نباید
+        # کشته بشن»): the old 0.30·n gate murdered exactly the MAJOR edges —
+        # a line last touched ~50 bars ago (price consolidating under it)
+        # is the trend, not archaeology. Liveness now only rejects a true
+        # fossil (≥85% of the window untouched, min 90 bars); floating is
+        # already handled by the fitters' edge-proximity checks.
+        if age > max(90, int(0.85 * n)):          # dead edge nobody touched lately
             return False
         if int(line.last_index) - int(line.first_index) < max(4, int(0.15 * n)):
             return False                          # too young/crowded to matter
@@ -374,8 +380,11 @@ def fit_edge_line(df: pd.DataFrame, side: str, cfg, n: int):
         if atr <= 0:
             return None
         recent = pts[-6:]
-        if int(recent[-1]["index"]) > n or n - int(recent[-1]["index"]) > max(6, int(0.30 * n)):
+        if int(recent[-1]["index"]) > n or n - int(recent[-1]["index"]) > max(40, int(0.75 * n)):
             return None  # newest pivot must be recent — no archaeology
+        # r40: the «recent» bound above is 0.75·n (min 40) now — the old
+        # 0.30·n (~50 candles on a 164-bar window) killed valid ranges whose
+        # newest test was older than 50 bars (Viva 09-26 law ②).
         best = None
         for drop in range(len(recent) - 1):
             chosen = tuple(p for i, p in enumerate(recent) if i != drop)
