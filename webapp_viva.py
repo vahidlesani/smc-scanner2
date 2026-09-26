@@ -1191,48 +1191,34 @@ def api_prices():
     now = time.monotonic()
     data = dict(_PRICES_CACHE["data"] or {})
     if not data or now - _PRICES_CACHE["at"] >= 10:
-        # r41c: ride the ENGINE'S OWN egress — data.fetcher's session (its
-        # BYBIT_PROXY_URL + base-url failover are the path the working kline
-        # fetches already use; raw urllib misses both and cloud IPs get
-        # CloudFront-blocked). ONE full spot-ticker list per 10s window;
-        # per-symbol linear probe only for symbols the spot board misses.
+        # r41d: THE SAME source the bot's own realtime monitor uses
+        # (main._live_price_map): ourbit tickers first, engine tickers as
+        # fallback — the proven egress, one cached call per 10s window.
         try:
-            from data.fetcher import _SESSION as _ENG_SESSION
-            from data.fetcher import _BASE_URLS as _ENG_BASES
-            _rows: List[Dict[str, Any]] = []
-            for _base in _ENG_BASES:
-                try:
-                    _resp = _ENG_SESSION.get(f"{_base}/v5/market/tickers",
-                                             params={"category": "spot"}, timeout=8)
-                    _rows = (((_resp.json() or {}).get("result") or {}).get("list")) or []
-                    if _rows:
-                        break
-                except Exception:
-                    continue
-            for row in _rows:
+            from data.ourbit import get_ourbit_tickers
+            for row in get_ourbit_tickers(use_cache=True):
                 _s = str(row.get("symbol") or "").upper()
                 try:
-                    _px = float(row.get("lastPrice") or 0)
+                    _px = float(row.get("last_price") or 0)
                 except Exception:
                     continue
                 if _px > 0:
                     data[_s] = _px
         except Exception as _exc:
-            print(f"spot price probe failed: {_exc}")
-        for _miss in [x for x in syms if x not in data][:24]:
-            for _base in _ENG_BASES:
-                try:
-                    _resp = _ENG_SESSION.get(
-                        f"{_base}/v5/market/tickers",
-                        params={"category": "linear", "symbol": _miss}, timeout=6)
-                    _lst = (((_resp.json() or {}).get("result") or {}).get("list")) or []
-                    if _lst:
-                        _px = float(_lst[0].get("lastPrice") or 0)
-                        if _px > 0:
-                            data[_miss] = _px
-                    break
-                except Exception:
-                    continue
+            print(f"ourbit price probe failed: {_exc}")
+        if not data:
+            try:
+                from data.fetcher import get_tickers
+                for row in get_tickers():
+                    _s = str(row.get("symbol") or "").upper()
+                    try:
+                        _px = float(row.get("last_price") or 0)
+                    except Exception:
+                        continue
+                    if _px > 0:
+                        data[_s] = _px
+            except Exception as _exc:
+                print(f"engine price probe failed: {_exc}")
         if data:
             if len(_PRICES_CACHE["data"]) > 200:
                 _PRICES_CACHE["data"] = {}
