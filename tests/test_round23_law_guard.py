@@ -14,11 +14,22 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+import pytest
 from analysis.models import SignalCandidate
 from analysis.quality_engine import (
     _project_watch_level,
     evaluate_confirmation,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_live_market(monkeypatch):
+    """r39: this law test must judge GEOMETRY, not today's BTC tape — a live
+    fetcher made it environment-dependent (green offline, red when the
+    sandbox had network and BTC was dumping). Same isolation law as the
+    chart-pill tests: get_klines → None."""
+    import data.fetcher as F
+    monkeypatch.setattr(F, "get_klines", lambda *a, **k: None)
 
 
 def _frame(tz: str, closes_tail, base: float = 84300.0) -> pd.DataFrame:

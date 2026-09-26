@@ -47,11 +47,13 @@ def test_about_tab_and_page_exist():
 
 def test_about_bilingual_owner_bio():
     src = _src()
-    assert "وحید لساتی" in src
+    assert "وحید لسانی" in src  # r39: surname fix
     assert "کارشناس و تحلیلگر اقتصاد کلان" in src
     assert "مدیریت بانکی از دانشگاه شاهرود" in src
     assert "۱۳۹۶" in src and "ویوا" in src
     assert "Vahid Lesani" in src and "Shahroud University" in src
+    # r39 additions: continuous development + formal disclaimer
+    assert "سلب مسئولیت" in src and "مالکیت تجاریِ ایده" in src
     assert "since 2017" in src                            # 1396 ≈ 2017 EN mirror
 
 

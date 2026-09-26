@@ -793,8 +793,47 @@ def _signal_chart_png(sid: str) -> Optional[bytes]:
     hit = _CHART_CACHE.get(sid)
     if hit and now - hit[1] < 1800:
         return hit[0]
-    # Mirror-only rule: never render a chart from the dashboard.
-    # If Telegram has not produced the canonical chart yet, the app waits.
+    # r39 (Viva 09-26, «عکس چارتم فقط برای تایید باید بیاد که اونهم نمیاد»):
+    # MIRROR-ONLY starved the app — every signal whose Telegram file_id
+    # mirror missed (pending rows, spot cards, older chains) 404-ed forever.
+    # The renderer is identity-faithful now (r33 render_identity + zoom_freeze
+    # live in KV per signal_id), so the dashboard re-render reproduces the
+    # channel's own picture. Bounded: mirror first, render once per sid,
+    # 30-minute cache, the SAME cached tape the bot drew from.
+    try:
+        from database.db import db_cursor
+        _cols39 = ["signal_id", "symbol", "source", "public_code", "market_json",
+                   "direction", "entry", "sl", "tp1", "tp2", "score", "confirmed",
+                   "trigger_timeframe", "trade_style", "setup_code",
+                   "created_at", "confirmed_at", "strategy_fa"]
+        with db_cursor() as c39:
+            c39.execute(f"SELECT {', '.join(_cols39)} FROM signals WHERE signal_id=%s", (sid,))
+            _r39 = c39.fetchone()
+        if _r39:
+            _row39 = dict(zip(_cols39, _r39))
+            _cand39 = _candidate_from_row(_row39)
+            _md39 = _cand39.metadata if isinstance(_cand39.metadata, dict) else {}
+            _is_spot39 = str(_md39.get("market") or "").upper() == "SPOT"
+            if _is_spot39:
+                _md39.update({"log_scale": True, "spot_measured_box": True, "engine": "SPOT"})
+            _tf39 = (str(_md39.get("confirm_tf") or _row39.get("trigger_timeframe") or "4h")
+                     .lower())
+            _md39["chart_view_tf"] = _tf39
+            _cand39.metadata = _md39
+            from data.fetcher import get_klines
+            _df39 = get_klines(str(_row39.get("symbol") or ""), _tf39, 190,
+                               closed_only=False, use_cache=True)
+            if _df39 is not None and not getattr(_df39, "empty", True):
+                from bot.messages_v7 import generate_chart
+                _png39 = generate_chart(_df39, _cand39,
+                                        confirmed=bool(_row39.get("confirmed")))
+                if _png39:
+                    if len(_CHART_CACHE) >= 48:
+                        _CHART_CACHE.pop(next(iter(_CHART_CACHE)))
+                    _CHART_CACHE[sid] = (_png39, now)
+                    return _png39
+    except Exception as _exc:
+        print(f"chart fallback render failed {sid}: {_exc}")
     return None
 
 
@@ -976,6 +1015,9 @@ def app_shell():
         return redirect("/app/login", code=302)
     resp = make_response(APP_HTML)
     resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    # r39: an installed PWA must NEVER live on a stale shell — every open
+    # revalidates (his «اپلیکیشن آپدیت نمیشه» bug report).
+    resp.headers["Cache-Control"] = "no-store, must-revalidate"
     return resp
 
 
@@ -985,6 +1027,7 @@ def login_page():
         return redirect("/app", code=302)
     resp = make_response(LOGIN_HTML.replace("__ERROR__", ""))
     resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-store, must-revalidate"
     return resp
 
 
@@ -1020,7 +1063,9 @@ _STATE_REBUILDING = {"flag": False}
 
 @viva_app.route("/app/api/state")
 def api_state():
-    return jsonify(_fetch_state())
+    resp = jsonify(_fetch_state())
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @viva_app.route("/app/api/signal/<sid>")
@@ -1056,7 +1101,7 @@ def pwa_manifest():
         "name": "VIVA SIGNALS PRO", "short_name": "VIVA",
         "description": "Professional crypto signals dashboard and Telegram mirror",
         "lang": "en", "dir": "ltr",
-        "version": "R31",
+        "version": "R39",
         "start_url": "/app", "scope": "/",
         "display": "standalone", "orientation": "portrait",
         "theme_color": "#0d1017", "background_color": "#0d1017",
@@ -1082,7 +1127,7 @@ self.addEventListener('fetch', e => {
   if (url.pathname.startsWith('/app/api/')) return;         // live data: always network
   const hit = SHELL.find(([p]) => url.pathname === p);
   if (hit) {
-    e.respondWith(caches.open('viva-shell-r38').then(async c => {
+    e.respondWith(caches.open('viva-shell-r39').then(async c => {
       const cached = await c.match(e.request);
       const fetchP = fetch(e.request).then(r => { c.put(e.request, r.clone()); return r; }).catch(() => cached);
       return cached || fetchP;
@@ -1184,7 +1229,7 @@ APP_HTML = """<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0a0f1a">
 <meta name="application-name" content="VIVA SIGNALS PRO">
-<meta name="app-version" content="R38">
+<meta name="app-version" content="R39">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="VIVA">
@@ -1389,9 +1434,9 @@ nav button.on .tiline{width:16px;height:2.5px;border-radius:2px;background:var(-
   </div>
 
   <div class="card">
-   <div class="ab-sec">👑 معرفی — وحید لساتی «ویوا»</div>
+   <div class="ab-sec">👑 معرفی — وحید لسانی «ویوا»</div>
    <p class="ab-fa">کارشناس و تحلیلگر اقتصاد کلان و استراتژیست اقتصاد سیاسی؛ تریدر و فعال بازارهای مالی. تحصیلات آکادمیک در رشتهٔ مدیریت بانکی از دانشگاه شاهرود. فعال از سال ۱۳۹۶ در بازارهای مالی سهام و کریپتو — با نام مستعار <b>«ویوا»</b>.</p>
-   <div class="ab-en">Macro-economics analyst &amp; political-economy strategist. Trader and financial-markets professional. Academic background in Banking Management — Shahroud University. Active in equities and crypto markets since 2017, known as <b>“Viva”</b>.</div>
+   <div class="ab-en">Macro-economics analyst &amp; political-economy strategist. Trader and financial-markets professional. Academic background in Banking Management — Shahroud University. Active in equities and crypto markets since 2017, known as <b>“Viva”</b> — project owner.</div>
    <div style="margin-top:10px">
     <span class="ab-chip">📊 تحلیل کلان</span><span class="ab-chip">📈 تریدر</span><span class="ab-chip">🏦 مدیریت بانکی</span><span class="ab-chip">⚡ از ۱۳۹۶</span>
    </div>
@@ -1400,14 +1445,20 @@ nav button.on .tiline{width:16px;height:2.5px;border-radius:2px;background:var(-
   <div class="card">
    <div class="ab-sec">⚙️ دربارهٔ پروژه · About the Project</div>
    <div class="ab-en">VIVA-MON.labs is the private research &amp; signal engine behind the VivaSignals channels: a self-hosted Smart-Money-Concepts scanner that watches hundreds of crypto pairs across twelve timeframes, validates every setup through a multi-stage quality gate, and publishes only high-confidence, fully-managed trade plans — with live tracking, lifecycle updates and an honest, audited results ledger.</div>
-   <p class="ab-fa" style="margin-top:8px">در گیتهاب، موتور اسکنر و اپلیکیشن به‌صورت خصوصی نگهداری می‌شود: معماری ماژولار (موتورهای ستاپ، مدیریت معامله، رندر چارت و اپ PWA)، تست‌محور با بیش از ۵۰۰ تست خودکار، و چرخهٔ انتشار کنترل‌شده.</p>
-   <div class="ab-en" style="margin-top:6px">The GitHub repository (private) hosts the scanner engine and this app: modular setup engines, trade management, a deterministic chart renderer and the PWA you are using — test-driven with 500+ automated tests and a controlled release chain.</div>
+   <p class="ab-fa" style="margin-top:8px">در گیتهاب، موتور اسکنر و اپلیکیشن به‌صورت خصوصی نگهداری می‌شود: معماری ماژولار (موتورهای ستاپ، مدیریت معامله، رندر چارت و اپ PWA)، تست‌محور با بیش از ۵۰۰ تست خودکار، و چرخهٔ انتشار کنترل‌شده. پروژه <b>در حال توسعهٔ مداوم</b> است و با هر نسخه، موتورها و همین اپلیکیشن کامل‌تر می‌شوند.</p>
+   <div class="ab-en" style="margin-top:6px">The GitHub repository (private) hosts the scanner engine and this app: modular setup engines, trade management, a deterministic chart renderer and the PWA you are using — test-driven with 500+ automated tests and a controlled release chain. The project is under <b>continuous development</b> — engines, charts and this app keep evolving release by release.</div>
   </div>
 
   <div class="card">
-   <div class="ab-sec">©️ مالکیت معنوی · Intellectual Property</div>
-   <p class="ab-fa">تمامی حقوق معنوی، مالکیت فکری و نشان تجاری «VIVA-MON.labs»، «VivaSignals»، لوگوی لوزی طلایی، اپلیکیشن VivaSignals Pro و مخزن گیتهابِ این پروژه، انحصاراً متعلق به <b>وحید لساتی (ویوا)</b> است. هرگونه بازانتشار، بازتولید یا بهره‌برداری تجاری از سیگنال‌ها، چارت‌ها، متن‌ها و کدهای این مجموعه، بدون اجازهٔ کتبی مالک، ممنوع است و پیگرد قانونی دارد.</p>
-   <div class="ab-en" style="margin-top:8px">All intellectual property rights, trademarks and branding of <b>VIVA-MON.labs</b> and <b>VivaSignals</b> — including the golden-diamond logo, the VivaSignals Pro application and the project's GitHub repository — are the exclusive property of <b>Vahid Lesani (“Viva”)</b>. Redistribution, reproduction or commercial use of any signal, chart, text or code from this project without the owner's written consent is strictly prohibited.</div>
+   <div class="ab-sec">©️ مالکیت معنوی و تجاری · Intellectual Property</div>
+   <p class="ab-fa">تمامی حقوق معنوی، <b>مالکیت تجاریِ ایده</b>، نشان تجاری و لوگوی «VIVA-MON.labs» و «VivaSignals»، اپلیکیشن VivaSignals Pro و مخزن گیتهابِ این پروژه، انحصاراً متعلق به <b>وحید لسانی (ویوا)</b> است. این پروژه در حال توسعهٔ مداوم است و هرگونه بازانتشار، بازتولید یا بهره‌برداری تجاری از ایده، سیگنال‌ها، چارت‌ها، متن‌ها و کدهای این مجموعه، بدون اجازهٔ کتبی مالک، ممنوع است و پیگرد قانونی دارد.</p>
+   <div class="ab-en" style="margin-top:8px">All intellectual property rights, the <b>commercial ownership of the idea</b>, trademarks and branding of <b>VIVA-MON.labs</b> and <b>VivaSignals</b> — including the golden-diamond logo, the VivaSignals Pro application and the project's GitHub repository — are the exclusive property of <b>Vahid Lesani (“Viva”)</b>. The project is under continuous development. Redistribution, reproduction or commercial use of the idea or of any signal, chart, text or code from this project without the owner's written consent is strictly prohibited.</div>
+  </div>
+
+  <div class="card">
+   <div class="ab-sec">⚠️ سلب مسئولیت · Disclaimer</div>
+   <p class="ab-fa">از سوی اپلیکیشن و مالک پروژه، به هیچ شخص حقیقی یا حقوقی، هیچ‌گونه پیشنهاد یا توصیهٔ مالی ارائه نمی‌شود؛ محتوای این اپ صرفاً تحلیل فنی و آموزشی است. مسئولیت هرگونه ضرر و زیان ناشی از استفاده از سیگنال‌ها، کاملاً بر عهدهٔ کاربر است و پروژه و توسعه‌دهنده، هیچ‌گونه مسئولیت حقوقی در قبال ضرر و زیان احتمالی کاربران نخواهند داشت.</p>
+   <div class="ab-en" style="margin-top:8px">Nothing in this application constitutes a financial offer, solicitation or investment advice to any individual or entity — all content is technical analysis only. Any loss or damage arising from the use of the signals is entirely at the user's own responsibility, and the project and its developer assume no legal liability for any potential user losses.</div>
    <div class="ab-foot">© 2026 VIVA-MON.labs · Vahid Lesani — All rights reserved</div>
   </div>
  </section>
@@ -1663,5 +1714,9 @@ function openDetail(sid){
 }
 function closeSheet(){document.getElementById('sheetbg').style.display='none';document.getElementById('sheet').classList.remove('on')}
 load();setInterval(load,60000);
+/* r39 (Viva 09-26, «اپ آپدیت نمیشه»): on resume the PWA used to sit on the
+   frozen snapshot until the next 60s tick — refresh the moment it returns. */
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)load()});
+window.addEventListener('pageshow',e=>{if(e.persisted)load()});
 </script></body></html>"""
 
