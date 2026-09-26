@@ -203,3 +203,12 @@ Suite 509P/1skip. Channel-screenshot forensics (03:15-03:28 Tehran):
 5. **«ATR 0.00» display**: distance lines now say «قیمت همین حالا داخل ناحیهٔ بررسی است» when distance=0 (approaching + final-watch builders).
 TEST LESSON: SimpleNamespace test doubles must carry symbol/signal_id if the prod path prints them; chart-pill tests must monkeypatch get_klines (r32). Re-anchored r12 (15.0 below-zone now True — symmetric edge law) and r30 tests.
 OPEN: PINVAL merge + Railway backup/migration (user-scheduled 09-27); app feed «سیگنال‌های امروز» + RESULTS page layout (r33+); Railway cost audit; spot publish-rate watch (gates still filtering 48/48).
+
+## 09-26 round r34 — `40d270c` (LIVE boot_sha 40d270cc604f, boot 2026-09-26T01:02:55Z = 04:32 Tehran)
+Suite 510P/1skip. User's 3-item night list:
+1. **Chart ledger → ENGLISH** (Viva: «با entry و مخفف انگلیسی بنویس، خوانا، نه خیلی بزرگ»): ENTRY / INITIAL STOP (+✓) / TRAILING (— until set) / TP1..5 (+✓) / LIVE, fontsize 7.6.
+2. **App RESULTS CONTROL board** («داشبورد کنترل… سود زیان به‌ازای لوریج»): payload.results = same-day closed rows with pnl_lev (price%×lev) + pnl_usd (margin×pnl%×lev/100) + usd_total/win/loss tiles; table UI (#resultsBoard, .rtable CSS) + feed card shows $ PnL. App charts were ALREADY mirror-only (zero render) — verified again, no re-render path.
+3. **Railway cost**: report file `/home/user/گزارش-هزینه-ریلوی.md` (real funnel numbers: TC 11 dup / PINVAL 3 / TLBREAK 1 filtered; SWR 0s; savings table + next 3 levers: live-probe share, retention, off-peak scan).
+MIGRATION BACKUP: `/home/user/railway_backup/export_backup.py` (fixed: POST /app/api/login JSON) + state-*.json (feed 16, chains 24, funnel) + health-*.json. DB full dump still needs Railway dashboard pg_dump at migration day.
+Re-anchored: r32 ledger test (English). Lint lesson: py-compat linter flags any string literal containing an unclosed `{` on one line (naive PEP701 check) — keep braces balanced inside test string literals.
+OPEN: PINVAL merge (user-scheduled 09-27); app «سیگنال‌های امروز» design pass + RESULTS layout polish after his review; cost lever #2 retention.
