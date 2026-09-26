@@ -1191,17 +1191,24 @@ def api_prices():
     now = time.monotonic()
     data = dict(_PRICES_CACHE["data"] or {})
     if not data or now - _PRICES_CACHE["at"] >= 10:
-        import urllib.request
-        # r41b: Bybit FIRST — the SAME egress the engine already proves works
-        # from the deploy box (api.binance.com is IP-blocked on many clouds).
-        # ONE full spot-ticker list per 10s window; per-symbol linear probe
-        # only for symbols the spot board misses (futures-only perps).
+        # r41c: ride the ENGINE'S OWN egress — data.fetcher's session (its
+        # BYBIT_PROXY_URL + base-url failover are the path the working kline
+        # fetches already use; raw urllib misses both and cloud IPs get
+        # CloudFront-blocked). ONE full spot-ticker list per 10s window;
+        # per-symbol linear probe only for symbols the spot board misses.
         try:
-            req = urllib.request.Request(
-                "https://api.bybit.com/v5/market/tickers?category=spot",
-                headers={"User-Agent": "viva-app/1"})
-            with urllib.request.urlopen(req, timeout=8) as _r41b:
-                _rows = ((json.loads(_r41b.read()) or {}).get("result") or {}).get("list") or []
+            from data.fetcher import _SESSION as _ENG_SESSION
+            from data.fetcher import _BASE_URLS as _ENG_BASES
+            _rows: List[Dict[str, Any]] = []
+            for _base in _ENG_BASES:
+                try:
+                    _resp = _ENG_SESSION.get(f"{_base}/v5/market/tickers",
+                                             params={"category": "spot"}, timeout=8)
+                    _rows = (((_resp.json() or {}).get("result") or {}).get("list")) or []
+                    if _rows:
+                        break
+                except Exception:
+                    continue
             for row in _rows:
                 _s = str(row.get("symbol") or "").upper()
                 try:
@@ -1213,18 +1220,19 @@ def api_prices():
         except Exception as _exc:
             print(f"spot price probe failed: {_exc}")
         for _miss in [x for x in syms if x not in data][:24]:
-            try:
-                req = urllib.request.Request(
-                    f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={_miss}",
-                    headers={"User-Agent": "viva-app/1"})
-                with urllib.request.urlopen(req, timeout=5) as _r41c:
-                    _lst = ((json.loads(_r41c.read()) or {}).get("result") or {}).get("list") or []
-                if _lst:
-                    _px = float(_lst[0].get("lastPrice") or 0)
-                    if _px > 0:
-                        data[_miss] = _px
-            except Exception:
-                continue
+            for _base in _ENG_BASES:
+                try:
+                    _resp = _ENG_SESSION.get(
+                        f"{_base}/v5/market/tickers",
+                        params={"category": "linear", "symbol": _miss}, timeout=6)
+                    _lst = (((_resp.json() or {}).get("result") or {}).get("list")) or []
+                    if _lst:
+                        _px = float(_lst[0].get("lastPrice") or 0)
+                        if _px > 0:
+                            data[_miss] = _px
+                    break
+                except Exception:
+                    continue
         if data:
             if len(_PRICES_CACHE["data"]) > 200:
                 _PRICES_CACHE["data"] = {}
