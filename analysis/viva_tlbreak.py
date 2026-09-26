@@ -35,7 +35,10 @@ class VivaTLBreakConfig:
     # r31 (Viva 09-26, PYTH): a substantial line whose close-break is inside
     # this many bars of the right edge stays admissible even when it died
     # soon after its last defining pivot — the tradeable recognition window.
-    fresh_break_bars: int = 12
+    # r33 (Viva 09-26 LAW, verbatim): «بعد از بریک هم باید بمونه … حداقل
+    # ۵۰ کندل بعد از بریک، مگر اینکه ترندلاین معتبر دیگری ارجح باشه» — the
+    # window is 50 bars, for recognition AND retest, never 10/12.
+    fresh_break_bars: int = 50
     min_score: float = 7.0
     retest_window_trigger_bars_daytrade: int = 16
     retest_window_trigger_bars_swing: int = 24

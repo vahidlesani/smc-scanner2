@@ -1011,6 +1011,41 @@ def _watch_edge_at(candidate, ts) -> float:
                  else candidate.entry_zone_bottom)
 
 
+def _heal_zone_stop(candidate, live_price) -> bool:
+    """r33 (Viva 09-26, «هنوز عدد ابطال بین ناحیه هست»): chains created before
+    the r30 clamp still carry (and DISPLAY) an invalidation inside the entry
+    zone. One protective repair: LONG stop below the zone floor, SHORT stop
+    above the ceiling, using the standard structural buffer. Persists once."""
+    try:
+        zb = float(candidate.entry_zone_bottom)
+        zt = float(candidate.entry_zone_top)
+        sl = float(candidate.sl or 0)
+        direction = str(candidate.direction or "").upper()
+        if zb <= 0 or zt <= 0 or sl <= 0 or not (0 < zb < zt):
+            return False
+        if (candidate.metadata or {}).get("technical_confirmation_complete"):
+            return False
+        from analysis.trade_management import structural_buffer
+        buf = structural_buffer(float(live_price or sl))
+        if direction == "LONG" and sl >= zb:
+            candidate.sl = round(zb - buf, 8)
+        elif direction == "SHORT" and sl <= zt:
+            candidate.sl = round(zt + buf, 8)
+        else:
+            return False
+        candidate.metadata["stop_clamped"] = True
+        candidate.metadata["stop_clamp_reason"] = "r33_zone_heal"
+        try:
+            from database.candidate_store import update_candidate as _uc33
+            _uc33(candidate)
+        except Exception:
+            pass  # the in-memory repair still governs this pass
+        print(f"🛠 zone-stop heal {candidate.symbol} {candidate.signal_id} → {candidate.sl}")
+        return True
+    except Exception:
+        return False
+
+
 def _tombstone_key(candidate) -> str:
     """r30 anti-flood tombstone: a CANCELLED/EXPIRED scenario fingerprint."""
     try:
@@ -1067,31 +1102,39 @@ def _scenario_out_of_reach(candidate, price) -> bool:
         atr = float(md.get("atr") or 0) or 0.0
         if atr <= 0:
             return False
-        zone_mid = (float(candidate.entry_zone_bottom) + float(candidate.entry_zone_top)) / 2.0
         px = float(price)
-        if candidate.direction == "LONG" and px < zone_mid:
-            return False
-        if candidate.direction == "SHORT" and px > zone_mid:
-            return False
         # r30 (Viva 09-26, «موقع بریک نباید ابطال بشه — باید آپدیت و بعد
         # تأیید بیاد»): a chain the market has ALREADY TOUCHED (or broken)
         # that then ran beyond the zone in the scenario direction is a
         # breakout in progress — the 09-21 close-out was for zones the
         # market never came near, not for this. Monitor, alert the break,
         # confirm on completion; never cancel success.
+        # r33 (Viva 09-26, FIL 4H T818632: live 1.018 INSIDE the 0.889-1.05
+        # zone was «4.59 ATR away» → cancelled; LTC T101855 72.35 inside
+        # 63.37-72.4 → cancelled): distance is measured from the NEAREST zone
+        # EDGE, and a price inside the zone is NEVER out of reach — the old
+        # mid-based measure murdered approaching chains and «الکی موقعیت‌ها
+        # رو خراب می‌کرد». The 09-21 law only ever meant: the market walked
+        # far PAST the zone and never gave the entry.
         try:
+            _zb = float(candidate.entry_zone_bottom)
+            _zt = float(candidate.entry_zone_top)
+            if _zb <= px <= _zt:
+                return False
+            # r30 law kept: a TOUCHED chain that ran BEYOND the zone in the
+            # scenario direction is a breakout in progress — monitor, alert,
+            # confirm; never cancel success.
             _md30 = candidate.metadata or {}
-            _seen_it = bool(_md30.get("touched")) or bool(_md30.get("live_break_bar")) \
-                or str(_md30.get("tl_stage") or "") == "JUST_BROKE"
-            if _seen_it:
-                _zb = float(candidate.entry_zone_bottom); _zt = float(candidate.entry_zone_top)
-                if candidate.direction == "LONG" and px >= _zt:
+            if bool(_md30.get("touched")) or bool(_md30.get("live_break_bar")) \
+                    or str(_md30.get("tl_stage") or "") == "JUST_BROKE":
+                if candidate.direction == "LONG" and px > _zt:
                     return False
-                if candidate.direction == "SHORT" and px <= _zb:
+                if candidate.direction == "SHORT" and px < _zb:
                     return False
+            _edge = _zt if px > _zt else _zb
+            return abs(px - _edge) / atr > float(getattr(SETTINGS, "scenario_out_of_reach_atr", 2.0))
         except Exception:
-            pass
-        return abs(px - zone_mid) / atr > float(getattr(SETTINGS, "scenario_out_of_reach_atr", 2.0))
+            return False
     except Exception:
         return False
 
@@ -1412,6 +1455,7 @@ def monitor_candidates() -> Dict[str, int]:
                     print(f"live-break watch {candidate.symbol}: {_lb_exc}")
 
             if not candidate.metadata.get("technical_confirmation_complete"):
+                _heal_zone_stop(candidate, current_price)
                 is_near, distance_atr = approaching_entry(candidate, current_price)
                 if is_near and not candidate.approaching_sent:
                     if send_approaching(candidate, current_price, distance_atr):
@@ -1470,9 +1514,12 @@ def monitor_candidates() -> Dict[str, int]:
                 # chain alive for days.
                 if not candidate.metadata.get("technical_confirmation_complete") \
                         and _scenario_out_of_reach(candidate, current_price):
-                    _zone_mid = (float(candidate.entry_zone_bottom) + float(candidate.entry_zone_top)) / 2.0
+                    _zb33 = float(candidate.entry_zone_bottom)
+                    _zt33 = float(candidate.entry_zone_top)
+                    _edge33 = _zt33 if float(current_price) > _zt33 else _zb33
+                    _zone_mid = (_zb33 + _zt33) / 2.0
                     _atr_md = float((candidate.metadata or {}).get("atr") or 0) or 0.0
-                    _far = abs(float(current_price) - _zone_mid) / _atr_md if _atr_md else 0.0
+                    _far = abs(float(current_price) - _edge33) / _atr_md if _atr_md else 0.0
                     candidate.status = "CANCELLED"
                     candidate.metadata["cancel_reason"] = "OUT_OF_REACH"
                     update_candidate(candidate)

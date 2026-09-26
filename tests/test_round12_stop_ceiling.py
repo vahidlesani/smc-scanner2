@@ -100,7 +100,9 @@ def test_out_of_reach_needs_the_right_direction_and_two_atr():
     assert M._scenario_out_of_reach(cand, 28.785) is True      # his VVV case
     assert M._scenario_out_of_reach(cand, 18.9) is False       # still at the zone
     assert M._scenario_out_of_reach(cand, 19.6) is False       # ~1 ATR: a fast break
-    assert M._scenario_out_of_reach(cand, 15.0) is False       # below the zone (other exit path)
+    # r33 nearest-EDGE law: far below the zone the premise is gone too
+    # (symmetric) — only NEAR the zone is a chain «still waiting».
+    assert M._scenario_out_of_reach(cand, 15.0) is True
     assert M._scenario_out_of_reach(cand, None) is False
 
 

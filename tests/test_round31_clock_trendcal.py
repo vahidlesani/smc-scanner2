@@ -104,11 +104,19 @@ def test_freshly_broken_major_is_admitted():
 
 
 def test_old_broken_line_stays_history_only():
-    from analysis.viva_tlbreak import fit_validated_line
-    df = _line_df(n=95, break_at=58)          # break 37 bars before the edge
-    line = fit_validated_line(df, "HIGH", _tl_cfg())
-    assert line is None or line.break_index is None, \
+    from analysis.viva_tlbreak import fit_validated_line, load_config
+    fresh = int(load_config().fresh_break_bars)
+    # r33 LAW: within the 50-bar window a broken line stays admissible
+    df95 = _line_df(n=95, break_at=58)        # break 37 bars before the edge
+    ln95 = fit_validated_line(df95, "HIGH", _tl_cfg())
+    assert ln95 is not None and ln95.break_index is not None, \
+        "a 37-bar-old break must stay admissible inside the 50-bar window"
+    # far beyond the window → history only, never a fresh event
+    df130 = _line_df(n=130, break_at=58)      # break 72 bars before the edge
+    ln130 = fit_validated_line(df130, "HIGH", _tl_cfg())
+    assert ln130 is None or ln130.break_index is None, \
         "an ancient break must never re-arm as a fresh event"
+    assert fresh == 50
 
 
 def test_engine_recognises_the_fresh_break():

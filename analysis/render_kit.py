@@ -225,7 +225,10 @@ def _recently_broken(line, n: int) -> bool:
         age = n - int(bx)
         # his charts show the break mid-frame (DOT/ADA/ARB ~09-23 16:00 in a
         # 41h window): a line broken within HALF the visible frame stays.
-        return 0 <= age <= max(12, int(0.5 * max(n, 1)))
+        # r33 LAW (Viva 09-26): after the break the line stays dotted/faint
+        # for AT LEAST 50 candles so retest touches stay visible — unless a
+        # better-ranked valid line replaces it (the fitter's best-score pick).
+        return 0 <= age <= max(50, int(0.5 * max(n, 1)))
     except Exception:
         return False
 

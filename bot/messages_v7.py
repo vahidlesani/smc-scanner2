@@ -1565,8 +1565,29 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         try:
             _md0 = getattr(candidate, "metadata", None) or {}
             if not _md0.get("render_patterns") and not _md0.get("render_zones"):
-                from analysis.render_kit import enrich_render
-                enrich_render(candidate, frame.reset_index())
+                # r33 IDENTITY LAW (Viva 09-26, «ترندلاین‌ها با تغییر زوم بهم
+                # می‌ریزند»): patterns/trendlines are detected ONCE per chain
+                # and reused across every zoom/update — never re-fitted per
+                # render (a refit on a shifted window picks new anchors and
+                # the line «changes shape»).
+                try:
+                    from database.bot_kv import get_json as _gj33
+                    _stored33 = _gj33(f"render_identity:{candidate.signal_id}")
+                except Exception:
+                    _stored33 = None
+                if _stored33:
+                    candidate.metadata["render_patterns"] = _stored33.get("render_patterns") or []
+                    candidate.metadata["render_zones"] = _stored33.get("render_zones") or []
+                else:
+                    from analysis.render_kit import enrich_render
+                    enrich_render(candidate, frame.reset_index())
+                    try:
+                        from database.bot_kv import set_json as _sj33
+                        _sj33(f"render_identity:{candidate.signal_id}", {
+                            "render_patterns": candidate.metadata.get("render_patterns") or [],
+                            "render_zones": candidate.metadata.get("render_zones") or []})
+                    except Exception:
+                        pass
         except Exception:
             pass
         if _STYLE_NAME == "dark":
@@ -2864,6 +2885,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         if confirmed:
             try:
                 _fz = (candidate.metadata or {}).get("chart_zoom_frozen")
+                if not _fz:
+                    try:
+                        from database.bot_kv import get_json as _gj34
+                        _fz = _gj34(f"zoom_freeze:{candidate.signal_id}")
+                    except Exception:
+                        _fz = None
                 if _fz and len(_fz) == 2:
                     _froz28 = (float(_fz[0]), float(_fz[1]))
             except Exception:
@@ -2890,6 +2917,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         _md29 = candidate.metadata if isinstance(candidate.metadata, dict) else {}
                         _md29["chart_zoom_frozen"] = [float(_win28[0]), float(_win28[1])]
                         candidate.metadata = _md29
+                        # r33: the freeze survives object copies too (the
+                        # candidate row is re-loaded between updates).
+                        try:
+                            from database.bot_kv import set_json as _sj34
+                            _sj34(f"zoom_freeze:{candidate.signal_id}",
+                                  [float(_win28[0]), float(_win28[1])])
+                        except Exception:
+                            pass
                     except Exception:
                         pass
             else:
@@ -3328,7 +3363,7 @@ def build_approaching_message(candidate: SignalCandidate, current_price: float, 
         f"🆔 <code>{_e(_public_code(candidate))}</code>\n\n"
         f"📍 ناحیه بررسی: <b>{_price(candidate.entry_zone_bottom)} – {_price(candidate.entry_zone_top)}</b>\n"
         f"💹 قیمت فعلی: <b>{_price(current_price)}</b>\n"
-        f"📏 فاصله تا ناحیه: <b>{distance_atr:.2f} ATR</b>\n\n"
+        f"📏 {'فاصله تا ناحیه: <b>%.2f ATR</b>' % distance_atr if distance_atr > 0 else 'قیمت همین حالا <b>داخل ناحیهٔ بررسی</b> است'}\n\n"
         f"{_why_fa(candidate)}\n\n"
         f"🔎 در انتظار: {_e(waiting)}\n\n"
         f"{_htf_context_fa(candidate)}\n\n"
@@ -4107,7 +4142,7 @@ def _approaching_caption(candidate: SignalCandidate, current_price: float, dista
         f"{VIVA_SEP}\n"
         f"🎯 جهت محتمل پس از تأیید معتبر: "
         f"{'نزولی (SHORT)' if candidate.direction == 'SHORT' else 'صعودی (LONG)'}\n"
-        f"📏 فاصله زنده تا ناحیه: {distance_atr:.2f} ATR\n"
+        f"📏 {'فاصلهٔ زنده تا ناحیه: %.2f ATR' % distance_atr if distance_atr > 0 else 'قیمت همین حالا داخل ناحیهٔ بررسی است'}\n"
         f"{VIVA_SEP}\n"
         f"⚖️ {event.strip() or 'شرایط در آستانهٔ کامل‌شدن'}\n"
         f"🌀 {_e(advisory or 'شرط خاص اضافه‌ای ثبت نشده.')}\n"

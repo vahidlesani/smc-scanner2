@@ -62,8 +62,10 @@ def test_out_of_reach_exempts_price_beyond_zone_in_direction():
     # market TOUCHED the zone, then price ran beyond it = breakout in progress
     c.metadata["touched"] = True
     assert m._scenario_out_of_reach(c, 75.5) is False
-    # price far on the ENTRY side (below mid) is never out-of-reach either way
-    assert m._scenario_out_of_reach(c, 55.0) is False
+    # r33 nearest-edge law: price INSIDE the zone is never out of reach
+    assert m._scenario_out_of_reach(c, 70.5) is False
+    # far on either side of the zone = premise gone (symmetric, 09-21 law)
+    assert m._scenario_out_of_reach(c, 55.0) is True
 
 
 # ── law 3: tombstone — cancelled scenario can't be re-fired (113-msg flood)
