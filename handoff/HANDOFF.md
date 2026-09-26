@@ -282,3 +282,11 @@ Suite 567P/1skip (new tests/test_round41_app_live.py ×11). His message after re
 5. **پینوال یکی شد؟ YES** — r40 #4: PINWALLQ no longer emitted; the Q quality audit (anatomy/location/context/bias) rides the classic PINVAL; surviving brand = PINWALL LEGACY only.
 LIVE PROOF 18:55 Tehran: /health 25a85daa1e52 ✓; prices 6/6 symbols real values ✓; version fingerprint stable+no-store ✓; POL chart 200 = 412KB render w/ publish ladder ✓; shell R41/viva-shell-r41 ✓.
 OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages kept as-is (app cards already minimal, detail page holds the full text); older opens: ENA-15M path, SEI/AXS dedupe, UNI-3D co-display, Railway migration.
+
+## r42 (2026-09-26 شب) — بهداشت پیام‌ها · کامیت `9a69200` (pushed) · **دیپلوی بلاک: توکن Railway منقضی**
+- «اهداف ۴ و ۵ از همه پیام‌ها حذف + درصدهای خروج اشتباه» → جدول وضعیت TP (`_tp_status_lines`) حالا نردبان واقعی ۳ پله‌ای با خروج‌های واقعی 40/30/30 را نشان می‌دهد (وزن‌های رویدادِ مانیتور اگر باشد برنده است)؛ تیبلِ مردهٔ 35/35/20/5/5 پاک شد؛ متادیتای چارت چرخهٔ عمر هم [40,30,30].
+- «چند پیام تکراری» → ریشه: راچتِ کفِ حفاظتی در هر چرخهٔ مانیتور رویداد PROFIT_FLOOR می‌ساخت (ETHFI 19:19/19:25 + خروج‌هشدار همان دقیقه‌ها). حالا `send_trailing_note` فقط نخستین فعال‌سازی هر سطح TP و جهش‌های ≥0.20٪ قیمت را به تلگرام می‌دهد؛ ریز-راچت‌ها فقط در اپ (KV کلید `floor_note|sid|hit`، fail-open).
+- «جارت ثابت بکسگتال» (موجی‌بیک روی گوش او) → `_fa_guard`: کدپوینت‌های Presentation-Form عربی (U+FB50–FEFF) از لیبل‌ها حذف (NFKC)؛ لیبل منطقی دست‌نخورده می‌گذرد.
+- «اسپات قالب مختصر فیوچرز» → `send_spot_alert`: دو پاراگراف هندسه/معنا در «یک» خط تحلیل ادغام شد؛ شاهد حجم یک‌خطی ماند.
+- تست: `tests/test_round42_laws.py` ×7؛ مجموع 574P/1skip؛ انکر r35 به فرم ادغام‌شده به‌روز شد.
+- **مانع:** `.railway_token` → Unauthorized (rotated?)؛ ریل‌وی می‌خواهد توکن تازه از Account Settings → Tokens. تا آن موقع لایو روی r41d (`25a85da`) می‌ماند.
