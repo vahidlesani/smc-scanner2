@@ -3706,13 +3706,26 @@ def _chain_by_code_get(code: str) -> dict:
         return {}
 
 
+def _fa_guard(text: str) -> str:
+    """r42 — kill the mojibake class («جارت ثابت بکسگتال» on his phone):
+    Arabic PRESENTATION-FORM codepoints (U+FB50–U+FEFF) must never ride in an
+    outgoing Telegram label — some device fonts substitute lookalike wrong
+    glyphs for them. NFKC folds any shaped run back to base letters; a clean
+    logical string passes through untouched (no-op)."""
+    import unicodedata as _ud42
+    raw = str(text or "")
+    if any(0xFB50 <= ord(ch) <= 0xFEFF for ch in raw):
+        return _ud42.normalize("NFKC", raw)
+    return raw
+
+
 def _chart_label(symbol: str = "", code: str = "", title_fa: str = "") -> str:
     """ONE-line Persian label for a chart photo bubble (Viva 2026-09-16: the
     readable text must NEVER ride as a photo caption again)."""
     parts = [p for p in (f"📊 چارت {_e(symbol)}" if symbol else "📊 چارت",
                          f"<code>{_e(code)}</code>" if code else "",
-                         title_fa)]
-    return " • ".join(p for p in parts if p)
+                         _fa_guard(title_fa))]
+    return _fa_guard(" • ".join(p for p in parts if p))
 
 
 def _send_photo_file_id(file_id: str, chat_id: str, label: str = "",
@@ -4470,17 +4483,7 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
     sym = str(item.get("symbol") or "")
     tf = str(item.get("tf") or "").upper()
     fa = str(item.get("pattern_fa") or "")
-    if stage == "BREAK_DOWN":
-        geometry = ("کلوز معتبر زیر ضلع پایین الگو ثبت شد — شرط صعودیِ الگو نقض شده؛ "
-                    "فقط هشدار تحلیلی است، سیگنال نیست.")
-    elif stage == "NEAR_BREAK":
-        side_fa = "بالا" if side == "HIGH" else "پایین"
-        geometry = (f"قیمت به ضلع {side_fa} الگو چسبیده (فاصله ≈ {dist:.2f}%) — "
-                    "آماده‌باش شکست؛ تأیید فقط با کلوز معتبر آن‌طرفِ ضلع.")
-    else:
-        side_fa = "بالا" if side == "HIGH" else "پایین"
-        geometry = (f"برخورد اولیه به ضلع {side_fa} الگو (فاصله تا ضلع ≈ {dist:.2f}%) — "
-                    "هشدار تماس؛ روند قیمت را از همین‌جا رصد کنید.")
+
     # ── Viva 09-22: honest REASON lines in his own style («دلایل جهت لانگ
     # اعلام بشه … مثلا بگه این الگو نشان‌دهنده حرکت صعودی ممکن است بزودی بریک
     # شود … حجم معاملات …») — pattern meaning + the volume witness. Free data
@@ -4489,23 +4492,24 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
         vr = float(item.get("vol_ratio") or 0.0)
     except Exception:
         vr = 0.0
-    if stage == "NEAR_BREAK":
-        why = ("این الگو نشان‌دهندهٔ احتمال حرکت صعودی است و ممکن است بزودی بشکند؛ "
-               "تأیید فقط با کلوز معتبر آن‌طرفِ ضلع صادر می‌شود.")
-    elif stage == "BREAK_DOWN":
-        why = ("شرط صعودی الگو فعلاً نقض شده است؛ سیگنالی صادر نمی‌شود — "
-               "این پیام فقط هشدار تحلیلی برای پرهیز از ورود زودهنگام است.")
+    # r42 (Viva 09-26, «اسپات هم طبق قالب و فرمت پیامهای مختصر فیوچرز بیاد»):
+    # geometry + meaning merge into ONE analysis line; the volume/on-chain
+    # witnesses stay one-liners (he approved: «اگر بیاد خیلی خوبه»).
+    if stage == "BREAK_DOWN":
+        analysis_line = ("کلوز معتبر زیر ضلع پایین الگو ثبت شد؛ شرط صعودیِ الگو نقض شده — "
+                         "فقط هشدار تحلیلی، سیگنال نیست.")
+    elif stage == "NEAR_BREAK":
+        analysis_line = (f"چسبیده به ضلع {'بالا' if side == 'HIGH' else 'پایین'} الگو (≈ {dist:.2f}%) — "
+                         "الگو نشان‌دهندهٔ احتمال شکست است؛ تأیید فقط با کلوز معتبر آن‌طرفِ ضلع.")
     else:
-        why = ("این الگو نشان‌دهندهٔ حرکت صعودی بالقوه است؛ برخورد اولیه ثبت شده و "
-               "رصدِ فشردگی به سمت ضلع آغاز می‌شود.")
+        analysis_line = (f"برخورد اولیه به ضلع {'بالا' if side == 'HIGH' else 'پایین'} الگو (≈ {dist:.2f}%) — "
+                         "نشان‌دهندهٔ حرکت صعودی بالقوه؛ فشردگی به سمت ضلع رصد می‌شود.")
     lines = [
         f"🪙 <b>VIVA-SPOT-MON</b>",
         f"<b>{_e(_SPOT_ALERT_TITLE.get(stage, '🪙 هشدار اسپات'))}</b>",
         f"<code>{_e(sym)}/USDT · {_e(tf)} · {_e(fa)}</code>",
         "",
-        _e(geometry),
-        "",
-        _e(why),
+        _e(analysis_line),
     ]
     if vr >= 1.2:
         lines.append(f"📊 حجم کندل ≈ {vr:.1f}× میانگین ۲۰کندله — همسو با فشار خرید.")
@@ -4903,14 +4907,24 @@ def _event_timing_lines(event: dict, include_confirmed: bool = False) -> str:
 
 
 def _tp_status_lines(event: dict) -> str:
-    hit = max(0, min(5, int(event.get("hit_index") or 0)))
-    weights = [35, 35, 20, 5, 5]
+    # r42 (Viva 09-26, «تا تی پی ۳ داریم … درصدهای خروج هم اشتباه زده»): the
+    # status table shows the r40 THREE-pill ladder with its REAL exits
+    # 40/30/30 — the old hardcoded 35/35/20/5/5 five-row table was a lie on
+    # both counts. The event's own weights win when the monitor sends them.
+    hit = max(0, min(3, int(event.get("hit_index") or 0)))
+    try:
+        weights = [float(w) for w in (event.get("weights")
+                                      or event.get("ladder_weights") or [])][:3]
+    except Exception:
+        weights = []
+    if len(weights) < 3 or any(not (w >= 0) for w in weights):
+        weights = [40.0, 30.0, 30.0]
     rows = []
     for i, weight in enumerate(weights, start=1):
         if i <= hit:
-            rows.append(f"🎯 TP{i}  |  {weight}%  |  ✅️")
+            rows.append(f"🎯 TP{i}  |  {weight:.0f}%  |  ✅️")
         else:
-            rows.append(f"⏳ TP{i}  |  {weight}%  |  💰")
+            rows.append(f"⏳ TP{i}  |  {weight:.0f}%  |  💰")
     return "\n".join(rows)
 
 
@@ -5510,7 +5524,7 @@ def _event_chart_candidate(event: dict) -> SignalCandidate:
             "targets": targets or build_ladder(
                 entry, sl, direction, {}, tp2,
                 trigger_tf=str(event.get("trigger_timeframe") or "15m")).get("targets", []),
-            "weights": [35, 35, 20, 5, 5],
+            "weights": [40.0, 30.0, 30.0],
             "hit_index": int(event.get("hit_index") or 0),
         },
         "current_trailing_sl": float(event.get("sl") or event.get("new_sl") or 0),
@@ -5666,6 +5680,25 @@ def send_trailing_note(event: dict) -> int:
             + (f" • مانیتور {_e(_mtf)}" if _mtf else "") + "\n"
             f"🆔 <code>{code}</code>")
     if kind == "PROFIT_FLOOR":
+        # r42 (Viva 09-26, «گاهی چند تا پیام تکراری میاد»): the ratchet fires
+        # a PROFIT_FLOOR event every monitor cycle once armed — members read
+        # the repeated notes as duplicate TP hits. Telegram gets the FIRST
+        # activation per TP level and only MEANINGFUL jumps (≥0.20% of price
+        # beyond the last announced floor); micro-ratchets stay app-only (the
+        # app cards have shown the live trailing SL since r41). Fail-open.
+        try:
+            from database.bot_kv import get_json as _gj42, set_json as _sj42
+            _key42 = f"floor_note|{event.get('signal_id')}|{hit}"
+            _st42 = _gj42(_key42) or {}
+            _new42 = float(event.get("new_sl") or event.get("sl") or 0)
+            _last42 = float(_st42.get("last") or 0)
+            if _last42 > 0 and _new42 > 0:
+                _need42 = 0.002 * _new42
+                if abs(_new42 - _last42) < _need42:
+                    return 0
+            _sj42(_key42, {"last": _new42})
+        except Exception:
+            pass
         text = (
             f"🔒 <b>کف حفاظتی سود فعال شد</b> (پس از TP{hit})\n\n{head}\n"
             f"━━━━━━━━━━━━━━━━━━\n"

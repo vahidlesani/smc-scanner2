@@ -38,7 +38,8 @@ def test_spot_engine_only_publishes_bullish_breaks_and_warns_both_sides():
     assert "BREAK_DOWN" in src
     # ladder: both sides warn (the alert post names UPPER and LOWER edges)
     msrc = open(f"{REPO}/bot/messages_v7.py", encoding="utf-8").read()
-    assert 'side_fa = "بالا" if side == "HIGH" else "پایین"' in msrc
+    # r42: the merged one-line analysis names BOTH edges inline
+    assert "'بالا' if side == 'HIGH' else 'پایین'" in msrc
 
 
 # ── 3. the on-chain witness block on confirmed spot cards ─────────────────
