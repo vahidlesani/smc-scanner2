@@ -243,3 +243,11 @@ Suite 531P/1skip (new tests/test_round37_chart_laws.py ×15). User sent 17 scree
 PROOFS: /home/user/r37_futures_proof.png (tool whole, no name pills, stamp=now) + /home/user/r37_spot_proof.png (box-only, no tool/arrow).
 NOTE for his review: r29/r33 freeze laws still apply — chains already frozen keep their frozen zoom until price exits the box; every NEW chain/render uses the r37 engine.
 OPEN: his phone re-check; PINWAL merge + Railway migration 09-27.
+
+## 09-26 round r38 — `6a73d1c` (LIVE boot_sha 6a73d1cbfe5a, boot 2026-09-26T03:31:35Z = 07:01 Tehran)
+Suite 537P/1skip (new tests/test_round38_about_brand.py ×6). User: owner brand in the app + an About section:
+1. REAL logo (assets/vivasignals-logo.png, the golden diamond = channel avatar) now served at /app/icons/brand-logo.png and used in: shell header (replaced the 🎯 placeholder), a NEW Home hero card (logo + VIVA-MON.labs + «Macro & Political-Economy Strategy · SMC Scanner v7»), and the About page hero.
+2. Header title → **VIVA-MON.labs** («VivaSignals Pro · SMC Scanner v7» subtitle).
+3. NEW 6th nav tab **About** (معرفی): bilingual owner bio — وحید لساتی «ویوا»، کارشناس و تحلیلگر اقتصاد کلان و استراتژیست اقتصاد سیاسی، تریدر، تحصیلات مدیریت بانکی دانشگاه شاهرود، فعال از ۱۳۹۶ در سهام و کریپتو / EN mirror (Shahroud University, since 2017) + chips; project blurb (EN + FA: private SMC scanner, modular engines, 500+ tests); FORMAL bilingual IP notice (trademark VIVA-MON.labs/VivaSignals, golden-diamond logo, app + GitHub repo exclusively Vahid Lesani's; no reproduction without written consent) + © 2026 footer.
+4. SW cache r36→r38, app-version R38. About verified end-to-end via jsdom (6 tabs, 3 cards, images) + live prod (logo 200 = the real 73,817-B PNG).
+OPEN: his phone review of r37 charts + r38 brand; PINWAL merge + Railway migration 09-27.
