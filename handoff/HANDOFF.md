@@ -212,3 +212,13 @@ Suite 510P/1skip. User's 3-item night list:
 MIGRATION BACKUP: `/home/user/railway_backup/export_backup.py` (fixed: POST /app/api/login JSON) + state-*.json (feed 16, chains 24, funnel) + health-*.json. DB full dump still needs Railway dashboard pg_dump at migration day.
 Re-anchored: r32 ledger test (English). Lint lesson: py-compat linter flags any string literal containing an unclosed `{` on one line (naive PEP701 check) — keep braces balanced inside test string literals.
 OPEN: PINVAL merge (user-scheduled 09-27); app «سیگنال‌های امروز» design pass + RESULTS layout polish after his review; cost lever #2 retention.
+
+## 09-26 round r35 — `33bfd5f` (LIVE boot_sha 33bfd5f05f12, boot 2026-09-26T01:22:43Z = 04:52 Tehran)
+Suite 516P/1skip. User: «قوانین امشب روی اسپات هم اعمال بشه»:
+1. **VERIFIED — spot DOES inherit everything**: both spot publishers (confirmed + ladder) render via the shared bot.messages_v7.generate_chart ⇒ Tehran clocks, 50-bar line lifecycle, render identity/frozen zoom, numeric-only pills, English ledger, smart-zoom recent floor, zone-stop heal… all already apply. Nothing to port.
+2. **CryptoCave-clean spot charts**: market=SPOT ⇒ no FVG/IFVG strips + no POI zone boxes (only the measured green box + the shape's own lines + tool). Both-side touches/breaks stay in the TEXT (ladder).
+3. **Budgets un-strangled**: SPOT_MAX_PER_DAY 2→16, SPOT_ALERT_MAX_PER_DAY 8→30. Dedup stamps + stage cooldowns remain the anti-spam layer (r29e pass was found 48 / published 0 with cap 2 + 72h/36h stamps).
+4. **On-chain REFERENCE block on confirmed spot cards**: free witness engine (analysis/onchain_free — CoinGecko markets + Fear&Greed + DefiLlama, cached 10-30min, fail-open) was built & enabled but never displayed; now renders ≤4 lines under the TP ladder («رفرنس آنچین — فقط زمینه، هرگز شرطِ سیگنال نیست»). Classic 12-16 pattern set: spot engine uses render_kit.detect_patterns (full classical set incl. wedges/flags/H&S) — touch/break of BOTH sides announced by ladder (TOUCH/NEAR_BREAK/BREAK_DOWN), signals only on bullish close above (opposite side = warn-only by construction).
+BUG LESSON: r35 first cut used _spot_clean35 before defining it AND deleted the original _rz assignment — renderer died («cannot access local variable '_rz'») on every chart; 7 tests caught it. Order matters inside the 3000-line render fn: define at FIRST use.
+Render proof: r35_spot_render.png (DOGE spot, clean view + English ledger).
+OPEN: PINVAL merge (today per user); app RESULTS polish after review; retention; TP-pill visibility when ladder far from candles (smart-zoom cap clips by design — check on real spot posts).
