@@ -4038,30 +4038,13 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
         send_signal_separator(target)
         candidate.metadata["education_separator_attempted"] = True
     chart = generate_chart(chart_df, candidate, confirmed=False) if chart_df is not None else None
-    if candidate.setup_code == "PINVAL":
-        md = candidate.metadata or {}
-        zone_fa = str(md.get("pin_zone_fa") or "ناحیه مهم")
-        ctx_fa = _TF_FA.get(str(md.get("pin_ctx_tf") or ""), str(md.get("pin_ctx_tf") or "").upper())
-        hi, lo = float(md.get("pin_high") or 0), float(md.get("pin_low") or 0)
-        if candidate.direction == "LONG":
-            rule = f"✅ کلوز بالای {_price(hi)} • ❌ کلوز زیر {_price(lo)}"
-        else:
-            rule = f"✅ کلوز زیر {_price(lo)} • ❌ کلوز بالای {_price(hi)}"
-        polarity_fa = str(md.get("pin_polarity_reason_fa") or "").strip()
-        polarity_line = f"\n🧭 {_e(polarity_fa)}" if polarity_fa else ""
-        caption = (
-            f"🚨 {_e(candidate.symbol)} • {_e(candidate.trigger_timeframe)} • پین‌بار "
-            f"{'🟢 صعودی' if candidate.direction == 'LONG' else '🔴 نزولی'}\n"
-            f"📍 داخل {_e(zone_fa)}" + (f" (کانتکست {_e(ctx_fa)})" if ctx_fa else "") + polarity_line + "\n"
-            f"{_e(rule)}\n"
-            f"🕓 ایران: {_iran_time(candidate)}\n"
-            f"🆔 <code>{_e(_public_code(candidate))}</code>"
-        )
-    else:
-        caption = (
-            f"📚 {_e(candidate.symbol)} • {_e(candidate.style)} • {_e(candidate.setup_code)}\n"
-            f"⛔ تأیید ورود نیست\n🕓 ایران: {_iran_time(candidate)}\n🆔 <code>{_e(_public_code(candidate))}</code>"
-        )
+    # r49 (Viva 09-27 05:43, «کپشن چارت پینوال رو برداری مثل بقیه بشه —
+    # همه شبیه هم باشن»): ONE uniform caption for EVERY alert chart; the pin
+    # zone/polarity/rules live in the message text, never on the photo.
+    caption = (
+        f"📚 {_e(candidate.symbol)} • {_e(candidate.style)} • {_e(candidate.setup_code)}\n"
+        f"⛔ تأیید ورود نیست\n🕓 ایران: {_iran_time(candidate)}\n🆔 <code>{_e(_public_code(candidate))}</code>"
+    )
     if chart:
         _store_alert_message_id(candidate, "education_chart_message_id",
                                 send_photo(chart, caption, target))
