@@ -78,13 +78,16 @@ def test_degenerate_inputs_return_none_and_fallback_keeps_working():
 
 
 def test_heartbeat_cap_is_three():
-    """«حتما نباید اینقدر آپدیت‌های بی‌خاصیت بیاد» — the per-candle heartbeat
-    default drops 12 → 3 (env MAX_CHAIN_HEARTBEATS still overrides)."""
+    """«حتما نباید اینقدر آپدیت‌های بی‌خاصیت بیاد» — r28 capped the heartbeat
+    12 → 3; r51 retires it outright: updates speak only on confirmation,
+    invalidation, or final readiness. The config knob stays but main no
+    longer sends any candle heartbeat."""
     import subprocess
     assert config.Settings.max_chain_heartbeats == 3
     src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "main.py"), encoding="utf-8").read()
-    assert "max_chain_heartbeats" in src, "main must read the config knob"
+    assert "send_setup_update(candidate, _pat[0], note_fa=_hb_note)" not in src
+    assert '"hb_bar"' not in src, "the retired heartbeat must not creep back"
 
 
 def test_smart_zoom_wired_and_tc_lines_pivot_local():

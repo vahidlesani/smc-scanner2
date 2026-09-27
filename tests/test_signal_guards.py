@@ -1104,7 +1104,9 @@ def test_gate_demotion_and_tolerant_liquidity():
     mn = _io.open("main.py", encoding="utf-8").read()
     assert "def _live_break_watch" in mn and "def _watch_edge_at" in mn
     assert "_live_break_watch(candidate" in mn
-    assert 'if _trg in ("1h", "4h", "1d")' in mn and "hb_bar" in mn
+    # r51 update-event law: the heartbeat is RETIRED (updates only on
+    # confirm / invalidation / final readiness); the live-break watch stays.
+    assert 'if _trg in ("1h", "4h", "1d")' not in mn and "hb_bar" not in mn
     assert '"4h": 14400, "1d": 86400}.get(tf, 300)' in mn
     assert "monitor_summary" in mn
 

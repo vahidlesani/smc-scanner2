@@ -120,10 +120,13 @@ def test_the_fast_break_exemption_is_bounded():
 
 
 def test_the_per_candle_heartbeat_is_capped():
-    # r28 (Viva 09-25): «نباید اینقدر آپدیت‌های بی‌خاصیت بیاد» — 12 → 3
+    # r51 (Viva 09-27): «فقط زمانی آپدیت بیاد که ورود تایید بشه یا ابطال بشه
+    # یا هشدار نهایی و آمادگی ورود باشه» — the heartbeat is RETIRED outright
+    # (r28 had capped it 12 → 3; the cap was still three useless updates).
     assert _get_settings().max_chain_heartbeats == 3
     src = io.open("main.py", encoding="utf-8").read()
-    assert 'candidate.metadata.get("hb_count")' in src and "_hb_sent < _hb_max" in src
+    assert 'candidate.metadata.get("hb_count")' not in src
+    assert "گزارشِ پایانِ کندل" not in src
 
 
 def test_a_permanent_thrust_no_longer_repeats_the_live_break_note():

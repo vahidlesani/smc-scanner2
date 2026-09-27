@@ -1097,6 +1097,31 @@ def _tombstone_hit(candidate, hours: float = 12.0) -> bool:
         return False
 
 
+def _structural_break_edge(candidate) -> float:
+    """r51 CONFIRM-TIMING LAW: the break reference of a structural chain —
+    the stored breakout/trend line when the lane kept one, else the
+    scenario-side zone edge (LONG breaks UP through the top, SHORT down
+    through the bottom). 0.0 when the chain carries no edge at all."""
+    md = candidate.metadata or {}
+    for _k51 in ("viva_breakout_line", "tl_line"):
+        try:
+            _v51 = float(md.get(_k51) or 0)
+            if _v51 > 0:
+                return _v51
+        except Exception:
+            pass
+    try:
+        _zt51 = float(candidate.entry_zone_top or 0)
+        _zb51 = float(candidate.entry_zone_bottom or 0)
+        if candidate.direction == "LONG" and _zt51 > 0:
+            return _zt51
+        if candidate.direction == "SHORT" and _zb51 > 0:
+            return _zb51
+    except Exception:
+        pass
+    return 0.0
+
+
 def _scenario_out_of_reach(candidate, price) -> bool:
     """Viva 09-21 («۵۱ آپدیت از ۱۸ دلار رفته ۲۸ دلار ربات هنوز منتظر مونده؟»).
 
@@ -1396,6 +1421,42 @@ def monitor_candidates() -> Dict[str, int]:
         have_frames = market_data is not None
         if current_price is None and not publication_in_progress:
             continue
+        # ── r51 CONFIRM-TIMING LAW (Viva 09-27, «بلافاصله بعد از شکست تایید
+        # بدن — یا اولین کلوز بعد از شکست»): DASH T242271 swept 63→74 while
+        # its chain sat silent for 1670 minutes — the duty-cycle fetch window
+        # simply had no frame to judge. A structural chain whose LIVE price
+        # is beyond its break edge is a break IN PROGRESS: the confirm frame
+        # is fetched NOW (throttled to one forced fetch / 10 min / chain) —
+        # the cost window never gates a real break.
+        if (not have_frames and not publication_in_progress
+                and candidate.setup_code in _STRUCTURAL_QUALITY_LANES
+                and current_price):
+            try:
+                _md51 = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+                _now51 = time.time()
+                if _now51 - float(_md51.get("break_bypass_at") or 0) > 600:
+                    _edge51 = _structural_break_edge(candidate)
+                    _px51 = float(current_price)
+                    _atr51 = float(_md51.get("atr") or 0) or abs(_px51) * 0.01
+                    if _edge51 > 0 and _atr51 > 0:
+                        _beyond51 = (_px51 > _edge51 + 0.05 * _atr51
+                                     if candidate.direction == "LONG"
+                                     else _px51 < _edge51 - 0.05 * _atr51)
+                        if _beyond51:
+                            _tf51 = str(_md51.get("confirm_tf")
+                                        or candidate.trigger_timeframe or "15m")
+                            _live51 = get_klines(candidate.symbol, _tf51, 140,
+                                                 closed_only=False, use_cache=False)
+                            if _live51 is not None and len(_live51) >= 20:
+                                market_data = (_live51, _live51.iloc[:-1].reset_index(drop=True),
+                                               float(_live51["close"].iloc[-1]))
+                                live, closed, current_price = market_data
+                                have_frames = True
+                                _md51["break_bypass_at"] = _now51
+                                candidate.metadata = _md51
+                                stats["break_bypass"] = stats.get("break_bypass", 0) + 1
+            except Exception as _bp51_exc:
+                print(f"r51 break-bypass {candidate.symbol}: {_bp51_exc}")
         try:
             if candidate.setup_code == "PINVAL":
                 # PINVAL now uses the same lower-timeframe confirmation engine
@@ -1582,44 +1643,13 @@ def monitor_candidates() -> Dict[str, int]:
                 code = str(candidate.metadata.get("last_reject_code") or "UNKNOWN")
                 stats["rejects"] = stats.get("rejects", {})
                 stats["rejects"][code] = int(stats["rejects"].get(code, 0)) + 1
-                # ── per-pattern-candle heartbeat (Viva 2026-09-14): «۱ ساعته هر یک ساعت،
-                # ۴ ساعته هر ۴ ساعت، روزانه هر روز — تا پایانِ تأیید یا عدم‌تأیید».
-                # Every closed candle of the pattern timeframe produces exactly ONE
-                # status update on the chain's live slot while unresolved.
-                try:
-                    _trg = str(candidate.trigger_timeframe or "")
-                    if _trg in ("1h", "4h", "1d") and not publication_in_progress:
-                        _pat = frames.get((candidate.symbol, _trg)) or (None, None, None)
-                        _pfr = _pat[1]
-                        if _pfr is not None and not _pfr.empty:
-                            _last = pd.Timestamp(_pfr["timestamp"].iloc[-1]
-                                                 if "timestamp" in _pfr.columns
-                                                 else _pfr.index[-1])
-                            _bts = _last.isoformat()[:16]
-                            _hb_sent = int(candidate.metadata.get("hb_count") or 0)
-                            _hb_max = int(getattr(SETTINGS, "max_chain_heartbeats", 12))
-                            if str(candidate.metadata.get("hb_bar") or "") != _bts \
-                                    and _hb_sent < _hb_max:
-                                _dur = _TF_SECONDS_LIVE.get(_trg, 3600)
-                                _rem = max(1, int((_last.timestamp() + 2 * _dur
-                                                    - pd.Timestamp.utcnow().tz_localize(None).timestamp()) // 60))
-                                _hb_note = (f"🕐 گزارشِ پایانِ کندلِ {_TF_FA_LIVE.get(_trg, _trg)} — این کندل بسته شد "
-                                            f"و کلوزِ معتبرِ فراتر از لبه هنوز در کارنامه نیست؛ "
-                                            f"کندلِ بعدی حدود {_rem} دقیقهٔ دیگر کلوز می‌دهد. زنجیره زنده و زیر نظر است.")
-                                if send_setup_update(candidate, _pat[0], note_fa=_hb_note):
-                                    stats["heartbeat"] = stats.get("heartbeat", 0) + 1
-                                    # HOT-4 (audit 09-15): the once-per-candle
-                                    # marker is set ONLY after a successful send;
-                                    # a failed/throttled send retries next cycle
-                                    # instead of losing this candle's heartbeat.
-                                    candidate.metadata["hb_bar"] = _bts
-                                    candidate.metadata["hb_count"] = _hb_sent + 1
-                                    try:
-                                        update_candidate(candidate)
-                                    except Exception:
-                                        pass
-                except Exception as _hb_exc:
-                    print(f"heartbeat watch {candidate.symbol}: {_hb_exc}")
+                # ── r51 UPDATE-EVENT LAW (Viva 09-27, «فقط زمانی آپدیت بیاد که
+                # ورود تایید بشه یا ابطال بشه یا هشدار نهایی و آمادگی ورود
+                # باشه»): the old per-pattern-candle heartbeat («زنجیره زنده و
+                # زیر نظر است» — DASH T242271's only sign of life in 1670
+                # minutes) carried ZERO information and is retired. Updates
+                # now speak ONLY on confirmation, invalidation/cancellation,
+                # or final readiness (the ⚡ live-break note above).
             if confirmed:
                 # Viva 2026-09-11: five identical SOL confirmations on the same
                 # trigger were USELESS. A new confirmed signal must bring NEW

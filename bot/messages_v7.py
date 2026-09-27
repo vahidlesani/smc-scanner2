@@ -457,7 +457,11 @@ def _axis_price(value: float, _position=None) -> str:
         return f"{value:,.2f}"
     if absolute >= 1:
         return f"{value:.4f}"
-    return f"{value:.6f}"
+    # r51 PRICE-AXIS LAW: plain decimals only — no scientific notation, and
+    # trailing zeros are stripped so near-equal ticks (0.2338 / 0.2352) can
+    # never print as overlapping walls of digits.
+    _s51 = f"{value:.6f}".rstrip("0").rstrip(".")
+    return _s51 if _s51 else "0"
 
 
 def _market_label(candidate: SignalCandidate) -> str:
@@ -867,6 +871,136 @@ def _pivot_line_fit(ax, frame, xs, ys):
         pass
     a, b = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
     return "lin", float(a), float(b)
+
+
+_TF_PATTERN_CACHE: Dict[Tuple[str, str, str], list] = {}
+
+
+def _pattern_anchors_in_frame(pattern: dict, t0, t1) -> bool:
+    """True when EVERY line-pivot timestamp of a stored render pattern maps
+    INSIDE the chart frame's time span (a RANGE box carries no lines and is
+    always native). One foreign pivot is enough to poison the whole pattern:
+    np.searchsorted clamps it to x=0 and the line fans out as garbage."""
+    if str(pattern.get("type") or "").upper() == "RANGE":
+        return True
+    for _ln in (pattern.get("lines") or []):
+        for _pt in (_ln.get("points") or []):
+            try:
+                _ts = pd.Timestamp(str(_pt.get("ts")))
+            except Exception:
+                return False
+            if _ts.tzinfo is not None:
+                _ts = _ts.tz_localize(None)
+            _a = t0.tz_localize(None) if t0.tzinfo is not None else t0
+            _b = t1.tz_localize(None) if t1.tzinfo is not None else t1
+            if _ts < _a or _ts > _b:
+                return False
+    return True
+
+
+def _native_patterns_for_frame(frame, direction: str, chart_tf: str,
+                               candidate_id: str, stored: list,
+                               log_axis: bool = True) -> list:
+    """r51 MULTI-TF-TREND LAW (Viva 09-27, «باید توی هر تایمی که میره
+    ترندلاین‌ها و الگوها رو دقیق نشون بده … در همه ستاپ‌ها باید اصلاح بشه»):
+    stored render_patterns are native to the DETECTION tape. On another chart
+    TF — or a shallower window whose first bar is younger than the anchors —
+    the timestamp re-anchor collapses pivots onto x≈0 and paints fan-shaped
+    «tangled red lines» with the true lower line missing (WLD 09-27). The
+    pattern set is then RE-FITTED on THIS frame's own tape; per-TF identity is
+    cached per (chain, tf, newest bar) so zooming inside one candle never
+    re-anchors (r33 identity law, now per TF). A TF with no valid pattern of
+    its own draws none — an honest empty beats a foreign lie."""
+    if not stored:
+        return stored
+    try:
+        _t0 = pd.Timestamp(frame.index[0])
+        _t1 = pd.Timestamp(frame.index[-1])
+    except Exception:
+        return stored
+    if all(_pattern_anchors_in_frame(_p, _t0, _t1) for _p in stored):
+        return stored
+    _last_bar = str(pd.Timestamp(frame.index[-1]).isoformat())[:16]
+    _key = (str(candidate_id), str(chart_tf), _last_bar)
+    if len(_TF_PATTERN_CACHE) > 512:
+        _TF_PATTERN_CACHE.clear()
+    if _key in _TF_PATTERN_CACHE:
+        return _TF_PATTERN_CACHE[_key]
+    _fresh: list = []
+    try:
+        from analysis.render_kit import detect_patterns as _dp
+        _reset = frame.reset_index()
+        if "timestamp" not in _reset.columns and len(_reset.columns):
+            _reset = _reset.rename(columns={_reset.columns[0]: "timestamp"})
+        _cols = [c for c in ("timestamp", "open", "high", "low", "close",
+                             "volume", "turnover") if c in _reset.columns]
+        _fdf = _reset[_cols]
+        if len(_fdf) >= 45:
+            _fresh = _dp(_fdf, direction or "", log_axis=bool(log_axis))
+    except Exception as exc:
+        print(f"r51 per-TF refit warning: {exc}")
+    _TF_PATTERN_CACHE[_key] = _fresh
+    return _fresh
+
+
+def _viva_points_native(points: list, frame) -> bool:
+    """r51: viva_upper/lower_points suffer the same cross-TF collapse as
+    render_patterns — every pivot timestamp must sit inside the frame span,
+    otherwise the caller RE-FITS the edge on this frame's own tape."""
+    if len(points) < 2:
+        return True
+    try:
+        _t0 = pd.Timestamp(frame.index[0])
+        _t1 = pd.Timestamp(frame.index[-1])
+    except Exception:
+        return True
+    _a = _t0.tz_localize(None) if _t0.tzinfo is not None else _t0
+    _b = _t1.tz_localize(None) if _t1.tzinfo is not None else _t1
+    for _pt in points:
+        try:
+            _ts = pd.Timestamp(str(_pt.get("timestamp")))
+        except Exception:
+            return False
+        if _ts.tzinfo is not None:
+            _ts = _ts.tz_localize(None)
+        if _ts < _a or _ts > _b:
+            return False
+    return True
+
+
+def _refit_viva_points(frame, side: str) -> list:
+    """Re-fit ONE valid edge (HIGH=upper / LOW=lower) on the RENDER frame's
+    own tape with the render-only 2-touch fitter and return its pivots as
+    {"timestamp", "price"} dicts — the same shape the detector stored."""
+    try:
+        import dataclasses as _dc51
+        from analysis.viva_tlbreak import fit_validated_line as _fvl, load_config as _lc51
+        _cfg51 = _dc51.replace(_lc51(), pivot_left=3, pivot_right=3,
+                               min_touches=2, touch_tolerance_atr=0.20,
+                               max_fit_residual_atr=0.45, require_alive=True)
+        _reset = frame.reset_index()
+        if "timestamp" not in _reset.columns and len(_reset.columns):
+            _reset = _reset.rename(columns={_reset.columns[0]: "timestamp"})
+        _cols = [c for c in ("timestamp", "open", "high", "low", "close",
+                             "volume", "turnover") if c in _reset.columns]
+        _ln51 = _fvl(_reset[_cols].tail(170).reset_index(drop=True), side, _cfg51)
+        if _ln51 is None:
+            return []
+        # The draw path searchsorts point timestamps against frame.index —
+        # the refit stamps must carry the SAME tz-ness as that index.
+        _idx_tz51 = getattr(frame.index, "tz", None)
+        _pts51 = []
+        for _p in (_ln51.points or ()):
+            _ts51 = pd.Timestamp(str(_p.get("timestamp")))
+            if _idx_tz51 is None and _ts51.tzinfo is not None:
+                _ts51 = _ts51.tz_convert("UTC").tz_localize(None)
+            elif _idx_tz51 is not None and _ts51.tzinfo is None:
+                _ts51 = _ts51.tz_localize(_idx_tz51)
+            _pts51.append({"timestamp": str(_ts51), "price": float(_p.get("price"))})
+        return _pts51
+    except Exception as exc:
+        print(f"r51 viva refit warning: {exc}")
+        return []
 
 
 def _level_tag(ax, x: float, y: float, label: str, color: str):
@@ -2191,7 +2325,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             notes.append((f"PAT 4H · {str(_htfp)}", CHART_THEME["muted"]))
         # pattern render commands: wedge / triangle / channel / flag / range
         from analysis.render_kit import line_xy as _line_xy, line_y as _line_y_cal
-        for _pat in ((candidate.metadata or {}).get("render_patterns") or []):
+        # r51 MULTI-TF-TREND LAW: foreign patterns (anchors outside THIS
+        # frame's time span) are re-fitted on the frame's own tape instead of
+        # fanning out of x≈0 — «هر تایمی که میره باید خطوطِ خودش رو نشون بده».
+        _draw_pats = _native_patterns_for_frame(
+            frame, getattr(candidate, "direction", ""), _chart_tf,
+            candidate.signal_id,
+            ((candidate.metadata or {}).get("render_patterns") or []),
+            log_axis=bool(use_log))
+        for _pat in _draw_pats:
             if _pat.get("type") == "RANGE":
                 # anchored to its oldest tested pivot when it carries a time
                 _range_start = int(_anchored_x(_pat.get("ts0"), zone_start))
@@ -2814,6 +2956,20 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             try:
                 _up0 = md.get("viva_upper_points") or []
                 _lo0 = md.get("viva_lower_points") or []
+                # r51 (Viva 09-27): on a chart TF whose window predates the
+                # stored pivots, the timestamp re-anchor collapses them onto
+                # x≈0 and the channel's LOWER line vanishes into a fan of
+                # steep red lines. Each TF re-fits BOTH edges on its own tape.
+                if _up0 and not _viva_points_native(_up0, frame):
+                    _up0 = _refit_viva_points(frame, "HIGH")
+                if _lo0 and not _viva_points_native(_lo0, frame):
+                    _lo0 = _refit_viva_points(frame, "LOW")
+                # The VALID UPPER/LOWER draw loop below re-reads the metadata;
+                # it must paint the SAME per-TF refit points — the foreign
+                # originals are what killed the lower line (tz/clamp crash
+                # aborted the whole overlay, WLD 09-27).
+                md["viva_upper_points"] = _up0
+                md["viva_lower_points"] = _lo0
                 if len(_up0) >= 2 and len(_lo0) >= 2:
                     try:
                         def _fitpts(pts):
@@ -3181,6 +3337,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         if _is_spot or _span48 >= 1.30:
             try:
                 ax.set_yscale("log")
+                # r51 PRICE-AXIS LAW (Viva 09-27, «عجیبه که ستون قیمتش وجود
+                # نداره»): set_yscale("log") reinstates matplotlib's scientific
+                # log labels (10⁰, 2.8×10⁻¹) — every LOG chart must re-arm the
+                # plain-decimal formatter + silence scientific minors.
+                ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
+                from matplotlib.ticker import NullFormatter as _NF48
+                ax.yaxis.set_minor_formatter(_NF48())
             except Exception:
                 pass
         _render_corner_notes(ax, notes, frame, confirmed=confirmed, fig=fig)
