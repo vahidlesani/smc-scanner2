@@ -20,11 +20,19 @@ class SwingEngine:
     required_frames = ("1d", "4h", "1h")
 
     def scan(self, bundle: MarketBundle) -> List[SignalCandidate]:
-        # mid-term swing = TWO trigger streams: 1h and 4h (Viva 09-16)
+        # mid-term swing trigger streams. Viva 09-16 gave TWO (1h, 4h);
+        # r48 (Viva 09-27, «۳۰ دقیقه و ۲ ساعته بعنوان تریگر جدید به ۴ ستاپ
+        # فیوچرز اضافه بشه») adds 30m and 2h. The zones come from the SAME
+        # engines (his rule: «از فرمول بدست بیاد، دوباره اسکن نشه») — these
+        # are extra streams over the identical bundle, and the 30m/2h tapes
+        # are resampled locally from the 15m/4h bases (zero extra requests).
         from analysis import setups_v7
         out: List[SignalCandidate] = []
-        for trig in ("1h", "4h"):
-            setups_v7.PROFILE_OVERRIDE["SWING"] = ("1d", "4h", trig)
+        for trig, profile in (("30m", ("2h", "1h", "30m")),
+                              ("1h", ("1d", "4h", "1h")),
+                              ("2h", ("1d", "4h", "2h")),
+                              ("4h", ("1d", "4h", "4h"))):
+            setups_v7.PROFILE_OVERRIDE["SWING"] = profile
             try:
                 out.extend(scan_setups(bundle, self.name))
             finally:

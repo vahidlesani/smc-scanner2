@@ -3163,9 +3163,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 fig.canvas.draw()
         except Exception as exc:
             print(f"chip column clamp warning: {exc}")
-        # r47 (Viva 09-27, «حتما که لگاریتمی» — CryptoCove reference): spot tapes
-        # render on a LOG price axis so multi-X breakouts read honestly.
-        if _is_spot:
+        # r47/r48 (Viva 09-27, «حتما که لگاریتمی» + «لگاریتمی از جایی فعال
+        # میشه که نیاز باشه — در تایم کوتاه که فرق نداره»): SPOT tapes always
+        # render LOG; FUTURES switch to LOG only when the rendered window's
+        # price span exceeds 30% — the point where a linear axis starts
+        # crushing the early candles (the squashed-ladder effect he flagged).
+        try:
+            _lo48 = float(frame["low"].min())
+            _hi48 = float(frame["high"].max())
+            _span48 = (_hi48 / _lo48) if _lo48 > 0 else 0.0
+        except Exception:
+            _span48 = 0.0
+        if _is_spot or _span48 >= 1.30:
             try:
                 ax.set_yscale("log")
             except Exception:
@@ -4654,13 +4663,17 @@ def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
         # not by TF; ALBROX/TLBREAK stay the double ones (میان‌مدت + بلندمدت).
         # Channels come from env (CHAT_ID_TF_15M_1H / _2H_4H / _1D); when an
         # ID is unset the mirror skips silently, exactly like r32 did.
+        # r48 final mapping (Viva 09-27 04:50 — the three renamed channels):
+        # VIVA-MON-Pival      = CHAT_ID_TF_15M_1H → PINVAL family, ALL its TFs
+        # VIVA-MON-AlboroxTLB = CHAT_ID_TF_2H_4H → the ONLY two-setup channel
+        # VIVA-MON-TECH       = CHAT_ID_TF_1D → TECHCLASSIC, ALL its TFs
         _setup_routes = {
             "PINVAL": (CHAT_ID_SWING_SHORT,),
             "PINWALLQ": (CHAT_ID_SWING_SHORT,),
             "PINWALL": (CHAT_ID_SWING_SHORT,),
             "TECHCLASSIC": (CHAT_ID_SWING_LONG,),
-            "ALBROX": (CHAT_ID_SWING_MID, CHAT_ID_SWING_LONG),
-            "TLBREAK": (CHAT_ID_SWING_MID, CHAT_ID_SWING_LONG),
+            "ALBROX": (CHAT_ID_SWING_MID,),
+            "TLBREAK": (CHAT_ID_SWING_MID,),
         }
         _setup_code47 = str(getattr(candidate, "setup_code", "") or "").upper()
         _mirror32s = _setup_routes.get(_setup_code47, ())
@@ -4671,17 +4684,6 @@ def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
                                           reply_kind="confirm_mirror")
                 except Exception:
                     pass
-        _mirror32 = ({"30m": CHAT_ID_SWING_MID, "4h": CHAT_ID_SWING_SHORT}
-                     .get(_tf32)) if not chat_override else None
-        if _mirror32 and str(_mirror32) != str(chat):
-            try:
-                _post_chart_then_text(chart, text, _mirror32,
-                                      label=_chart_label(symbol=candidate.symbol,
-                                                         code=code,
-                                                         title_fa="تأیید سیگنال"),
-                                      file_id=file_id)
-            except Exception as _mir_exc:
-                print(f"TF-channel mirror failed {code} → {_mirror32}: {_mir_exc}")
         return int(mid)
     except Exception as exc:
         print(f"TF-channel publish error {code}: {exc}")

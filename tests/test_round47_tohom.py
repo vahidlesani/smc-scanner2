@@ -13,7 +13,7 @@ Laws under test:
      edge, or the engine switched off (TOHOM_ENABLED=0) all keep waiting for
      the one-close law. TOHOM only ADDS confirmations, never loosens.
   4. Routing by SETUP: PINVAL→short channel, TECHCLASSIC→long,
-     ALBROX/TLBREAK→the double (mid+long). Spot price axis is LOG.
+     r48 final: ALBROX/TLBREAK→mid only (the two-setup channel). LOG axis.
 """
 from __future__ import annotations
 
@@ -171,8 +171,8 @@ def test_setup_routing_map():
     part = src.split("_setup_routes = {")[1].split("}")[0]
     assert '"PINVAL": (CHAT_ID_SWING_SHORT,)' in part
     assert '"TECHCLASSIC": (CHAT_ID_SWING_LONG,)' in part
-    assert '"ALBROX": (CHAT_ID_SWING_MID, CHAT_ID_SWING_LONG)' in part
-    assert '"TLBREAK": (CHAT_ID_SWING_MID, CHAT_ID_SWING_LONG)' in part
+    assert '"ALBROX": (CHAT_ID_SWING_MID,)' in part
+    assert '"TLBREAK": (CHAT_ID_SWING_MID,)' in part
 
 
 def test_spot_chart_is_log_and_tohom_line_exists():

@@ -93,9 +93,15 @@ def test_swing_pattern_cap_allows_long_daily_wedge():
 
 # ── 6. confirm mirror: 30m → MID, 4h → SHORT ──────────────────────────────
 def test_confirm_mirror_mapping():
+    # r48 (Viva 09-27 04:50, «به‌جای جدا سازی تایم‌ها ستاپ‌ها رو جدا کردیم»):
+    # the TF-based r32 mirror is superseded by SETUP lanes — three renamed
+    # channels, and the old mid channel is the only one carrying two setups.
     src = open(f"{REPO}/bot/messages_v7.py", encoding="utf-8").read()
-    assert '{"30m": CHAT_ID_SWING_MID, "4h": CHAT_ID_SWING_SHORT}' in src
-    assert "_mirror32" in src and "TF-channel mirror failed" in src
+    assert '"PINVAL": (CHAT_ID_SWING_SHORT,)' in src
+    assert '"ALBROX": (CHAT_ID_SWING_MID,)' in src
+    assert '"TLBREAK": (CHAT_ID_SWING_MID,)' in src
+    assert '"TECHCLASSIC": (CHAT_ID_SWING_LONG,)' in src
+    assert "TF-channel mirror failed" not in src
 
 
 # ── 7. clamp math sanity ───────────────────────────────────────────────────

@@ -452,6 +452,10 @@ def _derive_from_base(
             out[tf] = _resample_ohlcv(base_15m, "1h", 4)
         elif tf == "30m":
             out[tf] = _resample_ohlcv(base_15m, "30min", 2)
+        elif tf == "2h":
+            # r48: the 2h trigger lane rides the SAME 15m base (8×15m) — no
+            # extra venue request, honest OHLCV aggregation.
+            out[tf] = _resample_ohlcv(base_15m, "2h", 8)
         elif tf == "8h":
             out[tf] = _resample_ohlcv(base_4h, "8h", 2)
         elif tf == "12h":

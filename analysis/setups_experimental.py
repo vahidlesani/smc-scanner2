@@ -699,7 +699,10 @@ SETUP_NAMES_FA["PINVAL"] = "پین‌بار معتبر در ناحیه مهم"
 # structure and materially reduces the 15m noise that was dominating the feed.
 # 15m remains available to the other setup families (TLBREAK/TECHCLASSIC etc.);
 # this change is deliberately local to the PinWall family.
-PINVAL_TF_BY_STYLE = {"SWING": ("1h",), "DAYTRADE": ("30m",), "SCALP": ("5m",)}
+# r48 (Viva 09-27): the SWING pin lane scans the same four trigger TFs the
+# other futures setups use (30m/1h/2h/4h) — one engine, four lanes.
+PINVAL_TF_BY_STYLE = {"SWING": ("30m", "1h", "2h", "4h"),
+                      "DAYTRADE": ("30m",), "SCALP": ("5m",)}
 
 
 def _unmitigated_fvg_edge(df, direction: str, atr_v: float, lookback: int = 60):

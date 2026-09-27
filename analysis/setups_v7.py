@@ -141,7 +141,10 @@ PROFILE_OVERRIDE: Dict[str, tuple] = {}
 # the chain expires before its confirmation ever arrives (why 1d never spoke).
 # Global doctrine: confirmation is event-based (zone invalidated = dead),
 # never a candle count; expiry is hygiene only, so it stays generous.
-EXPIRY_HOURS_BY_TRIGGER = {"15m": 36, "1h": 96, "4h": 240, "1d": 360}
+# r48 (Viva 09-27): 30m and 2h join the trigger ladder — half/half between
+# their neighbours, per the same generosity doctrine.
+EXPIRY_HOURS_BY_TRIGGER = {"15m": 36, "30m": 48, "1h": 96, "2h": 168,
+                           "4h": 240, "1d": 360}
 
 
 def expiry_hours_for(style: str, trigger_tf: str = "") -> int:

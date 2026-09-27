@@ -196,7 +196,7 @@ _UNCHANGED_RETRY_SECONDS = 900
 
 def _closed_stamp(bundle) -> tuple:
     out = []
-    for tf in ("15m", "1h", "4h", "1d"):
+    for tf in ("15m", "30m", "1h", "2h", "4h", "1d"):
         try:
             df = bundle.get(tf)
             out.append(str(df["timestamp"].iloc[-1]) if df is not None and len(df) else "-")
@@ -285,7 +285,11 @@ def run_discovery_scan() -> Dict[str, int]:
         if _SHUTDOWN:
             break
         try:
-            bundle = get_market_bundle(symbol, ticker=metrics.get(symbol, {}))
+            # r48 (Viva 09-27): the futures discovery bundle carries the two
+            # NEW trigger frames (30m, 2h) — derived locally, zero extra calls.
+            bundle = get_market_bundle(
+                symbol, ("1d", "4h", "2h", "1h", "30m", "15m", "5m"),
+                ticker=metrics.get(symbol, {}))
             # ── Round-15: no new closed candle on any detection timeframe and no
             # open chain on this symbol ⇒ nothing can be detected that the last
             # pass did not already see. (Guarded, fail-open, 15-min window.)
