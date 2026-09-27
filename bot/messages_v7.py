@@ -1675,9 +1675,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # charts. Lower TFs keep the denser view used for entries.
         _chart_tf = str((candidate.metadata or {}).get("chart_view_tf")
                         or getattr(candidate, "trigger_timeframe", "15m") or "15m").lower()
-        _lookback = {"1d": 176, "4h": 140, "2h": 132, "1h": 150, "8h": 132,
-                     "12h": 120, "30m": 160, "15m": 164, "5m": 164,
-                     "3d": 96, "1w": 96}.get(_chart_tf, 164)
+        # r50 (Viva 09-27: «تعداد کندلهای چارت کریپتوکاو رو بسنج … دقیقا همون تعداد»):
+        # the reference batch measures a dense CryptoCove tape — roughly 150–190
+        # visible candles with a large blank forecast panel. The high TFs now render
+        # that density; low TFs keep their entry-grade zoom.
+        _lookback = {"1d": 176, "4h": 190, "2h": 132, "1h": 150, "8h": 176,
+                     "12h": 160, "30m": 160, "15m": 164, "5m": 164,
+                     "3d": 150, "1w": 140}.get(_chart_tf, 164)
         # r37 (Viva 09-26, «ترندهای ماژور و مینور مهم اصلا دیده نمیشن و رسم
         # نمیشن»): the r33 identity pins a chain's geometry forever, but the
         # render window is re-cut per render — when the fetch returns fewer

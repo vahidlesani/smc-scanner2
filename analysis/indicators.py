@@ -47,18 +47,69 @@ def rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return result.fillna(50.0)
 
 
-def pivots(df: pd.DataFrame, left: int = 3, right: int = 3) -> Tuple[List[Dict], List[Dict]]:
+# r50 (Viva 09-27, verbatim: «شدوهای نویز رو نگیره بعنوان پیوت … ترند رو از
+# بادی اونها بگیره»): a pivot candle whose wick is an OUTLIER against the
+# tape's own normal shadows — wick >= 2x the MEDIAN wick of the last 20
+# candles, AND >= 1x its body, AND >= 0.50x ATR14 — is a liquidity sweep,
+# not a structure anchor: the trend/pattern lines anchor at that candle's
+# BODY extreme. The criteria must stay strict so ordinary small-body candles
+# never lose their legitimate wick pivots. Structural consumers (sweeps,
+# stops, BOS) keep the raw wick: a sweep IS the wick. Only the line-fit
+# call sites opt in.
+WICK_NOISE_OUTLIER_MULT = 2.0
+WICK_NOISE_BODY_MULT = 1.0
+WICK_NOISE_ATR_FRAC = 0.50
+WICK_NOISE_LOOKBACK = 20
+
+
+def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
+           wick_noise_filter: bool = False) -> Tuple[List[Dict], List[Dict]]:
     highs: List[Dict] = []
     lows: List[Dict] = []
     if df is None or len(df) < left + right + 1:
         return highs, lows
     h = df["high"].to_numpy(dtype=float)
     l = df["low"].to_numpy(dtype=float)
+    # fail-open: frames without open/close (rare legacy tapes) keep raw pivots
+    has_body = "open" in df.columns and "close" in df.columns
+    o = df["open"].to_numpy(dtype=float) if has_body else None
+    c = df["close"].to_numpy(dtype=float) if has_body else None
+    atr14 = float((df["high"] - df["low"]).tail(14).mean()) if len(df) >= 14 else 0.0
+    if not has_body:
+        wick_noise_filter = False
+    _med_wick = 0.0
+    if wick_noise_filter and has_body:
+        _tail = df.tail(WICK_NOISE_LOOKBACK)
+        _med_wick = float(np.median(np.maximum(
+            (_tail["high"] - np.maximum(_tail["open"], _tail["close"])).to_numpy(dtype=float),
+            (np.minimum(_tail["open"], _tail["close"]) - _tail["low"]).to_numpy(dtype=float))))
     for i in range(left, len(df) - right):
         if h[i] >= np.max(h[i - left : i + right + 1]):
-            highs.append({"index": i, "price": float(h[i]), "timestamp": df["timestamp"].iloc[i]})
+            _price = float(h[i])
+            _anchor = "wick"
+            if wick_noise_filter and atr14 > 0:
+                _wick = float(h[i] - max(o[i], c[i]))
+                _body = abs(float(c[i] - o[i]))
+                if (_wick >= WICK_NOISE_OUTLIER_MULT * _med_wick
+                        and _wick >= WICK_NOISE_BODY_MULT * _body
+                        and _wick >= WICK_NOISE_ATR_FRAC * atr14):
+                    _price = float(max(o[i], c[i]))
+                    _anchor = "body"
+            highs.append({"index": i, "price": _price, "raw_price": float(h[i]),
+                          "anchor": _anchor, "timestamp": df["timestamp"].iloc[i]})
         if l[i] <= np.min(l[i - left : i + right + 1]):
-            lows.append({"index": i, "price": float(l[i]), "timestamp": df["timestamp"].iloc[i]})
+            _price = float(l[i])
+            _anchor = "wick"
+            if wick_noise_filter and atr14 > 0:
+                _wick = float(min(o[i], c[i]) - l[i])
+                _body = abs(float(c[i] - o[i]))
+                if (_wick >= WICK_NOISE_OUTLIER_MULT * _med_wick
+                        and _wick >= WICK_NOISE_BODY_MULT * _body
+                        and _wick >= WICK_NOISE_ATR_FRAC * atr14):
+                    _price = float(min(o[i], c[i]))
+                    _anchor = "body"
+            lows.append({"index": i, "price": _price, "raw_price": float(l[i]),
+                         "anchor": _anchor, "timestamp": df["timestamp"].iloc[i]})
     return highs, lows
 
 

@@ -142,6 +142,10 @@ def fit_validated_line(
         return None
     # R16 phase 3 — is this window drawn on a log axis? Same 3% guard the
     # chart obeys (spot is always log; futures go log when the span demands).
+    # r50 note: on a log axis a 2-point data-space segment renders
+    # SCREEN-straight (matplotlib transforms path vertices only), and this
+    # log-fit line's endpoints are exactly those vertices — so the drawn
+    # trendline is straight on the CryptoCove log chart with no extra work.
     use_log = False
     try:
         _lo = float(df["low"].min())
@@ -150,7 +154,8 @@ def fit_validated_line(
             use_log = True
     except Exception:
         use_log = False
-    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right)
+    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right,
+                      wick_noise_filter=True)
     pts = highs if side == "HIGH" else lows
     n = len(df) - 1
     if len(pts) < 2:
@@ -353,7 +358,8 @@ def fit_viva_breakout_line(df: pd.DataFrame, direction: str, cfg: Optional[VivaT
     line = fit_validated_line(df, side, cfg)
     if line is None:
         return None
-    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right)
+    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right,
+                      wick_noise_filter=True)
     opposite = lows if side == "HIGH" else highs
     after = [p for p in opposite if p["index"] > line.first_index]
     if not after:
@@ -847,7 +853,8 @@ class WatchLine:
 def fit_two_pivot_watch(df: pd.DataFrame, side: Literal["HIGH", "LOW"], cfg: Optional[VivaTLBreakConfig] = None) -> Optional[WatchLine]:
     """Visible 2-pivot watch only; never eligible for entry/confirmation."""
     cfg = cfg or load_config()
-    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right)
+    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right,
+                      wick_noise_filter=True)
     pts = highs if side == "HIGH" else lows
     if len(pts) < 2:
         return None

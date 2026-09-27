@@ -790,8 +790,11 @@ def run_spot_scan() -> Dict[str, int]:
         try:
             bundle = get_market_bundle(
                 symbol, tuple(SPOT_TRIGGERS),
-                limits={"4h": 170, "8h": 170, "12h": 170,
-                        "1d": 420, "3d": 120, "1w": 60,
+                # r50 CryptoCove counts: the chart must HAVE as many candles
+                # as it renders (1w:140 needs ~985 daily bars — inside the
+                # venue's 1000-bar single call, per the round-15 aggregator).
+                limits={"4h": 200, "8h": 200, "12h": 180,
+                        "1d": 1000, "3d": 160, "1w": 140,
                         "5m": 300, "15m": 200})
             bundles[symbol.upper()] = bundle
             for cand in spot_signals_for(symbol, bundle):

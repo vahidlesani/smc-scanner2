@@ -514,9 +514,9 @@ def get_market_bundle(
     # Derived 8h/12h views must retain enough source 4h candles to preserve
     # the same structural lookback that a direct feed would have provided.
     need_4h_bars = max(
-        int(limits.get("4h", 170)),
-        int(limits.get("8h", 170)) * 2 if "8h" in requested else 0,
-        int(limits.get("12h", 170)) * 3 if "12h" in requested else 0,
+        int(limits.get("4h", 200)),
+        int(limits.get("8h", 176)) * 2 if "8h" in requested else 0,
+        int(limits.get("12h", 160)) * 3 if "12h" in requested else 0,
     )
     base_4h = get_klines(
         symbol, "4h", max(60, need_4h_bars), closed_only=True
@@ -524,9 +524,9 @@ def get_market_bundle(
 
     # 1D is the economical long-history anchor. For 3D/1W, request enough
     # daily bars to produce the requested number of complete higher bars.
-    daily_need = int(limits.get("1d", 120))
-    daily_need = max(daily_need, int(limits.get("3d", 45)) * 3 + 6)
-    daily_need = max(daily_need, int(limits.get("1w", 45)) * 7 + 7)
+    daily_need = int(limits.get("1d", 200))
+    daily_need = max(daily_need, int(limits.get("3d", 150)) * 3 + 6)
+    daily_need = max(daily_need, int(limits.get("1w", 140)) * 7 + 7)
     daily = get_klines(symbol, "1d", daily_need, closed_only=True) if need_1d else None
 
     # Direct fallbacks for unusual requested frames not covered by the local
