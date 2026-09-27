@@ -1502,6 +1502,30 @@ def monitor_candidates() -> Dict[str, int]:
                     if _lf and _lt != key[1]:
                         confirmed, candidate, reason = evaluate_confirmation(
                             candidate, _lf[1], htf_closed_df=_pat_frame)
+                if not confirmed:
+                    # ── r47 TOHOM (Viva 09-27, «انجین هوشمند ورود قبل از کلوز
+                    # تایم تریگر»): the forming trigger candle's first closed
+                    # sub-TF candles may confirm NOW — 3 directional sub-closes
+                    # with rising volume and a confirming pattern beyond the
+                    # same break edge. Fail-closed; TOHOM_ENABLED=0 kills it.
+                    try:
+                        from analysis.tohom import evaluate_tohom_confirmation, TOHOM_LOWER_TF
+                        _tlt = TOHOM_LOWER_TF.get(str(candidate.trigger_timeframe or "").lower())
+                        _tlf = frames.get((candidate.symbol, _tlt)) if _tlt else None
+                        if _tlf is None and _tlt:
+                            try:
+                                from data.fetcher import get_klines
+                                _tlf = (None, get_klines(candidate.symbol, _tlt, 60,
+                                                         closed_only=True, use_cache=True), None)
+                            except Exception:
+                                _tlf = None
+                        if _tlf is not None and getattr(_tlf[1], "empty", True) is False:
+                            confirmed, candidate, reason = evaluate_tohom_confirmation(candidate, _tlf[1])
+                            if confirmed:
+                                stats["tohom_confirms"] = stats.get("tohom_confirms", 0) + 1
+                                print(f"⚡ TOHOM {candidate.symbol} {candidate.setup_code}: early confirm on {candidate.metadata.get('tohom_sub_tf')} x{candidate.metadata.get('tohom_subs')} vol x{candidate.metadata.get('tohom_vol_ratio')}")
+                    except Exception as exc:
+                        print(f"TOHOM check skipped {candidate.signal_id}: {exc}")
 
             if confirmed:
                 # ── Viva 09-21/22: the confirmation moment FROZENS the plan

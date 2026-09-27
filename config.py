@@ -168,6 +168,10 @@ class Settings:
     # enabled, they are educational-only: they are not tracked for monitoring
     # and therefore never send Approaching messages or lock their symbol.
     skip_dead_gate_candidates: bool = True
+    # r47 TOHOM (Viva 09-27): the early-confirmation engine — sub-TF closes may
+    # confirm before the trigger candle closes. TOHOM_ENABLED=0 restores the
+    # pure one-close law («اگر بد شد نتیجه بگم برگردونی»).
+    tohom_enabled: bool = True
     # Experimental P1234 detector: minimum Wilder ADX(14) on the trigger
     # timeframe at detection time. 0.0 disables the regime filter.
     p1234_min_adx: float = 0.0
@@ -336,6 +340,7 @@ class Settings:
             scenario_out_of_reach_atr=_float("SCENARIO_OUT_OF_REACH_ATR", cls.scenario_out_of_reach_atr),
             max_chain_heartbeats=_int("MAX_CHAIN_HEARTBEATS", cls.max_chain_heartbeats),
             skip_dead_gate_candidates=_bool("SKIP_DEAD_GATE_CANDIDATES", cls.skip_dead_gate_candidates),
+            tohom_enabled=_bool("TOHOM_ENABLED", cls.tohom_enabled),
             p1234_min_adx=_float("P1234_MIN_ADX", cls.p1234_min_adx),
             experimental_p1234_enabled=_bool("EXPERIMENTAL_P1234_ENABLED", cls.experimental_p1234_enabled),
             experimental_p1234_symbols=os.getenv("EXPERIMENTAL_P1234_SYMBOLS", cls.experimental_p1234_symbols),

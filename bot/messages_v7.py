@@ -1675,8 +1675,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # charts. Lower TFs keep the denser view used for entries.
         _chart_tf = str((candidate.metadata or {}).get("chart_view_tf")
                         or getattr(candidate, "trigger_timeframe", "15m") or "15m").lower()
-        _lookback = {"1d": 176, "4h": 140, "2h": 132, "1h": 150,
-                     "30m": 160, "15m": 164, "5m": 164}.get(_chart_tf, 164)
+        _lookback = {"1d": 176, "4h": 140, "2h": 132, "1h": 150, "8h": 132,
+                     "12h": 120, "30m": 160, "15m": 164, "5m": 164,
+                     "3d": 96, "1w": 96}.get(_chart_tf, 164)
         # r37 (Viva 09-26, «ترندهای ماژور و مینور مهم اصلا دیده نمیشن و رسم
         # نمیشن»): the r33 identity pins a chain's geometry forever, but the
         # render window is re-cut per render — when the fetch returns fewer
@@ -3162,6 +3163,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 fig.canvas.draw()
         except Exception as exc:
             print(f"chip column clamp warning: {exc}")
+        # r47 (Viva 09-27, «حتما که لگاریتمی» — CryptoCove reference): spot tapes
+        # render on a LOG price axis so multi-X breakouts read honestly.
+        if _is_spot:
+            try:
+                ax.set_yscale("log")
+            except Exception:
+                pass
         _render_corner_notes(ax, notes, frame, confirmed=confirmed, fig=fig)
 
         # ── r32 (Viva 09-26): the bottom-right LEDGER ────────────────────
@@ -3550,6 +3558,16 @@ def build_approaching_message(candidate: SignalCandidate, current_price: float, 
     )
 
 
+def _tohom_line(candidate: SignalCandidate) -> str:
+    """r47 TOHOM — one brief row when the entry was confirmed early by the
+    sub-TF engine; absent (no layout change) on normal close confirms."""
+    md = candidate.metadata or {}
+    if not md.get("tohom"):
+        return ""
+    note = str(md.get("tohom_note_fa") or "").strip()
+    return f"⚡ {note}" if note else "⚡ تأیید زودهنگام توهم."
+
+
 def build_confirmed_message(candidate: SignalCandidate) -> str:
     candidate = _final_stop_guard(candidate)
     mm = build_money_management(candidate)
@@ -3579,10 +3597,14 @@ def build_confirmed_message(candidate: SignalCandidate) -> str:
         f"{'└' if i == len(_tgts) - 1 else '├'} TP{i + 1}: <b>{_price(t)}</b> • {r:.1f}٪ • "
         + (f"بستن {w:.0f}%" if w > 0 else "بدون خروج — سطح اطلاع‌رسانی")
         for i, (t, r, w) in enumerate(zip(_tgts, _pcts, _wts)))
+    # r47 TOHOM: early-confirmed entries say so on the card, in ONE row
+    _tl47 = _tohom_line(candidate)
+    _tl47 = f"{_tl47}\n" if _tl47 else ""
     return (
         f"✅ <b>ENTRY CONFIRMED</b>\n"
         f"📊 <b>{_e(candidate.style)} • {_e(candidate.symbol)} • {_e(candidate.direction)}</b>\n"
         f"🌐 {_e(_market_label(candidate))}\n"
+        f"{_tl47}"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🎯 ستاپ: <b>{_e(candidate.strategy_fa)}</b>\n"
         f"⭐ کیفیت نهایی: <b>{candidate.score}/10</b> • Grade {mm.get('grade', '-')}\n"
@@ -4626,6 +4648,29 @@ def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
         # mirror is a plain copy (no bookkeeping). Viva: if it reads well,
         # we extend it to the other setups.
         _tf32 = str(candidate.trigger_timeframe or "").strip().lower()
+        # r47 (Viva 09-27, verbatim): «فقط پیامهای تایید پینوال به کانال
+        # کوتاه مدت … البروکس و تی ال بریک به میان مدته … تکنوکلاسیک همه
+        # سیگنالهای تاییدش به بلند مدته» — the mirror now routes by SETUP,
+        # not by TF; ALBROX/TLBREAK stay the double ones (میان‌مدت + بلندمدت).
+        # Channels come from env (CHAT_ID_TF_15M_1H / _2H_4H / _1D); when an
+        # ID is unset the mirror skips silently, exactly like r32 did.
+        _setup_routes = {
+            "PINVAL": (CHAT_ID_SWING_SHORT,),
+            "PINWALLQ": (CHAT_ID_SWING_SHORT,),
+            "PINWALL": (CHAT_ID_SWING_SHORT,),
+            "TECHCLASSIC": (CHAT_ID_SWING_LONG,),
+            "ALBROX": (CHAT_ID_SWING_MID, CHAT_ID_SWING_LONG),
+            "TLBREAK": (CHAT_ID_SWING_MID, CHAT_ID_SWING_LONG),
+        }
+        _setup_code47 = str(getattr(candidate, "setup_code", "") or "").upper()
+        _mirror32s = _setup_routes.get(_setup_code47, ())
+        for _mid47 in _mirror32s:
+            if _mid47 and str(_mid47) != str(chat):
+                try:
+                    _post_chart_then_text(chart, text, _mid47,
+                                          reply_kind="confirm_mirror")
+                except Exception:
+                    pass
         _mirror32 = ({"30m": CHAT_ID_SWING_MID, "4h": CHAT_ID_SWING_SHORT}
                      .get(_tf32)) if not chat_override else None
         if _mirror32 and str(_mirror32) != str(chat):
