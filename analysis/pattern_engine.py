@@ -1207,7 +1207,7 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         pass
     candidate.mandatory_gates["htf_alignment"] = True
     candidate.strategy_fa = (f"تکنوکلاسیک | " +
-                             (f"شکست {fa_pattern} در {structure_tf} — پولبک اول + BOS تأیید"
+                             (f"شکست {fa_pattern} در {structure_tf} — تأیید با اولین کلوز (توهم هوشمند)"
                               if is_break else
                               f"دفع از ضلعِ کانالِ موازی در {structure_tf} — کمک‌تأییدِ قانون آلفونسو؛ "
                               f"ورودِ بازگشتی فقط با کندلِ دفع/تأییدِ تایم‌پایین"))

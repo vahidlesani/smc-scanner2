@@ -132,10 +132,14 @@ def test_synthetic_live_candle_never_fabricates_without_a_price(monkeypatch):
 
 # ── 7. identity anchors keep their window (major/minor trendlines) ──────
 def test_render_window_widens_for_stored_anchors():
+    # r52 (Viva 09-28, SUI month-of-needles chart): the r37 window WIDEN is
+    # RETIRED — the CryptoCove count is a hard cap; anchors older than the
+    # window are re-fitted per TF (r51) instead of stretching the zoom.
     src = _src()
     assert '_gj37(f"render_identity:{candidate.signal_id}")' in src
-    assert "_need37 > _lookback" in src
-    assert "_lookback = max(_lookback, min(_need37, len(df), int(_lookback * 2.2)))" in src
+    assert "_need37" not in src
+    assert "int(_lookback * 2.2)" not in src
+    assert "r37 window-WIDEN is retired" in src
 
 
 # ── 8. silly projections never print ─────────────────────────────────────

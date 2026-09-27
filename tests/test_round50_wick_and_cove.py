@@ -82,18 +82,22 @@ def test_trend_fit_sites_opt_in():
 # ── 2. CryptoCove density ───────────────────────────────────────────────────
 
 def test_cryptocove_lookbacks():
+    # r52 — HIS dictation (09-28): 4h/8h→140-200, 12h/1d→170-250, 3d→250-350,
+    # 1w→170-250 (mid-points shipped); r50 measured numbers are superseded.
     src = open(os.path.join(REPO, "bot", "messages_v7.py"), encoding="utf-8").read()
-    assert '"4h": 190' in src and '"8h": 176' in src and '"12h": 160' in src
-    assert '"3d": 150' in src and '"1w": 140' in src and '"1d": 176' in src
+    assert '"4h": 170' in src and '"8h": 170' in src and '"12h": 210' in src
+    assert '"3d": 300' in src and '"1w": 210' in src and '"1d": 210' in src
 
 
 def test_spot_bundle_fetches_the_depths():
     src = open(os.path.join(REPO, "main.py"), encoding="utf-8").read()
-    part = src.split("r50 CryptoCove counts")[1].split("limits={")[1][:200]
-    assert '"1d": 1000' in part and '"1w": 140' in part and '"4h": 200' in part
+    part = src.split("r52 CryptoCove counts")[1].split("limits={")[1][:220]
+    assert '"3d": 300' in part and '"1w": 210' in part and '"4h": 200' in part
     src2 = open(os.path.join(REPO, "data", "fetcher.py"), encoding="utf-8").read()
     assert 'limits.get("4h", 200)' in src2
-    assert 'limits.get("1w", 140)) * 7 + 7' in src2
+    assert 'limits.get("1w", 210)) * 7 + 7' in src2
+    # deep dailies ride the one-time history store (Railway cost law)
+    assert 'get_deep_daily' in src2
 
 
 def test_spot_triggers_already_cover_the_high_lanes():

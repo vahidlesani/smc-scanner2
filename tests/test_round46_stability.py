@@ -66,5 +66,5 @@ def test_chain_updates_capped_at_three():
 
 def test_daily_lookback_widened():
     src = _msg()
-    assert '"1d": 176' in src
+    assert '"1d": 210' in src   # r52 dictation: 12h/1d → 170-250 (mid 210)
     assert '"1d": 96' not in src

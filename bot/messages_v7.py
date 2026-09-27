@@ -876,6 +876,23 @@ def _pivot_line_fit(ax, frame, xs, ys):
 _TF_PATTERN_CACHE: Dict[Tuple[str, str, str], list] = {}
 
 
+def _log_axis_decorate(ax) -> None:
+    """r52 (Viva 09-28, FIL/ADA/WLD/SUI axes): EVERY set_yscale('log') must
+    re-arm the FULL plain-price kit in one place —
+      * LogLocator(subs='all') so a sub-decade view (SUI 0.67->1.30) still
+        prints 0.7/0.8/0.9/1 instead of a lonely 1.0 with naked minor dashes;
+      * the plain-decimal FuncFormatter (no 10^0, no 2.8x10^-1);
+      * NullFormatter on minors (no scientific snippets)."""
+    try:
+        import matplotlib.ticker as _mt52
+        ax.yaxis.set_major_locator(
+            _mt52.LogLocator(base=10.0, subs="all", numticks=18))
+        ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
+        ax.yaxis.set_minor_formatter(_mt52.NullFormatter())
+    except Exception as exc:
+        print(f"log-axis decorate warning: {exc}")
+
+
 def _pattern_anchors_in_frame(pattern: dict, t0, t1) -> bool:
     """True when EVERY line-pivot timestamp of a stored render pattern maps
     INSIDE the chart frame's time span (a RANGE box carries no lines and is
@@ -1726,7 +1743,13 @@ def _infer_chart_tf(frame, candidate) -> str:
     trigger TF. Fail-open everywhere."""
     base = str(getattr(candidate, "trigger_timeframe", "15m") or "15m").lower()
     try:
-        ts = pd.DatetimeIndex(pd.to_datetime(frame["timestamp"]))
+        # r52: the RENDER frame is index-by-timestamp (clean_render_frame
+        # drops the column) — read the index when the column is absent, else
+        # inference silently fell back to the trigger on EVERY real chart.
+        if "timestamp" in getattr(frame, "columns", []):
+            ts = pd.DatetimeIndex(pd.to_datetime(frame["timestamp"]))
+        else:
+            ts = pd.DatetimeIndex(pd.to_datetime(frame.index))
         if len(ts) >= 3:
             deltas = pd.Series(ts).diff().dt.total_seconds().div(60.0)
             deltas = deltas[deltas > 0]
@@ -1760,8 +1783,11 @@ def _chart_tf_token(candidate, frame) -> str:
     English (ledger law)."""
     trig = str(getattr(candidate, "trigger_timeframe", "") or "").upper()
     md = getattr(candidate, "metadata", None) or {}
-    drawn = str(md.get("chart_view_tf") or _infer_chart_tf(frame, candidate)
-                or trig).upper()
+    # r52 (SUI 09-28: a deep tape stamped «15M» because a stale chart_view_tf
+    # outranked the picture): the TAPE decides first — metadata is only a
+    # fallback when the frame's own spacing can't be read.
+    drawn = str(_infer_chart_tf(frame, candidate)
+                or md.get("chart_view_tf") or trig).upper()
     if not trig or drawn == trig:
         return drawn or trig
     return f"{drawn} (TRIG {trig})"
@@ -1809,13 +1835,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # charts. Lower TFs keep the denser view used for entries.
         _chart_tf = str((candidate.metadata or {}).get("chart_view_tf")
                         or getattr(candidate, "trigger_timeframe", "15m") or "15m").lower()
-        # r50 (Viva 09-27: «تعداد کندلهای چارت کریپتوکاو رو بسنج … دقیقا همون تعداد»):
-        # the reference batch measures a dense CryptoCove tape — roughly 150–190
-        # visible candles with a large blank forecast panel. The high TFs now render
-        # that density; low TFs keep their entry-grade zoom.
-        _lookback = {"1d": 176, "4h": 190, "2h": 132, "1h": 150, "8h": 176,
-                     "12h": 160, "30m": 160, "15m": 164, "5m": 164,
-                     "3d": 150, "1w": 140}.get(_chart_tf, 164)
+        # r52 (Viva 09-28, his EXACT CryptoCove candle dictation — «خودم بهت
+        # میگم چند تا کندل»): 4h/8h → 140–200, 12h/1d → 170–250, 3d → 250–350,
+        # 1w → 170–250 (mid-points below; frames with less history render
+        # whatever exists). The window is a HARD CAP now: the r37 widen is
+        # RETIRED — deep stored anchors older than the window are handled by
+        # the r51 per-TF re-fit, and «نقطهٔ شروع زوم» must always show the
+        # CryptoCove density, never a month of needle candles.
+        _lookback = {"1d": 210, "4h": 170, "2h": 132, "1h": 150, "8h": 170,
+                     "12h": 210, "30m": 160, "15m": 164, "5m": 164,
+                     "3d": 300, "1w": 210}.get(_chart_tf, 164)
         # r37 (Viva 09-26, «ترندهای ماژور و مینور مهم اصلا دیده نمیشن و رسم
         # نمیشن»): the r33 identity pins a chain's geometry forever, but the
         # render window is re-cut per render — when the fetch returns fewer
@@ -1826,24 +1855,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         try:
             from database.bot_kv import get_json as _gj37
             _stored37 = _gj37(f"render_identity:{candidate.signal_id}")
-            _min_ts37 = None
-            for _p37 in (_stored37 or {}).get("render_patterns") or []:
-                for _l37 in (_p37.get("lines") or []):
-                    for _pt37 in (_l37.get("points") or []):
-                        _t37 = str(_pt37.get("ts") or "")
-                        if _t37:
-                            _c37 = pd.Timestamp(_t37)
-                            if _c37.tzinfo is not None:
-                                _c37 = _c37.tz_localize(None)
-                            _min_ts37 = _c37 if _min_ts37 is None or _c37 < _min_ts37 else _min_ts37
-            if _min_ts37 is not None and len(df):
-                _dts37 = pd.DatetimeIndex(pd.to_datetime(df["timestamp"]))
-                if _dts37.tz is not None:
-                    _dts37 = _dts37.tz_localize(None)
-                _pos37 = int(_dts37.searchsorted(_min_ts37))
-                _need37 = len(df) - _pos37 + 10
-                if _need37 > _lookback:
-                    _lookback = max(_lookback, min(_need37, len(df), int(_lookback * 2.2)))
+            # r52: the r37 window-WIDEN is retired (hard CryptoCove cap above).
+            # The identity is still read: the safety-net below reuses it, and
+            # anchors older than the window now go through the r51 per-TF
+            # re-fit instead of stretching the zoom over a month of candles.
         except Exception:
             pass
         frame = _clean_render_frame(df, window=_lookback)
@@ -1945,7 +1960,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             and _yl9[1] > _yl9[0]
                             and _yl9[1] / _yl9[0] > 1.03):
                         _a9.set_yscale("log")
-                        _a9.yaxis.set_major_formatter(FuncFormatter(_axis_price))
+                        _log_axis_decorate(_a9)
             except Exception as exc:
                 print(f"Chart log-all warning: {exc}")
         # mplfinance creates manually positioned axes, so set the panel geometry
@@ -2129,9 +2144,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         if use_log:
             try:
                 ax.set_yscale("log")
-                # set_yscale replaces the price formatter with matplotlib's
-                # scientific log labels (4.38 × 10³); restore plain prices.
-                ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
+                # r52: locator + plain formatter + silent minors, one kit.
+                _log_axis_decorate(ax)
             except Exception:
                 use_log = False
 
@@ -3337,13 +3351,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         if _is_spot or _span48 >= 1.30:
             try:
                 ax.set_yscale("log")
-                # r51 PRICE-AXIS LAW (Viva 09-27, «عجیبه که ستون قیمتش وجود
-                # نداره»): set_yscale("log") reinstates matplotlib's scientific
-                # log labels (10⁰, 2.8×10⁻¹) — every LOG chart must re-arm the
-                # plain-decimal formatter + silence scientific minors.
-                ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
-                from matplotlib.ticker import NullFormatter as _NF48
-                ax.yaxis.set_minor_formatter(_NF48())
+                # r51 PRICE-AXIS LAW + r52 locator: full plain kit in one shot.
+                _log_axis_decorate(ax)
             except Exception:
                 pass
         _render_corner_notes(ax, notes, frame, confirmed=confirmed, fig=fig)
@@ -4523,7 +4532,7 @@ def _approaching_caption(candidate: SignalCandidate, current_price: float, dista
         f"⚖️ {event.strip() or 'شرایط در آستانهٔ کامل‌شدن'}\n"
         f"🌀 {_e(advisory or 'شرط خاص اضافه‌ای ثبت نشده.')}\n"
         f"{VIVA_SEP}\n"
-        f"سیگنال واقعی فقط با Close معتبرِ شکست + پولبک اول + BOS تایم پایین "
+        f"سیگنال واقعی فقط با Close معتبرِ شکست (یا تأیید هوشمندِ توهم) — پولبک/BOS فقط نقشهٔ ورود پوزیشن بعدی "
         f"صادر می‌شود.\n"
         f"{VIVA_SEP}\n"
         f"🆔 <code>{_e(_public_code(candidate))}</code>"
@@ -6265,7 +6274,7 @@ def send_technoclassic_preview(ev: dict) -> bool:
             f"🌀 کامپرشن: {'قوی' if _comp.get('squeeze_ok') else 'ضعیف'} • "
             f"دوجی/کندل کوچک: {int(_comp.get('doji_count', 0) or 0)}\n"
             f"{VIVA_SEP}\n"
-            f"سیگنال واقعی فقط با Close معتبرِ شکست + پولبک اول + BOS تایم پایین "
+            f"سیگنال واقعی فقط با Close معتبرِ شکست (یا تأیید هوشمندِ توهم) — پولبک/BOS فقط نقشهٔ ورود پوزیشن بعدی "
             f"صادر می‌شود.\n"
             f"{VIVA_SEP}\n"
             f"🆔<code>{_e(code)}</code>"

@@ -178,7 +178,7 @@ def test_setup_routing_map():
 def test_spot_chart_is_log_and_tohom_line_exists():
     src = open(os.path.join(REPO, "bot", "messages_v7.py"), encoding="utf-8").read()
     assert 'ax.set_yscale("log")' in src
-    assert '"3d": 150' in src and '"8h": 176' in src
+    assert '"3d": 300' in src and '"8h": 170' in src
     assert "_tohom_line" in src
 
 

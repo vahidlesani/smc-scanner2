@@ -1042,20 +1042,26 @@ def evaluate_confirmation(
         event_map = {"S3_RETEST": "RETEST", "S4_REJECTION": "REJECTION", "S5_MICRO_BOS": "MICRO_BOS"}
         if state in event_map:
             machine = advance_viva_state(machine, event_map[state], max_retest_bars=int(candidate.metadata.get("viva_retest_window_bars", 16)))
+        # ── r52 SUFFOCATION LAW (Viva 09-28, verbatim: «گیت گذاشتی باید پولبک
+        # بزنه بعلاوه bos … اصلا نباید شرط تایید باشه — نقطه ورود پوزیشن
+        # بعدی»): Retest → Rejection → Micro-BOS is NO LONGER a confirmation
+        # path of THIS signal — not as a requirement and not as a fast lane.
+        # The machine keeps running as the NEXT position's entry map
+        # (pullback_entry_ready) and never gates the verdict. THIS signal
+        # confirms ONLY on the first valid close beyond the edge (fast lane
+        # / one-close law) or TOHOM — exactly what was dictated.
         if ready:
             machine = advance_viva_state(machine, "CONFIRM", max_retest_bars=int(candidate.metadata.get("viva_retest_window_bars", 16)))
+            candidate.metadata["pullback_entry_ready"] = True
+            candidate.metadata["pullback_entry_note"] = (
+                "پولبک/ریجکشن/BOS کامل شد — نقشهٔ ورودِ پوزیشن بعدی؛ شرط تأییدِ این سیگنال نیست.")
+            ready = False
         candidate.metadata["viva_state"] = state
         candidate.metadata["viva_state_machine"] = machine.payload()
         if not ready and alt is not None and state in ("S3_RETEST", "S4_REJECTION"):
-            # Cluster/MTF rejection at the retest counts as the rejection+BOS
-            # event pair compressed into one base — the state machine may
-            # confirm through it (fast lane), never the other way around.
-            ready = True
-            state = "S5_MICRO_BOS"
-            machine = advance_viva_state(machine, "CONFIRM", max_retest_bars=int(candidate.metadata.get("viva_retest_window_bars", 16)))
-            candidate.metadata["viva_state"] = state
-            candidate.metadata["viva_state_machine"] = machine.payload()
-            candidate.metadata["viva_fast_alt"] = alt.kind
+            # r52: a rejection cluster at the pullback is entry-quality data
+            # for the NEXT position — never a confirmation of this one.
+            candidate.metadata["viva_fast_alt"] = str(getattr(alt, "kind", "") or "")
         if not ready and fast_lane:
             machine = advance_viva_state(machine, "FAST_CONFIRM",
                                          max_retest_bars=int(candidate.metadata.get("viva_retest_window_bars", 16)))
@@ -1071,7 +1077,7 @@ def evaluate_confirmation(
             # expiry keep full veto over the scenario; the close itself does not.
             state, ready = "S6_CONFIRMED", True
         if not ready:
-            return reject("VIVA_TLBREAK_WAIT_" + state, "VIVA-TLBREAK در انتظار Retest → Rejection → BOS پنج‌دقیقه‌ای است.")
+            return reject("WAIT_FIRST_CLOSE_" + state, "در انتظار اولین کلوزِ معتبرِ فراتر از خط/لبه (یا تأییدِ هوشمندِ توهم) — پولبک و BOS شرطِ تأیید نیستند.")
     close, open_price = float(row["close"]), float(row["open"])
     previous_high, previous_low = float(previous["high"]), float(previous["low"])
     displacement = candle_displacement(closed_df, -1, atr_multiple=0.55)

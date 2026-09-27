@@ -163,7 +163,7 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
                       "📏 فاصله زنده تا خط:",
                       "⚖️ تاریخچۀ برخورد روی این خط:",
                       "🌀 کامپرشن:",
-                      "سیگنال واقعی فقط با Close معتبرِ شکست + پولبک اول + BOS تایم پایین"):
+                      "سیگنال واقعی فقط با Close معتبرِ شکست (یا تأیید هوشمندِ توهم) — پولبک/BOS فقط نقشهٔ ورود پوزیشن بعدی"):
             assert _need in cap, _need
         assert "🧠" not in cap and "⚡ <b>هشدار الگو" not in cap
 

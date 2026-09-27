@@ -69,9 +69,11 @@ def test_token_plain_when_tape_matches_trigger():
 def test_token_parenthetical_on_step_up():
     from bot.messages_v7 import _chart_tf_token
     assert _chart_tf_token(_cand(trigger="15m"), _frame(60)) == "1H (TRIG 15M)"
-    # explicit lifecycle metadata (chart_view_tf) wins over inference
+    # r52: the TAPE wins — a stale chart_view_tf (SUI «4h tape stamped 15M»)
+    # must never outrank the frame's own spacing; metadata is only a fallback
+    # when inference fails.
     assert _chart_tf_token(_cand(trigger="15m", view="2h"),
-                           _frame(60)) == "2H (TRIG 15M)"
+                           _frame(60)) == "1H (TRIG 15M)"
 
 
 # ── 3. the title block really uses the token ───────────────────────────────

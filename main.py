@@ -793,8 +793,11 @@ def run_spot_scan() -> Dict[str, int]:
                 # r50 CryptoCove counts: the chart must HAVE as many candles
                 # as it renders (1w:140 needs ~985 daily bars — inside the
                 # venue's 1000-bar single call, per the round-15 aggregator).
-                limits={"4h": 200, "8h": 200, "12h": 180,
-                        "1d": 1000, "3d": 160, "1w": 140,
+                # r52 CryptoCove counts (his dictation 09-28): 4h/8h→170,
+                # 12h/1d→210, 3d→300, 1w→210 candles — the deep dailies come
+                # from the one-time history store, not per-scan downloads.
+                limits={"4h": 200, "8h": 200, "12h": 210,
+                        "1d": 210, "3d": 300, "1w": 210,
                         "5m": 300, "15m": 200})
             bundles[symbol.upper()] = bundle
             for cand in spot_signals_for(symbol, bundle):

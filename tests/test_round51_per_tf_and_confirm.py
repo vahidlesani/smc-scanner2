@@ -154,10 +154,9 @@ def test_log_switch_restores_plain_formatter():
     formatter (FIL/ADA/WLD 1D printed 10⁰ / 9×10⁻¹ after it)."""
     src = open(os.path.join(ROOT, "bot", "messages_v7.py")).read()
     marker = src.index("if _is_spot or _span48 >= 1.30:")
-    window = src[marker:marker + 900]
+    window = src[marker:marker + 400]
     assert 'ax.set_yscale("log")' in window
-    assert "set_major_formatter(FuncFormatter(_axis_price))" in window
-    assert "NullFormatter" in window
+    assert "_log_axis_decorate(ax)" in window  # r52: locator+formatter+minors
 
 
 # ── 4. confirm-timing breaker (DASH law) ───────────────────────────────────
