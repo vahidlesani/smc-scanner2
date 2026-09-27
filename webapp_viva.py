@@ -334,7 +334,6 @@ _FEED_SQL = """
            tp1_hit, tp1_hit_at, sl_moved_to_be, description, entry_conditions,
            confirmations, setup_code, target_state_json, leverage, margin_usd
     FROM signals
-    WHERE created_at >= {cutoff}
     ORDER BY created_at DESC
     LIMIT 120
 """
@@ -446,8 +445,9 @@ def _rebuild_state() -> Dict[str, Any]:
         rows_archive: List[Dict[str, Any]] = []
         hits: List[Dict[str, Any]] = []
         with db_cursor() as c:
-            _cutoff = _today_start_utc()
-            c.execute(_FEED_SQL.format(cutoff=_db_placeholder()), (_cutoff,))
+            # r46: the app journal is ALL-TIME (latest 120) — the since-midnight
+            # window made every headline zero right after 00:00 UTC.
+            c.execute(_FEED_SQL)
             for r in c.fetchall():
                 (sid, symbol, source, fa, direction, entry, sl, tp1, tp2, result, pnl, score,
                  style, code, tf, created_at, closed_at, confirmed, partial_win, market_json,
@@ -532,10 +532,9 @@ def _rebuild_state() -> Dict[str, Any]:
                        MIN(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) AS worst,
                        AVG(score) AS avg_score, MAX(created_at) AS last
                 FROM signals
-                WHERE created_at >= {_db_placeholder()}
                 GROUP BY source
                 ORDER BY MAX(created_at) DESC
-            """, (_today_start_utc(),))
+            """)
             for r in c.fetchall():
                 (name, fa, total, wins, losses, pending, avg_pnl, avg_win, avg_loss, best, worst, avg_score, last) = r
                 total, wins, losses = int(total or 0), int(wins or 0), int(losses or 0)
@@ -569,13 +568,11 @@ def _rebuild_state() -> Dict[str, Any]:
                 SELECT symbol, public_code, tp1_hit_at, closed_at, result, pnl_pct,
                        created_at, confirmed_at, partial_win, tp1, tp2, sl
                 FROM signals
-                WHERE created_at >= {_db_placeholder()} AND (
-                       tp1_hit=TRUE OR result IN ('WIN','LOSS')
+                WHERE tp1_hit=TRUE OR result IN ('WIN','LOSS')
                        OR (confirmed=TRUE AND result='PENDING')
-                   )
                 ORDER BY COALESCE(closed_at, tp1_hit_at, confirmed_at, created_at) DESC
                 LIMIT 80
-            """, (_today_start_utc(),))
+            """)
             for r in c.fetchall():
                 (symbol, code, tp1_at, closed_at, result, pnl, created_at, confirmed_at,
                  partial_win, tp1, tp2, sl) = r
@@ -1684,7 +1681,7 @@ function donutSvg(w,l,b){
   +`<text x="60" y="58" text-anchor="middle" fill="#e7edf6" font-size="20" font-weight="800">${w+l+b}</text><text x="60" y="74" text-anchor="middle" fill="#8b9cb5" font-size="9">Trades</text></svg>`;
 }
 function eqSvg(pts){
- if(!pts.length)return '<div class="empty">هنوز معاملهٔ بسته‌ای امروز نیست</div>';
+ if(!pts.length)return '<div class="empty">هنوز معاملهٔ بسته‌ای ثبت نشده</div>';
  const W=300,H=110,P=6,vs=pts.map(p=>p.v),mn=Math.min(...vs,0),mx=Math.max(...vs,1);
  const X=i=>P+i*(W-2*P)/Math.max(1,pts.length-1),Y=v=>H-P-(v-mn)*(H-2*P)/(mx-mn||1);
  const poly=pts.map((p,i)=>`${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join(' ');

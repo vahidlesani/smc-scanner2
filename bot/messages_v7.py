@@ -1675,7 +1675,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # charts. Lower TFs keep the denser view used for entries.
         _chart_tf = str((candidate.metadata or {}).get("chart_view_tf")
                         or getattr(candidate, "trigger_timeframe", "15m") or "15m").lower()
-        _lookback = {"1d": 96, "4h": 120, "2h": 132, "1h": 150,
+        _lookback = {"1d": 176, "4h": 140, "2h": 132, "1h": 150,
                      "30m": 160, "15m": 164, "5m": 164}.get(_chart_tf, 164)
         # r37 (Viva 09-26, «ترندهای ماژور و مینور مهم اصلا دیده نمیشن و رسم
         # نمیشن»): the r33 identity pins a chain's geometry forever, but the
@@ -4214,6 +4214,12 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     if chain.get("upd_sig") == sig:
         return False
     upd_n = int(chain.get("upd_n") or 0) + 1
+    # r46 (Viva 09-27, «آپدیت‌های زیاد … هنوز داره آپدیت میاد واسشون» + the
+    # 09-14 UPDATE-SPAM(3) law): a chain posts at most THREE numbered updates;
+    # past that it goes quiet — the chain still lives and can confirm, but the
+    # channel is no longer flooded with «آپدیت ۳۰».
+    if upd_n > 3:
+        return False
     # the ordered one/two-line explanation rides along whenever this update's
     # chart was stepped up to a higher TF (09-20 time-axis law)
     _view_note = str((candidate.metadata or {}).get("chart_view_note") or "")
@@ -6121,6 +6127,12 @@ def send_technoclassic_preview(ev: dict) -> bool:
     cand.metadata["public_code"] = code
     chart = _chart_for(code)
     upd_n = int(chain.get("upd_n") or 0) + 1
+    # r46 (Viva 09-27, «آپدیت‌های زیاد … هنوز داره آپدیت میاد واسشون» + the
+    # 09-14 UPDATE-SPAM(3) law): a chain posts at most THREE numbered updates;
+    # past that it goes quiet — the chain still lives and can confirm, but the
+    # channel is no longer flooded with «آپدیت ۳۰».
+    if upd_n > 3:
+        return False
     state_fa = {"REJECTION_FADE": "↩️ کندلِ دفع در کانال — پلنِ بازگشت روی تابلو (تأییدِ تایم‌پایین لازم)",
                 "BREAK_READY": "⏱ آماده‌باشِ شکست — خط تست شد؛ تأییدِ کلوز لازم است",
                 "EDGE_NEAR": "👀 هنوز فقط نزدیکِ ضلع؛ ربات منتظرِ نشانه است"}.get(state, state)
