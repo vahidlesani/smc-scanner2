@@ -37,9 +37,10 @@ def test_dictated_candle_counts_are_law():
 
 def test_window_is_a_hard_cap_in_render():
     src = open(os.path.join(ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()
-    # the render window is cut straight from the map — no widen may sit
-    # between the map and the _clean_render_frame call
-    seg = src.split('_lookback = {"1d": 210')[1].split("frame = _clean_render_frame")[0]
+    # r53: the map is the module-level single source of truth; the render
+    # window is cut straight from it — no widen may sit in between.
+    assert '_CHART_CANDLE_COUNTS = {"1d": 210' in src
+    seg = src.split("_lookback = _CHART_CANDLE_COUNTS.get")[1].split("frame = _clean_render_frame")[0]
     assert "_need37" not in seg and "2.2" not in seg
     assert "frame = _clean_render_frame(df, window=_lookback)" in src
 

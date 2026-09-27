@@ -167,12 +167,14 @@ def test_hook_sits_after_the_late_bound_retry():
 
 
 def test_setup_routing_map():
+    # r53: routing by SETUP ONLY via _setup_announce_channel — the mirror
+    # table is gone (one signal, ONE announce channel, no TF dimension).
     src = open(os.path.join(REPO, "bot", "messages_v7.py"), encoding="utf-8").read()
-    part = src.split("_setup_routes = {")[1].split("}")[0]
-    assert '"PINVAL": (CHAT_ID_SWING_SHORT,)' in part
-    assert '"TECHCLASSIC": (CHAT_ID_SWING_LONG,)' in part
-    assert '"ALBROX": (CHAT_ID_SWING_MID,)' in part
-    assert '"TLBREAK": (CHAT_ID_SWING_MID,)' in part
+    part = src.split("def _setup_announce_channel")[1].split("def tf_channel_publish_confirmed")[0]
+    assert '"PINVAL", "PINWALLQ", "PINWALL"' in part and "CHAT_ID_SWING_SHORT" in part
+    assert '"TECHCLASSIC"' in part and "CHAT_ID_SWING_LONG" in part
+    assert '"ALBROX", "TLBREAK"' in part and "CHAT_ID_SWING_MID" in part
+    assert "_setup_routes" not in src
 
 
 def test_spot_chart_is_log_and_tohom_line_exists():

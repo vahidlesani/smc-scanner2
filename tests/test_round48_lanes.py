@@ -67,12 +67,17 @@ def test_expiry_map_has_the_new_tfs():
 # ── 2. the final channel mapping (three renamed channels) ──────────────────
 
 def test_routing_map_is_setup_final():
+    # r53 (Viva 09-28: «بازهم قاطی پاتی میاد … گفتی انجام دادی اما انجام نشده»):
+    # the channel is chosen by SETUP ONLY via _setup_announce_channel, and the
+    # mirror block is GONE — one signal lands in exactly ONE announce channel.
     src = open(os.path.join(REPO, "bot", "messages_v7.py"), encoding="utf-8").read()
-    part = src.split("_setup_routes = {")[1].split("}")[0]
-    assert '"PINVAL": (CHAT_ID_SWING_SHORT,)' in part
-    assert '"TECHCLASSIC": (CHAT_ID_SWING_LONG,)' in part
-    assert '"ALBROX": (CHAT_ID_SWING_MID,)' in part        # single, not double
-    assert '"TLBREAK": (CHAT_ID_SWING_MID,)' in part
+    part = src.split("def _setup_announce_channel")[1].split("def tf_channel_publish_confirmed")[0]
+    assert '"PINVAL", "PINWALLQ", "PINWALL"' in part
+    assert "CHAT_ID_SWING_SHORT" in part
+    assert '"ALBROX", "TLBREAK"' in part and "CHAT_ID_SWING_MID" in part
+    assert '"TECHCLASSIC"' in part and "CHAT_ID_SWING_LONG" in part
+    assert "_setup_routes" not in src          # the TF-routed primary + mirrors are gone
+    assert 'tf_channel_id(str(candidate.trigger_timeframe or ""))' not in src
 
 
 def test_legacy_tf_mirror_is_gone():

@@ -93,14 +93,15 @@ def test_swing_pattern_cap_allows_long_daily_wedge():
 
 # ── 6. confirm mirror: 30m → MID, 4h → SHORT ──────────────────────────────
 def test_confirm_mirror_mapping():
-    # r48 (Viva 09-27 04:50, «به‌جای جدا سازی تایم‌ها ستاپ‌ها رو جدا کردیم»):
-    # the TF-based r32 mirror is superseded by SETUP lanes — three renamed
-    # channels, and the old mid channel is the only one carrying two setups.
+    # r53 (Viva 09-28: «بازهم قاطی پاتی میاد»): the r48 mirror TABLE is gone —
+    # the channel IS the setup lane, chosen by _setup_announce_channel; no
+    # TF-routed primary, no mirror copies, one signal → ONE announce channel.
     src = open(f"{REPO}/bot/messages_v7.py", encoding="utf-8").read()
-    assert '"PINVAL": (CHAT_ID_SWING_SHORT,)' in src
-    assert '"ALBROX": (CHAT_ID_SWING_MID,)' in src
-    assert '"TLBREAK": (CHAT_ID_SWING_MID,)' in src
-    assert '"TECHCLASSIC": (CHAT_ID_SWING_LONG,)' in src
+    part = src.split("def _setup_announce_channel")[1].split("def tf_channel_publish_confirmed")[0]
+    assert '"PINVAL", "PINWALLQ", "PINWALL"' in part and "CHAT_ID_SWING_SHORT" in part
+    assert '"ALBROX", "TLBREAK"' in part and "CHAT_ID_SWING_MID" in part
+    assert '"TECHCLASSIC"' in part and "CHAT_ID_SWING_LONG" in part
+    assert "_setup_routes" not in src and "confirm_mirror" not in src
     assert "TF-channel mirror failed" not in src
 
 

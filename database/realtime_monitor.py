@@ -17,8 +17,104 @@ from analysis.trade_management import advance_ladder
 SETTINGS = get_settings()
 
 
+def _void_signal_row(cursor, signal_id: str, now: str, reason: str) -> None:
+    """Settle a phantom PENDING position as result='VOID' (pnl 0).
+
+    VOID is excluded from every WIN/LOSS statistic, board and the app's
+    PENDING list by construction — the fake profit never reaches results."""
+    truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
+    p = legacy_db._ph()
+    cursor.execute(
+        f"UPDATE signals SET result='VOID',pnl_pct=0,pnl_usd=0,closed_at={p} WHERE signal_id={p}",
+        (now, signal_id))
+    cursor.execute(
+        f"UPDATE active_signals SET status='CLOSED',is_cancelled={truth} WHERE signal_id={p}",
+        (signal_id,))
+    cursor.execute(
+        f"DELETE FROM signal_symbol_locks WHERE signal_id={p}",
+        (signal_id,))
+    print(f"VOID phantom position {signal_id}: {reason}")
+
+
+def classify_phantom(rows, strategy_version: str = "") -> Dict[str, str]:
+    """Pure r53 result-integrity rules — returns {signal_id: reason}.
+
+    • WRONG-SIDE LADDER: a LONG whose ladder targets sit AT/BELOW entry (or a
+      SHORT's above) can only «win» instantly and fictitiously — the daily
+      SHIB phantom (+$309, «فروش روی 0.00001») was exactly this.
+    • TWIN POSITION: the same (symbol, source, direction) holding MORE THAN
+      ONE PENDING paper position — the app re-registers an identical clone
+      every day; only the NEWEST may live.
+    rows: newest first, tuples (signal_id, symbol, source, direction, entry,
+    target_state_json)."""
+    verdicts: Dict[str, str] = {}
+    seen = {}
+    for (signal_id, symbol, source, direction, entry,
+         target_state_json) in rows:
+        signal_id = str(signal_id)
+        try:
+            entry_f = float(entry or 0)
+        except Exception:
+            entry_f = 0.0
+        sign = 1.0 if str(direction or "").upper() == "LONG" else -1.0
+        if entry_f > 0:
+            try:
+                ladder = json.loads(target_state_json or "{}")
+            except Exception:
+                ladder = {}
+            # NOTE: JSON numbers stringify as "1e-05" for sub-pip coins —
+            # parse with float(), never with a digit-string filter.
+            targets = []
+            for _t in (ladder.get("targets") or []):
+                try:
+                    targets.append(float(_t))
+                except Exception:
+                    continue
+            if targets and all(sign * (t - entry_f) <= 1e-12 for t in targets):
+                verdicts[signal_id] = "wrong-side ladder targets"
+                continue
+        key = (str(symbol or "").upper(), str(source or ""), str(direction or ""))
+        if key in seen:
+            verdicts[signal_id] = f"twin of {seen[key]}"
+        else:
+            seen[key] = signal_id
+    return verdicts
+
+
+def void_phantom_positions() -> int:
+    """r53 RESULTS-PNL integrity sweep (his SHIB report) — runs once per
+    realtime cycle, before any ladder advances."""
+    truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
+    p = legacy_db._ph()
+    try:
+        with legacy_db.db_cursor() as cursor:
+            cursor.execute(f"""
+                SELECT signal_id, symbol, source, direction, entry, target_state_json
+                FROM signals
+                WHERE confirmed={truth} AND confirmation_sent={truth}
+                  AND result='PENDING' AND closed_at IS NULL
+                ORDER BY created_at DESC
+            """)
+            rows = cursor.fetchall()
+        verdicts = classify_phantom(rows, str(SETTINGS.strategy_version or ""))
+        if not verdicts:
+            return 0
+        now = _now()
+        with legacy_db.db_cursor() as cursor:
+            for signal_id, reason in verdicts.items():
+                _void_signal_row(cursor, signal_id, now, reason)
+        return len(verdicts)
+    except Exception as exc:
+        print(f"phantom sweep skipped: {exc}")
+        return 0
+
+
 def monitor_realtime_prices(prices: Dict[str, float]) -> List[Dict]:
     """Advance durable filled ladders using one fresh last-price snapshot."""
+    try:
+        void_phantom_positions()
+    except Exception:
+        pass
     truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
     p = legacy_db._ph()
     with legacy_db.db_cursor() as cursor:

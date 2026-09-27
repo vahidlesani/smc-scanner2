@@ -876,6 +876,21 @@ def _pivot_line_fit(ax, frame, xs, ys):
 _TF_PATTERN_CACHE: Dict[Tuple[str, str, str], list] = {}
 
 
+# r52/r53 — HIS dictated CryptoCove candle counts, the single source of
+# truth for the render window AND every monitor/update chart fetch:
+# 4h/8h→140-200 (170), 12h/1d→170-250 (210), 3d→250-350 (300), 1w→170-250 (210).
+_CHART_CANDLE_COUNTS = {"1d": 210, "4h": 170, "2h": 132, "1h": 150, "8h": 170,
+                        "12h": 210, "30m": 160, "15m": 164, "5m": 164,
+                        "3d": 300, "1w": 210}
+
+
+def _chart_fetch_size(tf: str) -> int:
+    """Bars to FETCH so a chart of `tf` can actually render its dictated
+    count (monitor/update paths used a blind 180 — 1w/3d spot chains then
+    rendered a decade of needle candles instead of the CryptoCove density)."""
+    return int(_CHART_CANDLE_COUNTS.get(str(tf or "").lower(), 200))
+
+
 def _log_axis_decorate(ax) -> None:
     """r52 (Viva 09-28, FIL/ADA/WLD/SUI axes): EVERY set_yscale('log') must
     re-arm the FULL plain-price kit in one place —
@@ -1842,9 +1857,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # RETIRED — deep stored anchors older than the window are handled by
         # the r51 per-TF re-fit, and «نقطهٔ شروع زوم» must always show the
         # CryptoCove density, never a month of needle candles.
-        _lookback = {"1d": 210, "4h": 170, "2h": 132, "1h": 150, "8h": 170,
-                     "12h": 210, "30m": 160, "15m": 164, "5m": 164,
-                     "3d": 300, "1w": 210}.get(_chart_tf, 164)
+        _lookback = _CHART_CANDLE_COUNTS.get(_chart_tf, 164)
         # r37 (Viva 09-26, «ترندهای ماژور و مینور مهم اصلا دیده نمیشن و رسم
         # نمیشن»): the r33 identity pins a chain's geometry forever, but the
         # render window is re-cut per render — when the fetch returns fewer
@@ -4374,7 +4387,8 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
             from data.fetcher import get_klines
             _tf = str((candidate.metadata or {}).get("confirm_tf")
                       or candidate.trigger_timeframe)
-            frame = get_klines(candidate.symbol, _tf, 180, closed_only=False, use_cache=True)
+            frame = get_klines(candidate.symbol, _tf, _chart_fetch_size(_tf),
+                               closed_only=False, use_cache=True)
             if frame is not None and len(frame) >= 30:
                 chart = generate_chart(frame, candidate, confirmed=False)
         except Exception:
@@ -4782,19 +4796,61 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
         return False
 
 
+def _setup_announce_channel(setup_code: str) -> str:
+    """r53 FINAL routing law (Viva 09-28, third time — «گفتی انجام دادی اما
+    انجام نشده»): the three channels are CONFIRMED-ANNOUNCE boards routed by
+    SETUP ONLY, with NO timeframe dimension left:
+      PINVAL family (PINVAL/PINWALLQ/PINWALL)  → کوتاه‌مدت (Pival)
+      ALBROX + TLBREAK                         → میان‌مدت قدیمی
+      TECHCLASSIC (every TF)                   → بلندمدت قدیمی
+    Anything else (spot SPOTBREAK rides CHAT_ID_SPOT via the override) → "".
+    The result-link behaviour of every card is unchanged."""
+    s = str(setup_code or "").upper()
+    if s in ("PINVAL", "PINWALLQ", "PINWALL"):
+        return CHAT_ID_SWING_SHORT or ""
+    if s in ("ALBROX", "TLBREAK"):
+        return CHAT_ID_SWING_MID or ""
+    if s == "TECHCLASSIC":
+        return CHAT_ID_SWING_LONG or ""
+    return ""
+
+
 def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
                                  chat_override: str = "", file_id: str = "") -> int:
-    """Post the confirmed signal into its timeframe family's channel.
+    """Post the confirmed signal into ITS SETUP's announce channel.
+
+    r53: the channel is chosen by SETUP ONLY (never by trigger TF — the old
+    tf_channel_id routing is what kept mixing the channels), there are NO
+    mirrors (one signal → exactly ONE announce channel), and every card
+    carries a link to the SAME signal's Confirmed message in the main
+    channel plus the unchanged latest-result link line.
 
     `chat_override` is how the SPOT lane reaches VIVA-MON-SPOT: the same
     self-contained card, the same single latest-result link, no reply chain.
     """
     code = _public_code(candidate)
-    chat = str(chat_override or "") or tf_channel_id(str(candidate.trigger_timeframe or ""))
+    chat = str(chat_override or "") or _setup_announce_channel(
+        str(getattr(candidate, "setup_code", "") or ""))
     if not chat or not code:
         return 0
     result_line = "🔗 آخرین نتیجه: <i>در انتظار نتیجه</i>"
     text = _tf_channel_text(candidate, result_line)
+    # r53 link law: «لینک بشه به سیگنالهای تایید همون شناسه در کانال اصلی» —
+    # the card links to this signal's own Confirmed message in the main
+    # channel; the latest-result line keeps its behaviour untouched.
+    try:
+        _chain0 = _chain_by_code_get(code)
+        _conf_mid0 = int((_chain0 or {}).get("confirmed") or 0)
+        _conf_lnk0 = (_telegram_message_link(CHAT_ID_EXECUTION or CHAT_ID_ADMIN, _conf_mid0)
+                      if _conf_mid0 else "")
+        if _conf_lnk0:
+            _stamp53 = f'🔗 پیام تأیید در کانال اصلی: <a href="{_conf_lnk0}">{_e(code)}</a>'
+            if "🔗 آخرین نتیجه:" in text:
+                text = text.replace("🔗 آخرین نتیجه:", _stamp53 + "\n🔗 آخرین نتیجه:", 1)
+            else:
+                text = text.replace("📌 <b>VIVAMON", _stamp53 + "\n\n📌 <b>VIVAMON", 1)
+    except Exception:
+        pass
     try:
         _ph, mid = _post_chart_then_text(
             chart, text, chat,
@@ -4809,40 +4865,9 @@ def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
         chain["tfc_text"] = text
         chain["tfc_result_label"] = ""
         _setup_chain_set_by_code(code, chain)
-        # r32 (Viva 09-26): «پیام تایید ۳۰ دقیقه و ۴ ساعته توی کانالهای
-        # کوتاه مدت و میان مدت هم بیان» — the 30m confirm mirrors into the
-        # MID family channel and the 4h confirm into the SHORT family
-        # channel. The primary keeps the chain + latest-result link; the
-        # mirror is a plain copy (no bookkeeping). Viva: if it reads well,
-        # we extend it to the other setups.
-        _tf32 = str(candidate.trigger_timeframe or "").strip().lower()
-        # r47 (Viva 09-27, verbatim): «فقط پیامهای تایید پینوال به کانال
-        # کوتاه مدت … البروکس و تی ال بریک به میان مدته … تکنوکلاسیک همه
-        # سیگنالهای تاییدش به بلند مدته» — the mirror now routes by SETUP,
-        # not by TF; ALBROX/TLBREAK stay the double ones (میان‌مدت + بلندمدت).
-        # Channels come from env (CHAT_ID_TF_15M_1H / _2H_4H / _1D); when an
-        # ID is unset the mirror skips silently, exactly like r32 did.
-        # r48 final mapping (Viva 09-27 04:50 — the three renamed channels):
-        # VIVA-MON-Pival      = CHAT_ID_TF_15M_1H → PINVAL family, ALL its TFs
-        # VIVA-MON-AlboroxTLB = CHAT_ID_TF_2H_4H → the ONLY two-setup channel
-        # VIVA-MON-TECH       = CHAT_ID_TF_1D → TECHCLASSIC, ALL its TFs
-        _setup_routes = {
-            "PINVAL": (CHAT_ID_SWING_SHORT,),
-            "PINWALLQ": (CHAT_ID_SWING_SHORT,),
-            "PINWALL": (CHAT_ID_SWING_SHORT,),
-            "TECHCLASSIC": (CHAT_ID_SWING_LONG,),
-            "ALBROX": (CHAT_ID_SWING_MID,),
-            "TLBREAK": (CHAT_ID_SWING_MID,),
-        }
-        _setup_code47 = str(getattr(candidate, "setup_code", "") or "").upper()
-        _mirror32s = _setup_routes.get(_setup_code47, ())
-        for _mid47 in _mirror32s:
-            if _mid47 and str(_mid47) != str(chat):
-                try:
-                    _post_chart_then_text(chart, text, _mid47,
-                                          reply_kind="confirm_mirror")
-                except Exception:
-                    pass
+        # r53: the r32/r47 MIRROR block is gone for good — one signal lands in
+        # exactly ONE announce channel (its setup's), never a TF-routed copy
+        # plus a setup mirror (that double-posting WAS the قاطی‌پاتی).
         return int(mid)
     except Exception as exc:
         print(f"TF-channel publish error {code}: {exc}")
@@ -5519,7 +5544,10 @@ def _lifecycle_chart_frame(candidate: SignalCandidate, levels: list[float],
     # the trigger tape is ALWAYS fetched: it is what tells us whether price
     # is still inside the tool (the venue cache makes the second fetch cheap)
     try:
-        frame = get_klines(candidate.symbol, base, 180, closed_only=False, use_cache=True)
+        # r53: fetch the DICTATED count — spot monitors on 12h/3d/1w must get
+        # CryptoCove-depth update charts, not a blind 180-bar span.
+        frame = get_klines(candidate.symbol, base, _chart_fetch_size(base),
+                           closed_only=False, use_cache=True)
     except Exception:
         frame = None
     if frame is None or getattr(frame, "empty", True):
@@ -5528,7 +5556,8 @@ def _lifecycle_chart_frame(candidate: SignalCandidate, levels: list[float],
     if view != base:
         _stepped = None
         try:
-            _stepped = get_klines(candidate.symbol, view, 180, closed_only=False, use_cache=True)
+            _stepped = get_klines(candidate.symbol, view, _chart_fetch_size(view),
+                                  closed_only=False, use_cache=True)
         except Exception:
             _stepped = None
         if _stepped is not None and not getattr(_stepped, "empty", True):

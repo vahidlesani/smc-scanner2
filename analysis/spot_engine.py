@@ -308,6 +308,12 @@ def build_spot_candidate(item: dict):
     if entry > 0 and sl > 0 and (entry - sl) / entry > cap:
         sl = entry * (1.0 - cap)
     targets = [float(x) for x in (item.get("targets") or [])]
+    # r53 result-integrity: a LONG spot target AT/BELOW the entry can only
+    # produce an instant fictitious win (the SHIB phantom family) — drop it
+    # and rebuild the ladder from the default path when none survives.
+    targets = [t for t in targets if entry > 0 and t > entry]
+    if not targets:
+        targets = [entry * 1.05, entry * 1.10]
     weights = [float(x) for x in (item.get("weights") or SPOT_WEIGHTS)]
     meta = {
         "market": "SPOT", "engine": "SPOT", "log_scale": True,
