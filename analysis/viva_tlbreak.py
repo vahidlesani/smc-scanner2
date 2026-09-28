@@ -28,6 +28,9 @@ class VivaTLBreakConfig:
     pivot_right: int = 5
     min_touches: int = 3
     touch_tolerance_atr: float = 0.15
+    # r57 (his shadow law): "outlier" (futures TRADE default, unchanged) or
+    # "bodies" (render/drawing — trend anchors never sit on liquidation wicks)
+    wick_policy: str = "outlier"
     max_fit_residual_atr: float = 0.25
     require_alive: bool = False
     recency_bars: int = 40
@@ -155,13 +158,17 @@ def fit_validated_line(
     except Exception:
         use_log = False
     highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right,
-                      wick_noise_filter=True)
+                      wick_noise_filter=True,
+                      wick_policy=getattr(cfg, "wick_policy", "outlier") or "outlier")
     pts = highs if side == "HIGH" else lows
     n = len(df) - 1
     if len(pts) < 2:
         return None
     tol = max(cfg.touch_tolerance_atr, 0.12) * atr
-    pool = pts[-16:]
+    # r57 (his «لیمیت نداریم که فقط ۵۰ تا یا هرچی» — the old 16-pivot pool
+    # hid the chart's BEST majors; the whole pivot history competes now, the
+    # touches×fit×span score still picks the most valid line).
+    pool = pts[-200:]
     best: Optional[ValidatedLine] = None
     best_score = -1.0
     for i in range(len(pool)):

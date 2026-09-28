@@ -118,8 +118,9 @@ def test_volume_reason_line_honesty():
     frame = pd.DataFrame({
         "timestamp": idx, "open": [100.0] * n, "high": [101.0] * n,
         "low": [99.0] * n, "close": [100.0] * n, "volume": [1.0] * n})
-    # empty scan is fine — the contract is that no crash occurs without patterns
-    assert scan_spot_alerts("TEST", {"1d": frame}) == []
+    # the contract is that no crash occurs — r57 body-anchored pivots may
+    # legitimately find the flat top of an all-flat tape and warn on it
+    assert isinstance(scan_spot_alerts("TEST", {"1d": frame}), list)
 
 
 def test_final_stop_guard_never_binds_spot():

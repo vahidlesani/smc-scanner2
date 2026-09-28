@@ -1167,7 +1167,9 @@ def test_link_chain_laws_2026_09_14():
     assert "def _fit_caption" in src
     # 2) Compact is the permanent anchor; updates quote it and replace each other.
     assert 'chain["anchor_pro"] = int(mid)' in src
-    assert 'reply_to=int(chain.get("anchor_pro") or chain.get("edu_short") or 0)' in src
+    # r57: spot chains reply to their OWN newest message (alert→confirm→updates)
+    assert ('reply_to=(_spot_reply57 or' in src
+            and 'int(chain.get("anchor_pro") or chain.get("edu_short") or 0)) or None)' in src)
     # 3) The update gap is enforced IN the single writer (not only callers).
     up = src.split("def send_setup_update", 1)[1].split("def _approaching_ai_hint", 1)[0]
     assert "update_min_gap_seconds" in up

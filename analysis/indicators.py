@@ -63,7 +63,16 @@ WICK_NOISE_LOOKBACK = 20
 
 
 def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
-           wick_noise_filter: bool = False) -> Tuple[List[Dict], List[Dict]]:
+           wick_noise_filter: bool = False,
+           wick_policy: str = "outlier") -> Tuple[List[Dict], List[Dict]]:
+    """wick_policy (r57, Viva: «شدوهای خیلی بلند رو گفتم نگیره برای رسم الگو
+    و ترند .. الان همه شدوها رو رد میکنه اینجوری ترندها گاهی وقتا خطا مده»):
+      • "outlier" — the old r50 law (only OUTLIER wicks demote to body);
+        keeps the futures TRADE edges exactly as they were.
+      • "bodies"  — drawing anchors are ALWAYS the candle BODY; a trend or
+        pattern edge is drawn where the mass of the candle is, never where a
+        liquidation wick poked (DASH/ARB 3d mega-wicks bent the lines)."""
+
     highs: List[Dict] = []
     lows: List[Dict] = []
     if df is None or len(df) < left + right + 1:
@@ -87,7 +96,10 @@ def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
         if h[i] >= np.max(h[i - left : i + right + 1]):
             _price = float(h[i])
             _anchor = "wick"
-            if wick_noise_filter and atr14 > 0:
+            if wick_policy == "bodies" and has_body:
+                _price = float(max(o[i], c[i]))
+                _anchor = "body"
+            elif wick_noise_filter and atr14 > 0:
                 _wick = float(h[i] - max(o[i], c[i]))
                 _body = abs(float(c[i] - o[i]))
                 if (_wick >= WICK_NOISE_OUTLIER_MULT * _med_wick
@@ -100,7 +112,10 @@ def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
         if l[i] <= np.min(l[i - left : i + right + 1]):
             _price = float(l[i])
             _anchor = "wick"
-            if wick_noise_filter and atr14 > 0:
+            if wick_policy == "bodies" and has_body:
+                _price = float(min(o[i], c[i]))
+                _anchor = "body"
+            elif wick_noise_filter and atr14 > 0:
                 _wick = float(min(o[i], c[i]) - l[i])
                 _body = abs(float(c[i] - o[i]))
                 if (_wick >= WICK_NOISE_OUTLIER_MULT * _med_wick

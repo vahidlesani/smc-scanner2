@@ -673,6 +673,17 @@ def _spot_status_write(reason: str, stats: Optional[Dict[str, int]] = None) -> N
         pass
 
 
+def _spot_alert_mid_kv(symbol: str, tf: str, pattern: str) -> dict:
+    """The stored mid of this lane's FIRST WARNING (r57 reply-chain law)."""
+    try:
+        from database.bot_kv import get_json
+        return get_json(f"spot_alert_mid|{str(symbol or '').upper()}|"
+                        f"{str(tf or '').lower()}|{str(pattern or '').upper()}",
+                        {}) or {}
+    except Exception:
+        return {}
+
+
 def run_spot_scan() -> Dict[str, int]:
     """One full spot pass: 4h/8h short · 12h/1d mid · 3d/1w long."""
     stats: Dict[str, int] = {"symbols": 0, "found": 0, "published": 0,
@@ -751,6 +762,22 @@ def run_spot_scan() -> Dict[str, int]:
                 ladder.extend(scan_spot_alerts(symbol, bundle))
             except Exception as exc:
                 print(f"spot ladder scan warning {symbol}: {exc}")
+            # r57: MAJOR-EVENT updates only (volume surge / displacement /
+            # structural touch) — «الکی آپدیت نده»
+            try:
+                from analysis.spot_engine import (scan_spot_update_events,
+                                                  commit_spot_update_events)
+                from bot.messages_v7 import send_spot_event
+                _evs57 = scan_spot_update_events(symbol, bundle)
+                _sent57 = []
+                for _ev57 in _evs57:
+                    if send_spot_event(_ev57):
+                        _sent57.append(_ev57)
+                if _sent57:
+                    commit_spot_update_events(_sent57)
+                    stats["update_events"] = stats.get("update_events", 0) + len(_sent57)
+            except Exception as exc:
+                print(f"spot update-event warning {symbol}: {exc}")
         except Exception as exc:
             stats["errors"] += 1
             print(f"spot scan warning {symbol}: {exc}")
@@ -772,23 +799,40 @@ def run_spot_scan() -> Dict[str, int]:
             if not chart:
                 stats["chart_fail"] = stats.get("chart_fail", 0) + 1
                 stats["last_error"] = f"chart None {cand.symbol}:{cand.trigger_timeframe}"
-            if chart and tf_channel_publish_confirmed(cand, chart=chart, chat_override=CHAT_ID_SPOT):
-                stats["published"] += 1
-                _spot_stamp(key, window)          # marker ONLY after success
-            elif chart:
-                stats["send_fail"] = stats.get("send_fail", 0) + 1
-                stats["last_error"] = f"publish returned 0 {cand.symbol} code={str((cand.metadata or {}).get('public_code') or cand.signal_id)[:28]}"
-                # round 16: a published signal CLOSES the ladder for its shape
-                try:
-                    from analysis.spot_engine import spot_alert_mark_confirmed
-                    _kind8 = str((cand.metadata or {}).get("pattern_type") or "")
-                    for _it8 in ladder:
-                        if (_it8.get("symbol") == cand.symbol
-                                and _it8.get("tf") == cand.trigger_timeframe
-                                and str(_it8.get("pattern") or "") == _kind8):
-                            spot_alert_mark_confirmed(str(_it8.get("sig") or ""))
-                except Exception:
-                    pass
+            if chart:
+                # r57 (Viva: «آپدیتهای شکست و تایید به اولین هشدار ریپلای
+                # بشه، بعدی با قبلی و همینجوری»): the spot confirm QUOTES its
+                # own first ladder warning; the returned mid becomes the
+                # chain head that every later spot update quotes.
+                _alert_kv = _spot_alert_mid_kv(
+                    cand.symbol, cand.trigger_timeframe,
+                    str((cand.metadata or {}).get("pattern_type") or ""))
+                _pub_mid = tf_channel_publish_confirmed(
+                    cand, chart=chart, chat_override=CHAT_ID_SPOT,
+                    reply_to=int(_alert_kv.get("mid") or 0))
+                if _pub_mid:
+                    stats["published"] += 1
+                    _spot_stamp(key, window)      # marker ONLY after success
+                    try:
+                        from bot.messages_v7 import (_public_code as _pc57,
+                                                     _spot_chain_get as _scg57,
+                                                     _spot_chain_set as _scs57)
+                        _code57 = _pc57(cand)
+                        _chain57 = _scg57(_code57)
+                        _chain57.update({"alert": int(_alert_kv.get("mid") or 0),
+                                         "confirm": int(_pub_mid),
+                                         "last": int(_pub_mid)})
+                        _scs57(_code57, _chain57)
+                    except Exception as _ch57_exc:
+                        print(f"spot chain store skipped: {_ch57_exc}")
+                else:
+                    stats["send_fail"] = stats.get("send_fail", 0) + 1
+                    stats["last_error"] = f"publish returned 0 {cand.symbol} code={str((cand.metadata or {}).get('public_code') or cand.signal_id)[:28]}"
+                    # round 16: a SEND FAILURE does not close the ladder for
+                    # its shape (only a real publish does, via the stamp)
+            if not chart:
+                # chart_fail: nothing was sent — keep the alert ladder warm
+                pass
         except Exception as exc:
             stats["errors"] += 1
             stats["last_error"] = f"{type(exc).__name__}: {exc}"[:160]

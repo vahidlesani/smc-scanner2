@@ -342,9 +342,13 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
         # RENDER-ONLY clone (Viva 09-17): painting tolerates 2-touch lines and
         # a wider residual than TRADE detection ever may — doctrine lines are
         # drawn for the eye here; entries keep the strict fitter.
+        # r57 (his shadow law + «بهترین انتخاب»): drawing anchors are candle
+        # BODIES (mega-wicks never bend a trend), and the winner is scored by
+        # touches² — a 5-touch major beats a 2-touch minor every time.
         cfg = _dc.replace(load_config(), pivot_left=3, pivot_right=3,
                           min_touches=2, touch_tolerance_atr=0.20,
-                          max_fit_residual_atr=0.45, require_alive=True)
+                          max_fit_residual_atr=0.45, require_alive=True,
+                          wick_policy="bodies")
         # R16 phase 3: fit in the space the chart is drawn in. A linear chart
         # keeps the linear fit (futures look untouched); a log chart fits in
         # log10 so the painted line lands exactly on its pivots.
@@ -371,7 +375,7 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                     prox = 1.0 / (1.0 + max(0.0, _d - 1.0))
             except Exception:
                 prox = 1.0
-            return touch * fit * (span ** 0.5) * prox
+            return (touch ** 2) * fit * (span ** 0.5) * prox  # r57: majors win
 
         def _best(side: str):
             """Best-fitting validated line across lookback windows —

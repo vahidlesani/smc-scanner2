@@ -1670,6 +1670,16 @@ def _clean_render_frame(df: pd.DataFrame, window: int = 150) -> pd.DataFrame:
     frame = frame.dropna(subset=["open", "high", "low", "close"])
     for col in ("open", "high", "low", "close"):
         frame = frame[pd.to_numeric(frame[col], errors="coerce") > 0]
+    # r57 (the WLD 3d blank chart): near-zero PLACEHOLDER candles (OHLC ≈
+    # 1e-9, real volume) pass the >0 test, render invisible and crush the
+    # axis. Any row 50× below the window's median close is dead data.
+    try:
+        _med57 = float(pd.Series(frame["close"]).astype(float).median() or 0.0)
+        if _med57 > 0:
+            frame = frame[pd.to_numeric(frame["close"], errors="coerce")
+                          > 0.02 * _med57]
+    except Exception:
+        pass
     # keep the renderer's contract: the frame is INDEXED by timestamp
     frame = frame.set_index("timestamp")
     frame.index = pd.DatetimeIndex(frame.index)
@@ -1746,6 +1756,12 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
     ylo = min(ylo, r_lo - 0.05 * cap)
     yhi = max(yhi, r_hi + 0.05 * cap)
     yr = max(yhi - ylo, 1e-12)
+    # r57 (Viva: «اگر ارتفاع کندلها بالاست در چارت کمی محور قیمت جمع بشه که
+    # کندلهای کوتاه‌تر بشن و رسم ترندها و الگوها قشنگ‌تر دیده بشه»): a tall
+    # candle block gets a TIGHT pad (less dead headroom → bigger pattern);
+    # quiet tapes keep the roomy pad.
+    if r_span >= 3.0 * _a:
+        return ylo - 0.015 * yr, yhi + 0.025 * yr
     return ylo - 0.05 * yr, yhi + 0.05 * yr
 
 
@@ -2145,15 +2161,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # در چارت … و لیبل VIVA-SPOT-MON در پیام‌های اسپات فراموش نشه»
         if str(md0.get("market") or "").upper() == "SPOT":
             notes.append(("VIVA-SPOT-MON · SPOT", CHART_THEME["muted"]))
-        ctx_for_log = md0.get("tl_context_tf")
-        use_log = (
-            getattr(SETTINGS, "chart_log_htf", True)
-            and _STYLE_NAME != "dark"
-            and (
-                (candidate.setup_code in ("TLBREAK", "TECHCLASSIC") and ctx_for_log in ("4h", "1d"))
-                or (candidate.trigger_timeframe == "1h" and float(frame["high"].max()) / max(float(frame["low"].min()), 1e-12) > 1.35)
-            )
-        )
+        # r57 (Viva: «چارت حتماً لگاریتمی باشه، در اسپات و فیوچرز»): the price
+        # axis is LOG on EVERY chart of BOTH systems — no TF/span conditions
+        # left. Percent-distance is what a trend/pattern eye needs.
+        use_log = True
         if use_log:
             try:
                 ax.set_yscale("log")
@@ -2302,18 +2313,19 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # drawn chip (FLIP over DEMAND POI, etc.) is rejected, so the chip
         # falls through to the staggered top-edge anchors instead.
         _anchored = []
+        # r57 (Viva: «روی کندلها اصلاً لیبل‌های نواحی نیاد — تنظیم هوشمند در
+        # جای خالی»): zone chips are DEFERRED to after the FINAL y-zoom — the
+        # old in-render placement measured clearance against the pre-zoom
+        # range, so the r28/r37 smart zoom could then drag candles UNDER an
+        # already-placed chip. Placement now runs against the final window:
+        # in-box → walk-up → SKY slot, always a candle-free band.
+        _deferred_chips: list = []
         for _it in _zone_items:
             _spot = _place_in_box(_it)
             if _spot:
-                ax.text(_spot[0], _spot[1], _it["text"], color=_it["color"],
-                        fontsize=7, va=_spot[2], ha="left", fontweight="bold",
-                        zorder=12,
-                        bbox={"boxstyle": "round,pad=0.26",
-                              "facecolor": CHART_THEME["panel"],
-                              "edgecolor": "none", "alpha": 1.0})
-                _chip_taken.append((float(_spot[0]),
-                                    float(_spot[0]) + 1.4 + 0.52 * len(_it["text"]),
-                                    float(_spot[1])))
+                _deferred_chips.append({"x": float(_spot[0]), "y": float(_spot[1]),
+                                        "text": _it["text"], "color": _it["color"],
+                                        "va": _spot[2], "alpha": 1.0})
             else:
                 _anchored.append(_it)
         # fallback: chip anchored to the box TOP edge at its left end
@@ -2338,12 +2350,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         break
                     _y9 += 0.035 * _yr9
             _prev9 = _y9
-            ax.text(_it["x0"] + 0.6, _y9, _it["text"], color=_it["color"],
-                    fontsize=7, va="bottom", ha="left", fontweight="bold",
-                    zorder=12,
-                    bbox={"boxstyle": "round,pad=0.26",
-                          "facecolor": CHART_THEME["panel"],
-                          "edgecolor": "none", "alpha": 0.78})
+            _deferred_chips.append({"x": float(_it["x0"]) + 0.6, "y": float(_y9),
+                                    "text": _it["text"], "color": _it["color"],
+                                    "va": "bottom", "alpha": 0.78})
         _chip_ys8 = []
         for _bl8 in ((candidate.metadata or {}).get("brooks_labels") or []):
             notes.append((str(_bl8), CHART_THEME["muted"]))
@@ -3315,6 +3324,45 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # ── FINAL pill materialization (Viva 09-23/24): with the y-limits now
         # FINAL, allocate the label column and draw every pill — then widen
         # the panel (bounded) until the whole column sits INSIDE the axes.
+        try:
+            fig.canvas.draw()
+            _lo2, _hi2 = ax.get_ylim()
+            _sp2 = max(_hi2 - _lo2, 1e-9)
+        except Exception:
+            _lo2, _hi2, _sp2 = 0.0, 1.0, 1.0
+        # ── r57: place every deferred zone chip against the FINAL window ──
+        try:
+            _yr2 = _sp2
+            _sky_k = 0
+            for _chip in _deferred_chips:
+                _cx = float(_chip["x"])
+                _wb2 = 1.4 + 0.52 * len(str(_chip["text"]))
+                _a2 = int(max(0, _cx))
+                _b2 = int(min(_n9, _cx + _wb2 + 1))
+                _cy = float(_chip["y"])
+                _placed2 = False
+                for _try2 in range(10):
+                    if _b2 > _a2:
+                        _band2 = (_hi9[_a2:_b2] >= _cy - 0.012 * _yr2) & \
+                                 (_lo9[_a2:_b2] <= _cy + 0.012 * _yr2)
+                        if np.any(_band2):
+                            _cy += 0.035 * _yr2
+                            continue
+                    _placed2 = True
+                    break
+                if not _placed2 or _cy > _hi2 - 0.02 * _yr2:
+                    # the SKY — the always-empty band under the top edge
+                    _cy = _hi2 - (0.035 + 0.045 * _sky_k) * _yr2
+                    _sky_k += 1
+                _cy = min(max(_cy, _lo2 + 0.02 * _yr2), _hi2 - 0.02 * _yr2)
+                ax.text(_cx, _cy, _chip["text"], color=_chip["color"],
+                        fontsize=7, va="bottom", ha="left", fontweight="bold",
+                        zorder=12,
+                        bbox={"boxstyle": "round,pad=0.26",
+                              "facecolor": CHART_THEME["panel"],
+                              "edgecolor": "none", "alpha": float(_chip["alpha"])})
+        except Exception as _chip_exc:
+            print(f"zone-chip placement warning: {_chip_exc}")
         try:
             fig.canvas.draw()
             _lo2, _hi2 = ax.get_ylim()
@@ -4464,8 +4512,20 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     # chain's live slot — post the new one first, delete the superseded
     # compact/update after; the 📚 button points at the permanent detailed
     # alert in the alerts channel. A fresh live chart rides along.
+    # r57 (Viva: «آپدیتهای شکست و تایید به اولین هشدار ریپلای بشه، بعدی با
+    # قبلی و همینجوری»): a SPOT chain has no main-channel anchors — it replies
+    # to ITS OWN newest message (confirm → updates → updates), stored in kv.
+    _spot_reply57 = 0
+    if str((candidate.metadata or {}).get("market") or "").upper() == "SPOT":
+        try:
+            _sc57 = _spot_chain_get(_public_code(candidate))
+            _spot_reply57 = int(_sc57.get("last") or _sc57.get("confirm")
+                                or _sc57.get("alert") or 0)
+        except Exception:
+            _spot_reply57 = 0
     mid = _pro_slot_post(candidate, caption, chart=chart, markup=markup, kind="update",
-                         reply_to=int(chain.get("anchor_pro") or chain.get("edu_short") or 0) or None)
+                         reply_to=(_spot_reply57 or
+                                   int(chain.get("anchor_pro") or chain.get("edu_short") or 0)) or None)
     if mid:
         chain = _setup_chain_get(candidate)
         chain["upd"] = int(mid)
@@ -4473,6 +4533,10 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
         chain["upd_sig"] = sig
         chain["upd_ts"] = _time.time()
         _setup_chain_set(candidate, chain)
+        if _spot_reply57:
+            _sc57 = _spot_chain_get(_public_code(candidate))
+            _sc57["last"] = int(mid)
+            _spot_chain_set(_public_code(candidate), _sc57)
     return bool(mid)
 def _approaching_ai_hint(candidate: SignalCandidate) -> str:
     md = candidate.metadata or {}
@@ -4722,13 +4786,21 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
         try:
             from analysis.onchain_free import market_snapshot, symbol_stats
             _lines35 = []
+            # r57 (Viva: «در اسپات هم تحلیل مولتی تایم فریم فعاله؟ اگر نیست
+            # باید بشه»): the 4h/1d structure verdict rides the spot card.
+            _mtf35 = [str(x) for x in ((candidate.metadata or {}).get("mtf_fa") or [])]
+            if _mtf35:
+                _onchain35 = ("\n━━━━━━━━━━━━━━\n🧭 <b>مولتی‌تایم‌فریم</b> — زمینهٔ ساختاری\n"
+                              + "\n".join(f"• {x}" for x in _mtf35[:2]) + "\n")
             _snap35 = market_snapshot() or {}
             _dex35 = _snap35.get("dex") or {}
             if _dex35.get("change_1d_pct") is not None:
                 _lines35.append(f"🌊 موج DEX ۲۴ساعته بازار: {_dex35['change_1d_pct']:+.1f}٪")
             _fng35 = _snap35.get("fear_greed") or {}
             if _fng35.get("value"):
-                _lbl35 = f" ({_fng35.get('label')})" if _fng35.get("label") else ""
+                # r57: fully Persian — «شاخص ترس و طمع: ۷۴ (طمع)» never "(Greed)"
+                _lbl35 = f" ({_fng35.get('label_fa') or _fng35.get('label') or ''})" \
+                    if (_fng35.get("label_fa") or _fng35.get("label")) else ""
                 _lines35.append(f"🧭 شاخص ترس و طمع: {_fng35['value']}{_lbl35}")
             _st35 = (symbol_stats([str(candidate.symbol)]) or {}).get(
                 str(candidate.symbol).upper()) or {}
@@ -4741,11 +4813,54 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
                     _bits35.append(f"تغییر ۲۴س {_chg35:+.1f}٪")
                 _lines35.append("📊 " + str(candidate.symbol) + ": " + " · ".join(_bits35))
             if _lines35:
-                _onchain35 = ("\n━━━━━━━━━━━━━━\n📡 <b>رفرنس آنچین</b> — فقط زمینه، هرگز شرطِ سیگنال نیست\n"
+                # r57: MTF block (may already sit in _onchain35) + onchain block
+                _onchain35 = (_onchain35
+                              + "\n━━━━━━━━━━━━━━\n📡 <b>رفرنس آنچین</b> — فقط زمینه، هرگز شرطِ سیگنال نیست\n"
                               + "\n".join(f"• {x}" for x in _lines35[:4]) + "\n\n")
         except Exception:
             _onchain35 = ""
     return head + "\n".join(rows) + "\n\n" + result_line + _onchain35 + "\n📌 <b>VIVAMON-Labs-Pro</b>"
+
+
+def send_spot_event(event: dict) -> bool:
+    """r57 (Viva: «الکی آپدیت نده — فقط شکست هر جهت، برخورد به هردو جهت،
+    بالارفتن حجم، دایرکشنِ پرحجم‌تر …»): the ONLY spot update post. Compact
+    event card, reply-chained to the lane's newest message."""
+    chat = str(CHAT_ID_SPOT or "")
+    if not chat:
+        return False
+    sym = str(event.get("symbol") or "")
+    tf = str(event.get("tf") or "").upper()
+    text = "\n".join([
+        f"🪙 <b>VIVA-SPOT-MON</b>",
+        f"⚡ <b>رویداد مهم اسپوت</b>",
+        f"<code>{_e(sym)}/USDT · {_e(tf)}</code>",
+        "",
+        _e(f"• {event.get('text_fa') or ''}"),
+        _e(f"• قیمت لحظه‌ای: {_price(float(event.get('close') or 0))}"),
+        "",
+        "⚠️ رویدادِ تحلیلی است، سیگنال ورود نیست — تأیید همان قانونِ همیشگی: کلوز معتبر.",
+        "📌 <b>VIVAMON-Labs-Pro</b>",
+    ])
+    try:
+        mid = 0
+        _reply = 0
+        try:
+            from database.bot_kv import get_json as _gj
+            _reply = int((_gj(f"spot_event_chain|{sym}|{tf}", {}) or {}).get("last") or 0)
+        except Exception:
+            _reply = 0
+        mid = int(send_message(text, chat, reply_to_message_id=_reply or None) or 0)
+        if mid:
+            try:
+                from database.bot_kv import set_json as _sj
+                _sj(f"spot_event_chain|{sym}|{tf}", {"last": mid})  # بعدی با قبلی
+            except Exception:
+                pass
+        return bool(mid)
+    except Exception as exc:
+        print(f"spot event send error {sym}: {exc}")
+        return False
 
 
 _SPOT_ALERT_TITLE = {
@@ -4809,13 +4924,25 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
               "📌 <b>VIVAMON-Labs-Pro</b>"]
     text = "\n".join(lines)
     try:
-        from bot.telegram_bot import send_message, send_photo
+        # r57: the ladder warning's mid is STORED — the future confirmation of
+        # this exact (symbol, tf, pattern) replies to it, and every later
+        # update replies to the newest message (the chain law).
+        mid = 0
         if chart:
-            return bool(send_photo(chart, text, chat))
-        return bool(send_message(text, chat))
+            mid = int(send_photo(chart, text, chat) or 0)
+        else:
+            mid = int(send_message(text, chat) or 0)
+        if mid:
+            try:
+                from database.bot_kv import set_json
+                set_json(_spot_alert_mid_key(sym, tf, str(item.get("pattern") or "")),
+                         {"mid": mid, "at": _time.time()})
+            except Exception:
+                pass
+        return mid
     except Exception as exc:
         print(f"spot alert send error {sym}: {exc}")
-        return False
+        return 0
 
 
 def _setup_announce_channel(setup_code: str) -> str:
@@ -4837,8 +4964,33 @@ def _setup_announce_channel(setup_code: str) -> str:
     return ""
 
 
+def _spot_alert_mid_key(symbol: str, tf: str, pattern: str) -> str:
+    return f"spot_alert_mid|{str(symbol or '').upper()}|{str(tf or '').lower()}|{str(pattern or '').upper()}"
+
+
+def _spot_chain_key(code: str) -> str:
+    return f"spot_chain|{str(code or '').upper()}"
+
+
+def _spot_chain_get(code: str) -> dict:
+    try:
+        from database.bot_kv import get_json
+        return get_json(_spot_chain_key(code), {}) or {}
+    except Exception:
+        return {}
+
+
+def _spot_chain_set(code: str, data: dict) -> None:
+    try:
+        from database.bot_kv import set_json
+        set_json(_spot_chain_key(code), data)
+    except Exception:
+        pass
+
+
 def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
-                                 chat_override: str = "", file_id: str = "") -> int:
+                                 chat_override: str = "", file_id: str = "",
+                                 reply_to: int = 0) -> int:
     """Post the confirmed signal into ITS SETUP's announce channel.
 
     r53: the channel is chosen by SETUP ONLY (never by trigger TF — the old
@@ -4877,7 +5029,11 @@ def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
         _ph, mid = _post_chart_then_text(
             chart, text, chat,
             label=_chart_label(symbol=candidate.symbol, code=code, title_fa="تأیید سیگنال"),
-            file_id=file_id)
+            file_id=file_id,
+            # r57 (Viva: «آپدیتهای شکست و تایید به اولین هشدار ریپلای بشه،
+            # بعدی با قبلی و همینجوری»): the SPOT confirm quotes its own
+            # first warning; futures keep their existing chains.
+            reply_to=int(reply_to or 0) or None)
         if not mid:
             print(f"TF-channel publish failed {code} → {chat}")
             return 0
