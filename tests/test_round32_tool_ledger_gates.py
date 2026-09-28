@@ -73,7 +73,7 @@ def test_engine_target_clamp_and_one_candle_floor_in_source():
     src = open(f"{REPO}/analysis/pattern_engine.py", encoding="utf-8").read()
     assert "target = max(target, live + 1.5 * atr_p)" in src
     assert "height = max(height, 2.0 * _lr32)" in src
-    assert "_vr32 < 1.3:" in src and "startswith(\"CHANNEL\")" in src
+    assert "_vr32 < 1.3 and not _counter54:" in src and "startswith(\"CHANNEL\")" in src  # r54: counter close-law bypasses the volume gate
 
 
 def test_engine_math_import_present():

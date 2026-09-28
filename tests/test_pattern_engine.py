@@ -79,11 +79,14 @@ def test_scan_edges_finds_break_on_descending_triangle():
     pattern, trigger = _wedge_frames()
     events = m.scan_edges(pattern, trigger, "4h")
     assert events, "expected at least one edge event on a validated pattern"
-    violated = [e for e in events if e.get("warn_only")]
-    assert violated and violated[0]["state"] == m.STATE_VIOLATED
-    assert violated[0]["side"] == "upper" and violated[0]["direction"] is None
-    assert "هیچ سیگنالی" in (violated[0].get("violation_fa") or "")
-    assert not [e for e in events if e["side"] == "upper" and e.get("direction")]
+    # r54: the upper CLOSE-cross is a confirmable COUNTER-DOCTRINE LONG (the
+    # descending triangle's nature is SHORT); the warn-only path is now only
+    # for live-only crosses.
+    upper_ev = [e for e in events if e["side"] == "upper"]
+    assert upper_ev and upper_ev[0].get("direction") == "LONG"
+    assert upper_ev[0].get("counter_doctrine") is True
+    assert upper_ev[0].get("doctrine_direction") == "SHORT"
+    assert not [e for e in events if e.get("warn_only")]
     # the nature side: lower-edge break + close → SHORT only
     line = float(_pattern_line(pattern, "LOWER").price_at(len(pattern) - 1))
     atr_p = float((pattern["high"] - pattern["low"]).tail(14).mean())
@@ -434,6 +437,10 @@ def test_crossed_line_never_fades():
     assert up, "upper-edge event expected on the crossed line"
     assert up[0]["state"] != m.STATE_FADE
     assert "fade" not in up[0]
+    # r54: the crossed upper line of a one-nature pattern is now the counter
+    # LONG break edge — never a fade, and its close-cross is confirmable.
+    if up[0].get("counter_doctrine"):
+        assert up[0].get("direction") == "LONG"
 
 
 def test_choose_primary_keeps_nearest_edge():

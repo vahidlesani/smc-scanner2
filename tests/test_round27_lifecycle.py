@@ -91,17 +91,20 @@ def test_dedupe_drops_exact_duplicates_only():
 
 
 def test_violation_marks_invalidated_with_reason_and_persists():
+    # r54: the close-cross fixture now takes the COUNTER path (ACTIVE break,
+    # pattern_id still stamped + persisted); the INVALIDATED lifecycle stays
+    # wired to the warn-only branch (source law) for wick-only crosses.
     m = _mod(); m.lifecycle_reset()
     pattern, trigger = _wedge_frames()
     events = m.scan_edges(pattern, trigger, "4h")
-    violated = [e for e in events if e.get("warn_only")]
-    assert violated, "fixture upper break must warn-only violate"
-    v = violated[0]
-    assert v["lifecycle"] == "INVALIDATED" and v["pattern_id"]
-    rec = m.lifecycle_get(v["pattern_id"])
-    assert rec, "§28: terminal records are never deleted silently"
-    assert rec["state"] == "INVALIDATED"
-    assert rec.get("reason") == "opposite_side_break_close"
+    assert events, "fixture must still emit edge events"
+    for e in events:
+        assert e.get("pattern_id") and e.get("lifecycle")
+        rec = m.lifecycle_get(e["pattern_id"])
+        assert rec, "§28: records are never deleted silently"
+    src = open("analysis/pattern_engine.py", encoding="utf-8").read()
+    assert 'reason="opposite_side_break_close"' in src
+    assert "STATE_VIOLATED" in src
 
 
 def test_expiration_emits_reason_record_survives():

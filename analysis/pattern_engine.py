@@ -85,6 +85,70 @@ _EDGE_RULES.update({
     "CHANNEL_ASCENDING": {"upper": "LONG"},
     "CHANNEL_DESCENDING": {"lower": "SHORT"},
 })
+
+# r54 (Viva 09-28, LIT falling-wedge short — verbatim: «این الگو ذاتا صعودی
+# است و با بریک ضلع بالا تایید میشه … اگر نزولی قراره بده اون هم با بریکِ
+# ترند پایین و کلوز یا سیستم توهم باید تایید بشه»): every ONE-NATURE pattern
+# carries its DOCTRINE direction; a trade AGAINST it is a counter-doctrine
+# trade and exists only through (a) the opposite side's break + valid close,
+# (b) TOHOM on that same edge, or (c) explicit supporting judgment — which
+# MUST be stated in the confirmation message.
+_DOCTRINE_DIRECTION = {}
+for _p54, _sides54 in _EDGE_RULES.items():
+    _dirs54 = {str(_d).upper() for _d in _sides54.values() if _d}
+    if len(_dirs54) == 1:
+        _DOCTRINE_DIRECTION[str(_p54).upper()] = _dirs54.pop()
+
+
+def _counter_support_factors(bundle, direction: str, trigger_df):
+    """The (c) path's evidence — multi-TF structure / momentum pressure in the
+    trade's own direction. Empty list = NO supporting judgment exists."""
+    factors = []
+    want = "BULLISH" if str(direction).upper() == "LONG" else "BEARISH"
+    fa = "صعودی" if want == "BULLISH" else "نزولی"
+    try:
+        from analysis.indicators import structure_bias as _sb54
+    except Exception:
+        _sb54 = None
+    try:
+        for tf in ("4h", "1d"):
+            _f = bundle.get(tf) if bundle is not None else None
+            if _f is None or len(_f) < 60:
+                continue
+            _b = (_sb54 or structure_bias)(_f.reset_index(drop=True)) if False else _sb54(_f.reset_index(drop=True))
+            if str(_b.get("bias") or "").upper() == want:
+                factors.append(f"ساختار سوئینگِ تایم‌فریم بالاتر ({tf}) {fa} است و جهتِ این معامله را تأیید می‌کند")
+                break
+    except Exception:
+        pass
+    try:
+        d = trigger_df.tail(5).reset_index(drop=True)
+        sign = 1.0 if str(direction).upper() == "LONG" else -1.0
+        atr = float((d["high"] - d["low"]).tail(14).mean() or 0.0) or 1e-12
+        press = sum(sign * (float(r["close"]) - float(r["open"])) for _, r in d.iterrows())
+        if press / atr >= 1.5:
+            factors.append("فشارِ بدنه‌ای کندل‌های اخیرِ تایم تریگر هم‌جهتِ این معامله است ( displacement تأییدی)")
+    except Exception:
+        pass
+    return factors
+
+
+def _counter_doctrine_gate(pattern: str, direction: str, is_break: bool,
+                           bundle, trigger_df):
+    """Pure r54 gate: returns (allowed, factors, doctrine_direction).
+
+    * counter BREAK (the opposite side closed through its line): allowed by
+      the (a)/(b) paths — the one-close law / TOHOM confirm on that edge.
+    * counter FADE (rejection-based, no break): allowed ONLY with at least
+      one supporting factor — the (c) path — which the confirm message must
+      display; otherwise the candidate is never minted."""
+    doctrine = _DOCTRINE_DIRECTION.get(str(pattern or "").upper())
+    if not doctrine or str(direction).upper() == doctrine:
+        return True, [], doctrine
+    factors = _counter_support_factors(bundle, direction, trigger_df)
+    if is_break:
+        return True, factors, doctrine
+    return bool(factors), factors, doctrine
 # patterns whose ONLY valid break is their nature side; the other side warns
 def alert_lineage_key(setup: str, symbol: str, trigger_tf: str, pattern_tf: str,
                       side, direction: str, points, is_break: bool = True) -> str:
@@ -655,35 +719,48 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         if not _line_alive(line, n):
             continue
         direction = rules.get(side)
+        _counter54 = False
         if not direction:
-            # Viva 09-24 («هم برخورد هم بعد از کلوز تنها باید هشدار و
-            # توضیحاتش بیاد اما نباید سیگنال صعودی بده یا حتی نزولی»): the
-            # wrong-side break of a ONE-NATURE pattern emits a WARN-ONLY
-            # violation event — never a candidate.
+            # Viva 09-24: the wrong-side break of a ONE-NATURE pattern was
+            # warn-only. r54 (his 09-28 law, superseding): a wrong-side CLOSE
+            # break IS the counter-doctrine confirmation («اگر نزولی قراره
+            # بده اون هم با بریکِ ترند پایین و کلوز یا توهم باید تایید بشه»)
+            # — it now runs the NORMAL break machinery as a counter candidate;
+            # a live-only cross (wick, no close) stays a WARN-ONLY event.
             if str(pattern).upper() not in _ONE_NATURE:
                 continue
             _ln9 = float(line.price_at(n))
             _cross9 = (live > _ln9) if side == "upper" else (live < _ln9)
             if not _cross9:
                 continue
-            events.append({
-                "pattern": pattern, "pattern_fa": PATTERN_FA.get(pattern, pattern),
-                "side": side, "direction": None, "state": STATE_VIOLATED,
-                "warn_only": True, "distance_atr": round(abs(live - _ln9) / max(atr_p, 1e-12), 3),
-                "break_edge": "UPPER" if side == "upper" else "LOWER",
-                "break_direction": "UP" if side == "upper" else "DOWN",
-                "line_price": _ln9, "live": live, "pattern_tf": pattern_tf,
-                "ref_ts": str(trigger_df["timestamp"].iloc[-1]),
-                "approach_direction": approach_direction,
-                "pattern_role": _role9, "role_confidence": _rolec9,
-                "legality": "WARNING_ONLY",
-                "event_id": f"{side}|{pattern}|{STATE_VIOLATED}|{ev_ref9}",
-                "violation_fa": (
-                    f"الگوی {PATTERN_FA.get(pattern, pattern)} در تایم‌فریم {pattern_tf} "
-                    f"نقض شد — بریک و کلوز از ضلعِ {'بالا' if side == 'upper' else 'پایین'} "
-                    "در خلافِ ماهیت الگو است. هیچ سیگنالی تأیید نمی‌شود؛ فقط هشدار."),
-            })
-            continue
+            _cc54 = (last_close > _ln9) if side == "upper" else (last_close < _ln9)
+            if not _cc54:
+                events.append({
+                    "pattern": pattern, "pattern_fa": PATTERN_FA.get(pattern, pattern),
+                    "side": side, "direction": None, "state": STATE_VIOLATED,
+                    "warn_only": True, "distance_atr": round(abs(live - _ln9) / max(atr_p, 1e-12), 3),
+                    "break_edge": "UPPER" if side == "upper" else "LOWER",
+                    "break_direction": "UP" if side == "upper" else "DOWN",
+                    "line_price": _ln9, "live": live, "pattern_tf": pattern_tf,
+                    "ref_ts": str(trigger_df["timestamp"].iloc[-1]),
+                    "approach_direction": approach_direction,
+                    "pattern_role": _role9, "role_confidence": _rolec9,
+                    "legality": "WARNING_ONLY",
+                    "event_id": f"{side}|{pattern}|{STATE_VIOLATED}|{ev_ref9}",
+                    "violation_fa": (
+                        f"الگوی {PATTERN_FA.get(pattern, pattern)} در تایم‌فریم {pattern_tf} "
+                        f"نقض شد — بریک و کلوز از ضلعِ {'بالا' if side == 'upper' else 'پایین'} "
+                        "در خلافِ ماهیت الگو است. هیچ سیگنالی تأیید نمی‌شود؛ فقط هشدار."),
+                })
+                continue
+            # r54: a wrong-side CLOSE-cross falls through to the normal break
+            # machinery below with the counter direction (SHORT via the lower
+            # line of a falling wedge / LONG via the upper line of a
+            # descending triangle).
+        if direction is None:
+            # close-cross confirmed above — promote to the counter direction
+            _counter54 = True
+            direction = "LONG" if side == "upper" else "SHORT"
         line_now = float(line.price_at(n))
         if side == "upper":
             dist = (line_now - live) / atr_p
@@ -771,8 +848,8 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                 _vr32 = (float(_v32.iloc[-1]) / _vm32) if _vm32 > 0 else 0.0
             except Exception:
                 _vr32 = 0.0
-            if _vr32 < 1.3:
-                continue
+            if _vr32 < 1.3 and not _counter54:
+                continue   # volume gate for LEGAL breaks; r54 counter close-law is its own authority
         pct = (target - live) / live * 100.0 if live else 0.0
         ev = {
             "pattern": pattern, "pattern_fa": PATTERN_FA.get(pattern, pattern),
@@ -789,6 +866,9 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             "compression": comp, "pattern_tf": pattern_tf,
             "approach_direction": approach_direction,
             "pattern_role": _role9, "role_confidence": _rolec9,
+            "counter_doctrine": bool(_counter54),
+            "doctrine_direction": (_DOCTRINE_DIRECTION.get(str(pattern).upper())
+                                   if _counter54 else None),
             "legality": "LEGAL",
             "fresh_break_recognition": bool(_fresh_bk31),
             "bars_since_break": (n - int(_bk31)) if _bk31 is not None else None,
@@ -808,7 +888,7 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             ev["structure_score"] = min(10, int(ev.get("structure_score") or 0) + 1)
             ev["support_note_fa"] = (f"نرخ دفع تاریخِ این خط {int(float(react['reject_rate']) * 100)}٪ "
                                      "— کمک‌تأییدِ مثبت (نه شرط قطعی)")
-        if fade_enabled and is_parallel and react["touches"] >= 3 \
+        if fade_enabled and not _counter54 and is_parallel and react["touches"] >= 3 \
                 and abs(dist) <= 0.35 and (not crossed or rejected_now):
             fdir = "SHORT" if side == "upper" else "LONG"
             opp = lower if side == "upper" else upper
@@ -1026,6 +1106,19 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     is_break = ev["state"] == STATE_BREAK
     fade = ev.get("fade") or {}
     direction = (ev["direction"] if is_break else str(fade.get("direction") or ev["direction"])).upper()
+    # ── r54 DOCTRINE GATE (Viva 09-28, LIT falling-wedge short): a trade
+    # against the pattern's own nature exists only via the opposite-side
+    # close-break / TOHOM, or with stated supporting judgment; a counter
+    # FADE with zero support is never minted.
+    try:
+        _ok54, _factors54, _doc54 = _counter_doctrine_gate(
+            str(ev.get("pattern") or ""), direction, bool(is_break), bundle, trig)
+    except Exception as _g54_exc:
+        print(f"counter-gate skipped {getattr(bundle, 'symbol', '?')}: {_g54_exc}")
+        _ok54, _factors54, _doc54 = True, [], None
+    if not _ok54:
+        return None
+    _counter54 = bool(_doc54 and str(direction).upper() != str(_doc54).upper())
     atr_p = _atr(pat)
     atr_t = _atr(trig) or atr_p
     if atr_p <= 0 or atr_t <= 0:
@@ -1237,6 +1330,9 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         "role_confidence": ev.get("role_confidence"),
         "pattern_id": ev.get("pattern_id"),
         "lifecycle": ev.get("lifecycle"),
+        "counter_doctrine": _counter54,
+        "doctrine_direction": (_doc54 if _counter54 else None),
+        "direction_why_fa": (_factors54 if _counter54 else []),
         "viva_structure_score": float(ev.get("structure_score") or 0.0),
         "viva_final_score": raw, "viva_state": stage + "_CLOSED",
         "tl_context_tf": structure_tf, "tl_line": line_now,

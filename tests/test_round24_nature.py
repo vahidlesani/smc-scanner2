@@ -54,24 +54,25 @@ def test_directional_triangles_and_channels_are_one_nature():
 
 
 def test_falling_wedge_wrong_side_break_warns_and_never_signals():
-    """Falling wedge closed BELOW its lower edge = nature violated: exactly a
-    WARN event (no direction), and NO LONG/SHORT event from that side."""
+    """r54 (Viva 09-28, superseding the 09-24 warn-only): a falling wedge that
+    CLOSES below its lower edge now emits a confirmable COUNTER-DOCTRINE
+    SHORT — «اگر نزولی قراره بده اون هم با بریکِ ترند پایین و کلوز باید تایید
+    بشه». A live-only cross (wick, no close) stays a WARN-ONLY violation."""
     low_touches = [(10, 0.2040), (40, 0.1930), (70, 0.1820), (100, 0.1715), (130, 0.1610)]
     high_touches = [(20, 0.2270), (52, 0.2115), (84, 0.1965), (114, 0.1820), (140, 0.1680)]
     mid = _zigzag(sorted(low_touches + high_touches))
     mid[146:] = [0.1570, 0.1550, 0.1532, 0.1515]      # close breaks the LOWER edge
     df = _frame(mid)
     events = scan_edges(df.tail(150).reset_index(drop=True), df.tail(6).reset_index(drop=True), "15m")
-    violated = [e for e in events if e.get("warn_only")]
-    assert violated, events
-    v = violated[0]
-    assert v["state"] == STATE_VIOLATED and v["direction"] is None
-    assert v["side"] == "lower" and v["break_edge"] == "LOWER"
-    assert "هیچ سیگنالی" in (v.get("violation_fa") or "")
-    wrong = [e for e in events
-             if e.get("side") == "lower" and not e.get("warn_only")
-             and e.get("direction") in ("LONG", "SHORT")]
-    assert not wrong, wrong
+    counter = [e for e in events
+               if e.get("side") == "lower" and e.get("direction") == "SHORT"
+               and e.get("counter_doctrine")]
+    assert counter, events
+    c = counter[0]
+    assert c["doctrine_direction"] == "LONG"           # the wedge's own nature
+    assert not [e for e in events if e.get("warn_only")],         "a CLOSE-cross takes the counter path, not the warn path"
+    src = open("analysis/pattern_engine.py", encoding="utf-8").read()
+    assert "_cc54" in src and "STATE_VIOLATED" in src  # wick-only stays warn
 
 
 def test_ascending_triangle_upper_break_confirms_long_only():

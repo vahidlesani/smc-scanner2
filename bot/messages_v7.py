@@ -3011,6 +3011,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         # valid lines («سایه آبی پشتش») is GONE — lines only.
                     except Exception:
                         pass
+                _fits9 = {}
                 for key, color, label in (("viva_upper_points", CHART_THEME["supply"], "VALID UPPER LINE"), ("viva_lower_points", CHART_THEME["demand"], "VALID LOWER LINE")):
                     points = md.get(key) or []
                     if len(points) < 2:
@@ -3025,6 +3026,24 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         continue
                     # Phase-3: log-space fit when the log axis is live & span>3%
                     _mode9, slope, intercept = _pivot_line_fit(ax, frame, xs, ys)
+                    _fits9[key] = (xs, ys, _mode9, slope, intercept, color, label)
+                # r54 (his «ترند بالا و پایین دو تا روی هم افتاده»): a converging
+                # pair must END AT ITS APEX — projecting both dashed edges to
+                # the canvas edge paints collapsed overlapping lines across the
+                # live candles (LIT 09-28). Converging lines stop where they
+                # meet; diverging pairs keep the full canvas.
+                _apex9 = None
+                if "viva_upper_points" in _fits9 and "viva_lower_points" in _fits9:
+                    _u9, _l9 = _fits9["viva_upper_points"], _fits9["viva_lower_points"]
+                    if _u9[2] == _l9[2] and abs(_u9[3] - _l9[3]) > 1e-12:
+                        try:
+                            _ax9 = (_l9[4] - _u9[4]) / (_u9[3] - _l9[3])
+                            _canvas9 = count + future - .5
+                            if max(0.0, min(_u9[0][0], _l9[0][0])) < _ax9 < _canvas9:
+                                _apex9 = _ax9
+                        except Exception:
+                            _apex9 = None
+                for key, (xs, ys, _mode9, slope, intercept, color, label) in _fits9.items():
                     def _fy9(_x9, _s=slope, _b=intercept, _m=_mode9):
                         return 10 ** (_s * _x9 + _b) if _m == "log" else _s * _x9 + _b
                     def _fx9(_p9, _s=slope, _b=intercept, _m=_mode9):
@@ -3032,8 +3051,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # Viva 2026-09-11 (v2, the «هرچی میگم انجام نمیشه» fix): the
                     # edge spans the WHOLE frame — from the first bar where it
                     # is inside the visible price range (major-pivot start),
-                    # solid through LIVE, dashed past it to the canvas edge.
+                    # solid through LIVE, dashed past it to the canvas edge
+                    # (r54: or to the APEX of the converging pair).
                     x_edge = count + future - .5
+                    if _apex9 is not None:
+                        x_edge = min(x_edge, max(0.0, _apex9))
                     _pmin = float(frame["low"].min())
                     _pmax = float(frame["high"].max())
                     x0 = min(xs)
@@ -4965,6 +4987,15 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         # ladder is a PRICE PATH (5 parts), not a ratio.
         f"⭐ امتیاز ساختاری: {candidate.score}/10",
     ]
+    # r54 (Viva 09-28, verbatim: «عوامل دیگه که باید بگه و توضیح بده در پیام
+    # تایید»): a counter-doctrine trade MUST show its supporting judgment.
+    _md54c = candidate.metadata or {}
+    if _md54c.get("counter_doctrine"):
+        rows.append("🧭 چرا این جهت (خلافِ ماهیت الگو):")
+        _why54 = [str(x) for x in (_md54c.get("direction_why_fa") or [])]
+        rows.extend(f"• {_e(w)}" for w in _why54)
+        if not _why54:
+            rows.append("• تأیید روی شکستِ ضلعِ مقابلِ الگو با کلوزِ معتبر (قانون یک‌کلوز/توهم)")
     rows.append(f"🤖 <b>نظر AI:</b> {_e(advisory or _ai_rich_note(candidate))}")
     if mm:
         # Viva 09-20: the ACTIVE management profile is named in the message so
