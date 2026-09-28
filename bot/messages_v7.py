@@ -160,11 +160,29 @@ def _zone_family(poi: str) -> str:
     p = str(poi or "").upper()
     if "FLAG" in p or "LIMIT" in p or "DIAMOND" in p:
         return "FLAG"
-    if "FLIP" in p:
-        return "FLIP"
     if "ORDER_BLOCK" in p or p.startswith("OB"):
         return "OB"
+    if "FVG" in p or "BREAKER" in p:
+        return "FVG"
+    if "FLIP" in p:
+        return "FLIP"
     return "DEF"
+
+
+# r59 (Viva chart dictation 09-28): classic PATTERNS far from the live price
+# paint BLUE; trends and near-price patterns keep red-above/green-below.
+# Zone boxes AWAY from the price become faint family guides — red shades
+# above the price, green shades below — one ordered shade per kind
+# (SR → FVG → OB → FLAG), fill only (NO border), name parked in the
+# right-hand notes margin, never over the candles. CHART_CANDLE_STYLE=
+# cryptocove previews the green/red candle bodies (default stays ink until
+# Viva approves).
+_PATTERN_BLUE = "#2962FF" if _STYLE_NAME == "light" else "#4D8DFF"
+_ZONE_SHADES = {
+    "above": {"SR": "#E0A3A3", "FVG": "#D47E7E", "OB": "#C25555", "FLAG": "#A83B3B"},
+    "below": {"SR": "#A3CBA8", "FVG": "#7CBB89", "OB": "#57A46B", "FLAG": "#3A8B55"},
+}
+_CANDLE_STYLE = (os.getenv("CHART_CANDLE_STYLE", "ink") or "ink").lower()
 
 
 CHART_THEME = {
@@ -1936,7 +1954,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         pass
         except Exception:
             pass
-        if _STYLE_NAME == "dark":
+        if _CANDLE_STYLE == "cryptocove":
+            # r59 PREVIEW only — Viva judges before it becomes the default.
+            market_colors = mpf.make_marketcolors(
+                up="#089981", down="#F23645",
+                edge={"up": "#089981", "down": "#F23645"},
+                wick={"up": "#089981", "down": "#F23645"},
+                volume={"up": "#9BD9C6", "down": "#F3B3B8"},
+            )
+        elif _STYLE_NAME == "dark":
             market_colors = mpf.make_marketcolors(
                 up=CHART_THEME["bull"], down=CHART_THEME["bear"],
                 edge="inherit", wick="inherit", volume="in",
@@ -2294,20 +2320,37 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             else:
                 _x0 = max(zone_start, int(_z.get("x0", zone_start)) - 2)
             _bias8 = _z.get("bias") or ("DEMAND" if _dir_key == "LONG" else "SUPPLY")
-            _f8, _t8 = ZONE_PALETTE[("SR", _bias8 if _bias8 in ("SUPPLY", "DEMAND")
-                                     else ("DEMAND" if _dir_key == "LONG" else "SUPPLY"))]
             _fam8 = _zone_family(_z.get("kind", ""))
-            if (_fam8, _dir_key) in ZONE_PALETTE and _fam8 != "DEF":
-                _f8, _t8 = ZONE_PALETTE[(_fam8, _dir_key)]
-            ax.fill_between([_x0, zone_end], float(_z["bottom"]),
-                            float(_z["top"]), color=_f8,
-                            alpha=0.10 if _clean_zone_view else 0.18,
+            _zb9, _zt9 = float(_z["bottom"]), float(_z["top"])
+            _cl9z = float(frame["close"].iloc[-1])
+            _away9 = (_zb9 > _cl9z) or (_zt9 < _cl9z)
+            if _away9:
+                # r59: a zone ABOVE or BELOW the price is a faint guide —
+                # red family above, green family below, one shade per kind;
+                # NO border (fill only) and the NAME lives in the right-hand
+                # notes margin like a legend, never on the candles.
+                _side9 = "above" if _zb9 > _cl9z else "below"
+                _f8 = _t8 = _ZONE_SHADES[_side9].get(_fam8, _ZONE_SHADES[_side9]["SR"])
+            else:
+                _f8, _t8 = ZONE_PALETTE[("SR", _bias8 if _bias8 in ("SUPPLY", "DEMAND")
+                                         else ("DEMAND" if _dir_key == "LONG" else "SUPPLY"))]
+                if (_fam8, _dir_key) in ZONE_PALETTE and _fam8 != "DEF":
+                    _f8, _t8 = ZONE_PALETTE[(_fam8, _dir_key)]
+            ax.fill_between([_x0, zone_end], _zb9, _zt9, color=_f8,
+                            alpha=0.10 if _clean_zone_view else 0.16,
                             linewidth=0, zorder=1)
-            _zone_items.append({"x0": float(_x0), "x1": float(zone_end),
-                                "bottom": float(_z["bottom"]),
-                                "top": float(_z["top"]),
-                                "text": str(_z.get("kind") or ""),
-                                "color": _t8})
+            if _away9:
+                ax.text(count + future * 0.45, 0.5 * (_zb9 + _zt9),
+                        str(_z.get("kind") or ""), color=_t8, fontsize=6.5,
+                        va="center", ha="center", fontweight="bold", zorder=12,
+                        bbox={"boxstyle": "round,pad=0.24",
+                              "facecolor": CHART_THEME["panel"],
+                              "edgecolor": "none", "alpha": 0.82})
+            else:
+                _zone_items.append({"x0": float(_x0), "x1": float(zone_end),
+                                    "bottom": _zb9, "top": _zt9,
+                                    "text": str(_z.get("kind") or ""),
+                                    "color": _t8})
         _yr9 = max(float(frame["high"].max()) - float(frame["low"].min()), 1e-9)
         _hi9 = frame["high"].to_numpy(float)
         _lo9 = frame["low"].to_numpy(float)
@@ -2400,19 +2443,30 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             if _pat.get("type") == "RANGE":
                 # anchored to its oldest tested pivot when it carries a time
                 _range_start = int(_anchored_x(_pat.get("ts0"), zone_start))
+                # r59: NEAR-price range = «بالا قرمز، پایین سبز» (top edge
+                # red, bottom edge green); a FAR range box paints BLUE as
+                # every classic pattern does.
+                _atrR9 = float((frame["high"] - frame["low"]).tail(14).mean())
+                _clR9 = float(frame["close"].iloc[-1])
+                _rgfar9 = bool(_atrR9 > 0 and min(
+                    abs(_clR9 - float(_pat["lo"])),
+                    abs(_clR9 - float(_pat["hi"]))) > 2.0 * _atrR9)
+                if _rgfar9:
+                    _cTop9 = _cBot9 = _PATTERN_BLUE
+                else:
+                    _cTop9, _cBot9 = CHART_THEME["supply"], CHART_THEME["demand"]
                 ax.fill_between([_range_start, zone_end], float(_pat["lo"]),
-                                float(_pat["hi"]), color=CHART_THEME["muted"],
-                                alpha=0.07, linewidth=0, zorder=1)
-                # CryptoCove reference (his 08-14 green-bg charts): a range
-                # box carries a thin solid border AND a dashed midline.
-                ax.plot([_range_start, _range_start, zone_end, zone_end, _range_start],
-                        [float(_pat["lo"]), float(_pat["hi"]), float(_pat["hi"]),
-                         float(_pat["lo"]), float(_pat["lo"])],
-                        color=CHART_THEME["muted"], linewidth=0.7, alpha=0.5,
-                        zorder=2)
+                                float(_pat["hi"]), color=_cTop9,
+                                alpha=0.05, linewidth=0, zorder=1)
+                ax.plot([_range_start, zone_end], [float(_pat["hi"])] * 2,
+                        color=_cTop9, linewidth=1.3 if _rgfar9 else 0.9,
+                        alpha=0.8, zorder=2)
+                ax.plot([_range_start, zone_end], [float(_pat["lo"])] * 2,
+                        color=_cBot9, linewidth=1.3 if _rgfar9 else 0.9,
+                        alpha=0.8, zorder=2)
                 _mid8 = (float(_pat["lo"]) + float(_pat["hi"])) / 2
                 ax.hlines(_mid8, _range_start, zone_end,
-                          colors=CHART_THEME["muted"], linestyles="--",
+                          colors=_cTop9, linestyles="--",
                           linewidth=0.7, alpha=0.55, zorder=2)
                 _rg = _place_in_box({"x0": float(_range_start),
                                      "x1": float(zone_end),
@@ -2478,14 +2532,28 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         _ln8["log_fit"] = False
                 _lns.append(_ln8)
             _atr9 = float((frame["high"] - frame["low"]).tail(14).mean())
+            # r59 (Viva: «همه الگوها مثل کانالها .. وج . مستطیل . مثلث .
+            # تریدینگ رنج با رنگ آبی رسم بشه و ترندها و الگوهای نزدیکِ قیمت با
+            # همین روش فعلی بالا قرمز و پایین سبز») — a classic shape whose
+            # edges both sit FAR from the live price (>2×ATR) is BLUE; the
+            # near-price reference structure stays red-above/green-below.
+            _pblue9 = False
+            if str(_pat.get("type") or "").upper() not in ("TRENDLINE", "NONE", "RANGE"):
+                try:
+                    _cl9 = float(frame["close"].iloc[-1])
+                    _d9 = [abs(_cl9 - _line_y_cal(_ln, int(count))) for _ln in _lns]
+                    _pblue9 = bool(_atr9 > 0 and _d9 and min(_d9) > 2.0 * _atr9)
+                except Exception:
+                    _pblue9 = False
             _flat8 = []
             _brk8 = []
             for _ln in _lns:
                 _sl, _ic = float(_ln["slope"]), float(_ln["intercept"])
                 _xa = max(0.0, float(_ln.get("x0", 0)))
                 _xe = count + future - 0.5
-                _col8 = CHART_THEME["supply"] if _ln.get("side") == "HIGH" \
-                    else CHART_THEME["demand"]
+                _col8 = _PATTERN_BLUE if _pblue9 else (
+                    CHART_THEME["supply"] if _ln.get("side") == "HIGH"
+                    else CHART_THEME["demand"])
                 # Viva 09-18 (his AAVE ruling): a FLAT «trendline» is not a
                 # trend — it is the supply/demand box of the base it came
                 # from, so paint it as a zone band instead of a line.
@@ -2699,13 +2767,29 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 if xb > xa:
                     slope = (pb - pa) / (xb - xa)
                     x_end = count + future - 0.5
-                    ax.plot([xa, x_end], [pa, pa + slope * (x_end - xa)],
+                    # r59: solid→LIVE, dashed→canvas (the same law every
+                    # trend/pattern obeys; was solid into the margin).
+                    _xlv9 = min(float(count), x_end)
+                    ax.plot([xa, _xlv9], [pa, pa + slope * (_xlv9 - xa)],
                             color=CHART_THEME["trend"], linewidth=1.65, alpha=0.92, zorder=8,
                             solid_capstyle="round", antialiased=True)
+                    if count < x_end - 0.6:
+                        ax.plot([_xlv9, x_end],
+                                [pa + slope * (_xlv9 - xa), pa + slope * (x_end - xa)],
+                                color=CHART_THEME["trend"], linewidth=1.15, alpha=0.7,
+                                zorder=7, linestyle=(0, (6, 4)), solid_capstyle="butt",
+                                antialiased=True)
                     p_anc = float(md["tl_anchor_price"])
-                    ax.plot([xanc, x_end], [p_anc, p_anc + slope * (x_end - xanc)],
+                    _xla9 = min(float(count), max(xanc, x_end))
+                    ax.plot([xanc, _xla9], [p_anc, p_anc + slope * (_xla9 - xanc)],
                             color=CHART_THEME["trend"], linewidth=1.35, alpha=0.75, zorder=8,
                             solid_capstyle="round", antialiased=True)
+                    if _xla9 < x_end - 0.6:
+                        ax.plot([_xla9, x_end],
+                                [p_anc + slope * (_xla9 - xanc), p_anc + slope * (x_end - xanc)],
+                                color=CHART_THEME["trend"], linewidth=1.0, alpha=0.55,
+                                zorder=7, linestyle=(0, (6, 4)), solid_capstyle="butt",
+                                antialiased=True)
                     stage = md.get("tl_stage", "")
                     pattern_en = (md.get("tl_pattern") or "CHANNEL").upper()
                     if "TECHCLASSIC" in pattern_en:
@@ -4676,7 +4760,7 @@ def send_approaching(candidate: SignalCandidate, current_price: float, distance_
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
     try:
         from data.fetcher import get_klines
-        frame = get_klines(candidate.symbol, candidate.trigger_timeframe, 180, closed_only=False, use_cache=False)
+        frame = get_klines(candidate.symbol, candidate.trigger_timeframe, _chart_fetch_size(candidate.trigger_timeframe), closed_only=False, use_cache=False)
         chart = generate_chart(frame, candidate, confirmed=False) if frame is not None else None
     except Exception:
         chart = None
@@ -6480,7 +6564,7 @@ def send_technoclassic_preview(ev: dict) -> bool:
     cand = None
     frame = None
     try:
-        frame = get_klines(sym, tf, 150, closed_only=False, use_cache=False)
+        frame = get_klines(sym, tf, _chart_fetch_size(tf), closed_only=False, use_cache=False)
     except Exception as exc:
         print(f"TECHCLASSIC preview tape unavailable: {exc}")
     cand = _technoclassic_preview_candidate(ev)

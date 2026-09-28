@@ -419,3 +419,13 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
   Update charts draw structure only: POI/entry band, FIRST STOP line+label, and
   entry/stop level list are all skipped when `metadata.update_event` — chip-on-
   candles law holds, no fake stop on an analysis post. Tests +3 → 706P/1skip.
+- **r59 (same day): the CHART DICTATION** → ① far classic patterns (>2×ATR) BLUE,
+  near/trends keep red-above/green-below; ② zone boxes above/below price = fill-only
+  family shades (SR/FVG/OB/FLAG × red-above, green-below), name parked in the right
+  notes margin as a legend; ③ every trend/pattern/TLBREAK-legacy line solid→LIVE,
+  dashed→canvas; ④ cryptocove green/red candles behind CHART_CANDLE_STYLE=cryptocove
+  (default ink until Viva approves); ⑤ all chart fetch paths now use the dictated
+  candle counts (180/150 stragglers unified); ⑥ backup of the pre-r59 renderer:
+  git tag backup-render-r58 + docs/RENDER_BACKUP_r58.md. 4 real-data CryptoCove
+  samples rendered for judgment (BTC 4h futures, ONDO 3d spot update, LINK 4h spot,
+  GRAM 15m futures). Tests: tests/test_round59_chart_laws.py (9) → 715P/1skip.
