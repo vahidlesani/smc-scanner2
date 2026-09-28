@@ -460,11 +460,16 @@ def health():
             """)
             _v = c.fetchone()
             diag["void_24h"] = {"count": int(_v[0] or 0), "last": str(_v[1] or "")}
+            # r58: spot rows are identified by setup_code/public_code too
             c.execute("SELECT symbol, source, direction, created_at FROM signals "
-                      "WHERE source ILIKE '%SPOT%' ORDER BY created_at DESC LIMIT 1"
+                      "WHERE source ILIKE '%SPOT%' OR setup_code='SPOTBREAK' "
+                      "OR public_code ILIKE 'VIVA-SPOT-%' "
+                      "ORDER BY created_at DESC LIMIT 1"
                       if _pg
                       else "SELECT symbol, source, direction, created_at FROM signals "
-                           "WHERE upper(source) LIKE '%SPOT%' ORDER BY created_at DESC LIMIT 1")
+                           "WHERE upper(source) LIKE '%SPOT%' OR setup_code='SPOTBREAK' "
+                           "OR upper(public_code) LIKE 'VIVA-SPOT-%' "
+                           "ORDER BY created_at DESC LIMIT 1")
             _s = c.fetchone()
             diag["spot_last"] = ({"symbol": _s[0], "source": _s[1],
                                   "direction": _s[2], "created_at": str(_s[3] or "")}

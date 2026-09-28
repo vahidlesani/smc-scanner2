@@ -59,7 +59,7 @@ def test_body_anchored_pivots_ignore_mega_wicks():
 
 def test_render_cfg_uses_bodies_and_big_pool():
     src = open(os.path.join(ROOT, "analysis", "render_kit.py"), encoding="utf-8").read()
-    assert 'wick_policy="bodies"' in src
+    assert 'wick_policy="hybrid"' in src  # r58: extreme wick→body, reasonable→wick
     src2 = open(os.path.join(ROOT, "analysis", "viva_tlbreak.py"), encoding="utf-8").read()
     assert "pool = pts[-200:]" in src2, "his «لیمیت نداریم» — the whole pivot history competes"
     assert 'wick_policy: str = "outlier"' in src2, "futures TRADE default untouched"

@@ -185,6 +185,21 @@ def spot_risk_levels(close: float, upper: float, lower_vals: list,
     return {"sl": float(sl), "targets": [float(tp1), float(tp2), float(tp3)]}
 
 
+def _structural_weight(pat: dict) -> float:
+    """r58 SUPERIORITY LAW (Viva: «اگر از دورتر و با کندل‌های بیشتری ببینیم یک
+    ترند دیگر بالای قیمت است یا ضلع یک الگو بالای قیمت است، آن معتبرتر است و
+    باید ملاک قرار بگیره»): the reference structure is the WIDER-SPAN, MORE-
+    TOUCH one — span of the drawn edges × their validated touch count."""
+    try:
+        x0 = min(float(l.get("x0", 0)) for l in (pat.get("lines") or []))
+        x1 = max(float(l.get("x1", 0)) for l in (pat.get("lines") or []))
+        touches = sum(len(l.get("points") or []) for l in (pat.get("lines") or []))
+        span = max(1.0, x1 - x0)
+        return span * max(1.0, float(touches))
+    except Exception:
+        return 0.0
+
+
 def _sane_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     """r57 (the WLD 3d blank chart): corrupt near-zero placeholder candles
     (OHLC ≈ 1e-9 with real volume) pass every >0 filter, draw invisible
@@ -274,6 +289,9 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 if upper is None or close <= upper + eps:
                     continue                      # no valid close above the area yet
                 kind = str(pat.get("type") or "NONE").upper()
+                _rect_fa = None
+                if kind == "RANGE" and str(pat.get("break_direction") or "") != "DOWN":
+                    _rect_fa = "مستطیل صعودی (شکست سقف رنج)"
                 lower_vals = []
                 for _l in (pat.get("lines") or []):
                     from analysis.render_kit import line_y as _ly2
@@ -295,7 +313,7 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 out.append({
                     "symbol": symbol.upper(), "tf": tf, "pattern": kind,
                     "horizon": ("SHORT" if tf in SPOT_SHORT_TFS else "MID" if tf in SPOT_MID_TFS else "LONG"),
-                    "pattern_fa": pattern_info(kind)["fa"],
+                    "pattern_fa": (_rect_fa or pattern_info(kind)["fa"]),
                     "label": state_label(kind, str(pat.get("break_direction") or "")),
                     "rule_fa": pattern_info(kind)["rule_fa"],
                     "entry": close, "sl": float(sl), "targets": targets,
@@ -311,13 +329,17 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
         except Exception as exc:
             print(f"spot scan warning {symbol} {tf}: {exc}")
             continue
-    # one setup per (symbol, tf): the strongest shape (largest path) wins
+    # one setup per (symbol, tf): r58 SUPERIORITY — the most VALID structure
+    # (span × touches) is the reference; path breaks the tie. «معتبرتر ملاک».
     best: Dict[tuple, dict] = {}
     for item in out:
         key = (item["symbol"], item["tf"])
-        if key not in best or item["path_pct"] > best[key]["path_pct"]:
+        _w = _structural_weight((item.get("pattern_commands") or [{}])[0])
+        item["_weight"] = _w
+        if key not in best or (_w, item["path_pct"]) > (
+                best[key]["_weight"], best[key]["path_pct"]):
             best[key] = item
-    return list(best.values())
+    return [b for b in best.values()]
 
 
 def _next_spot_public_code() -> str:

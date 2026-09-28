@@ -387,3 +387,28 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
 - دیکته با ۵ چارتِ اسپوت (PENGU/WLD/ARB/DASH/XRP — 3d SPOTBREAK) + قوانین جدید. سندِ مرجعِ چت‌های آینده: **docs/VIVA_RULES.md** (قانونِ صفر: قانون فقط با تأیید و درخواستِ خودِ ویوا تغییر می‌کند).
 - **① شدو (رسم):** pivots پارامتر `wick_policy` گرفت — render_kit حالا `"bodies"` (انکرِ همیشه‌بدنه؛ ویکِ DASH/ARB دیگر ترند را خم نمی‌کند)؛ فیتِ معاملهٔ فیوچرز outlier مثل قبل («فیوچرز بهم نریزه»). **② بدونِ سقفِ پیوت:** استخرِ فیت ۱۶→۲۰۰ («لیمیت نداریم») + امتیازِ touches² — خطِ ماژورِ چند-لمس بر خطِ محلی می‌چربد. **③ لاگِ همیشگی:** use_log=True بدونِ شرط، اسپات و فیوچرز. **④ زومِ خدمتگزارِ الگو:** پدِ تایپ ۰.۰۱۵/۰.۰۲۵ برای کندلِ بلند. **⑤ تناسبِ تی‌پی:** MIN_PATH_PCT_BY_TF = 6/8/10/14/20/28 (4h→1w) + TP1ِ هوای خالی ۰٫۳۵×مسیر («تی‌پی یک‌سنی» مُرد) — انکرِ مقاومتِ واقعی r37 دست‌نخورده. **⑥ آنچینِ فارسی از منبع:** fear_greed label_fa (طمع/ترس/...) + کارت فقط label_fa. **⑦ ریپلای-چین اسپات:** send_photo/send_message (telegram_bot) حالا message_id برمی‌گردانند؛ send_spot_alert mid را در kv نگه می‌دارد؛ تأییدِ اسپات reply_to=هشدار اول؛ send_setup_update برای SPOT به last/confirm ریپلای می‌شود؛ spot_chain در kv. **⑧ رویداد-آپدیتِ فقط-مهم:** scan_spot_update_events (حجم ≥۱٫۸× / بدنه ≥۱٫۵×ATR / تاچِ سقف‌کفِ ساختاری) + dedup ۱۲ساعت + send_spot_event (کارتِ مختصر) + commit بعد از ارسال موفق. **⑨ مولتی‌تی‌افِ اسپات:** _mtf_bias_fa (4h/1d با structure_bias) روی کارتِ تأیید اسپات. **⑩ چیپِ نواحی روی کندل ممنوع:** چیپ‌ها به بعدِ زومِ نهایی defer → in-box→walk-up→آسمان (band خالی زیر لبهٔ بالا). **⑪ دیتای مرده (WLD 3d خالی):** گاردِ میانه‌باند (۰٫۰۲×med) در _clean_render_frame + _sane_ohlcv در اسکن اسپوت. تیپ‌های placeholder رندر نمی‌شوند.
 - تست: test_round57_spot_quality.py ×17 + انکرهای r16/r37/signal_guards (مجموع **692P/1skip**). دودی: ویکِ ۳۵٪ خط را خم نکرد (r57_body_anchor.png)؛ لاگ همیشگی؛ چیپ در جای خالی.
+
+## r58 — 2026-09-28 (hybrid wick + superiority + urgent spot watch)
+- **Wick-HYBRID (Viva corrected r57):** «نگفتم از بادی بگیر فقط .. شدوهای معقول رو
+  محاسبه بکنه و وصل بکنه» → `indicators.pivots`: wick anchors AT THE WICK unless
+  EXTREME (≥2× median wick AND ≥1×ATR → body); render_kit cfg `wick_policy="hybrid"`;
+  futures trade fit stays "outlier". test_round57 anchor updated to hybrid.
+- **Superiority law:** per (symbol,tf) winner = `_structural_weight` = span×touches
+  (path only tie-breaks) — «آن معتبرتر است و باید ملاک قرار بگیره».
+- **Urgent spot watch (Railway-opt):** pass pins NEAR_BREAK/TOUCH symbols into
+  bot_kv `spot_urgent_watch` (2h TTL, ≤6 symbols); `main._spot_urgent_recheck` runs
+  every monitor cycle (5 min) — mini-pass re-scans ONLY pinned symbols via
+  history_store, publishes with stamps + reply-chains → confirm ≤5 min after the
+  trigger close, zero extra full passes.
+- **WLD 3d completion:** `_clean_render_frame` sets `dropped_dead_rows`; renderer
+  invalidates `chart_zoom_frozen` + `zoom_freeze:<sid>` kv when dead rows were
+  dropped → re-freeze on clean tape. (r57 guard fixed the scan; this fixes the
+  already-frozen charts.)
+- **Naming:** bullish range-top break on spot cards reads «مستطیل صعودی (شکست سقف
+  رنج)»; spot lane probes use setup_code+public_code too (dashboard probe fix).
+- Stall probe verdict: lanes were NOT dead — spot pass 02:53Z published 60;
+  TLBREAK/TECHCLASSIC silence started exactly at the r54 confirm-gate deploy
+  (23:36Z/00:05Z) = gate working as designed, NOT a bug. ALBROX 0/24h = law.
+- Tests: tests/test_round58_hybrid_superiority.py (11) → suite 703P/1skip.
+- Visual smoke: /home/user/r58_hybrid.png — extreme wick ignored, reasonable
+  wicks connected.

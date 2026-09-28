@@ -1,5 +1,16 @@
 # Changelog
 
+## v7.6.3 — 2026-09-28 (r57+r58)
+- r57: body-anchored drawing pivots, 200-pivot pool + touches² scoring, always-LOG
+  axis, tall-candle tight pad, TF-proportional spot targets (4h→6% … 1w→28%) with
+  the «یک‌سُن» TP1 fix, Persian fear&greed labels, reply-chains (alert→confirm→update),
+  majors-only spot update events, spot MTF bias block, deferred chips, dead-data guard,
+  docs/VIVA_RULES.md (قانون صفر).
+- r58: hybrid wick anchors (extreme→body, reasonable→wick), structural-superiority
+  selection (span×touches), urgent spot mini-pass every 5 min for pinned near-break
+  symbols, frozen-zoom invalidation on dead-row drop, bullish-rectangle naming,
+  dashboard spot probe fix.
+
 ## v7.6.0 — 2026-08-16
 
 ### Viva's 9-point overhaul wave

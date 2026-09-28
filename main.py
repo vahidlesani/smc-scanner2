@@ -759,7 +759,16 @@ def run_spot_scan() -> Dict[str, int]:
             # the ladder rides the SAME fetched frames — zero extra downloads
             try:
                 from analysis.spot_engine import scan_spot_alerts
-                ladder.extend(scan_spot_alerts(symbol, bundle))
+                _items58 = scan_spot_alerts(symbol, bundle)
+                ladder.extend(_items58)
+                _pin58 = {s: {"ts": _time.time()} for s in (symbol,)
+                          if any(str(i.get("stage")) in ("NEAR_BREAK", "TOUCH")
+                                 for i in _items58)}
+                if _pin58:
+                    from database.bot_kv import get_json as _g58, set_json as _s58
+                    _w58 = _g58("spot_urgent_watch", {}) or {}
+                    _w58.update(_pin58)
+                    _s58("spot_urgent_watch", _w58)
             except Exception as exc:
                 print(f"spot ladder scan warning {symbol}: {exc}")
             # r57: MAJOR-EVENT updates only (volume surge / displacement /
@@ -1862,12 +1871,83 @@ def run_realtime_execution_cycle() -> int:
         return 0
 
 
+def _spot_urgent_recheck() -> int:
+    """r58 (Viva: «روشی پیدا بکن که هم موقعیت‌های اسپوت از بین نره هم مصرف
+    بهینه ریلوی») — symbols whose ladder showed NEAR_BREAK/TOUCH are pinned
+    in kv; every monitor cycle (5 min) a MINI-pass re-scans ONLY those few
+    symbols, so a confirmation lands within ≤5 min of its close instead of
+    waiting up to an hour for the full pass. Railway cost stays flat: 2-6
+    symbols × 6 TFs (history store), not 24. Dedup stamps prevent doubles."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        import time as _t
+        watch = {k: v for k, v in (_g("spot_urgent_watch", {}) or {}).items()
+                 if _t.time() - float((v or {}).get("ts", 0)) < 2 * 3600.0}
+        if not watch:
+            return 0
+        syms = sorted(watch.keys())[:6]
+        from analysis.spot_engine import spot_signals_for, SPOT_TRIGGERS
+        from bot.messages_v7 import (CHAT_ID_SPOT, generate_chart,
+                                     tf_channel_publish_confirmed)
+        from data.fetcher import get_market_bundle
+        published = 0
+        for symbol in syms:
+            try:
+                bundle = get_market_bundle(
+                    symbol, tuple(SPOT_TRIGGERS),
+                    limits={"4h": 200, "8h": 200, "12h": 210,
+                            "1d": 210, "3d": 300, "1w": 210,
+                            "5m": 300, "15m": 200})
+                for cand in spot_signals_for(symbol, bundle):
+                    key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"
+                           f"{(cand.metadata or {}).get('pattern_type')}")
+                    window = 72.0 if str(cand.trigger_timeframe) == "3d" else 36.0
+                    if _spot_stamp(key, window, commit=False):
+                        continue
+                    frame = bundle.get(cand.trigger_timeframe)
+                    chart = (generate_chart(frame, cand, confirmed=True)
+                             if frame is not None else None)
+                    if not chart:
+                        continue
+                    _alert_kv = _spot_alert_mid_kv(
+                        cand.symbol, cand.trigger_timeframe,
+                        str((cand.metadata or {}).get("pattern_type") or ""))
+                    mid = tf_channel_publish_confirmed(
+                        cand, chart=chart, chat_override=CHAT_ID_SPOT,
+                        reply_to=int(_alert_kv.get("mid") or 0))
+                    if mid:
+                        _spot_stamp(key, window)
+                        published += 1
+                        try:
+                            from bot.messages_v7 import (_public_code as _pc,
+                                                         _spot_chain_get as _scg,
+                                                         _spot_chain_set as _scs)
+                            _chain = _scg(_pc(cand))
+                            _chain.update({"alert": int(_alert_kv.get("mid") or 0),
+                                           "confirm": int(mid), "last": int(mid)})
+                            _scs(_pc(cand), _chain)
+                        except Exception:
+                            pass
+            except Exception as exc:
+                print(f"spot urgent recheck warning {symbol}: {exc}")
+        if published:
+            print(f"🪙 spot urgent recheck published={published} syms={syms}")
+        return published
+    except Exception as exc:
+        print(f"spot urgent recheck skipped: {exc}")
+        return 0
+
+
 def run_monitor_cycle() -> None:
     try:
         trade_events = monitor_confirmed_results()
     except Exception as exc:
         print(f"Confirmed trade monitor error: {exc}")
         trade_events = 0
+    try:   # r58: pinned near-break symbols confirm within the 5-min cycle
+        _spot_urgent_recheck()
+    except Exception:
+        pass
     try:
         with _CANDIDATE_MONITOR_LOCK:
             stats = monitor_candidates()

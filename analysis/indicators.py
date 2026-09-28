@@ -61,6 +61,16 @@ WICK_NOISE_BODY_MULT = 1.0
 WICK_NOISE_ATR_FRAC = 0.50
 WICK_NOISE_LOOKBACK = 20
 
+# r58 (Viva, the hybrid shadow law — verbatim: «گفتم پینبارها کوچک گرفته بشه
+# نگفتم که از بادی بگیر فقط .. بعضی کندل‌ها یک شدو خیلی خیلی بلند دارن که اگر
+# ترند از نوک اون شدو رسم بشه اصلاً قابل ترسیم نیست — اونها رو از بادی بگیره
+# اما در نقاط بعدی همون ترند شدوهای معقول رو محاسبه بکنه و وصل بکنه بهشون»):
+# a pivot wick anchors AT THE WICK unless it is EXTREME (≥ WICK_EXTREME_MED_MULT
+# × the recent median wick AND ≥ WICK_EXTREME_ATR_FRAC × ATR) — extreme wicks
+# (liquidation spikes) anchor on the body; reasonable wicks stay wicks.
+WICK_EXTREME_MED_MULT = 2.0
+WICK_EXTREME_ATR_FRAC = 1.0
+
 
 def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
            wick_noise_filter: bool = False,
@@ -96,9 +106,14 @@ def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
         if h[i] >= np.max(h[i - left : i + right + 1]):
             _price = float(h[i])
             _anchor = "wick"
-            if wick_policy == "bodies" and has_body:
-                _price = float(max(o[i], c[i]))
-                _anchor = "body"
+            if wick_policy in ("bodies", "hybrid") and has_body:
+                _wick_up = float(h[i] - max(o[i], c[i]))
+                if wick_policy == "bodies" or (
+                        wick_policy == "hybrid" and atr14 > 0 and
+                        _wick_up >= WICK_EXTREME_MED_MULT * _med_wick and
+                        _wick_up >= WICK_EXTREME_ATR_FRAC * atr14):
+                    _price = float(max(o[i], c[i]))
+                    _anchor = "body"
             elif wick_noise_filter and atr14 > 0:
                 _wick = float(h[i] - max(o[i], c[i]))
                 _body = abs(float(c[i] - o[i]))
@@ -112,9 +127,14 @@ def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
         if l[i] <= np.min(l[i - left : i + right + 1]):
             _price = float(l[i])
             _anchor = "wick"
-            if wick_policy == "bodies" and has_body:
-                _price = float(min(o[i], c[i]))
-                _anchor = "body"
+            if wick_policy in ("bodies", "hybrid") and has_body:
+                _wick_dn = float(min(o[i], c[i]) - l[i])
+                if wick_policy == "bodies" or (
+                        wick_policy == "hybrid" and atr14 > 0 and
+                        _wick_dn >= WICK_EXTREME_MED_MULT * _med_wick and
+                        _wick_dn >= WICK_EXTREME_ATR_FRAC * atr14):
+                    _price = float(min(o[i], c[i]))
+                    _anchor = "body"
             elif wick_noise_filter and atr14 > 0:
                 _wick = float(min(o[i], c[i]) - l[i])
                 _body = abs(float(c[i] - o[i]))

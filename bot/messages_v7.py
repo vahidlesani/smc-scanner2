@@ -1673,13 +1673,22 @@ def _clean_render_frame(df: pd.DataFrame, window: int = 150) -> pd.DataFrame:
     # r57 (the WLD 3d blank chart): near-zero PLACEHOLDER candles (OHLC ≈
     # 1e-9, real volume) pass the >0 test, render invisible and crush the
     # axis. Any row 50× below the window's median close is dead data.
+    # r58: WHEN dead rows are dropped, any frozen zoom of this signal is
+    # STALE (it froze the crushed axis) — flagged so the renderer re-freezes
+    # on the clean tape («چرا این چارت اینجوریه؟» never repeats).
     try:
         _med57 = float(pd.Series(frame["close"]).astype(float).median() or 0.0)
         if _med57 > 0:
-            frame = frame[pd.to_numeric(frame["close"], errors="coerce")
-                          > 0.02 * _med57]
+            _keep57 = pd.to_numeric(frame["close"], errors="coerce") > 0.02 * _med57
+            if not bool(_keep57.all()):
+                _clean_render_frame.dropped_dead_rows = True
+                frame = frame[_keep57]
+            else:
+                _clean_render_frame.dropped_dead_rows = False
+        else:
+            _clean_render_frame.dropped_dead_rows = False
     except Exception:
-        pass
+        _clean_render_frame.dropped_dead_rows = False
     # keep the renderer's contract: the frame is INDEXED by timestamp
     frame = frame.set_index("timestamp")
     frame.index = pd.DatetimeIndex(frame.index)
@@ -1891,6 +1900,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         except Exception:
             pass
         frame = _clean_render_frame(df, window=_lookback)
+        if getattr(_clean_render_frame, "dropped_dead_rows", False):
+            # r58: the frozen zoom was computed over dead data — discard it so
+            # the r28 freeze rebuilds on the clean tape (WLD 3d stays fixed).
+            try:
+                (candidate.metadata or {}).pop("chart_zoom_frozen", None)
+                from database.bot_kv import set_json as _sj58
+                _sj58(f"zoom_freeze:{candidate.signal_id}", None)
+            except Exception:
+                pass
         # Viva 09-18 ruling (PINWALL/PINWALL-Q/ALBROX must paint trends too):
         # ABSOLUTE safety net — any candidate that reaches the chart without
         # render commands (old alert metadata, exotic path) gets enriched HERE.
