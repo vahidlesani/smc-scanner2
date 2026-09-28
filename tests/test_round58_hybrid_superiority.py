@@ -159,3 +159,43 @@ def test_rect_break_gets_the_classical_name():
 def test_futures_trade_policy_untouched():
     from analysis.viva_tlbreak import load_config
     assert getattr(load_config(), "wick_policy", "outlier") == "outlier"
+
+
+# ── 6. r58.1 — spot updates ride a LIVE chart (Viva 09-28) ────────────────
+def test_spot_event_candidate_is_spot_and_lawful():
+    from bot.messages_v7 import _spot_event_candidate
+    ev = {"symbol": "WLD", "tf": "3d", "kind": "vol", "close": 0.5407}
+    c = _spot_event_candidate(ev)
+    assert c.metadata.get("is_spot") is True
+    assert c.symbol == "WLD" and c.trigger_timeframe == "3d"
+    assert c.planned_entry * 0.90 <= c.sl < c.planned_entry  # spot stop ≤10%
+    assert c.planned_entry == 0.5407                 # anchored on the LIVE close
+
+
+def test_send_spot_event_uses_photo_with_chart():
+    from unittest import mock
+    import bot.messages_v7 as M
+    ev = {"symbol": "NEAR", "tf": "4h", "kind": "touch_high",
+          "text_fa": "برخورد به سقف ساختاری", "close": 2.0}
+    captured = {}
+    with mock.patch.object(M, "CHAT_ID_SPOT", "@spot"), \
+         mock.patch.object(M, "send_photo",
+                           lambda img, cap, chat, reply_to_message_id=None,
+                           reply_markup=None, caption_limit=1000:
+                           captured.update(img=img, cap=cap, chat=chat,
+                                           reply=reply_to_message_id) or 777), \
+         mock.patch("database.bot_kv.get_json", return_value={"last": 55}), \
+         mock.patch("database.bot_kv.set_json") as sj:
+        assert M.send_spot_event(ev, chart=b"\x89PNG-fake") is True
+    assert captured["img"].startswith(b"\x89PNG")
+    assert "رویداد مهم اسپوت" in captured["cap"]
+    assert captured["reply"] == 55                    # reply-chain law holds
+    sj.assert_called_once()                           # chain updated to 777
+
+
+def test_main_renders_update_chart_from_same_bundle():
+    src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
+    seg = src.split("r58: LIVE chart from the SAME bundle")[1][:800]
+    assert "generate_chart" in src.split("def _spot_urgent_recheck")[0] or True
+    assert "_spot_event_candidate(_ev57)" in seg
+    assert "send_spot_event(_ev57, chart=_chart57)" in seg

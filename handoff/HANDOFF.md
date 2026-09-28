@@ -412,3 +412,10 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
 - Tests: tests/test_round58_hybrid_superiority.py (11) → suite 703P/1skip.
 - Visual smoke: /home/user/r58_hybrid.png — extreme wick ignored, reasonable
   wicks connected.
+- **r58.1 (same day): «آپدیتهایی که در اسپوت میاد هم با چارت زنده و لایو بیاد»** →
+  `messages_v7._spot_event_candidate` (SPOT stub anchored on the event close);
+  `send_spot_event(event, chart=)` posts the PHOTO reply-chained (text fallback on
+  upload failure); main renders the live chart from the SAME bundle (zero refetch).
+  Update charts draw structure only: POI/entry band, FIRST STOP line+label, and
+  entry/stop level list are all skipped when `metadata.update_event` — chip-on-
+  candles law holds, no fake stop on an analysis post. Tests +3 → 706P/1skip.

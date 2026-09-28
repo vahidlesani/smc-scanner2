@@ -2197,12 +2197,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         zone_start = int(_anchored_x((candidate.metadata or {}).get("tool_anchor_ts"),
                                      max(0, count - 55)))
         zone_end = count + future - 0.5  # box extends into the candle-free margin
+        # r58: an update chart is analysis, not a trade — no POI/entry band
+        # (Viva: «آپدیت‌ها هم با چارت زنده» + spot no-trade-tools r37), so its
+        # chip can never sit on the live candles.
+        if (candidate.metadata or {}).get("update_event"):
+            zone_start = None
         _dir_key = "LONG" if candidate.direction == "LONG" else "SHORT"
         _poi = str((candidate.metadata or {}).get("poi_type") or "").upper()
         _fam = _zone_family(_poi)
         _fill, _ztxt = ZONE_PALETTE.get((_fam, _dir_key),
                                         ZONE_PALETTE[("DEF", _dir_key)])
-        zone_color, zone_text_color = _fill, _ztxt
+        zone_color, zone_text_color = (None, None) if zone_start is None else (_fill, _ztxt)
         _POI_TOKEN = {"ORDER_BLOCK": "OB", "FVG": "FVG",
                       "OB + FVG CONFLUENCE": "OB + FVG",
                       "INVERSE FVG / BREAKER": "IFVG",
@@ -2215,23 +2220,27 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # Python 3.11-safe: no multi-line f-string expressions (PEP 701 is 3.12+)
         _zone_tok = _POI_TOKEN.get(_poi, "DEMAND" if _dir_key == "LONG" else "SUPPLY")
         zone_name = f"{_zone_tok}  ·  POI / ENTRY"
-        ax.fill_between(
-            [zone_start, zone_end],
-            candidate.entry_zone_bottom,
-            candidate.entry_zone_top,
-            color=zone_color,
-            alpha=0.26,
-            zorder=1,
-            linewidth=0,
-        )
+        if zone_start is None:
+            zone_name = None
+        if zone_start is not None:
+            ax.fill_between(
+                [zone_start, zone_end],
+                candidate.entry_zone_bottom,
+                candidate.entry_zone_top,
+                color=zone_color,
+                alpha=0.26,
+                zorder=1,
+                linewidth=0,
+            )
         # CHART-8 (Viva 09-16 night-3): zone NAMES live INSIDE their own box,
         # in a candle-free spot at the box right end / middle / left end —
         # never floating in mid-air, never over candles.  Only when every
         # in-box spot is occupied does the chip anchor to the box top edge.
-        _zone_items = [{"x0": zone_start, "x1": zone_end,
-                        "bottom": float(candidate.entry_zone_bottom),
-                        "top": float(candidate.entry_zone_top),
-                        "text": zone_name, "color": zone_text_color}]
+        _zone_items = ([] if zone_start is None else
+                       [{"x0": zone_start, "x1": zone_end,
+                         "bottom": float(candidate.entry_zone_bottom),
+                         "top": float(candidate.entry_zone_top),
+                         "text": zone_name, "color": zone_text_color}])
         # CHART-8 unified kit: every setup stores detect→render commands in
         # metadata; the renderer obeys them (fallback: detect on this frame).
         # r35 CryptoCave-clean (defined HERE — the first use site; the FVG
@@ -2711,16 +2720,20 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
 
         line_start = max(0, count - 34)
         line_end = count + (5 if confirmed else 1)
-        ax.hlines(
-            candidate.sl,
-            line_start,
-            line_end,
-            color=CHART_THEME["invalidation"],
-            linewidth=1.15,
-            linestyles=(0, (6, 3)),
-            zorder=7,
-        )
-        notes.append((f"FIRST STOP  {_price(candidate.sl)}", CHART_THEME["invalidation"]))
+        # r58: an UPDATE chart is pure structure analysis — the synthetic
+        # stop of the render stub («سیگنال ورود نیست») draws no line/label.
+        if not (candidate.metadata or {}).get("update_event"):
+            ax.hlines(
+                candidate.sl,
+                line_start,
+                line_end,
+                color=CHART_THEME["invalidation"],
+                linewidth=1.15,
+                linestyles=(0, (6, 3)),
+                zorder=7,
+            )
+            notes.append((f"FIRST STOP  {_price(candidate.sl)}",
+                          CHART_THEME["invalidation"]))
         # PINWALL-specific second/risk entry: same candidate metadata and same
         # chart coordinates used by Telegram, so WebApp mirrors the exact line.
         try:
@@ -2817,10 +2830,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             ladder = (candidate.metadata or {}).get("target_ladder") or {}
             ladder_targets = list(ladder.get("targets") or [candidate.tp1, candidate.tp2])
             ladder_weights = list(ladder.get("weights") or [50, 30, 20])
-            levels = [
+            levels = ([] if (candidate.metadata or {}).get("update_event") else [
                 (candidate.planned_entry, "ENTRY", CHART_THEME["entry"]),
                 (candidate.sl, "FIRST STOP", CHART_THEME["invalidation"]),
-            ]
+            ])
             _tpg = (candidate.metadata or {}).get("tp_gates") or {}
             _tp_locked = set(_tpg.get("locked") or [])
             # Display labels are ranked by actual price path, not by the
@@ -4840,10 +4853,36 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
     return head + "\n".join(rows) + "\n\n" + result_line + _onchain35 + "\n📌 <b>VIVAMON-Labs-Pro</b>"
 
 
-def send_spot_event(event: dict) -> bool:
+def _spot_event_candidate(event: dict):
+    """r58 (Viva: «آپدیتهایی که در اسپوت میاد هم با چارت زنده و لایو بیاد») —
+    a minimal SPOT candidate anchored on the event's own close; render_kit
+    re-detects the CURRENT structure on the fresh tape, so the chart behind
+    an update is always LIVE (not a stale screenshot). Spot renders carry no
+    trade tools (r37) — clean tape + the live lines/box only."""
+    from analysis.models import SignalCandidate
+    close = float(event.get("close") or 0.0) or 1.0
+    tf = str(event.get("tf") or "4h")
+    ev_kind = str(event.get("kind") or "")
+    return SignalCandidate(
+        signal_id=f"spot-update-{event.get('symbol') or 'X'}-{tf}",
+        symbol=str(event.get("symbol") or ""), style="SWING",
+        setup_code="SPOTUPDATE", setup_name="SPOT UPDATE",
+        strategy_fa="رویداد مهم اسپوت", direction="LONG", score=7,
+        status="CONFIRMED",
+        entry_zone_bottom=close * 0.995, entry_zone_top=close * 1.005,
+        planned_entry=close, sl=close * 0.92, tp1=close * 1.12,
+        tp2=close * 1.20, rr_tp1=1.5, rr_tp2=2.5, bias="LONG",
+        trigger_timeframe=tf,
+        metadata={"market": "SPOT", "is_spot": True,
+                  "pattern_type": f"UPDATE_{ev_kind}".upper(),
+                  "update_event": True})
+
+
+def send_spot_event(event: dict, chart: Optional[bytes] = None) -> bool:
     """r57 (Viva: «الکی آپدیت نده — فقط شکست هر جهت، برخورد به هردو جهت،
     بالارفتن حجم، دایرکشنِ پرحجم‌تر …»): the ONLY spot update post. Compact
-    event card, reply-chained to the lane's newest message."""
+    event card, reply-chained to the lane's newest message. r58: the update
+    rides a LIVE chart of its own TF (rendered from the current tape)."""
     chat = str(CHAT_ID_SPOT or "")
     if not chat:
         return False
@@ -4868,7 +4907,15 @@ def send_spot_event(event: dict) -> bool:
             _reply = int((_gj(f"spot_event_chain|{sym}|{tf}", {}) or {}).get("last") or 0)
         except Exception:
             _reply = 0
-        mid = int(send_message(text, chat, reply_to_message_id=_reply or None) or 0)
+        if chart:
+            # r58: the update arrives WITH its live chart (photo post); if the
+            # upload fails, the text still goes out — the update is never lost.
+            mid = int(send_photo(chart, text, chat,
+                                 reply_to_message_id=_reply or None) or 0) \
+                or int(send_message(text, chat,
+                                    reply_to_message_id=_reply or None) or 0)
+        else:
+            mid = int(send_message(text, chat, reply_to_message_id=_reply or None) or 0)
         if mid:
             try:
                 from database.bot_kv import set_json as _sj

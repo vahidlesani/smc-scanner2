@@ -776,11 +776,22 @@ def run_spot_scan() -> Dict[str, int]:
             try:
                 from analysis.spot_engine import (scan_spot_update_events,
                                                   commit_spot_update_events)
-                from bot.messages_v7 import send_spot_event
+                from bot.messages_v7 import (send_spot_event,
+                                             _spot_event_candidate,
+                                             generate_chart as _gchart57)
                 _evs57 = scan_spot_update_events(symbol, bundle)
                 _sent57 = []
                 for _ev57 in _evs57:
-                    if send_spot_event(_ev57):
+                    _chart57 = None
+                    try:   # r58: LIVE chart from the SAME bundle (no refetch)
+                        _frame57 = (bundle or {}).get(str(_ev57.get("tf") or ""))
+                        if _frame57 is not None and len(_frame57) > 0:
+                            _chart57 = _gchart57(
+                                _frame57, _spot_event_candidate(_ev57),
+                                confirmed=True)
+                    except Exception as _exc57:
+                        print(f"spot update chart warning {_ev57.get('symbol')}: {_exc57}")
+                    if send_spot_event(_ev57, chart=_chart57):
                         _sent57.append(_ev57)
                 if _sent57:
                     commit_spot_update_events(_sent57)
