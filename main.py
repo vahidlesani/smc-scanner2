@@ -655,21 +655,37 @@ def _spot_stamp(key: str, window_hours: float, commit: bool = True) -> bool:
         return False
 
 
-def _spot_daily_left() -> int:
-    """Daily publication budget for the spot channel."""
+def _spot_tehran_date() -> str:
+    """The spot budget counts HIS day — Tehran midnight (TIMEZONE-IRAN law),
+    never UTC: a 03:30 Tehran reset made the first pass of the UTC day dump
+    the whole budget in one 8-minute burst and leave 23h of silence."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d")
+    except Exception:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _spot_daily_left(pass_cap: int = 0) -> int:
+    """Daily publication budget for the spot channel — plus (r55) a per-pass
+    PACING cap: the 09-28 pass spent all 16 in one pass (found 87, dur 8.5m)
+    and the lane sat silent for the rest of the day. Detections trickle out
+    SPOT_MAX_PER_PASS per pass instead — anti-burst, never anti-signal."""
     try:
         from database.bot_kv import get_json as _g, set_json as _s
-        # r35 (Viva 09-26, «گیت‌های خفه‌کننده روی اسپات نباشه»): the old cap
-        # of 2/day left the lane at found 48 / published 0. The dedup stamps
-        # (per symbol+tf+pattern) and the alert stage cooldowns remain the
+        # r35 (Viva 09-26, «گیت‌های خفه‌کننده روی اسپات نباشه»): the dedup
+        # stamps (per symbol+tf+pattern) and the alert cooldowns remain the
         # anti-spam layer; the budget is only the last line now.
         cap = max(1, int(os.getenv("SPOT_MAX_PER_DAY", "16") or 16))
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = _spot_tehran_date()
         data = _g("spot_daily", {}) or {}
         if str(data.get("date")) != today:
             data = {"date": today, "count": 0}
             _s("spot_daily", data)
-        return max(0, cap - int(data.get("count") or 0))
+        day_left = max(0, cap - int(data.get("count") or 0))
+        if pass_cap <= 0:
+            return day_left
+        return min(day_left, max(0, int(os.getenv("SPOT_MAX_PER_PASS", "3") or 3)))
     except Exception:
         return 1
 
@@ -815,8 +831,9 @@ def run_spot_scan() -> Dict[str, int]:
     # strongest path first — the daily budget only ever spends on the best
     pending.sort(key=lambda c: float(((c.metadata or {}).get("target_ladder") or {})
                                      .get("path_pct") or 0.0), reverse=True)
+    _pass_left55 = _spot_daily_left(pass_cap=1)
     for cand in pending:
-        if _spot_daily_left() <= 0:
+        if _pass_left55 <= 0:
             break
         key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"
                f"{(cand.metadata or {}).get('pattern_type')}")
@@ -836,6 +853,7 @@ def run_spot_scan() -> Dict[str, int]:
                 stats["published"] += 1
                 _spot_stamp(key, window)          # marker ONLY after success
                 _spot_daily_count()
+                _pass_left55 -= 1                 # r55 pacing: max 3 per pass
             elif chart:
                 stats["send_fail"] = stats.get("send_fail", 0) + 1
                 stats["last_error"] = f"publish returned 0 {cand.symbol} code={str((cand.metadata or {}).get('public_code') or cand.signal_id)[:28]}"

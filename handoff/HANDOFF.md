@@ -373,3 +373,5 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
 - **④ تشخیصِ «طبیعیه یا گیت یا باگ؟» بدون حدس:** /health حالا diag دارد: app_state (خطای آخرین rebuild/سنِ کش/جدیدترین pending)، lanes_24h (هر ستاپ: total/confirmed/آخرین created/confirmed)، void_24h، spot_last، heartbeat (اسکنر)، spot_lane (reason/stats آخری‌پاس)، push_tail. بعد از دیپلوی خوانده می‌شود و علت با دیتا اعلام می‌شود.
 - **⑤ اصلاحِ over-VOID ر53:** قانونِ twin حالا trigger_timeframe را هم در کلید دارد — اسپاتِ همان نماد/جهت در دو تایم‌فریم (4h+1d) دیگر «دوقلو» VOID نمی‌شود؛ کلونِ هم‌TF همان‌طور شکار می‌شود (تست r53 به‌روز + تستِ cross-TF).
 - تست: test_round55 ×13 + به‌روزرسانیِ round39/46/53 (مجموع **672P/1skip**).
+
+- **r55.1 (همان روز، دیتای زندهٔ /health):** علتِ سکوتِ اسپوت **گیتِ بودجه** بود نه باگ: پاسِ ۰۰:۴۳Z با found=87 «همهٔ» سقفِ 16تاییِ روزِ UTC را در یک پاسِ ۸.۵ دقیقه‌ای سوزاند و budget_left=0 ماند → سکوت تا نیمه‌شبِ UTC بعدی. اصلاح: تاریخِ بودجه = روزِ **تهران** + سقفِ per-pass (SPOT_MAX_PER_PASS=3) → انتشار قطره‌ای در طول روز (ضدِ بورست، ضدِ گرسنگی). باگِ dialectِ probe‌های /health (attribute 'db' غلط) هم اصلاح شد.

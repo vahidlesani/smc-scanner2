@@ -212,3 +212,22 @@ def test_push_endpoints_exist_and_are_locked():
     # they are NOT in the public prefix list (fail-closed law)
     seg = src.split("_PUBLIC_PREFIXES")[1][:400]
     assert "/app/api/push" not in seg
+
+
+# ── 5. the spot pacing law (the 09-28 diagnosis: found 87 → 16 in ONE pass
+#      → budget_left 0 → 23h of silence; the gate, not a bug) ────────────────
+def test_spot_budget_is_paced_per_pass_and_tehran_day():
+    import main as M
+    _MemKV.data["spot_daily"] = {"date": "2026-09-27", "count": 0}  # stale date
+    with mock.patch("database.bot_kv.get_json", _MemKV.get_json), \
+         mock.patch("database.bot_kv.set_json", _MemKV.set_json), \
+         mock.patch.dict(os.environ, {"SPOT_MAX_PER_DAY": "16",
+                                      "SPOT_MAX_PER_PASS": "3"}):
+        left = M._spot_daily_left(pass_cap=1)
+        assert left == 3, "a fresh day allows at most 3 per pass"
+        _MemKV.data["spot_daily"] = {"date": M._spot_tehran_date(), "count": 15}
+        assert M._spot_daily_left(pass_cap=1) == 1, "the daily cap still binds"
+        _MemKV.data["spot_daily"] = {"date": M._spot_tehran_date(), "count": 16}
+        assert M._spot_daily_left(pass_cap=1) == 0, "cap spent → the day is done"
+        _MemKV.data["spot_daily"] = {"date": M._spot_tehran_date(), "count": 2}
+        assert M._spot_daily_left() == 14, "no pass_cap → plain day budget"

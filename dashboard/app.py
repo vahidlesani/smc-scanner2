@@ -427,7 +427,9 @@ def health():
     except Exception as _e1:
         diag["app_state"] = {"error": str(_e1)[:80]}
     try:   # lane activity: last 24h per setup/source + spot + VOID
+        from database import db as _dbmod
         from database.db import db_cursor
+        _pg = bool(getattr(_dbmod, "USE_POSTGRES", False))
         with db_cursor() as c:
             c.execute("""
                 SELECT COALESCE(setup_code, source) AS lane, COUNT(*),
@@ -436,7 +438,7 @@ def health():
                 FROM signals
                 WHERE created_at >= (NOW() - INTERVAL '24 hours')
                 GROUP BY 1 ORDER BY MAX(created_at) DESC
-            """ if getattr(__import__("database.db", fromlist=["db"]).db, "USE_POSTGRES", False) else """
+            """ if _pg else """
                 SELECT COALESCE(setup_code, source) AS lane, COUNT(*),
                        SUM(CASE WHEN confirmed=1 THEN 1 ELSE 0 END),
                        MAX(created_at), MAX(confirmed_at)
@@ -451,7 +453,7 @@ def health():
             c.execute("""
                 SELECT COUNT(*), MAX(closed_at) FROM signals
                 WHERE result='VOID' AND closed_at >= (NOW() - INTERVAL '24 hours')
-            """ if getattr(__import__("database.db", fromlist=["db"]).db, "USE_POSTGRES", False) else """
+            """ if _pg else """
                 SELECT COUNT(*), MAX(closed_at) FROM signals
                 WHERE result='VOID' AND closed_at >= datetime('now', '-24 hours')
             """)
@@ -459,7 +461,7 @@ def health():
             diag["void_24h"] = {"count": int(_v[0] or 0), "last": str(_v[1] or "")}
             c.execute("SELECT symbol, source, direction, created_at FROM signals "
                       "WHERE source ILIKE '%SPOT%' ORDER BY created_at DESC LIMIT 1"
-                      if getattr(__import__("database.db", fromlist=["db"]).db, "USE_POSTGRES", False)
+                      if _pg
                       else "SELECT symbol, source, direction, created_at FROM signals "
                            "WHERE upper(source) LIKE '%SPOT%' ORDER BY created_at DESC LIMIT 1")
             _s = c.fetchone()
