@@ -431,12 +431,13 @@ def health():
         from database.db import db_cursor
         _pg = bool(getattr(_dbmod, "USE_POSTGRES", False))
         with db_cursor() as c:
+            # created_at/closed_at are TEXT isoformat stamps → compare as text
             c.execute("""
                 SELECT COALESCE(setup_code, source) AS lane, COUNT(*),
                        SUM(CASE WHEN confirmed=TRUE THEN 1 ELSE 0 END),
                        MAX(created_at), MAX(confirmed_at)
                 FROM signals
-                WHERE created_at >= (NOW() - INTERVAL '24 hours')
+                WHERE created_at >= to_char(NOW() - INTERVAL '24 hours', 'YYYY-MM-DD HH24:MI:SS')
                 GROUP BY 1 ORDER BY MAX(created_at) DESC
             """ if _pg else """
                 SELECT COALESCE(setup_code, source) AS lane, COUNT(*),
@@ -452,7 +453,7 @@ def health():
                 for r in c.fetchall()]
             c.execute("""
                 SELECT COUNT(*), MAX(closed_at) FROM signals
-                WHERE result='VOID' AND closed_at >= (NOW() - INTERVAL '24 hours')
+                WHERE result='VOID' AND closed_at >= to_char(NOW() - INTERVAL '24 hours', 'YYYY-MM-DD HH24:MI:SS')
             """ if _pg else """
                 SELECT COUNT(*), MAX(closed_at) FROM signals
                 WHERE result='VOID' AND closed_at >= datetime('now', '-24 hours')
