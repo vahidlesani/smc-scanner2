@@ -86,9 +86,9 @@ def test_lifecycle_and_update_fetches_use_the_map():
 def test_classify_phantom_wrong_side_ladder():
     from database.realtime_monitor import classify_phantom
     rows = [("S1", "SHIBUSDT", "SPOTBREAK", "LONG", 0.0000245,
-             json.dumps({"targets": [0.00001, 0.000012, 0.000014]})),
+             json.dumps({"targets": [0.00001, 0.000012, 0.000014]}), "1d"),
             ("S2", "ETHUSDT", "TECHCLASSIC", "LONG", 2500.0,
-             json.dumps({"targets": [2600, 2700, 2800]}))]
+             json.dumps({"targets": [2600, 2700, 2800]}), "4h")]
     v = classify_phantom(rows)
     assert v.get("S1") == "wrong-side ladder targets"
     assert "S2" not in v
@@ -97,14 +97,19 @@ def test_classify_phantom_wrong_side_ladder():
 def test_classify_phantom_twin_positions():
     from database.realtime_monitor import classify_phantom
     rows = [("NEW", "SHIBUSDT", "SPOTBREAK", "LONG", 0.00002,
-             json.dumps({"targets": [0.000022]})),
+             json.dumps({"targets": [0.000022]}), "4h"),
             ("OLD", "SHIBUSDT", "SPOTBREAK", "LONG", 0.00002,
-             json.dumps({"targets": [0.000022]})),
+             json.dumps({"targets": [0.000022]}), "4h"),
             ("OTHER", "ADAUSDT", "PINVAL", "LONG", 0.9,
-             json.dumps({"targets": [0.95]}))]
+             json.dumps({"targets": [0.95]}), "1d"),
+            # r55: same symbol+source+direction on a DIFFERENT trigger TF is
+            # legitimate coexistence — never a phantom twin.
+            ("MULTI", "SHIBUSDT", "SPOTBREAK", "LONG", 0.00002,
+             json.dumps({"targets": [0.000022]}), "1d")]
     v = classify_phantom(rows)
     assert v.get("OLD", "").startswith("twin of NEW")
     assert "NEW" not in v and "OTHER" not in v
+    assert "MULTI" not in v, "cross-TF spot positions are not twins"
 
 
 def test_spot_candidate_rebuilds_wrong_side_targets():

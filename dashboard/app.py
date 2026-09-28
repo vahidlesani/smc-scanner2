@@ -33,6 +33,15 @@ _BOOT_AT = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 # every route of this server (the Railway domain is public — nothing leaks).
 from webapp_viva import install_viva_app
 install_viva_app(app)
+
+# r55 (Viva: «اپلیکیشن دقیقا باید مثل تلگرام عمل بکنه»): the 5s lifecycle
+# tailer lives in the web process — it watches confirmed/tp/closed stamps and
+# fires the phone pushes. Fail-open: a push outage never touches the scanner.
+try:
+    from database.app_push import start_push_tailer as _spt55
+    _spt55()
+except Exception as _tail_exc:
+    print(f"push tailer not started: {_tail_exc}")
 CHANNEL_NAME = SETTINGS.channel_name
 
 try:
@@ -390,14 +399,93 @@ def health():
     scanner = app.config.get("VIVA_SCANNER_THREAD")
     scanner_alive = scanner.is_alive() if scanner is not None else None
     status = "ok" if scanner_alive is not False else "degraded"
-    return jsonify({
+    payload = {
         "status": status,
         "version": SETTINGS.version,
         "confirmed_only": True,
         "scanner_alive": scanner_alive,
         "boot_sha": _BOOT_SHA,
         "boot_at": _BOOT_AT,
-    }), (200 if status == "ok" else 503)
+    }
+    # r55 DIAGNOSTICS (Viva 09-28: «ببین علت طبیعیه یا گیت خفه‌کننده یا باگ؟؟»)
+    # Everything below is fail-open: a broken probe never degrades /health.
+    import json as _json
+    diag: dict = {}
+    try:   # the app's state engine — the 09-28 freeze detector
+        import webapp_viva as _wv
+        st = _wv._STATE_CACHE.get("state") or {}
+        feed = st.get("feed") or []
+        pend = [x for x in feed if x.get("result") == "PENDING"]
+        diag["app_state"] = {
+            "last_rebuild_error": str(getattr(_wv, "_LAST_STATE_ERROR", "") or ""),
+            "cache_age_s": (round(time.monotonic() - _wv._STATE_CACHE["at"], 1)
+                            if _wv._STATE_CACHE.get("state") else None),
+            "feed_rows": len(feed),
+            "newest_created_at": str(feed[0].get("time") or "") if feed else "",
+            "newest_pending_at": str(pend[0].get("time") or "") if pend else "",
+        }
+    except Exception as _e1:
+        diag["app_state"] = {"error": str(_e1)[:80]}
+    try:   # lane activity: last 24h per setup/source + spot + VOID
+        from database.db import db_cursor
+        with db_cursor() as c:
+            c.execute("""
+                SELECT COALESCE(setup_code, source) AS lane, COUNT(*),
+                       SUM(CASE WHEN confirmed=TRUE THEN 1 ELSE 0 END),
+                       MAX(created_at), MAX(confirmed_at)
+                FROM signals
+                WHERE created_at >= (NOW() - INTERVAL '24 hours')
+                GROUP BY 1 ORDER BY MAX(created_at) DESC
+            """ if getattr(__import__("database.db", fromlist=["db"]).db, "USE_POSTGRES", False) else """
+                SELECT COALESCE(setup_code, source) AS lane, COUNT(*),
+                       SUM(CASE WHEN confirmed=1 THEN 1 ELSE 0 END),
+                       MAX(created_at), MAX(confirmed_at)
+                FROM signals
+                WHERE created_at >= datetime('now', '-24 hours')
+                GROUP BY 1 ORDER BY MAX(created_at) DESC
+            """)
+            diag["lanes_24h"] = [
+                {"lane": r[0], "total": int(r[1] or 0), "confirmed": int(r[2] or 0),
+                 "last_created": str(r[3] or ""), "last_confirmed": str(r[4] or "")}
+                for r in c.fetchall()]
+            c.execute("""
+                SELECT COUNT(*), MAX(closed_at) FROM signals
+                WHERE result='VOID' AND closed_at >= (NOW() - INTERVAL '24 hours')
+            """ if getattr(__import__("database.db", fromlist=["db"]).db, "USE_POSTGRES", False) else """
+                SELECT COUNT(*), MAX(closed_at) FROM signals
+                WHERE result='VOID' AND closed_at >= datetime('now', '-24 hours')
+            """)
+            _v = c.fetchone()
+            diag["void_24h"] = {"count": int(_v[0] or 0), "last": str(_v[1] or "")}
+            c.execute("SELECT symbol, source, direction, created_at FROM signals "
+                      "WHERE source ILIKE '%SPOT%' ORDER BY created_at DESC LIMIT 1"
+                      if getattr(__import__("database.db", fromlist=["db"]).db, "USE_POSTGRES", False)
+                      else "SELECT symbol, source, direction, created_at FROM signals "
+                           "WHERE upper(source) LIKE '%SPOT%' ORDER BY created_at DESC LIMIT 1")
+            _s = c.fetchone()
+            diag["spot_last"] = ({"symbol": _s[0], "source": _s[1],
+                                  "direction": _s[2], "created_at": str(_s[3] or "")}
+                                 if _s else None)
+    except Exception as _e2:
+        diag["db"] = {"error": str(_e2)[:120]}
+    try:   # KV liveness: scanner heartbeat, spot lane reason, funnel, push tail
+        from database.bot_kv import get_json as _gj
+        hb = _gj("scanner_heartbeat", {}) or {}
+        diag["heartbeat"] = {"when": hb.get("when"), "stage": hb.get("stage"),
+                             "last_scan": hb.get("last_scan"),
+                             "last_monitor": hb.get("last_monitor")}
+        sp = _gj("spot_lane_status", {}) or {}
+        diag["spot_lane"] = {"reason": sp.get("reason"), "at": sp.get("at"),
+                             "stats": sp.get("stats")}
+        try:
+            from database.app_push import tail_health, subscriber_count
+            diag["push_tail"] = dict(tail_health(), subs=subscriber_count())
+        except Exception as _e3:
+            diag["push_tail"] = {"error": str(_e3)[:80]}
+    except Exception as _e4:
+        diag["kv"] = {"error": str(_e4)[:80]}
+    payload["diag"] = diag
+    return jsonify(payload), (200 if status == "ok" else 503)
 
 
 if __name__ == "__main__":

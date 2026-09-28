@@ -335,7 +335,7 @@ _FEED_SQL = """
            confirmations, setup_code, target_state_json, leverage, margin_usd
     FROM signals
     ORDER BY created_at DESC
-    LIMIT 120
+    LIMIT 200
 """
 
 
@@ -405,7 +405,7 @@ def _fetch_state() -> Dict[str, Any]:
     answers INSTANTLY while one background thread rebuilds (at most one
     concurrent rebuild — duplicate tabs no longer multiply DB/CPU work).
     Cold boot still builds once inline (there is nothing to serve yet)."""
-    global _STATE_CACHE, _STATE_REBUILDING
+    global _STATE_CACHE, _STATE_REBUILDING, _LAST_STATE_ERROR
     if _demo_mode():
         return _demo_payload()
     _now = time.monotonic()
@@ -416,9 +416,14 @@ def _fetch_state() -> Dict[str, Any]:
             _STATE_REBUILDING["flag"] = True
 
             def _bg_rebuild():
+                global _LAST_STATE_ERROR
                 try:
                     _rebuild_state()
                 except Exception as _exc:
+                    # r55 (the 09-28 freeze): one failing rebuild must NEVER
+                    # leave the app on an hours-old snapshot with no trace —
+                    # the error is surfaced on /health immediately.
+                    _LAST_STATE_ERROR = f"{type(_exc).__name__}: {_exc}"[:200]
                     print(f"state bg rebuild failed: {_exc}")
                 finally:
                     _STATE_REBUILDING["flag"] = False
@@ -432,7 +437,7 @@ def _rebuild_state() -> Dict[str, Any]:
     # Short server-side snapshot cache: the dashboard polls frequently, but the
     # underlying state is DB-heavy. This keeps refresh responsiveness while
     # preventing duplicate full DB snapshots across tabs/clients.
-    global _STATE_CACHE
+    global _STATE_CACHE, _LAST_STATE_ERROR
     if _demo_mode():
         return _demo_payload()
     try:
@@ -520,22 +525,26 @@ def _rebuild_state() -> Dict[str, Any]:
             )
 
             # ── winrate per setup: current day only
-            c.execute(f"""
-                SELECT source, MAX(strategy_fa) AS fa, COUNT(*) AS total,
-                       SUM(CASE WHEN (result='WIN' OR partial_win=TRUE) THEN 1 ELSE 0 END) AS wins,
-                       SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) AS losses,
-                       SUM(CASE WHEN result='PENDING' THEN 1 ELSE 0 END) AS pending,
-                       AVG(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) AS avg_pnl,
-                       AVG(CASE WHEN result='WIN' THEN pnl_pct END) AS avg_win,
-                       AVG(CASE WHEN result='LOSS' THEN pnl_pct END) AS avg_loss,
-                       MAX(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) AS best,
-                       MIN(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) AS worst,
-                       AVG(score) AS avg_score, MAX(created_at) AS last
-                FROM signals
-                GROUP BY source
-                ORDER BY MAX(created_at) DESC
-            """)
-            for r in c.fetchall():
+            try:
+                c.execute("""
+                    SELECT source, MAX(strategy_fa) AS fa, COUNT(*) AS total,
+                           SUM(CASE WHEN (result='WIN' OR partial_win=TRUE) THEN 1 ELSE 0 END) AS wins,
+                           SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) AS losses,
+                           SUM(CASE WHEN result='PENDING' THEN 1 ELSE 0 END) AS pending,
+                           AVG(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) AS avg_pnl,
+                           AVG(CASE WHEN result='WIN' THEN pnl_pct END) AS avg_win,
+                           AVG(CASE WHEN result='LOSS' THEN pnl_pct END) AS avg_loss,
+                           MAX(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) AS best,
+                           MIN(CASE WHEN result IN ('WIN','LOSS') THEN pnl_pct END) AS worst,
+                           AVG(score) AS avg_score, MAX(created_at) AS last
+                    FROM signals
+                    GROUP BY source
+                    ORDER BY MAX(created_at) DESC
+                """)
+                _setup_rows55 = c.fetchall()
+            except Exception:
+                _setup_rows55 = []
+            for r in _setup_rows55:
                 (name, fa, total, wins, losses, pending, avg_pnl, avg_win, avg_loss, best, worst, avg_score, last) = r
                 total, wins, losses = int(total or 0), int(wins or 0), int(losses or 0)
                 closed = wins + losses
@@ -564,16 +573,20 @@ def _rebuild_state() -> Dict[str, Any]:
                                             pending=0, wr=0.0, avg_pnl=None, avg_win=None, avg_loss=None, best=None,
                                             worst=None, avg_score=None, last="امروز بدون سیگنال", active=True))
             # ── hit notifications (TP/SL/close/confirm lifecycle feed)
-            c.execute(f"""
-                SELECT symbol, public_code, tp1_hit_at, closed_at, result, pnl_pct,
-                       created_at, confirmed_at, partial_win, tp1, tp2, sl
-                FROM signals
-                WHERE tp1_hit=TRUE OR result IN ('WIN','LOSS')
-                       OR (confirmed=TRUE AND result='PENDING')
-                ORDER BY COALESCE(closed_at, tp1_hit_at, confirmed_at, created_at) DESC
-                LIMIT 80
-            """)
-            for r in c.fetchall():
+            try:
+                c.execute("""
+                    SELECT symbol, public_code, tp1_hit_at, closed_at, result, pnl_pct,
+                           created_at, confirmed_at, partial_win, tp1, tp2, sl
+                    FROM signals
+                    WHERE tp1_hit=TRUE OR result IN ('WIN','LOSS')
+                           OR (confirmed=TRUE AND result='PENDING')
+                    ORDER BY COALESCE(closed_at, tp1_hit_at, confirmed_at, created_at) DESC
+                    LIMIT 80
+                """)
+                _hit_rows55 = c.fetchall()
+            except Exception:
+                _hit_rows55 = []
+            for r in _hit_rows55:
                 (symbol, code, tp1_at, closed_at, result, pnl, created_at, confirmed_at,
                  partial_win, tp1, tp2, sl) = r
                 res = "WIN" if (result == "WIN" or partial_win) else str(result or "PENDING")
@@ -618,9 +631,13 @@ def _rebuild_state() -> Dict[str, Any]:
         # live POSITIONS (confirmed, still running) on top of the chains list
         try:
             with db_cursor() as c2:
+                # r55 FIX: the SELECT listed 10 columns but the unpack wanted
+                # 15 — this section had NEVER run (silent except-pass). Now it
+                # selects what it unpacks and feeds the app's LIVE positions.
                 c2.execute(f"""
                     SELECT signal_id, symbol, source, direction, entry, sl, score,
-                           public_code, trigger_timeframe, created_at
+                           public_code, trigger_timeframe, created_at, tp1, tp2,
+                           leverage, margin_usd, target_state_json
                     FROM signals
                     WHERE created_at >= {_db_placeholder()} AND confirmed=TRUE AND result='PENDING' AND closed_at IS NULL
                     ORDER BY created_at DESC LIMIT 12
@@ -700,8 +717,16 @@ def _rebuild_state() -> Dict[str, Any]:
         except Exception:
             payload["funnel"] = {}
         _STATE_CACHE.update(state=payload, at=time.monotonic())
+        _LAST_STATE_ERROR = ""
         return payload
     except Exception as exc:
+        # r55 (the 09-28 freeze): a mid-rebuild exception used to flip the
+        # app to the DEMO board or freeze it for hours. Keep the last good
+        # snapshot serving (stale-but-real) and surface the error on /health.
+        _LAST_STATE_ERROR = f"{type(exc).__name__}: {exc}"[:200]
+        print(f"state rebuild failed: {_LAST_STATE_ERROR}")
+        if _STATE_CACHE.get("state") is not None:
+            return _STATE_CACHE["state"]
         payload = _demo_payload()
         payload["db_error"] = str(exc)[:120]
         return payload
@@ -1146,6 +1171,7 @@ def api_logout():
 
 _STATE_CACHE: Dict[str, Any] = {"state": None, "at": 0.0}
 _STATE_REBUILDING = {"flag": False}
+_LAST_STATE_ERROR = ""  # r55: last /app/api/state rebuild failure (→ /health)
 
 
 @viva_app.route("/app/api/state")
@@ -1262,6 +1288,27 @@ def api_control():
 
 
 # ────────────────────────────── PWA assets ──────────────────────────────
+@viva_app.route("/app/api/push/key")
+def api_push_key():
+    from database.app_push import public_key
+    return jsonify({"public_key": public_key()})
+
+
+@viva_app.route("/app/api/push/subscribe", methods=["POST"])
+def api_push_subscribe():
+    from database.app_push import subscribe
+    body = request.get_json(silent=True) or {}
+    ok = subscribe(body.get("subscription") or {})
+    return jsonify({"ok": ok}), (200 if ok else 400)
+
+
+@viva_app.route("/app/api/push/unsubscribe", methods=["POST"])
+def api_push_unsubscribe():
+    from database.app_push import unsubscribe
+    body = request.get_json(silent=True) or {}
+    return jsonify({"ok": unsubscribe(str(body.get("endpoint") or ""))})
+
+
 @viva_app.route("/app/manifest.webmanifest")
 def pwa_manifest():
     manifest = {
@@ -1288,6 +1335,23 @@ const SHELL = [['/app/fonts/Vazirmatn-Regular.woff2','font'],['/app/fonts/Vazirm
   ['/app/icons/icon-192.png','img'],['/app/icons/icon-512.png','img']];
 self.addEventListener('install', e => { self.skipWaiting(); });
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+// r55: real phone push — «به گوشی نوتیف نمیاد»
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_) { d = { title: 'VIVA', body: (e.data && e.data.text()) || '' }; }
+  e.waitUntil(self.registration.showNotification(d.title || 'VIVA Signals', {
+    body: d.body || '', tag: d.tag || 'viva', renotify: true,
+    icon: '/app/icons/icon-192.png', badge: '/app/icons/icon-192.png',
+    dir: 'rtl', lang: 'fa'
+  }));
+});
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(clients.matchAll({ type: 'window' }).then(list => {
+    for (const c of list) if ('focus' in c) return c.focus();
+    return clients.openWindow('/app');
+  }));
+});
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET') return;
@@ -1570,6 +1634,10 @@ nav button.on .tiline{width:16px;height:2.5px;border-radius:2px;background:var(-
 
  <section class="page" id="pg-signals">
   <h1 class="pg">Signals</h1><div class="sub" id="sigCount">—</div>
+  <div class="card" id="liveConfirmsCard" style="display:none;border-color:rgba(44,229,167,.35)">
+   <b style="font-size:13px;color:#2ce5a7">⚡ تأییدهای زنده — همان لحظهٔ تأیید</b>
+   <div id="liveConfirms" style="margin-top:8px"></div>
+  </div>
   <div class="fchips" id="fchips"></div>
   <div id="sigList"></div>
  </section>
@@ -1761,6 +1829,18 @@ async function pollV(){
 function render(){
  if(!STATE)return;
  if(STATE.demo)document.getElementById('demoBar').style.display='block';
+ /* r55 LIVE CONFIRMS — «دقیقاً مثل تلگرام، همان لحظهٔ تأیید» */
+ {
+  const conf=(STATE.hits||[]).filter(h=>h.kind==='confirm').slice(0,6);
+  const card=document.getElementById('liveConfirmsCard');
+  if(card){card.style.display=conf.length?'block':'none';
+   document.getElementById('liveConfirms').innerHTML=conf.map(h=>
+    `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06)">
+      <span style="width:8px;height:8px;border-radius:50%;background:#2ce5a7;box-shadow:0 0 8px #2ce5a7;display:inline-block"></span>
+      <b style="font-size:13px">${fnum(h.symbol)}</b>
+      <span class="ssub" style="flex:1">${fnum(h.detail)}</span>
+      <span class="ssub">${ago(h.time)}</span></div>`).join('');}
+ }
  const feed=STATE.feed||[],cl=closed();
  const wins=cl.filter(x=>x.result==='WIN').length,loss=cl.filter(x=>x.result==='LOSS').length;
  const be=cl.length-wins-loss;
@@ -1885,11 +1965,28 @@ function renderAlerts(){
    <div class="ssub" style="margin-top:6px">${fnum(h.detail)}</div></div>`).join('')
   :'<div class="empty">🔕 No alerts yet.<br>Signal notifications will appear here.</div>';
 }
-function askNote(){
+async function enablePush(){
+ const el=document.getElementById('noteState');
  if(!('Notification'in window))return;
- Notification.requestPermission().then(()=>renderAlerts());
+ const perm=await Notification.requestPermission();
+ renderAlerts();
+ try{
+  if(perm!=='granted')return;
+  if(!('serviceWorker'in navigator))return;
+  const j=await fetch('/app/api/push/key').then(r=>r.json()).catch(()=>({}));
+  const key=j.public_key;if(!key)return;
+  const b64ToU8=b=>{const p='='.repeat((4-b.length%4)%4);const raw=atob((b+p).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)))};
+  const reg=await navigator.serviceWorker.register('/app/sw.js');
+  const ready=await navigator.serviceWorker.ready;
+  let sub=await ready.pushManager.getSubscription();
+  if(!sub)sub=await ready.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64ToU8(key)});
+  const r=await fetch('/app/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscription:sub.toJSON()})});
+  if(r.ok&&el){el.className='note ok';el.textContent='✅ نوتیفیکیشن گوشی فعال شد — تأیید/هیت/استاپ لحظه‌ای می‌آید.';document.getElementById('noteBtn').style.display='none'}
+ }catch(e){}
 }
-document.getElementById('noteBtn').onclick=askNote;
+document.getElementById('noteBtn').onclick=enablePush;
+/* r55: returning users with an existing subscription re-sync it silently */
+if(('Notification'in window)&&Notification.permission==='granted'&&'serviceWorker'in navigator)setTimeout(enablePush,2500);
 function go(t){
  document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
  document.getElementById('pg-'+t).classList.add('on');
@@ -1937,7 +2034,7 @@ function openDetail(sid){
   <div class="ssub" style="margin-top:8px">🕓 ${ago(x.time)} • ${tehran(x.time)}</div>`;
 }
 function closeSheet(){document.getElementById('sheetbg').style.display='none';document.getElementById('sheet').classList.remove('on')}
-load();setInterval(pollV,10000);setInterval(pollPrices,10000);setInterval(load,300000);let TOUCH={};
+load();setInterval(pollV,3000);setInterval(pollPrices,8000);setInterval(load,300000);let TOUCH={};
 /* r39 (Viva 09-26, «اپ آپدیت نمیشه»): on resume the PWA used to sit on the
    frozen snapshot until the next 60s tick — refresh the moment it returns. */
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)load()});

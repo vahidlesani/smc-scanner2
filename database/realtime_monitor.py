@@ -42,15 +42,17 @@ def classify_phantom(rows, strategy_version: str = "") -> Dict[str, str]:
     • WRONG-SIDE LADDER: a LONG whose ladder targets sit AT/BELOW entry (or a
       SHORT's above) can only «win» instantly and fictitiously — the daily
       SHIB phantom (+$309, «فروش روی 0.00001») was exactly this.
-    • TWIN POSITION: the same (symbol, source, direction) holding MORE THAN
-      ONE PENDING paper position — the app re-registers an identical clone
-      every day; only the NEWEST may live.
+    • TWIN POSITION: the same (symbol, source, direction, trigger-TF) holding
+      MORE THAN ONE PENDING paper position — the app re-registers an identical
+      clone every day; only the NEWEST may live. r55: the trigger TF joined
+      the key — the SAME symbol legitimately holds a 4h AND a 1d spot
+      position at once; those were being VOIDed as "twins".
     rows: newest first, tuples (signal_id, symbol, source, direction, entry,
-    target_state_json)."""
+    target_state_json, trigger_timeframe)."""
     verdicts: Dict[str, str] = {}
     seen = {}
     for (signal_id, symbol, source, direction, entry,
-         target_state_json) in rows:
+         target_state_json, trigger_tf) in rows:
         signal_id = str(signal_id)
         try:
             entry_f = float(entry or 0)
@@ -73,7 +75,8 @@ def classify_phantom(rows, strategy_version: str = "") -> Dict[str, str]:
             if targets and all(sign * (t - entry_f) <= 1e-12 for t in targets):
                 verdicts[signal_id] = "wrong-side ladder targets"
                 continue
-        key = (str(symbol or "").upper(), str(source or ""), str(direction or ""))
+        key = (str(symbol or "").upper(), str(source or ""), str(direction or ""),
+               str(trigger_tf or "").lower())
         if key in seen:
             verdicts[signal_id] = f"twin of {seen[key]}"
         else:
@@ -89,7 +92,8 @@ def void_phantom_positions() -> int:
     try:
         with legacy_db.db_cursor() as cursor:
             cursor.execute(f"""
-                SELECT signal_id, symbol, source, direction, entry, target_state_json
+                SELECT signal_id, symbol, source, direction, entry, target_state_json,
+                       trigger_timeframe
                 FROM signals
                 WHERE confirmed={truth} AND confirmation_sent={truth}
                   AND result='PENDING' AND closed_at IS NULL

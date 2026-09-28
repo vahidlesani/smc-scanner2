@@ -115,8 +115,8 @@ def test_js_refreshes_on_resume():
     src = _src()
     assert "visibilitychange" in src and "pageshow" in src
     # r41: the 60s blind poll grew into the version-probe live loop
-    assert "setInterval(pollV,10000)" in src
-    assert "setInterval(pollPrices,10000)" in src
+    assert "setInterval(pollV,3000)" in src  # r55: the app mirrors Telegram within seconds
+    assert "setInterval(pollPrices,8000)" in src
     assert "setInterval(load,300000)" in src
 
 

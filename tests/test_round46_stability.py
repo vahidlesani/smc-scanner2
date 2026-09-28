@@ -44,7 +44,8 @@ def test_strategy_and_hits_tables_are_all_time():
     part = src.split("GROUP BY source")[0][-400:]
     assert "WHERE created_at >=" not in part
     # the hits feed no longer takes a cutoff parameter
-    assert 'LIMIT 80\n            """)' in src
+    assert 'LIMIT 80' in src  # r55: the hits section re-indented under its own guard
+    assert 'except Exception:' in src
 
 
 def test_empty_state_copy_is_journal_wide():
