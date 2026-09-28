@@ -375,3 +375,4 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
 - تست: test_round55 ×13 + به‌روزرسانیِ round39/46/53 (مجموع **672P/1skip**).
 
 - **r55.1 (همان روز، دیتای زندهٔ /health):** علتِ سکوتِ اسپوت **گیتِ بودجه** بود نه باگ: پاسِ ۰۰:۴۳Z با found=87 «همهٔ» سقفِ 16تاییِ روزِ UTC را در یک پاسِ ۸.۵ دقیقه‌ای سوزاند و budget_left=0 ماند → سکوت تا نیمه‌شبِ UTC بعدی. اصلاح: تاریخِ بودجه = روزِ **تهران** + سقفِ per-pass (SPOT_MAX_PER_PASS=3) → انتشار قطره‌ای در طول روز (ضدِ بورست، ضدِ گرسنگی). باگِ dialectِ probe‌های /health (attribute 'db' غلط) هم اصلاح شد.
+- r55.2: پروب‌های ۲۴ساعتهٔ /health با castِ درستِ text اجرا شدند — دیتا: PINVAL 34/24h (آخرین تأیید 01:50Z)، TECHCLASSIC 27 (00:05Z)، TLBREAK 4 (23:36Z)، ALBROX 0؛ spot reason=ok با found=87/published=16/**budget_left=0** → سکوتِ اسپوت = بودجه، نه باگ (r55.1 پیس شد). HEAD `dccafe2`.
