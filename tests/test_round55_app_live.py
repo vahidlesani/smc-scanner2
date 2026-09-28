@@ -214,20 +214,31 @@ def test_push_endpoints_exist_and_are_locked():
     assert "/app/api/push" not in seg
 
 
-# ── 5. the spot pacing law (the 09-28 diagnosis: found 87 → 16 in ONE pass
-#      → budget_left 0 → 23h of silence; the gate, not a bug) ────────────────
-def test_spot_budget_is_paced_per_pass_and_tehran_day():
-    import main as M
-    _MemKV.data["spot_daily"] = {"date": "2026-09-27", "count": 0}  # stale date
-    with mock.patch("database.bot_kv.get_json", _MemKV.get_json), \
-         mock.patch("database.bot_kv.set_json", _MemKV.set_json), \
-         mock.patch.dict(os.environ, {"SPOT_MAX_PER_DAY": "16",
-                                      "SPOT_MAX_PER_PASS": "3"}):
-        left = M._spot_daily_left(pass_cap=1)
-        assert left == 3, "a fresh day allows at most 3 per pass"
-        _MemKV.data["spot_daily"] = {"date": M._spot_tehran_date(), "count": 15}
-        assert M._spot_daily_left(pass_cap=1) == 1, "the daily cap still binds"
-        _MemKV.data["spot_daily"] = {"date": M._spot_tehran_date(), "count": 16}
-        assert M._spot_daily_left(pass_cap=1) == 0, "cap spent → the day is done"
-        _MemKV.data["spot_daily"] = {"date": M._spot_tehran_date(), "count": 2}
-        assert M._spot_daily_left() == 14, "no pass_cap → plain day budget"
+# ── 5. r56 (Viva: «من کی گفتم ۱۶ تا؟؟ محدودیت اسپات نداریم») — the whole
+#      budget family is DEAD; only the dedup stamps remain ───────────────────
+def test_spot_has_no_budget_caps_at_all():
+    src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
+    for gone in ("SPOT_MAX_PER_DAY", "SPOT_MAX_PER_PASS", "SPOT_ALERT_MAX_PER_DAY",
+                 "_spot_daily_left", "_spot_daily_count", "_spot_alert_daily_left",
+                 "_spot_alert_daily_count", "budget_left"):
+        assert gone not in src, f"{gone} must not exist"
+    assert "no budget" in src  # the publish loop documents the law
+
+
+def test_spot_pass_runs_offloop_single_flight():
+    """r56 Railway optimisation: the ~8.5-min spot pass must never stall the
+    monitor/confirm cadence — it runs in its own single-flight thread."""
+    src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
+    seg = src.split("# r56 RAILWAY OPTIMISATION")[1][:1800]
+    assert "threading.Thread(" in seg and "_SPOT_THREAD[0].start()" in seg
+    assert "slot skipped, no stacking" in seg
+    assert src.count("_SPOT_THREAD = [None]") == 1
+
+
+def test_multi_tf_breaks_all_publish_no_cap():
+    """«شاید یک نماد در چند تایم فریم در یک روز ناحیه الگو یا ترند مهمی رو
+    بشکنه و تایید بشه» — the stamp key is (symbol, tf, pattern), so the same
+    symbol publishes per-TF breaks, and there is NO daily counter anywhere."""
+    src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
+    assert 'key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"' in src
+    assert "for cand in pending:   # r56: no budget" in src

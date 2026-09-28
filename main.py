@@ -626,7 +626,10 @@ def run_discovery_scan() -> Dict[str, int]:
 # The lane runs the SPOT engine (LONG only · bullish shapes only · TLBREAK +
 # TECHCLASSIC · 4h/1d/3d/1w · LOG-scale chart · green measured box) on the same
 # liquidity watchlist, one full pass per hour, and publishes ONLY fully-formed
-# signals — at most SPOT_MAX_PER_DAY a day, each (symbol, tf, shape) once.
+# signals — NO daily budget (Viva 09-28, r56: «محدودیت اسپات نداریم … هر وقت
+# موقعیت بود بیام بده»): a symbol may break an important pattern/trend area in
+# SEVERAL timeframes the same day and every one of them is delivered. The only
+# anti-spam layer is the per (symbol, tf, shape) stamp window.
 def _spot_enabled() -> bool:
     return str(os.getenv("SPOT_ENGINE_ENABLED", "1")).strip().lower() in {"1", "true", "on", "yes"}
 
@@ -653,83 +656,6 @@ def _spot_stamp(key: str, window_hours: float, commit: bool = True) -> bool:
         return False
     except Exception:
         return False
-
-
-def _spot_tehran_date() -> str:
-    """The spot budget counts HIS day — Tehran midnight (TIMEZONE-IRAN law),
-    never UTC: a 03:30 Tehran reset made the first pass of the UTC day dump
-    the whole budget in one 8-minute burst and leave 23h of silence."""
-    try:
-        from zoneinfo import ZoneInfo
-        return datetime.now(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d")
-    except Exception:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
-def _spot_daily_left(pass_cap: int = 0) -> int:
-    """Daily publication budget for the spot channel — plus (r55) a per-pass
-    PACING cap: the 09-28 pass spent all 16 in one pass (found 87, dur 8.5m)
-    and the lane sat silent for the rest of the day. Detections trickle out
-    SPOT_MAX_PER_PASS per pass instead — anti-burst, never anti-signal."""
-    try:
-        from database.bot_kv import get_json as _g, set_json as _s
-        # r35 (Viva 09-26, «گیت‌های خفه‌کننده روی اسپات نباشه»): the dedup
-        # stamps (per symbol+tf+pattern) and the alert cooldowns remain the
-        # anti-spam layer; the budget is only the last line now.
-        cap = max(1, int(os.getenv("SPOT_MAX_PER_DAY", "16") or 16))
-        today = _spot_tehran_date()
-        data = _g("spot_daily", {}) or {}
-        if str(data.get("date")) != today:
-            data = {"date": today, "count": 0}
-            _s("spot_daily", data)
-        day_left = max(0, cap - int(data.get("count") or 0))
-        if pass_cap <= 0:
-            return day_left
-        return min(day_left, max(0, int(os.getenv("SPOT_MAX_PER_PASS", "3") or 3)))
-    except Exception:
-        return 1
-
-
-def _spot_daily_count() -> None:
-    try:
-        from database.bot_kv import get_json as _g, set_json as _s
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        data = _g("spot_daily", {}) or {}
-        if str(data.get("date")) != today:
-            data = {"date": today, "count": 0}
-        data["count"] = int(data.get("count") or 0) + 1
-        _s("spot_daily", data)
-    except Exception:
-        pass
-
-
-def _spot_alert_daily_left() -> int:
-    """Daily budget for the spot LADDER warnings — separate from the signal
-    budget («بقیه فقط هشدار ها و تحلیل های مختصر بشه», but never a spam faucet)."""
-    try:
-        from database.bot_kv import get_json as _g, set_json as _s
-        cap = max(0, int(os.getenv("SPOT_ALERT_MAX_PER_DAY", "30") or 30))
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        data = _g("spot_alert_daily", {}) or {}
-        if str(data.get("date")) != today:
-            data = {"date": today, "count": 0}
-            _s("spot_alert_daily", data)
-        return max(0, cap - int(data.get("count") or 0))
-    except Exception:
-        return 0
-
-
-def _spot_alert_daily_count() -> None:
-    try:
-        from database.bot_kv import get_json as _g, set_json as _s
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        data = _g("spot_alert_daily", {}) or {}
-        if str(data.get("date")) != today:
-            data = {"date": today, "count": 0}
-        data["count"] = int(data.get("count") or 0) + 1
-        _s("spot_alert_daily", data)
-    except Exception:
-        pass
 
 
 def _spot_status_write(reason: str, stats: Optional[Dict[str, int]] = None) -> None:
@@ -831,10 +757,7 @@ def run_spot_scan() -> Dict[str, int]:
     # strongest path first — the daily budget only ever spends on the best
     pending.sort(key=lambda c: float(((c.metadata or {}).get("target_ladder") or {})
                                      .get("path_pct") or 0.0), reverse=True)
-    _pass_left55 = _spot_daily_left(pass_cap=1)
-    for cand in pending:
-        if _pass_left55 <= 0:
-            break
+    for cand in pending:   # r56: no budget — every fresh (symbol,tf,shape) publishes
         key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"
                f"{(cand.metadata or {}).get('pattern_type')}")
         window = 72.0 if str(cand.trigger_timeframe) == "3d" else 36.0
@@ -852,8 +775,6 @@ def run_spot_scan() -> Dict[str, int]:
             if chart and tf_channel_publish_confirmed(cand, chart=chart, chat_override=CHAT_ID_SPOT):
                 stats["published"] += 1
                 _spot_stamp(key, window)          # marker ONLY after success
-                _spot_daily_count()
-                _pass_left55 -= 1                 # r55 pacing: max 3 per pass
             elif chart:
                 stats["send_fail"] = stats.get("send_fail", 0) + 1
                 stats["last_error"] = f"publish returned 0 {cand.symbol} code={str((cand.metadata or {}).get('public_code') or cand.signal_id)[:28]}"
@@ -883,9 +804,7 @@ def run_spot_scan() -> Dict[str, int]:
         from bot.messages_v7 import send_spot_alert as _send_spot_alert
         from analysis.spot_engine import (spot_alert_check, spot_alert_commit,
                                           build_spot_alert_candidate)
-        for aitem in ladder:
-            if _spot_alert_daily_left() <= 0:
-                break
+        for aitem in ladder:   # r56: no budget — cooldown stamps are the layer
             try:
                 if not spot_alert_check(aitem):
                     continue
@@ -898,14 +817,12 @@ def run_spot_scan() -> Dict[str, int]:
                 if _send_spot_alert(aitem, chart):
                     spot_alert_commit(aitem)      # marker only AFTER the send
                     stats["alerts"] = stats.get("alerts", 0) + 1
-                    _spot_alert_daily_count()
             except Exception as exc:
                 stats["errors"] += 1
                 print(f"spot alert warning {aitem.get('symbol')}: {exc}")
     except ImportError as exc:
         print(f"spot ladder import failed: {exc}")
     stats["dur_s"] = round(time.monotonic() - started, 1)
-    stats["budget_left"] = _spot_daily_left()
     if stats["found"] and not stats["published"] and not stats.get("alerts"):
         # the lane LIVES but nothing reaches the channel — make that state
         # loud in the app instead of a green «فعال» hiding a dead sender
@@ -916,7 +833,7 @@ def run_spot_scan() -> Dict[str, int]:
           f"symbols={stats['symbols']} found={stats['found']} "
           f"published={stats['published']} stamp_skip={stats.get('stamp_skip', 0)} "
           f"send_fail={stats.get('send_fail', 0)} chart_fail={stats.get('chart_fail', 0)} "
-          f"errors={stats['errors']} budget_left={stats['budget_left']}")
+          f"errors={stats['errors']}")
     return stats
 
 
@@ -2101,6 +2018,7 @@ def main() -> None:
     )
     last_daily_report = ""
     last_weekly_digest = ""
+    _SPOT_THREAD = [None]   # r56: single-flight spot-pass slot
     print(
         f"Scheduler active • next discovery {next_scan.isoformat(timespec='minutes')} • "
         f"monitor every {SETTINGS.monitor_minutes} minutes"
@@ -2127,10 +2045,27 @@ def main() -> None:
             _hb["last_scan"] = now.strftime("%H:%M")
             _hb["stats"] = dict(run_discovery_scan() or {})
             next_scan = _next_aligned_scan(datetime.now(timezone.utc))
-        # ── spot lane on its own cadence (never blocks the futures scan)
+        # ── spot lane on its own cadence (never blocks the futures scan).
+        # r56 RAILWAY OPTIMISATION (his «بهینه‌سازی ریلوی فراموش نشه»): the
+        # pass takes ~8.5 min (24 symbols × 6 TFs) and used to run INLINE in
+        # this loop — every monitor/confirm cycle stalled for it («ستاپ‌ها
+        # کم‌کار شدند» had a second, mechanical cause). It now runs in its
+        # own single-flight thread; a still-running pass skips its slot
+        # instead of stacking.
         if now >= next_spot:
-            _hb["spot_runs"] = _hb.get("spot_runs", 0) + 1
-            _hb["spot_stats"] = dict(run_spot_scan() or {})
+            if _SPOT_THREAD[0] is not None and _SPOT_THREAD[0].is_alive():
+                print("spot pass still running — slot skipped, no stacking")
+            else:
+                _hb["spot_runs"] = _hb.get("spot_runs", 0) + 1
+
+                def _spot_pass_job():
+                    try:
+                        _hb["spot_stats"] = dict(run_spot_scan() or {})
+                    except Exception as _sp_exc:
+                        print(f"spot pass thread failed: {_sp_exc}")
+                _SPOT_THREAD[0] = threading.Thread(
+                    target=_spot_pass_job, name="viva-spot-pass", daemon=True)
+                _SPOT_THREAD[0].start()
             next_spot = now + timedelta(
                 minutes=max(15, int(os.getenv("SPOT_SCAN_MINUTES", "60") or 60)))
         if time.time() >= _hb["next"]:

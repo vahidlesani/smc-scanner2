@@ -21,7 +21,7 @@ def test_spot_stamp_has_commit_flag_and_marks_after_success():
     assert 'stats["published"] += 1' in src and "_spot_stamp(key, window)" in src
     # diagnostic counters land in the surfaced stats
     for counter in ("stamp_skip", "send_fail", "chart_fail", "last_error",
-                    "budget_left", "dur_s"):
+                    "dur_s"):  # r56: no budget_left — the cap is gone
         assert f'"{counter}' in src, counter
 
 

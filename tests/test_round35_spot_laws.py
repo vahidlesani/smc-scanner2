@@ -24,8 +24,13 @@ def test_spot_chart_gets_the_cryptocave_clean_pass():
 # ── 2. the lane is no longer strangled by the daily budget ────────────────
 def test_spot_budgets_raised():
     src = open(f"{REPO}/main.py", encoding="utf-8").read()
-    assert 'os.getenv("SPOT_MAX_PER_DAY", "16")' in src
-    assert 'os.getenv("SPOT_ALERT_MAX_PER_DAY", "30")' in src
+    # r56 (Viva 09-28): «من کی گفتم ۱۶ تا؟؟ … محدودیت اسپات نداریم — هر وقت
+    # موقعیت بود بیام بده». The daily caps (16 signals / 30 alerts) are GONE;
+    # the per (symbol, tf, shape) stamp window is the only anti-spam layer.
+    assert 'SPOT_MAX_PER_DAY' not in src
+    assert 'SPOT_ALERT_MAX_PER_DAY' not in src
+    assert '_spot_stamp(key, window)' in src   # fresh break → publishes
+    assert 'spot_alert_commit(aitem)' in src   # alert cooldown, not a budget
     # the dedup stamp remains the real anti-spam layer
     assert "_spot_stamp(key, window, commit=False)" in src
 
