@@ -180,7 +180,7 @@ def test_health_diag_present_and_fail_open():
 # ── 4. wiring in the served page + phantom law ─────────────────────────────
 def test_page_wires_live_confirms_fast_poll_and_push():
     src = open(os.path.join(ROOT, "webapp_viva.py"), encoding="utf-8").read()
-    assert "تأییدهای زنده" in src and "liveConfirms" in src
+    assert "رویدادهای زنده" in src and "liveConfirms" in src  # r59.4: full lifecycle
     assert "setInterval(pollV,3000)" in src
     assert "pushManager.subscribe" in src and "serviceWorker.register" in src
     assert "addEventListener('push'" in src and "showNotification" in src
