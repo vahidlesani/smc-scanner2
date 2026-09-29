@@ -112,7 +112,8 @@ def test_urgent_watch_exists_and_is_bounded():
     seg = src.split("def _spot_urgent_recheck")[1][:2200]
     assert "spot_urgent_watch" in seg
     assert "[:6]" in seg, "the mini-pass is bounded (Railway-friendly)"
-    assert "2 * 3600.0" in seg, "pins expire after 2h"
+    assert "3600.0" in seg, "pins expire after 1h (r59.3 Railway-diet)"
+    assert "SYMBOL|TF" in seg, "r59.3: pins are per (symbol, tf)"
     # the full pass pins NEAR_BREAK/TOUCH symbols
     seg2 = src.split("# the ladder rides the SAME fetched frames")[1][:1200]
     assert "spot_urgent_watch" in seg2 and "NEAR_BREAK" in seg2
@@ -120,7 +121,7 @@ def test_urgent_watch_exists_and_is_bounded():
 
 def test_urgent_recheck_uses_the_reply_chain():
     src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
-    seg = src.split("def _spot_urgent_recheck")[1][:2600]
+    seg = src.split("def _spot_urgent_recheck")[1][:4000]
     assert "reply_to=int(_alert_kv.get" in seg
     assert "_spot_stamp(" in seg     # dedupe law holds in the mini-pass too
 

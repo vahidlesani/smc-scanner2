@@ -761,9 +761,10 @@ def run_spot_scan() -> Dict[str, int]:
                 from analysis.spot_engine import scan_spot_alerts
                 _items58 = scan_spot_alerts(symbol, bundle)
                 ladder.extend(_items58)
-                _pin58 = {s: {"ts": _time.time()} for s in (symbol,)
-                          if any(str(i.get("stage")) in ("NEAR_BREAK", "TOUCH")
-                                 for i in _items58)}
+                # pin per SYMBOL|TF so the recheck scans one TF, not six
+                _pin58 = {f"{symbol}|{str(i.get('tf') or '')}": {"ts": _time.time()}
+                          for i in _items58
+                          if str(i.get("stage")) in ("NEAR_BREAK", "TOUCH")}
                 if _pin58:
                     from database.bot_kv import get_json as _g58, set_json as _s58
                     _w58 = _g58("spot_urgent_watch", {}) or {}
@@ -782,6 +783,14 @@ def run_spot_scan() -> Dict[str, int]:
                 _evs57 = scan_spot_update_events(symbol, bundle)
                 _sent57 = []
                 for _ev57 in _evs57:
+                    # r59.3 Railway-diet (Viva: «مصرف بهینه ریلوی»): at most
+                    # 12 CHART RENDERS per pass — every event beyond it still
+                    # PUBLISHES (no publish cap), just text-only. Rendering is
+                    # the single most expensive thing a pass does.
+                    if stats.get("update_charts", 0) >= 12:
+                        if send_spot_event(_ev57):
+                            _sent57.append(_ev57)
+                        continue
                     _chart57 = None
                     try:   # r58: LIVE chart from the SAME bundle (no refetch)
                         _frame57 = (bundle or {}).get(str(_ev57.get("tf") or ""))
@@ -791,6 +800,8 @@ def run_spot_scan() -> Dict[str, int]:
                                 confirmed=True)
                     except Exception as _exc57:
                         print(f"spot update chart warning {_ev57.get('symbol')}: {_exc57}")
+                    if _chart57 is not None:
+                        stats["update_charts"] = stats.get("update_charts", 0) + 1
                     if send_spot_event(_ev57, chart=_chart57):
                         _sent57.append(_ev57)
                 if _sent57:
@@ -1892,20 +1903,25 @@ def _spot_urgent_recheck() -> int:
     try:
         from database.bot_kv import get_json as _g, set_json as _s
         import time as _t
+        # r59.3 Railway-diet: pins are per (SYMBOL|TF) and live 1h — the
+        # mini-pass re-scans ONLY the alerting timeframe (6× less detector
+        # work) instead of all six TFs of the symbol.
         watch = {k: v for k, v in (_g("spot_urgent_watch", {}) or {}).items()
-                 if _t.time() - float((v or {}).get("ts", 0)) < 2 * 3600.0}
+                 if _t.time() - float((v or {}).get("ts", 0)) < 3600.0}
         if not watch:
             return 0
-        syms = sorted(watch.keys())[:6]
+        syms = sorted(watch.keys())[:6]   # keys are "SYMBOL|TF"
         from analysis.spot_engine import spot_signals_for, SPOT_TRIGGERS
         from bot.messages_v7 import (CHAT_ID_SPOT, generate_chart,
                                      tf_channel_publish_confirmed)
         from data.fetcher import get_market_bundle
         published = 0
-        for symbol in syms:
+        for key58 in syms:
+            symbol, _, _want_tf = key58.partition("|")
+            _tfs58 = (_want_tf,) if _want_tf else tuple(SPOT_TRIGGERS)
             try:
                 bundle = get_market_bundle(
-                    symbol, tuple(SPOT_TRIGGERS),
+                    symbol, _tfs58,
                     limits={"4h": 200, "8h": 200, "12h": 210,
                             "1d": 210, "3d": 300, "1w": 210,
                             "5m": 300, "15m": 200})

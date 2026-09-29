@@ -2292,12 +2292,22 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # DETECTION TF — the chart re-refines on ITS OWN tape, every time.
         _rz_list = list(_rz or [])
         if _rz_list and str(_chart_tf or ""):
+            # r59.3 Railway-diet: the per-render refinement is MEMOIZED per
+            # (candidate, tf, newest bar) — 28 update-charts per spot pass no
+            # longer re-run a full zone detection on an unchanged tape.
             try:
                 from analysis.render_kit import detect_zones as _dz59
-                _rz_list = list(_dz59(frame.reset_index(drop=True),
-                                      candidate.direction,
-                                      float(candidate.entry_zone_bottom),
-                                      float(candidate.entry_zone_top)) or [])
+                _zkey59 = (f"zrefine:{candidate.signal_id}:{_chart_tf}:"
+                           f"{str(frame.index[-1])[:16]}")
+                from database.bot_kv import get_json as _zg, set_json as _zs
+                _zmem = _zg(_zkey59)
+                if _zmem is None:
+                    _zmem = _dz59(frame.reset_index(drop=True),
+                                  candidate.direction,
+                                  float(candidate.entry_zone_bottom),
+                                  float(candidate.entry_zone_top)) or []
+                    _zs(_zkey59, _zmem)
+                _rz_list = list(_zmem)
             except Exception:
                 pass
         # r59.2 TARGET LAW: a LONG trades UP → the ≤2 nearest zones ABOVE the

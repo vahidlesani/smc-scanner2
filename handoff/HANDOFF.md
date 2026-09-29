@@ -456,3 +456,15 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
   «🎯 TARGET» margin legend (his ONDO drawing: supply above = short's? no —
   LONG's final target). Probes: CRV/XLM/PENGU/BCH real-data renders — single
   red line, clean flat line, solid→LIVE then dotted. Tests 715P/1skip.
+- **r59.3 (09-29): RAILWAY-DIET + the app-live/livedata follow-ups.** Cost cuts
+  (no law broken — publishes stay uncapped): ① per-render zone refinement now
+  memoized per (candidate, tf, bar) in bot_kv; ② update-event CHART renders
+  budgeted 12/pass (events beyond publish TEXT-ONLY — publish count untouched);
+  ③ urgent-watch pins per (SYMBOL|TF), TTL 1h → mini-pass scans one TF not six;
+  ④ webapp state poll 20→30s + server state cache 8→20s (rebuilds ÷3, prices
+  still 8s + instant first paint). App LIVE price on cards exists for PENDING
+  cards via pollPrices (x.live→LIVE tile) — was dead only because of the stale
+  r41 shell; now ships fresh. Config version → "2026.09.29-r59.3" (/health).
+  Cost math: render was ~1.5-2s CPU/chart × 28/pass + uncached zone detect +
+  6×TF rechecks + 20s full-SQL app polls ≈ the bulk of the ~$0.90/2d; cuts
+  ≈50-70% of steady-state compute.

@@ -409,7 +409,7 @@ def _fetch_state() -> Dict[str, Any]:
     if _demo_mode():
         return _demo_payload()
     _now = time.monotonic()
-    if _STATE_CACHE["state"] is not None and _now - _STATE_CACHE["at"] < 8.0:
+    if _STATE_CACHE["state"] is not None and _now - _STATE_CACHE["at"] < 20.0:
         return _STATE_CACHE["state"]
     if _STATE_CACHE["state"] is not None:
         if not _STATE_REBUILDING["flag"]:
@@ -2059,7 +2059,9 @@ function closeSheet(){document.getElementById('sheetbg').style.display='none';do
    re-fetched only every 5 MINUTES — prices moved but the journal sat frozen.
    The state endpoint has an 8s server cache; polling it every 20s is cheap
    and finally makes the app LIVE. */
-load();setInterval(pollV,3000);setInterval(pollPrices,8000);setInterval(load,20000);let TOUCH={};
+/* r59.3 Railway-diet: state 30s (prices stay 8s + instant first paint) —
+   the journal stays fresh while the DB snapshot rebuilds drop 3×. */
+load();pollPrices();setInterval(pollV,3000);setInterval(pollPrices,8000);setInterval(load,30000);let TOUCH={};
 /* r39 (Viva 09-26, «اپ آپدیت نمیشه»): on resume the PWA used to sit on the
    frozen snapshot until the next 60s tick — refresh the moment it returns. */
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)load()});
