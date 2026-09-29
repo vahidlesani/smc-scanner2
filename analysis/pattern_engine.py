@@ -1337,8 +1337,19 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     # the stop behind its far edge. Bounded so the tool stays honest.
     _tp2_zone60 = ""
     try:
+        # ── r60.4 THE zone-anchor priority (Viva 09-30, verbatim): «من در تایم
+        # تریگر ساپلای و دیمند منطقی میخوام که ریفاین شده باشه» و «تی پی و
+        # استاپ اگر در تایم تریگر دیده نمیشه با توجه به تایم بالاتر محاسبه
+        # بشه». The anchor reads the TRIGGER-TF refined inventory FIRST (the
+        # same boxes his chart shows), then the pattern-TF for context; the
+        # higher-TF metadata inventory joins ONLY when neither showed an
+        # opposing/protective box — for CALCULATION, never for drawing.
         from analysis.render_kit import detect_zones as _dz60
-        _zinv60 = _dz60(pat, direction, float(poi["bottom"]), float(poi["top"])) or []
+        _zinv60 = list(_dz60(trig, direction, float(poi["bottom"]), float(poi["top"])) or [])
+        try:
+            _zinv60 += list(_dz60(pat, direction, float(poi["bottom"]), float(poi["top"])) or [])
+        except Exception:
+            pass
         _buf60 = structural_buffer(entry)
         if direction == "LONG":
             _opp60 = sorted((z for z in _zinv60 if float(z.get("bottom", 0) or 0) > entry),
@@ -1347,6 +1358,18 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
             _opp60 = sorted((z for z in _zinv60
                              if 0 < float(z.get("top", 0) or 0) < entry),
                             key=lambda z: -float(z["top"]))
+        if not _opp60:
+            # fallback: the higher-TF inventory (calculation only, never drawn)
+            _htf60 = list((candidate.metadata or {}).get("htf_zones") or [])
+            if _htf60:
+                _zinv60 = _zinv60 + _htf60
+                if direction == "LONG":
+                    _opp60 = sorted((z for z in _htf60 if float(z.get("bottom", 0) or 0) > entry),
+                                    key=lambda z: float(z["bottom"]))
+                else:
+                    _opp60 = sorted((z for z in _htf60
+                                     if 0 < float(z.get("top", 0) or 0) < entry),
+                                    key=lambda z: -float(z["top"]))
         if _opp60:
             _edge60 = (float(_opp60[0].get("bottom", 0) or 0) if direction == "LONG"
                        else float(_opp60[0].get("top", 0) or 0))

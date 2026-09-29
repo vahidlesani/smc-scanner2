@@ -993,42 +993,6 @@ def _native_patterns_for_frame(frame, direction: str, chart_tf: str,
     return _fresh
 
 
-def merge_htf_zones(chart_zones, htf_zones, price, direction: str = "") -> list:
-    """r60.3 (Viva 09-30): «الگوی تایم بالاتر باید جدا رسم بشه» + «اون
-    باکس‌هایی که گفتم اگر در چارت هست باید رسم بشه چرا نمیشه؟». enrich_render
-    always stored the higher-TF zone inventory (md["htf_zones"]) but nothing
-    ever drew it — his 4h OB/supply boxes were invisible on LTF charts. Here
-    the NEAREST HTF box per side joins the draw list under its own «HTF·»
-    family: separate label, one parent per side (DECLUTTER), never trimmed by
-    the chart-TF diet. HTF boxes anchor targets above and stops behind."""
-    out = list(chart_zones or [])
-    sides = {"above": None, "below": None}
-    for z in (htf_zones or []):
-        try:
-            zlo = float(z.get("bottom", z.get("lo", 0)) or 0)
-            zhi = float(z.get("top", z.get("hi", 0)) or 0)
-        except Exception:
-            continue
-        if zhi <= 0 or zhi < zlo:
-            continue
-        mid = 0.5 * (zlo + zhi)
-        side = "above" if zlo > price else ("below" if zhi < price else None)
-        if side is None:
-            continue
-        d = abs(mid - price)
-        if sides[side] is None or d < sides[side][0]:
-            sides[side] = (d, z)
-    for side in ("above", "below"):
-        hit = sides[side]
-        if not hit:
-            continue
-        z = dict(hit[1])
-        z["kind"] = "HTF·" + str(z.get("kind") or "ZONE")
-        z["htf"] = True
-        out.append(z)
-    return out
-
-
 def _viva_points_xs(points: list, frame) -> list:
     """r60.3 THE multi-TF geometry law (Viva 09-30): «در مولتی، الگو یا ترند
     نباید تغییر بکنه» — the pattern's OWN stored pivots are mapped onto this
@@ -2420,17 +2384,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         for z8 in sorted(_zs8, key=_zone_importance)[:2]]
             if _clean_zone_view and len(_rz_list) > 2:
                 _rz_list = sorted(_rz_list, key=_zone_importance)[:2]
-        # r60.3: the higher-TF boxes join AFTER the chart-TF diet — nearest
-        # per side under the «HTF·» family, so his OB/supply boxes from the
-        # pattern timeframe finally render on the trigger chart.
-        try:
-            _htf_z60 = (candidate.metadata or {}).get("htf_zones")
-            if _htf_z60:
-                _rz_list = merge_htf_zones(_rz_list, _htf_z60,
-                                           float(frame["close"].iloc[-1]),
-                                           str(candidate.direction or ""))
-        except Exception:
-            pass
+        # ── r60.4 THE box law (Viva 09-30, verbatim): «فقط ساپلای و دیمندِ
+        # همون تایم. اگر در چارت تریگر وجود داره رسم بشه» — ONLY trigger-TF
+        # (refined) boxes render. A giant 1–2-TF-higher box on a 15m chart
+        # (his BTC case) is noise; the higher-TF inventory feeds the TP/stop
+        # anchor in pattern_engine when the trigger TF shows nothing — it is
+        # a CALCULATION input, never a drawing.
         for _z in _rz_list:
             # timestamp-anchored when the zone carries its origin time (every
             # zone detected since 09-20 does); legacy rows keep the old rule.

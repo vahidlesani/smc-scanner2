@@ -958,3 +958,39 @@ def gate_ladder(candidate, base) -> None:
     if locked:
         candidate.metadata["tp_gates"] = {"level": float(level),
                                           "locked": locked}
+
+
+def merge_htf_zones(chart_zones, htf_zones, price, direction: str = "") -> list:
+    """r60.3 (Viva 09-30): «الگوی تایم بالاتر باید جدا رسم بشه» + «اون
+    باکس‌هایی که گفتم اگر در چارت هست باید رسم بشه چرا نمیشه؟». enrich_render
+    always stored the higher-TF zone inventory (md["htf_zones"]) but nothing
+    ever drew it — his 4h OB/supply boxes were invisible on LTF charts. Here
+    the NEAREST HTF box per side joins the draw list under its own «HTF·»
+    family: separate label, one parent per side (DECLUTTER), never trimmed by
+    the chart-TF diet. HTF boxes anchor targets above and stops behind."""
+    out = list(chart_zones or [])
+    sides = {"above": None, "below": None}
+    for z in (htf_zones or []):
+        try:
+            zlo = float(z.get("bottom", z.get("lo", 0)) or 0)
+            zhi = float(z.get("top", z.get("hi", 0)) or 0)
+        except Exception:
+            continue
+        if zhi <= 0 or zhi < zlo:
+            continue
+        mid = 0.5 * (zlo + zhi)
+        side = "above" if zlo > price else ("below" if zhi < price else None)
+        if side is None:
+            continue
+        d = abs(mid - price)
+        if sides[side] is None or d < sides[side][0]:
+            sides[side] = (d, z)
+    for side in ("above", "below"):
+        hit = sides[side]
+        if not hit:
+            continue
+        z = dict(hit[1])
+        z["kind"] = "HTF·" + str(z.get("kind") or "ZONE")
+        z["htf"] = True
+        out.append(z)
+    return out

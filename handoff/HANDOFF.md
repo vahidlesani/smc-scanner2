@@ -505,3 +505,9 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
 - Missing OB boxes root cause: enrich_render stores md["htf_zones"] but NOTHING drew it. New merge_htf_zones (module-level, tested) appends nearest HTF box per side under «HTF·» kind after the chart-TF zone diet; wired at the r59.2 site in generate_chart.
 - TC zone anchors: TP2 snapped to nearest opposing pattern-TF box edge (0.55–1.45× path window; metadata tp2_zone); stop hosted behind protective box between entry and structural stop (bounded 0.45–1.10× risk, clamp applied; in _build_candidate after tp2, using render_kit.detect_zones on pat).
 - Suite 739P/1skip. version 2026.09.30-r60.3. Next: visual pass on live charts (he judges), best-line selection polish, PINVAL round, TLBREAK personalization.
+
+## r60.4 — box law + update law (2026-09-30)
+- REVERTED r60.3 HTF-box draw (his BTC 15m complaint: giant 1-2-TF-higher boxes useless). Charts draw ONLY trigger-TF refined zones. merge_htf_zones moved to render_kit (unwired from draw); htf_zones = TP/stop CALC fallback only in the TC anchor: inventory = detect_zones(trig) + detect_zones(pat); opposing/protective search on that; HTF metadata appended only when no opposing box found. Anchor priority tested (trigger-FVG beats pattern-OB at 0.70× vs 1.35× clamped path).
+- Update law: live-break block no longer sends (note stored in metadata, ONE DB write per NEW bar); kills the 23:46+3-repeats family and a big chunk of ~1000 msgs/2h + render cost. Remaining senders: approaching once/candidate, stale-confirm note, material absorb, confirmations, verdicts.
+- Engine-alive: end-to-end detection tests green; TC volume drops by design (fades banned + 12h mint guard per pattern).
+- version 2026.09.30-r60.4. Suite 742P/1skip. Tomorrow (his plan): refine the whole entry/stop/TP management engine; render polish (NEAR thick green line, short dashed tail on 1h charts).

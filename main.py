@@ -1543,23 +1543,29 @@ def monitor_candidates() -> Dict[str, int]:
                 # cannot ever confirm; expiry/invalidation above will close it.
                 continue
 
-            # ── live-break watch (Viva 2026-09-14) — report the crossing the
-            # moment the OPEN pattern candle thrusts beyond the line/edge.
+            # ── r60.4 THE update law (Viva 09-30, verbatim): «آپدیت فقط برای
+            # هشدار نهایی و آماده‌سازی بیاد» — the old live-break chatter
+            # (an update + LIVE CHART per bar while price hovered at the edge:
+            # his 23:46 initial + 3 «هنوز در همان ناحیه» repeats, ~1000 msgs /
+            # 2 h, plus Railway render cost) is DEMOTED to metadata: the note
+            # is still computed and stored as evidence, it just never posts.
+            # Updates that still send: approaching (final-watch), stale/analysis
+            # note, material zone move, confirmation, verdicts.
             if not candidate.metadata.get("technical_confirmation_complete"):
                 try:
                     _pat_frames = frames.get((candidate.symbol, str(candidate.trigger_timeframe or "")))
                     _live_note, _lb_key = _live_break_watch(candidate, (_pat_frames or (None, None, None))[0])
-                    if _live_note and send_setup_update(
-                            candidate, (_pat_frames or (None, None, None))[0],
-                            note_fa=_live_note, critical=True):
-                        stats["live_break"] = stats.get("live_break", 0) + 1
+                    if _live_note:
                         _md = candidate.metadata or {}
-                        _md["live_break_bar"] = _lb_key
-                        candidate.metadata = _md
-                        try:
-                            update_candidate(candidate)
-                        except Exception:
-                            pass
+                        if _md.get("live_break_bar") != _lb_key:
+                            stats["live_break"] = stats.get("live_break", 0) + 1
+                            _md["live_break_bar"] = _lb_key
+                            _md["live_break_note"] = str(_live_note)[:220]
+                            candidate.metadata = _md
+                            try:   # r60.4: ONE metadata write per new bar (Railway diet)
+                                update_candidate(candidate)
+                            except Exception:
+                                pass
                 except Exception as _lb_exc:
                     print(f"live-break watch {candidate.symbol}: {_lb_exc}")
 

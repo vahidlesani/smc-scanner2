@@ -425,7 +425,7 @@ def test_htf_zone_boxes_merge_separately():
     """The missing OB boxes: enrich_render always stored htf_zones but nothing
     drew them. merge_htf_zones joins the NEAREST box per side under the
     «HTF·» family — separate, one parent per side."""
-    from bot.messages_v7 import merge_htf_zones
+    from analysis.render_kit import merge_htf_zones
     chart = [{"kind": "FVG", "bottom": 101.0, "top": 101.5}]
     htf = [
         {"kind": "OB", "bottom": 104.0, "top": 106.0},     # nearest above
@@ -445,7 +445,7 @@ def z_is_htf(z):
 
 
 def test_htf_zone_merge_handles_gaps_and_price_inside():
-    from bot.messages_v7 import merge_htf_zones
+    from analysis.render_kit import merge_htf_zones
     out = merge_htf_zones([], [{"kind": "OB", "bottom": 99.0, "top": 101.0}],
                           price=100.0)                     # price INSIDE the box
     assert out == []                                       # not above/below → skip
@@ -458,7 +458,7 @@ def test_viva_points_xs_projects_across_frames():
     """THE multi-TF law: the pattern's own pivots map onto any frame by TIME —
     a pre-window pivot extrapolates to a NEGATIVE x (the same straight line),
     it is never clamped to 0 and never re-fitted."""
-    from bot.messages_v7 import _viva_points_xs
+    from bot.messages_v7 import _viva_points_xs  # draw helper (chart-side)
     from datetime import datetime, timedelta
     t0 = datetime(2026, 9, 20)
     frame = pd.DataFrame({"x": range(10)})
@@ -511,3 +511,62 @@ def test_tc_tp2_snaps_to_opposing_zone_edge(monkeypatch):
     assert md.get("tp2_zone") in ("OB", "") or md.get("tp2_zone") is None
     if md.get("tp2_zone") == "OB":
         assert cand.tp2 in (100.0, 101.0)
+
+
+# ── 8) r60.4: box law + update law + trigger-TF anchor priority ─────────────
+def test_chart_never_draws_htf_boxes():
+    """THE box law («فقط ساپلای و دیمند همون تایم … رسم بشه»): the chart
+    renderer must NOT merge htf_zones into the draw list — trigger-TF refined
+    boxes only; htf_zones stay a TP/stop CALCULATION input."""
+    src = open("bot/messages_v7.py", encoding="utf-8").read()
+    draw_zone_block = src.split('if _rz_list:')[1][:2000]
+    assert "merge_htf_zones" not in draw_zone_block
+    assert "htf_zones" not in draw_zone_block
+
+
+def test_live_break_updates_never_post():
+    """THE update law («آپدیت فقط برای هشدار نهایی و آماده‌سازی»): the
+    live-break chatter block computes and stores the note but never sends an
+    update (his 23:46 + 3 repeats case, each with a live chart)."""
+    src = open("main.py", encoding="utf-8").read()
+    block = src.split("THE update law")[1].split('except Exception as _lb_exc')[0]
+    assert "send_setup_update" not in block
+    assert 'live_break_note' in block          # evidence kept, silently
+
+
+def test_anchor_prefers_trigger_tf_zones(monkeypatch):
+    """«تایم تریگر ریفاین میخوام»: when BOTH the trigger and the pattern TF
+    offer an opposing zone, TP2 snaps to the TRIGGER-TF edge (nearer box),
+    not the pattern-TF one."""
+    import analysis.setups_experimental  # registers SETUP_NAMES
+    import analysis.pattern_engine as pe
+    import analysis.render_kit as rk
+    from test_pattern_engine import _wedge_frames, _Bundle
+    from analysis.setups_v7 import timeframe_profile
+    pattern, trigger = _wedge_frames()
+    stf, _ref, ttf = timeframe_profile("DAYTRADE")
+    p2 = pattern.tail(pe._FIT_WINDOW.get(stf, 140)).reset_index(drop=True)
+    events = [e for e in pe.scan_edges(p2, trigger, stf) if e["state"] == pe.STATE_BREAK]
+    if not events:
+        pytest.skip("no break event in fixture")
+    ev = events[0]
+    entry_guess = float(ev.get("live") or float(trigger["close"].iloc[-1]))
+    from analysis.trade_management import clamp_path_to_band as _cpb
+    raw_d = abs(float((ev.get("measured") or {}).get("to") or 0.0) - entry_guess)
+    raw_path, _ = _cpb(entry_guess, ttf, raw_d)   # the ACTUAL clamped path tp2 uses
+    assert raw_path > 0
+    z_trig = {"kind": "FVG", "bottom": entry_guess + 0.70 * raw_path,
+              "top": entry_guess + 0.85 * raw_path, "ts0": "2026-09-01 00:00"}
+    z_pat = {"kind": "OB", "bottom": entry_guess + 1.35 * raw_path,
+             "top": entry_guess + 1.45 * raw_path, "ts0": "2026-09-01 00:00"}
+
+    def fake_zones(df, direction, zlo, zhi, *a, **k):
+        return [dict(z_trig if df is trigger else z_pat)]
+
+    monkeypatch.setattr(rk, "detect_zones", fake_zones)
+    cand = pe._build_candidate(_Bundle({"4h": pattern, "1h": pattern, "15m": trigger}),
+                               "DAYTRADE", ev, p2, trigger, stf, ttf, pe._fit_cfg())
+    if cand is None:
+        pytest.skip("no candidate built")
+    assert cand.metadata.get("tp2_zone") == "FVG"      # the TRIGGER-TF box won
+    assert abs(cand.tp2 - z_trig["bottom"]) < 1e-6
