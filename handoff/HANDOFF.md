@@ -441,3 +441,18 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
   candles stay ink per Viva («فعلا همین رنگ بمونه» — cryptocove switch stays
   opt-in). Old spot-alert charts keep their published chain; only future
   sends inherit new laws. Tests 715P/1skip.
+- **r59.2 (09-29, the audit dictation — NO confirm/entry law touched):**
+  ① APP-LIVE ROOT FIX: webapp feed was re-fetched every 5 MINUTES → now 20s
+  (state server-cache is 8s); SW shell viva-shell-r41 was cache-first even for
+  navigations (months-old JS after deploys) → navigations NETWORK-FIRST in a
+  fresh viva-shell-r59 + old-shell sweep on activate + r39 anchor updated.
+  ② clutter: ONE parent line per side (was 2+2), child must be ≥0.8×ATR clear.
+  ③ live-line mid-air stop fixed (PENGU): line paints THROUGH the live bar.
+  ④ render-side smart-break fallback: ≥3 closes beyond a line by ≥0.8×ATR ends
+  the solid leg (XLM solid-across-price bug). ⑤ extension law: broken edges
+  extend only for CONFIRMED trades (reaction validator), else 3-bar stub.
+  ⑥ zones re-refined on the RENDER TF (his «باکسها در هر تایم فریم باید
+  ریفاین همون تایم باشن») + ≤2 direction-matching far zones get the
+  «🎯 TARGET» margin legend (his ONDO drawing: supply above = short's? no —
+  LONG's final target). Probes: CRV/XLM/PENGU/BCH real-data renders — single
+  red line, clean flat line, solid→LIVE then dotted. Tests 715P/1skip.

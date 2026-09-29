@@ -2287,7 +2287,37 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # در سقف‌ها و کف‌های مشخص» — the clutter box-stack becomes a diet: at
         # most two zones per side, chosen by importance = near the live price
         # AND tall (a real base/ceiling), never every imbalance on the tape.
+        # r59.2 (Viva 09-29: «باکسها در هر تایم فریم باید ریفاین همون تایم
+        # باشن» + his hand-drawn ONDO reference): stored zones came from the
+        # DETECTION TF — the chart re-refines on ITS OWN tape, every time.
         _rz_list = list(_rz or [])
+        if _rz_list and str(_chart_tf or ""):
+            try:
+                from analysis.render_kit import detect_zones as _dz59
+                _rz_list = list(_dz59(frame.reset_index(drop=True),
+                                      candidate.direction,
+                                      float(candidate.entry_zone_bottom),
+                                      float(candidate.entry_zone_top)) or [])
+            except Exception:
+                pass
+        # r59.2 TARGET LAW: a LONG trades UP → the ≤2 nearest zones ABOVE the
+        # live price are its probable final targets (his «اونجا خودش میشه
+        # تارگت احتمالی نهایی»); a SHORT mirrors below. Marked in the margin.
+        try:
+            _clT = float(frame["close"].iloc[-1])
+            _tgt_above = sorted([z for z in _rz_list
+                                 if float(z.get("bottom", 0)) > _clT],
+                                key=lambda z: float(z["bottom"]))
+            _tgt_below = sorted([z for z in _rz_list
+                                 if float(z.get("top", 0)) < _clT],
+                                key=lambda z: -float(z["top"]))
+            _target_zone_ids = set()
+            if str(candidate.direction).upper() == "LONG":
+                _target_zone_ids = {id(z) for z in _tgt_above[:2]}
+            elif str(candidate.direction).upper() == "SHORT":
+                _target_zone_ids = {id(z) for z in _tgt_below[:2]}
+        except Exception:
+            _target_zone_ids = set()
         _clean_zone_view = str(os.getenv("CHART_CLEAN_ZONES", "1")).strip().lower() \
             in {"1", "true", "on", "yes"}
         if _rz_list:
@@ -2340,8 +2370,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             alpha=0.10 if _clean_zone_view else 0.16,
                             linewidth=0, zorder=1)
             if _away9:
+                _lbl9 = str(_z.get("kind") or "")
+                if id(_z) in _target_zone_ids:
+                    # r59.2: the trade's probable final target box
+                    _lbl9 = ("🎯 TARGET · " + _lbl9) if _dir_key == "LONG" \
+                        else ("🎯 TARGET · " + _lbl9)
                 ax.text(count + future * 0.45, 0.5 * (_zb9 + _zt9),
-                        str(_z.get("kind") or ""), color=_t8, fontsize=6.5,
+                        _lbl9, color=_t8, fontsize=6.5,
                         va="center", ha="center", fontweight="bold", zorder=12,
                         bbox={"boxstyle": "round,pad=0.24",
                               "facecolor": CHART_THEME["panel"],
@@ -2612,9 +2647,29 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _bx8 = float(_ln.get("break_x")) * _tfscale
                 else:
                     _bx8 = _ln.get("break_x")
+                # r59.2 SMART-BREAK FALLBACK: if no stored break but the tape
+                # has CLOSED beyond this line for ≥3 bars by ≥0.8×ATR, the
+                # break is a FACT — end the solid leg at the crossing bar and
+                # continue faint-dotted («بعضی ترندها نباید اکستند بشه»).
+                if _bx8 is None and _atr9 > 0:
+                    try:
+                        _ys = np.array([_line_y_cal(_ln, int(k))
+                                        for k in range(max(0, count - 8), count + 1)])
+                        _cl = frame["close"].iloc[max(0, count - 8):count + 1].to_numpy(float)
+                        _op = frame["open"].iloc[max(0, count - 8):count + 1].to_numpy(float)
+                        _beyond = (_cl > _ys + 0.8 * _atr9) | (_cl < _ys - 0.8 * _atr9)
+                        if _beyond.size >= 4 and _beyond[-3:].all():
+                            _k = int(np.argmax(_beyond))
+                            _bx8 = max(0.0, count - 8.0 + _k)
+                            _ln["_xbreak_est"] = True
+                    except Exception:
+                        pass
                 _brk8.append(_bx8 is not None)
-                _xend8 = min(float(count), float(_bx8)) \
-                    if _bx8 is not None else float(count)
+                # r59.2 (PENGU 15m: the green trend ended MID-AIR — stored x1
+                # is a detection-window artifact). A line price hasn't broken
+                # runs to the LIVE bar, never to a stale stored end.
+                _xend8 = (min(float(count), float(_bx8))
+                          if _bx8 is not None else float(count))
                 # spec §13: parent patterns thick & solid, children thin;
                 # r59 far-majors sit between (a thin BLUE background major)
                 _lw8 = 1.8 if _pat.get("far_major") else (
@@ -2626,6 +2681,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # through its own fit — that is what makes it touch the pivots
                 # instead of hanging in the air. Linear lines keep the exact
                 # two-point segment they always had.
+                _ln["x1"] = float(count)      # r59.2: paint THROUGH live
                 _xsA, _ysA = _line_xy(_ln, _xa, _xend8)
                 ax.plot(_xsA, _ysA,
                         color=_col8, linewidth=_lw8, alpha=_al8, zorder=7,
@@ -2637,13 +2693,21 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             zorder=6, linestyle=(0, (6, 4)),
                             solid_capstyle="butt")
                 elif _bx8 is not None and _bx8 < _xe - 0.6:
-                    # Viva 09-18: every trend EXTENDS past price so its break
-                    # stays visible & alertable — broken history continues as
-                    # a faint dotted projection into the future panel.
-                    _xsC, _ysC = _line_xy(_ln, _xend8, _xe)
-                    ax.plot(_xsC, _ysC,
-                            color=_col8, linewidth=0.9, alpha=0.35, zorder=5,
-                            linestyle=(0, (2, 3)), solid_capstyle="butt")
+                    # r59.2 EXTENSION LAW (Viva 09-29: «اکستند شدن باید
+                    # هوشمند باشه — اگر پوزیشن تایید شده اجازه داره اکستند
+                    # بشه تا واکنش جدید رو تایید یا ابطال کنیم»): the
+                    # broken edge extends into the margin only for a
+                    # CONFIRMED trade (reaction validator); otherwise a
+                    # 3-bar stub keeps the break visible without chasing.
+                    _ext59 = str(getattr(candidate, "status", "") or "").upper() == "CONFIRMED"
+                    _xe2 = _xe if _ext59 else min(_xe, _xend8 + 3.0)
+                    if _xe2 > _xend8 + 0.6:
+                        _xsC, _ysC = _line_xy(_ln, _xend8, _xe2)
+                        ax.plot(_xsC, _ysC,
+                                color=_col8, linewidth=1.1 if _ext59 else 0.9,
+                                alpha=0.55 if _ext59 else 0.30, zorder=5,
+                                linestyle=(0, (6, 4)) if _ext59 else (0, (2, 3)),
+                                solid_capstyle="butt")
                 _px8, _xs8 = [], []
                 for q in (_ln.get("points") or []):
                     _qx = float(np.searchsorted(

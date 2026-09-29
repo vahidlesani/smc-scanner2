@@ -1334,7 +1334,13 @@ def pwa_sw():
 const SHELL = [['/app/fonts/Vazirmatn-Regular.woff2','font'],['/app/fonts/Vazirmatn-Bold.woff2','font'],
   ['/app/icons/icon-192.png','img'],['/app/icons/icon-512.png','img']];
 self.addEventListener('install', e => { self.skipWaiting(); });
-self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+self.addEventListener('activate', e => e.waitUntil((async () => {
+  /* r59.2: sweep the retired shells (r41…) so no phone ever resurrects them */
+  const names = await caches.keys();
+  await Promise.all(names.filter(n => n.startsWith('viva-shell-') && n !== 'viva-shell-r59')
+                        .map(n => caches.delete(n)));
+  await self.clients.claim();
+})()));
 // r55: real phone push — «به گوشی نوتیف نمیاد»
 self.addEventListener('push', e => {
   let d = {};
@@ -1358,7 +1364,22 @@ self.addEventListener('fetch', e => {
   if (url.pathname.startsWith('/app/api/')) return;         // live data: always network
   const hit = SHELL.find(([p]) => url.pathname === p);
   if (hit) {
-    e.respondWith(caches.open('viva-shell-r41').then(async c => {
+    // r59.2: NAVIGATIONS go network-first (a deploy reaches the phone on the
+    // very next open — the r41 cache-first shell shipped months-old JS and
+    // the app «لایو نبود»); assets still fall back to cache when offline.
+    if (e.request.mode === 'navigate') {
+      e.respondWith(caches.open('viva-shell-r59').then(async c => {
+        try {
+          const fresh = await fetch(e.request);
+          c.put(e.request, fresh.clone());
+          return fresh;
+        } catch (_) {
+          return (await c.match(e.request)) || Response.error();
+        }
+      }));
+      return;
+    }
+    e.respondWith(caches.open('viva-shell-r59').then(async c => {
       const cached = await c.match(e.request);
       const fetchP = fetch(e.request).then(r => { c.put(e.request, r.clone()); return r; }).catch(() => cached);
       return cached || fetchP;
@@ -2034,7 +2055,11 @@ function openDetail(sid){
   <div class="ssub" style="margin-top:8px">🕓 ${ago(x.time)} • ${tehran(x.time)}</div>`;
 }
 function closeSheet(){document.getElementById('sheetbg').style.display='none';document.getElementById('sheet').classList.remove('on')}
-load();setInterval(pollV,3000);setInterval(pollPrices,8000);setInterval(load,300000);let TOUCH={};
+/* r59.2 (Viva 09-29, «کماکان اپلیکیشن اصلا لایو واقعی نیست»): the feed was
+   re-fetched only every 5 MINUTES — prices moved but the journal sat frozen.
+   The state endpoint has an 8s server cache; polling it every 20s is cheap
+   and finally makes the app LIVE. */
+load();setInterval(pollV,3000);setInterval(pollPrices,8000);setInterval(load,20000);let TOUCH={};
 /* r39 (Viva 09-26, «اپ آپدیت نمیشه»): on resume the PWA used to sit on the
    frozen snapshot until the next 60s tick — refresh the moment it returns. */
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)load()});

@@ -117,7 +117,7 @@ def test_js_refreshes_on_resume():
     # r41: the 60s blind poll grew into the version-probe live loop
     assert "setInterval(pollV,3000)" in src  # r55: the app mirrors Telegram within seconds
     assert "setInterval(pollPrices,8000)" in src
-    assert "setInterval(load,300000)" in src
+    assert "setInterval(load,20000)" in src   # r59.2: the app is LIVE now
 
 
 # ── 3. About copy fixes ─────────────────────────────────────────────────

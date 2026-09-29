@@ -642,14 +642,19 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
         if _atr_d > 0 and _n_d > 10:
             _mid_x = _n_d / 2.0
             _end_x = float(_n_d)
+            # r59.2 (Viva 09-29, «بعضی چارتها خط‌خطی و شلوغ شده .. برای یک
+            # ناحیه چند ترند میکشه»): ONE parent line per side — a second
+            # parent is the clutter he circled; a child survives only if it
+            # is CLEARLY separated (≥0.8×ATR at both ends) from the parent.
             _kept = {"HIGH": [], "LOW": []}   # (p_mid, p_end, child)
-            _limits = {"HIGH": [2, 1], "LOW": [2, 1]}  # [parents, children]
+            _limits = {"HIGH": [1, 1], "LOW": [1, 1]}  # [parents, children]
             _counts = {"HIGH": [0, 0], "LOW": [0, 0]}
 
             def _same_line(side, sl, ic, child):
                 pm, pe = sl * _mid_x + ic, sl * _end_x + ic
+                _tol = 0.80 * _atr_d if child else 0.55 * _atr_d
                 for qm, qe, _c in _kept.get(side, []):
-                    if abs(pm - qm) <= 0.35 * _atr_d and abs(pe - qe) <= 0.35 * _atr_d:
+                    if abs(pm - qm) <= _tol and abs(pe - qe) <= _tol:
                         return True
                 return False
 
