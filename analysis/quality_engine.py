@@ -756,7 +756,9 @@ def evaluate_confirmation(
         _contract = (candidate.metadata or {})
         _contract_kind = str(_contract.get("strategy_variant") or "").upper()
         _contract_break = str(_contract.get("break_direction") or "").upper()
-        if _contract_kind == "VIVA_TLBREAK" and _contract_break in {"UP", "DOWN"}:
+        # r60: TECHCLASSIC breaks now carry the same canonical contract —
+        # a break UP may only ever trade LONG, a break DOWN only SHORT.
+        if _contract_kind in ("VIVA_TLBREAK", "TECHNOCLASSIC") and _contract_break in {"UP", "DOWN"}:
             _expected = "LONG" if _contract_break == "UP" else "SHORT"
             if str(candidate.direction).upper() != _expected:
                 return reject("BREAK_SIDE_MISMATCH", (
@@ -1353,11 +1355,25 @@ def evaluate_confirmation(
                 _brk = _close_px < float(_prior["low"].min())
             else:
                 _brk = _close_px > float(_prior["high"].max())
-            if not _brk:
+            # ── r60 TC calibration (Viva 09-29, dictated law, his prime
+            # suspect): for a TECHCLASSIC BREAK the validated break IS the
+            # signal — a lagging parent-TF trend may no longer veto it
+            # («چرا این ستاپ‌ها موقعیت رو می‌شناسن اما تایید نمی‌کنن؟»).
+            # The opposed parent becomes a visible warning only. Counter-trend
+            # FADEs and every other setup keep the hard veto untouched.
+            _tc_break60 = (
+                str(getattr(candidate, "setup_code", "") or "").upper() == "TECHCLASSIC"
+                and str((candidate.metadata or {}).get("break_direction") or "").upper() in ("UP", "DOWN")
+            )
+            if not _brk and not _tc_break60:
                 return reject("COUNTER_TREND_TOUCH_ONLY", (
                     "سیگنال خلاف جهت ساختار است: برخورد به خط/ناحیه فقط هشدار است؛ "
                     "تأیید نیازمند کلوز معتبر فراتر از سوینگ هم‌جهت است "
                     "(سلرها/خریداران در برخورد شکار می‌شوند)."))
+            if _tc_break60:
+                candidate.metadata["mtf_context_warning_tc"] = (
+                    "روند تایم والد هنوز مخالف است؛ طبق قانون تکنوکلاسیک جهت با "
+                    "شکستِ اعتبارسنجی‌شده قفل شد و این فقط هشدار زمینه است.")
             if _trg_tf == "1d" and _pdf is not None and len(_pdf) >= 12:
                 _pp = _pdf.iloc[-11:-1]
                 if candidate.direction == "SHORT":

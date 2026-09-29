@@ -477,3 +477,10 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
   Telegram channel: confirm 🟢 · TP1 🎯 · برد ✅ · استاپ/باخت 🛑 with colors;
   header «رویدادهای زنده». Test added (test_app_live_strip_carries_full_
   lifecycle). Push (true phone notifications) still needs his Enable (subs=0).
+
+## r60 — TECHCLASSIC calibration (2026-09-29)
+- User sent 8 annotated charts (uploads/IMG_20260929_163813..171040) + dictated: blue=entry, red=stop, green=TPs, light-red box=supply that must render; saved as docs/TC_TLBREAK_REFERENCE.md (laws + case archive + TLBREAK-vs-TC difference: TLBREAK may confirm counter-trend zone rejections via TOHOM illusion engine; TC strictly with-trend).
+- Code (scope: TECHCLASSIC only): quality_engine counter block — locked TC BREAKs (setup TECHCLASSIC + metadata break_direction UP/DOWN) no longer reject COUNTER_TREND_TOUCH_ONLY; opposed parent = metadata warning `mtf_context_warning_tc`. pattern_engine TC builder — htf_alignment popped from mandatory_gates for BREAK events (FADEs keep it). Contract lock (break UP→LONG only) now explicit for TECHNOCLASSIC variant too.
+- KEY correction found while testing: htf_alignment was force-stamped True at TC build end (:1314) — it was NEVER the discovery killer for TC; the real veto was COUNTER_TREND_TOUCH_ONLY at confirm. Fix C (counter block runs after CONFIRMED set) left as-is for other setups per NO-CONFIRM-CHANGE.
+- Tests: tests/test_round60_tc_calibrate.py (4) — suite 720P/1skip. config version 2026.09.29-r60.
+- Queued next: projection-drift bug D (ARB detected twice 10min apart: T138451 FINAL WATCH → T490695 CONFIRMED); ADA retest-entry preference question; render items in reference doc §2 (red supply boxes, best-line selection SUI, HBAR base rectangle, ADA arrow overlap); PINVAL round (NEAR bad confirm, BCH reference pattern); TLBREAK personalization round.

@@ -1298,7 +1298,16 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         comp_bonus, _comp = compression_bonus(pat)
     except Exception:
         pass
-    candidate.mandatory_gates["htf_alignment"] = True
+    # ── r60 TC calibration (Viva 09-29, dictated law): TECHCLASSIC is the
+    # WITH-TREND BREAK lane — the validated break itself is the signal. The
+    # multi-TF alignment reading stays as evidence/score, but it may never be
+    # a MANDATORY gate for a break (his prime suspect: the multi-TF snapshot
+    # vetoing the trigger-TF confirm). BREAK events drop the gate entirely;
+    # FADEs keep the forced-pass (a fade must still declare trend harmony).
+    if is_break:
+        candidate.mandatory_gates.pop("htf_alignment", None)
+    else:
+        candidate.mandatory_gates["htf_alignment"] = True
     candidate.strategy_fa = (f"تکنوکلاسیک | " +
                              (f"شکست {fa_pattern} در {structure_tf} — تأیید با اولین کلوز (توهم هوشمند)"
                               if is_break else

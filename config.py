@@ -33,7 +33,7 @@ def _bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    version: str = "2026.09.29-r59.3"
+    version: str = "2026.09.29-r60"
     strategy_version: str = "smc-core-7.0"
     channel_name: str = "VivaSignals Pro"
 
