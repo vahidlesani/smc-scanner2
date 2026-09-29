@@ -2439,6 +2439,33 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             candidate.signal_id,
             ((candidate.metadata or {}).get("render_patterns") or []),
             log_axis=bool(use_log))
+        # r59 FAR-MAJOR PRESERVE (Viva: «الگوی ماژورِ دورتر معتبرتر است» +
+        # «الگوهای ماژور آبی کشیده بشن»): when the r51 window-refit replaced
+        # the stored set, a classic shape FAR from the live price (>2.5×ATR,
+        # ts-anchored) must SURVIVE next to the near reference — it paints as
+        # the blue far pattern, thin, never dropped by the window cut.
+        try:
+            _clM = float(frame["close"].iloc[-1])
+            _atrM = float((frame["high"] - frame["low"]).tail(14).mean())
+            _nFar59 = 0
+            for _pm in (candidate.metadata or {}).get("render_patterns") or []:
+                if _nFar59 >= 2 or len(_draw_pats) >= 4:
+                    break
+                _tM = str(_pm.get("type") or "").upper()
+                _lnsM = list(_pm.get("lines") or [])
+                if (_tM in ("TRENDLINE", "NONE", "RANGE", "")
+                        or not _lnsM or _pm.get("child")):
+                    continue
+                try:
+                    _dM = min(abs(_clM - _line_y_cal(
+                        _ln, int(_ln.get("x1") or len(frame)))) for _ln in _lnsM)
+                except Exception:
+                    continue
+                if _atrM > 0 and _dM > 2.5 * _atrM:
+                    _draw_pats.append({**_pm, "far_major": True})
+                    _nFar59 += 1
+        except Exception:
+            pass
         for _pat in _draw_pats:
             if _pat.get("type") == "RANGE":
                 # anchored to its oldest tested pivot when it carries a time
@@ -2537,8 +2564,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # همین روش فعلی بالا قرمز و پایین سبز») — a classic shape whose
             # edges both sit FAR from the live price (>2×ATR) is BLUE; the
             # near-price reference structure stays red-above/green-below.
-            _pblue9 = False
-            if str(_pat.get("type") or "").upper() not in ("TRENDLINE", "NONE", "RANGE"):
+            _pblue9 = bool(_pat.get("far_major"))
+            if not _pblue9 and str(_pat.get("type") or "").upper() not in (
+                    "TRENDLINE", "NONE", "RANGE"):
                 try:
                     _cl9 = float(frame["close"].iloc[-1])
                     _d9 = [abs(_cl9 - _line_y_cal(_ln, int(count))) for _ln in _lns]
@@ -2557,7 +2585,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # Viva 09-18 (his AAVE ruling): a FLAT «trendline» is not a
                 # trend — it is the supply/demand box of the base it came
                 # from, so paint it as a zone band instead of a line.
-                if _atr9 > 0 and abs(_sl) * max(1.0, count - _xa) < 0.5 * _atr9:
+                # r59: a FAR-MAJOR edge is exempt — it is a LINE of the big
+                # pattern, never a zone band.
+                if (not _pat.get("far_major") and _atr9 > 0
+                        and abs(_sl) * max(1.0, count - _xa) < 0.5 * _atr9):
                     _y8 = _line_y_cal(_ln, count)
                     ax.fill_between([_xa, _xe], _y8 - 0.12 * _atr9,
                                     _y8 + 0.12 * _atr9, color=_col8,
@@ -2584,9 +2615,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _brk8.append(_bx8 is not None)
                 _xend8 = min(float(count), float(_bx8)) \
                     if _bx8 is not None else float(count)
-                # spec §13: parent patterns thick & solid, children thin
-                _lw8 = 1.2 if _pat.get("child") else 2.0
-                _al8 = 0.60 if _pat.get("child") else 0.95
+                # spec §13: parent patterns thick & solid, children thin;
+                # r59 far-majors sit between (a thin BLUE background major)
+                _lw8 = 1.8 if _pat.get("far_major") else (
+                    1.2 if _pat.get("child") else 2.0)
+                _al8 = 0.92 if _pat.get("far_major") else (
+                    0.60 if _pat.get("child") else 0.95)
                 # R16 phase 3: draw the CALIBRATED geometry. A log-fitted line
                 # is a curve on a log axis, so it is painted as a polyline
                 # through its own fit — that is what makes it touch the pivots
@@ -3406,6 +3440,22 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _sbt28 = float((candidate.metadata or {}).get("spot_box_top") or 0.0)
                     if _sbt28 > 0:
                         _ovs28.append(_sbt28)
+                # r59 (his quality law: «انجین … زوم و محور قیمت و زمان رو بالا
+                # و پایین بکنه در بهترین حالت الگوها و ترندها رو رسم بکنه») —
+                # the far-blue major frames the window too, clamped so a
+                # decade-old edge can never crush the candles.
+                try:
+                    _span59 = max(1e-12, float(frame["high"].max())
+                                  - float(frame["low"].min()))
+                    for _patF in _draw_pats or []:
+                        if not _patF.get("far_major"):
+                            continue
+                        for _lnF in (_patF.get("lines") or [])[:2]:
+                            _yF = float(_line_y_cal(_lnF, int(count)))
+                            if 0 < _yF and abs(_yF - _live28) <= 2.5 * _span59:
+                                _ovs28.append(_yF)
+                except Exception:
+                    pass
             _ovs28 = [v for v in _ovs28 if v is not None and math.isfinite(v) and v > 0]
             _atr28 = float((frame["high"] - frame["low"]).tail(14).mean())
             _win28 = _smart_y_window(

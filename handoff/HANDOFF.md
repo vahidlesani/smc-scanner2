@@ -429,3 +429,15 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
   git tag backup-render-r58 + docs/RENDER_BACKUP_r58.md. 4 real-data CryptoCove
   samples rendered for judgment (BTC 4h futures, ONDO 3d spot update, LINK 4h spot,
   GRAM 15m futures). Tests: tests/test_round59_chart_laws.py (9) → 715P/1skip.
+- **r59.1 (same day): far-major preserve + three fixes.** Probe on real ONDO 4h
+  data exposed a law conflict: the window-refit (r51) replaced the stored far
+  TRIANGLE with the near ascending channel → blue never fired in production
+  windows. Fix: stored classic shapes >2.5×ATR survive the refit as
+  `far_major` (blue, thin 1.8, exempt from the flat→band branch) + far-major
+  edges join the zoom frame (clamped 2.5×window-span). Also: workspace diet
+  135MB→17MB (275 used-up uploads + old render/scratch files removed — Viva:
+  «سبکش کن»); INJ-style red dashed mid-box line on spot BREAK cards identified
+  as the TP-gate fragment (lat-close ladder), untouched (trade geometry);
+  candles stay ink per Viva («فعلا همین رنگ بمونه» — cryptocove switch stays
+  opt-in). Old spot-alert charts keep their published chain; only future
+  sends inherit new laws. Tests 715P/1skip.
