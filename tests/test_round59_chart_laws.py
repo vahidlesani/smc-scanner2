@@ -40,8 +40,11 @@ def test_far_patterns_paint_blue_near_keep_red_green():
     src = open(os.path.join(ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()
     assert "_PATTERN_BLUE" in src
     # the blue gate: classic shapes only, >2×ATR from the live close
-    seg = src.split("_pblue9 = False")[1][:700]
+    seg = src.split("_pblue9 = bool(_pat.get(\"far_major\"))")[1][:700]
     assert "TRENDLINE" in seg and "2.0 * _atr9" in seg
+    # r59.1: the stored far major survives the window refit
+    assert "far_major" in src.split("def _native_patterns_for_frame")[1][:8000] or \
+        "_draw_pats.append({**_pm, \"far_major\": True})" in src
 
 
 def test_range_near_red_green_far_blue():
