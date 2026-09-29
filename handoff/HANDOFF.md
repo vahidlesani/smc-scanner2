@@ -493,3 +493,9 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
 - ALBROX union rebuild: detect_albrox = TC engine (setup_code param added to detect_technoclassic/_build_candidate) + _albrox_zone_lane (break/reclaim first-close + rejection scalp TOHOM-only; zones score-only; break_direction contract; lineage; enrich_render). Contract lock now covers ALBROX_ZONE. albrox_enabled default True.
 - Test fixes: round47 test leaked mutated singleton tohom_enabled=False (restored attr in finally); round41 albrox wiring test updated to union routing; suite 732P/1skip. version 2026.09.29-r60.1.
 - Open/next: watch real-feed ALBROX volume first day (tune zone freshness if noisy); projection-drift false-reject D2/D3 (frozen-vs-render single source) still queued; PINVAL round; TLBREAK personalization round.
+
+## r60.2 — internal-signal ban + twin/dup-send guards (2026-09-30)
+- User verdict on 09-29/30 charts (AAVE/FET/ETC CONFIRMED): TC was still minting edge-FADE internal signals (my r60 kept them — wrong call, now dead). detect_technoclassic keeps ONLY STATE_BREAK events; fades unreachable for TC+ALBROX (they live on in TLBREAK scalp / ALBROX zone lanes under TOHOM).
+- Twin guard: _mint_guard_key (symbol|pattern_tf|pattern|side|direction|first/last edge pivot ts, NO trigger TF) + bot_kv TCMINT key, TTL 12h; new pivot ⇒ new key ⇒ re-alert allowed (tested).
+- Send idempotency: main._educate posts each signal_id once (bot_kv posted|id TTL 36h, set only after successful send; deferred retries unaffected; stats dup_send_blocked). Covers INJ×2/OKB×2/LINK1d×2/ALGO K795612×2 family.
+- Chart-render root causes identified (NOT yet fixed, dedicated pass next): LTF-trigger charts re-fit pattern edges on the chart tape (_refit_viva_points) replacing the 4h/1h line; PAT-4h variant overlay inconsistent across the two render paths; best-trendline selection (SUI complaint) still open. version 2026.09.30-r60.2. Suite 735P/1skip.

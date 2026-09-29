@@ -264,7 +264,31 @@ def run_discovery_scan() -> Dict[str, int]:
             stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
             return False
         _b9["left"] -= 1
-        return send_educational_setup(cand, frame)
+        # ── r60.2 send-idempotency (his duplicate-post reports: INJ×2, OKB×2,
+        # LINK 1d×2, ALGO PINVAL K795612×2 within one minute): two lanes can
+        # carry the SAME candidate id (main scan + pinned mini-pass) and each
+        # posts its own message. ONE Telegram post per signal id, ever — the
+        # guard is set only AFTER a successful send, so budget-deferred
+        # candidates still retry on the next pass.
+        _post_key = ""
+        try:
+            from database.bot_kv import get_json as _gj60
+            import time as _t60
+            _post_key = f"posted|{str(getattr(cand, 'signal_id', '') or '')}"
+            _prev = _gj60(_post_key, {}) or {}
+            if float(_prev.get("ts") or 0) > _t60.time() - 36 * 3600:
+                stats["dup_send_blocked"] = stats.get("dup_send_blocked", 0) + 1
+                return True   # already posted — treat as success, no second post
+        except Exception:
+            _post_key = ""
+        _sent = send_educational_setup(cand, frame)
+        if _sent and _post_key:
+            try:
+                from database.bot_kv import set_json as _sj60
+                _sj60(_post_key, {"ts": _t60.time()})
+            except Exception:
+                pass
+        return _sent
     # Observability only (no behaviour change): tally where each raw detector
     # candidate goes, per setup, so "0 confirmed" is diagnosable from logs.
     tally = {}

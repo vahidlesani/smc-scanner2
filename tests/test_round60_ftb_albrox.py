@@ -309,3 +309,112 @@ def test_albrox_registered_and_enabled():
     import analysis.setups_experimental as exp
     assert config.get_settings().albrox_enabled is True
     assert exp.ALBROX_DETECTORS and exp.ALBROX_DETECTORS[0].__name__ == "detect_albrox"
+
+
+# ── 6) r60.2 THE LAW: TC = break-only, twin guard across lanes ──────────────
+def _tc_detect_env(monkeypatch):
+    monkeypatch.setenv("TECHCLASSIC_ENABLED", "true")
+    import config
+    config._cached = None
+    importlib.reload(config)
+    import analysis.pattern_engine as pe
+    importlib.reload(pe)
+    import analysis.setups_experimental as exp
+    importlib.reload(exp)
+    return pe
+
+
+def test_tc_never_mints_internal_fade_signals(monkeypatch):
+    """THE r60.2 law («تکنوکلاسیک نباید سیگنال داخلی قبل از شکست بگیره»):
+    a pattern whose only event is an internal edge-fade mints NOTHING."""
+    pe = _tc_detect_env(monkeypatch)
+    from test_pattern_engine import _wedge_frames, _Bundle
+    pattern, trigger = _wedge_frames()
+    bundle = _Bundle({"4h": pattern, "1h": pattern, "15m": trigger})
+    import analysis.setups_v7 as _sv7  # pe imports _ensure_frames from here at call time
+    monkeypatch.setattr(_sv7, "_ensure_frames", lambda b, tfs: True)
+    fade_ev = {"state": pe.STATE_FADE, "pattern": "CHANNEL_ASCENDING",
+               "pattern_fa": "کانال", "side": "lower", "direction": "LONG",
+               "line_price": 100.0, "live": 100.5, "touches": 4,
+               "fit_error_atr": 0.3, "structure_score": 7,
+               "reactions": {"reject_rate": 0.8}, "edge_points": []}
+    monkeypatch.setattr(pe, "scan_edges",
+                        lambda *a, **k: [dict(fade_ev)])
+    monkeypatch.setattr(pe, "_build_candidate",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("fade must never reach the builder")))
+    assert pe.detect_technoclassic(bundle, "DAYTRADE") is None
+
+
+def test_tc_twin_guard_blocks_second_lane(monkeypatch):
+    """FET case: the same visual pattern re-detected on another trigger lane
+    (trig-1h SWING vs trig-15m DAYTRADE) must stay silent — the guard key is
+    pattern-level, not per-lane."""
+    pe = _tc_detect_env(monkeypatch)
+    from database.bot_kv import set_json as _sj
+    from test_pattern_engine import _wedge_frames, _Bundle
+    pattern, trigger = _wedge_frames()
+    bundle = _Bundle({"4h": pattern, "1h": pattern, "15m": trigger})
+    import analysis.setups_v7 as _sv7
+    monkeypatch.setattr(_sv7, "_ensure_frames", lambda b, tfs: True)
+    ev = {"state": pe.STATE_BREAK, "pattern": "TRIANGLE_DESCENDING",
+          "pattern_fa": "مثلث نزولی", "side": "lower", "direction": "SHORT",
+          "line_price": 100.0, "live": 98.0, "touches": 4, "fit_error_atr": 0.3,
+          "structure_score": 8, "reactions": {"reject_rate": 0.7},
+          "edge_points": [{"timestamp": "2026-09-01 04:00", "price": 101.0},
+                          {"timestamp": "2026-09-10 08:00", "price": 99.0}],
+          "pattern_tf": "4h"}
+    monkeypatch.setattr(pe, "scan_edges", lambda *a, **k: [dict(ev)])
+    mints = {"n": 0}
+
+    from types import SimpleNamespace as _NS
+    def fake_build(*a, **k):
+        mints["n"] += 1
+        return _NS(signal_id="FAKE-TWIN-1")
+
+    monkeypatch.setattr(pe, "_build_candidate", fake_build)
+    _sj(pe._mint_guard_key(bundle, ev), {})          # hermetic: clear the guard
+    first = pe.detect_technoclassic(bundle, "DAYTRADE")
+    assert getattr(first, "signal_id", "") == "FAKE-TWIN-1"       # lane A posts
+    assert mints["n"] == 1
+    assert pe.detect_technoclassic(bundle, "DAYTRADE") is None  # same lane again: silent
+    assert mints["n"] == 1                           # builder never ran again
+
+
+def test_tc_mint_guard_releases_on_new_pivot(monkeypatch):
+    """A genuinely NEW pivot (structural change) = a new guard key → the
+    setup may alert again without waiting for the TTL."""
+    pe = _tc_detect_env(monkeypatch)
+    from database.bot_kv import set_json as _sj
+    from test_pattern_engine import _wedge_frames, _Bundle
+    pattern, trigger = _wedge_frames()
+    bundle = _Bundle({"4h": pattern, "1h": pattern, "15m": trigger})
+    import analysis.setups_v7 as _sv7
+    monkeypatch.setattr(_sv7, "_ensure_frames", lambda b, tfs: True)
+    ev1 = {"state": pe.STATE_BREAK, "pattern": "P", "side": "lower",
+           "direction": "SHORT", "line_price": 100.0, "live": 98.0, "touches": 3,
+           "fit_error_atr": 0.3, "structure_score": 8,
+           "reactions": {"reject_rate": 0.5},
+           "edge_points": [{"timestamp": "2026-09-01 04:00", "price": 101.0},
+                           {"timestamp": "2026-09-10 08:00", "price": 99.0}],
+           "pattern_tf": "4h"}
+    ev2 = dict(ev1, edge_points=[{"timestamp": "2026-09-01 04:00", "price": 101.0},
+                                 {"timestamp": "2026-09-12 12:00", "price": 98.5}])  # new pivot
+    from types import SimpleNamespace as _NS
+    state = {"n": 0, "ev": ev1}
+    def fake_scan(*a, **k):
+        return [dict(state["ev"])]
+    def fake_build(*a, **k):
+        state["n"] += 1
+        return _NS(signal_id=f"FAKE-{state['n']}")
+    monkeypatch.setattr(pe, "scan_edges", fake_scan)
+    monkeypatch.setattr(pe, "_build_candidate", fake_build)
+    _sj(pe._mint_guard_key(bundle, ev1), {})   # hermetic: clear
+    _sj(pe._mint_guard_key(bundle, ev2), {})
+    assert getattr(pe.detect_technoclassic(bundle, "DAYTRADE"), "signal_id", "") == "FAKE-1"
+    state["ev"] = ev2                          # a NEW defining pivot appears
+    assert getattr(pe.detect_technoclassic(bundle, "DAYTRADE"), "signal_id", "") == "FAKE-2"
+    assert state["n"] == 2
+    state["ev"] = ev2
+    assert pe.detect_technoclassic(bundle, "DAYTRADE") is None   # same pivots again → silent
+    assert state["n"] == 2

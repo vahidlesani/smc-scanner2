@@ -1050,6 +1050,25 @@ def _fit_cfg():
     return load_config()
 
 
+_MINT_GUARD_TTL_S = 12 * 3600  # r60.2: one live alert per visual pattern across lanes
+
+
+def _mint_guard_key(bundle, ev) -> str:
+    """Pattern-level identity for the twin guard: symbol + pattern TF + kind +
+    edge + the edge's FIRST and LAST pivot timestamps. A new pivot (a genuine
+    structural change) yields a new key and may alert again; a mere refit
+    yields the SAME key and stays silent. No trigger TF in the key — that is
+    the whole point (FET trig-1h vs trig-15m twins)."""
+    pts = [str(p.get("timestamp") or p.get("ts") or "")[:16]
+           for p in (ev.get("edge_points") or ())]
+    if not pts:
+        pts = [str(getattr(bundle, "symbol", ""))]
+    return "|".join(("TCMINT", str(getattr(bundle, "symbol", "")).upper(),
+                     str(ev.get("pattern_tf") or ev.get("pattern") or ""),
+                     str(ev.get("pattern") or ""), str(ev.get("side") or ""),
+                     str(ev.get("direction") or ""), pts[0], pts[-1]))
+
+
 def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
     """TECHCLASSIC live detector: only this setup issues pattern signals
     (breakouts AND confirmed edge-fades). Other setups untouched.
@@ -1078,19 +1097,43 @@ def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
         live = float((getattr(bundle, "ticker", None) or {}).get("last_price") or 0.0)
     except Exception:
         live = 0.0
+    # ── r60.2 THE LAW (Viva 09-30, verbatim): «تکنوکلاسیک نباید سیگنال
+    # داخلی قبل از شکست ترند یا الگو بگیره» — ONLY a validated CLOSE through
+    # an edge may mint a signal (break UP → LONG, break DOWN → SHORT). The
+    # edge-fade lane (internal rejection inside the still-unbroken pattern —
+    # his AAVE/FET/ETC 09-29 complaint) is DEAD here: rejections belong to
+    # TLBREAK's scalp lane and ALBROX's zone-rejection lane, where the TOHOM
+    # illusion engine governs them.
     events = [e for e in scan_edges(pat, trig, structure_tf,
                                     live_price=(live if live > 0 else None))
-              if e["state"] in (STATE_BREAK, STATE_FADE)]
+              if e["state"] == STATE_BREAK]
     if not events:
         return None
-    events.sort(key=lambda e: (e["state"] == STATE_BREAK, e["structure_score"]), reverse=True)
-    fade_enabled = bool(getattr(settings, "technoclassic_fade_signals", True))
+    events.sort(key=lambda e: e["structure_score"], reverse=True)
     for ev in events:
-        if ev["state"] == STATE_FADE and not fade_enabled:
-            continue
+        # ── r60.2 twin guard: the same visual pattern re-detected on ANOTHER
+        # trigger/style lane (his FET case: T446848 trig-1h → T894237
+        # trig-15m two hours later) must not post twice. The guard key lives
+        # at PATTERN level (no trigger TF), so any lane meeting the same
+        # pivots within the freshness window stays silent.
+        _guard = _mint_guard_key(bundle, ev)
+        try:
+            from database.bot_kv import get_json as _gj
+            _seen = _gj(_guard, {}) or {}
+            if float(_seen.get("ts") or 0) > __import__("time").time() - _MINT_GUARD_TTL_S:
+                continue
+        except Exception:
+            _seen = {}
         candidate = _build_candidate(bundle, style, ev, pat, trig, structure_tf, trigger_tf, cfg,
                                      setup_code=setup_code)
         if candidate is not None:
+            try:
+                from database.bot_kv import set_json as _sj
+                import time as _t60
+                _sj(_guard, {"ts": _t60.time(),
+                             "signal_id": str(getattr(candidate, "signal_id", "") or "")})
+            except Exception:
+                pass
             return candidate
     return None
 
