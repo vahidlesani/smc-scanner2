@@ -1656,7 +1656,7 @@ nav button.on .tiline{width:16px;height:2.5px;border-radius:2px;background:var(-
  <section class="page" id="pg-signals">
   <h1 class="pg">Signals</h1><div class="sub" id="sigCount">—</div>
   <div class="card" id="liveConfirmsCard" style="display:none;border-color:rgba(44,229,167,.35)">
-   <b style="font-size:13px;color:#2ce5a7">⚡ تأییدهای زنده — همان لحظهٔ تأیید</b>
+   <b style="font-size:13px;color:#2ce5a7">⚡ رویدادهای زنده — تأیید · TP · استاپ (همان لحظه)</b>
    <div id="liveConfirms" style="margin-top:8px"></div>
   </div>
   <div class="fchips" id="fchips"></div>
@@ -1850,17 +1850,24 @@ async function pollV(){
 function render(){
  if(!STATE)return;
  if(STATE.demo)document.getElementById('demoBar').style.display='block';
- /* r55 LIVE CONFIRMS — «دقیقاً مثل تلگرام، همان لحظهٔ تأیید» */
+ /* r55 LIVE CONFIRMS — «دقیقاً مثل تلگرام، همان لحظهٔ تأیید»
+    r59.3 (Viva: «نوتیفیکیشن‌ها… نه سیگنال‌ها و نه استاپ‌ها و نه تی‌پی‌ها
+    بروز نمیشه» — he meant the APP): the live strip now carries the WHOLE
+    lifecycle like the Telegram channel — confirm / TP1 / WIN / LOSS. */
  {
-  const conf=(STATE.hits||[]).filter(h=>h.kind==='confirm').slice(0,6);
+  const _icon55={confirm:['#2ce5a7','تأیید'],tp1:['#ffc857','🎯 TP1'],
+                 win:['#2ce5a7','✅ برد'],loss:['#ff5c6c','🛑 استاپ/باخت']};
+  const conf=(STATE.hits||[]).slice(0,8);
   const card=document.getElementById('liveConfirmsCard');
   if(card){card.style.display=conf.length?'block':'none';
-   document.getElementById('liveConfirms').innerHTML=conf.map(h=>
-    `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06)">
-      <span style="width:8px;height:8px;border-radius:50%;background:#2ce5a7;box-shadow:0 0 8px #2ce5a7;display:inline-block"></span>
+   document.getElementById('liveConfirms').innerHTML=conf.map(h=>{
+    const ic=_icon55[h.kind]||_icon55.confirm;
+    return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06)">
+      <span style="width:8px;height:8px;border-radius:50%;background:${ic[0]};box-shadow:0 0 8px ${ic[0]};display:inline-block"></span>
       <b style="font-size:13px">${fnum(h.symbol)}</b>
+      <span class="ssub" style="color:${ic[0]}">${ic[1]}</span>
       <span class="ssub" style="flex:1">${fnum(h.detail)}</span>
-      <span class="ssub">${ago(h.time)}</span></div>`).join('');}
+      <span class="ssub">${ago(h.time)}</span></div>`;}).join('');}
  }
  const feed=STATE.feed||[],cl=closed();
  const wins=cl.filter(x=>x.result==='WIN').length,loss=cl.filter(x=>x.result==='LOSS').length;

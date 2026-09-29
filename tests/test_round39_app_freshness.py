@@ -145,3 +145,11 @@ def test_formal_bilingual_disclaimer():
     assert "constitutes a financial offer, solicitation or investment advice" in src
     assert "entirely at the user's own responsibility" in src
     assert "assume no legal liability" in src
+
+def test_app_live_strip_carries_full_lifecycle():
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "webapp_viva.py"), encoding="utf-8").read()
+    # r59.3: the app notification strip mirrors the channel — not only confirms
+    assert "_icon55" in src and "tp1:['#ffc857','🎯 TP1']" in src.replace('"', "'").replace("\u200c", " ")
+    assert "(STATE.hits||[]).slice(0,8)" in src
+    assert "🛑 استاپ" in src

@@ -468,3 +468,12 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
   Cost math: render was ~1.5-2s CPU/chart × 28/pass + uncached zone detect +
   6×TF rechecks + 20s full-SQL app polls ≈ the bulk of the ~$0.90/2d; cuts
   ≈50-70% of steady-state compute.
+- **r59.4 (09-29): the APP live-strip clarification (Viva: «منظور از کانال
+  اپلیکیشن بود»).** Verified server pipeline: monitor_confirmed_trades has NO
+  entry_filled gate → spot rows ARE lifecycle-monitored (tp1_hit/result update
+  correctly); the app freeze was the stale r41 shell + 5-min poll (fixed
+  r59.2/r59.3). REAL gap found & fixed: the app's live strip rendered ONLY
+  kind=confirm — TP1/WIN/LOSS events were hidden. Now the strip mirrors the
+  Telegram channel: confirm 🟢 · TP1 🎯 · برد ✅ · استاپ/باخت 🛑 with colors;
+  header «رویدادهای زنده». Test added (test_app_live_strip_carries_full_
+  lifecycle). Push (true phone notifications) still needs his Enable (subs=0).
