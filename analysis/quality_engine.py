@@ -496,6 +496,18 @@ def evaluate_confirmation(
     if after is None or after.empty:
         return reject("NO_NEW_BAR", "هنوز کندلی بعد از ایجاد ستاپ بسته نشده است.")
 
+    # ── r60 TOHOM-only lanes (Viva 09-29 §6): rejection scalps (TLBREAK/
+    # ALBROX) confirm ONLY through the illusion engine — sub-TF directional
+    # closes + rising volume + a confirming candle pattern at the line/zone.
+    # A bare close may never confirm them. Candle patterns remain the
+    # CONFIRMER here only; they still never veto break signals (fast lane
+    # unchanged, per his law).
+    _md60 = candidate.metadata or {}
+    if _md60.get("rejection_scalp") and not _md60.get("tohom"):
+        return reject("WAIT_TOHOM_SCALP", (
+            "اسکلپ ریجکت فقط با تأیید موتور توهم صادر می‌شود: کندل‌های هم‌جهت تایم "
+            "پایین‌تر + رشد حجم + الگوی کندلی روی خط/ناحیه؛ هنوز ثبت نشده است."))
+
     # ── ONE-CLOSE LAW, EVERY SETUP (Viva 2026-09-12, final) ──────────────
     # «کی به تو گفته تأیید سیگنال حتماً باید ریتست ناحیه باشه؟!» — nobody.
     # Confirmation is exactly ONE closed candle of the confirm timeframe that
@@ -758,7 +770,7 @@ def evaluate_confirmation(
         _contract_break = str(_contract.get("break_direction") or "").upper()
         # r60: TECHCLASSIC breaks now carry the same canonical contract —
         # a break UP may only ever trade LONG, a break DOWN only SHORT.
-        if _contract_kind in ("VIVA_TLBREAK", "TECHNOCLASSIC") and _contract_break in {"UP", "DOWN"}:
+        if _contract_kind in ("VIVA_TLBREAK", "TECHNOCLASSIC", "ALBROX_ZONE") and _contract_break in {"UP", "DOWN"}:
             _expected = "LONG" if _contract_break == "UP" else "SHORT"
             if str(candidate.direction).upper() != _expected:
                 return reject("BREAK_SIDE_MISMATCH", (

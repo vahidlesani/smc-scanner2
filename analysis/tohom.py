@@ -114,6 +114,27 @@ def _power_candle(row: pd.Series, direction: int) -> bool:
     return body >= 0.65 * rng
 
 
+def _doji_like(row: pd.Series) -> bool:
+    """r60 (Viva 09-29 §6): the dojo/dogi is part of his confirming candle
+    vocabulary — a genuine indecision pause (tiny body on a real range) that
+    rides along WITH the directional sub-closes and volume."""
+    rng = float(row["high"]) - float(row["low"])
+    return rng > 0 and abs(float(row["close"]) - float(row["open"])) <= 0.12 * rng
+
+
+def _reverse_pin(row: pd.Series, direction: int) -> bool:
+    """r60 (Viva 09-29 §6): «پین‌بار معکوس» — the wick pokes BACK toward the
+    broken line (against the trade direction: the failed retest) while the
+    body closes on the trade's side. Exactly the FTB rejection candle."""
+    rng = max(float(row["high"]) - float(row["low"]), 1e-12)
+    mid = (float(row["high"]) + float(row["low"])) / 2.0
+    body_top = max(float(row["close"]), float(row["open"]))
+    body_bottom = min(float(row["close"]), float(row["open"]))
+    if direction > 0:
+        return (float(row["high"]) - body_top) >= 0.40 * rng and float(row["close"]) >= mid
+    return (body_bottom - float(row["low"])) >= 0.40 * rng and float(row["close"]) <= mid
+
+
 def evaluate_tohom_confirmation(
     candidate: SignalCandidate, lower_closed_df: Optional[pd.DataFrame],
     trigger_open: Optional[pd.Timestamp] = None,
@@ -178,12 +199,17 @@ def evaluate_tohom_confirmation(
     last3 = subs.tail(need)
     closes = [float(v) for v in last3["close"]]
     opens = [float(v) for v in last3["open"]]
-    direction_ok = True
+    # r60 FTB (Viva 09-29 §6): at the First Time Back the LTF has usually just
+    # printed its pullback candle — a perfectly monotonic streak would reject
+    # exactly the retest he wants confirmed early. ONE counter step inside the
+    # window is allowed; the LAST sub-candle must still close our way.
+    _bad = 0
     for i in range(1, len(closes)):
         if direction > 0 and closes[i] < closes[i - 1]:
-            direction_ok = False
+            _bad += 1
         if direction < 0 and closes[i] > closes[i - 1]:
-            direction_ok = False
+            _bad += 1
+    direction_ok = _bad <= (1 if len(closes) >= 3 else 0)
     last = last3.iloc[-1]
     if direction > 0 and float(last["close"]) <= float(last["open"]):
         direction_ok = False
@@ -197,6 +223,13 @@ def evaluate_tohom_confirmation(
     if edge <= 0:
         return reject("TOHOM_EDGE", "لبهٔ شکست برای توهم پیدا نشد.")
     margin = 0.10 * atr if atr > 0 else 0.0002 * edge
+    # ── r60 FTB: the retest touch means price is ON the broken line by
+    # definition — demanding the fresh-break clearance there waits for a
+    # second break that may never print. Halve the clearance once the
+    # candidate has touched back (his FTB early-confirm law).
+    _ftb60 = bool(md.get("touched")) or str(md.get("viva_state") or "").upper().startswith("S3")
+    if _ftb60:
+        margin *= 0.5
     beyond = (float(last["close"]) >= edge + margin) if direction > 0 \
         else (float(last["close"]) <= edge - margin)
     if not beyond:
@@ -214,6 +247,10 @@ def evaluate_tohom_confirmation(
             pattern = "انگلفینگ"
         elif _power_candle(row, direction):
             pattern = "کندلِ قدرتی"
+        elif _doji_like(row):
+            pattern = "دوجی"
+        elif _reverse_pin(row, direction):
+            pattern = "پین‌بار معکوس"
         if pattern:
             break
     if not pattern:
@@ -225,8 +262,10 @@ def evaluate_tohom_confirmation(
     md["tohom_vol_ratio"] = round(vol_ratio, 2)
     md["tohom_pattern"] = pattern
     md["technical_confirmation_complete"] = True
-    reason = (f"⚡ تأیید زودهنگام توهم: {need} کلوزِ پیوستهٔ تایم {sub_tf.upper()} در جهت "
+    reason = (f"⚡ تأیید زودهنگام توهم{' در First Time Back (FTB)' if _ftb60 else ''}: "
+              f"{need} کلوزِ پیوستهٔ تایم {sub_tf.upper()} در جهت "
               f"{'صعودی' if direction > 0 else 'نزولی'} با رشد حجم {vol_ratio:.1f}× و الگوی {pattern}، "
-              "بیش از لبهٔ شکست.")
+              f"{'روی' if _ftb60 else 'بیش از'} لبهٔ شکست ثبت شد — به همین دلیل ورود پیش از "
+              f"کلوزِ کندلِ {str(tf).upper()} تأیید شد.")
     md["tohom_note_fa"] = reason
     return True, candidate, reason

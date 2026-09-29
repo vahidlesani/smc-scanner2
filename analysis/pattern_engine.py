@@ -562,13 +562,31 @@ def pattern_id_for(pattern, pattern_tf: str, upper, lower, n: int) -> str:
     """§28 stable id: deterministic hash of kind + both fitted lines + span.
     Same geometry → same id across rescans; a materially refitted line is a
     DIFFERENT pattern (structural replacement), never a silent mutation."""
+    # r60 bug-D: identity now lives in the DEFINING PIVOTS, not the fit.
+    # The old slope/intercept hash re-minted the same visual pattern on every
+    # refit — each new candle slid the polyfit slightly, the id changed, and
+    # the engine «discovered» the identical pattern again (his ARB 09-29 case:
+    # T138451 FINAL WATCH → T490695 CONFIRMED ten minutes apart). Pivot prices
+    # (3 significant digits) + relative pivot spacings are invariant to window
+    # slide and micro-refits; a genuinely new/lost pivot is still a different
+    # pattern (structural replacement), never a silent mutation.
     parts = [str(pattern), str(pattern_tf)]
     for line in (upper, lower):
         if line is None:
             parts.append("none")
-        else:
+            continue
+        pts = tuple(line.points or ())
+        if len(pts) < 2:
             parts.append("%.8g|%.8g|%d" % (float(line.slope), float(line.intercept),
                                            int(line.first_index)))
+            continue
+        sig, prev_idx = [], None
+        for p in pts:
+            idx = int(float(p.get("index", 0)))
+            gap = 0 if prev_idx is None else idx - prev_idx
+            prev_idx = idx
+            sig.append("%.3g~%d" % (float(p.get("price", 0.0)), gap))
+        parts.append("+".join(sig))
     parts.append(str(int(n)))
     digest = hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:12]
     return "%s-%s" % (str(pattern).lower(), digest)
@@ -860,6 +878,7 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                                  f"{'شکست ضلع بالا' if side == 'upper' else 'شکست ضلع پایین'}"),
             "line_price": line_now, "live": live, "distance_atr": round(abs(dist), 3),
             "touches": int(line.touch_count), "fit_error_atr": round(float(line.fit_residual_atr), 3),
+            "edge_points": [dict(p) for p in (line.points or ())],
             "structure_score": structure_score(line, cfg), "reactions": react,
             "measured": {"from": line_now, "to": target, "pct": round(pct, 1),
                          "height": height, "last_close": live},
@@ -1031,9 +1050,12 @@ def _fit_cfg():
     return load_config()
 
 
-def detect_technoclassic(bundle, style: str):
+def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
     """TECHCLASSIC live detector: only this setup issues pattern signals
-    (breakouts AND confirmed edge-fades). Other setups untouched."""
+    (breakouts AND confirmed edge-fades). Other setups untouched.
+    r60: setup_code is injectable — ALBROX's pattern lane is THIS engine
+    under the ALBROX name (his union law: ALBROX = TLBREAK + TECHCLASSIC +
+    zones; the zone lanes live in setups_experimental)."""
     settings = _s()
     if not getattr(settings, "technoclassic_enabled", False):
         return None
@@ -1066,7 +1088,8 @@ def detect_technoclassic(bundle, style: str):
     for ev in events:
         if ev["state"] == STATE_FADE and not fade_enabled:
             continue
-        candidate = _build_candidate(bundle, style, ev, pat, trig, structure_tf, trigger_tf, cfg)
+        candidate = _build_candidate(bundle, style, ev, pat, trig, structure_tf, trigger_tf, cfg,
+                                     setup_code=setup_code)
         if candidate is not None:
             return candidate
     return None
@@ -1095,7 +1118,7 @@ def measured_target(entry: float, direction: str, trigger_tf: str,
     return float(target), source
 
 def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
-                     trigger_tf: str, cfg):
+                     trigger_tf: str, cfg, setup_code: str = "TECHCLASSIC"):
     from analysis.indicators import structure_bias
     from analysis.models import EvidenceItem, generate_viva_public_code
     from analysis.patterns import pattern_info
@@ -1196,7 +1219,7 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         return None
     poi = {"bottom": line_now - 0.15 * atr_t, "top": line_now + 0.15 * atr_t,
            "touches": int(ev.get("touches") or 0),
-           "type": f"TECHNOCLASSIC {ev['pattern']} {'BREAK' if is_break else 'FADE'}"}
+           "type": f"{setup_code} {ev['pattern']} {'BREAK' if is_break else 'FADE'}"}
     bias = structure_bias(pat, 5)
     context = {"bias": bias.get("bias", "NEUTRAL")}
     impulse = {"index": len(trig) - 1, "level": line_now, "valid": True,
@@ -1210,12 +1233,25 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
          ("کلوز شکست با جابه‌جایی ثبت شد." if is_break else
           f"برخوردِ دفع‌شده در ضلع؛ نرخ دفع تاریخی {int(float(ev['reactions']['reject_rate'])*100)}٪ (قانون آلفونسو).")),
         True, 2, level=line_now, timeframe=structure_tf)
-    gate = "technoclassic_break_closed" if is_break else "technoclassic_rejection_confirmed"
-    candidate = _base_candidate(bundle, style, "TECHCLASSIC", direction, structure_tf,
+    gate = f"{setup_code.lower()}_break_closed" if is_break else f"{setup_code.lower()}_rejection_confirmed"
+    candidate = _base_candidate(bundle, style, setup_code, direction, structure_tf,
                                trigger_tf, context, poi, impulse,
                                special, gate, True)
     if candidate is None:
         return None
+    # ── r60 bug-D: TC/ALBROX candidates now carry the same stable alert
+    # lineage TLBREAK has had since R31.7 (pivot-timestamp identity), so a
+    # refit re-detection of the SAME pattern supersedes the older row at the
+    # store instead of minting a twin alert.
+    try:
+        _lk = alert_lineage_key(setup_code, str(bundle.symbol), str(trigger_tf),
+                                str(structure_tf), str(ev.get("side") or ""),
+                                direction, [dict(p) for p in (ev.get("edge_points") or ())],
+                                bool(is_break))
+        if _lk:
+            candidate.metadata["alert_lineage_key"] = _lk
+    except Exception:
+        pass
     # chain-link (same contract as the legacy setups): the confirmation message
     # must quote the edge-alert that announced this level — persisted in KV so
     # it survives the 5-minute gap and any restart.

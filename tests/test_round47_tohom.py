@@ -144,6 +144,9 @@ def test_engine_off_keeps_one_close_law():
         assert not ok and cand.metadata["last_reject_code"] == "TOHOM_OFF"
     finally:
         config.get_settings = orig
+        # the settings object is the SHARED cached singleton — the mutated
+        # flag must be restored too, or every later TOHOM test sees OFF.
+        object.__setattr__(cfg, "tohom_enabled", True)
 
 
 def test_once_per_candidate():

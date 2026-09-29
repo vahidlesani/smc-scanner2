@@ -137,11 +137,16 @@ def test_touch_notifications_wired():
 # ── 4. MTF/refine parity across setups ─────────────────────────────────────
 
 def test_albrox_wires_the_same_htf_enrich():
+    # r60: ALBROX is the union — the pattern lane renders through the shared
+    # setups_v7 enrich (htf_df=context_df), the zone lane wires its own.
     src = open(os.path.join(REPO, "analysis", "setups_experimental.py"),
                encoding="utf-8").read()
     part = src.split("def detect_albrox")[1].split("ALBROX_DETECTORS")[0]
-    assert "enrich_render" in part
-    assert 'htf_df=bundle.get("4h") or bundle.get("1h")' in part
+    assert "detect_technoclassic" in part          # pattern lane = shared TC engine
+    assert "enrich_render" in part                 # zone lane paints zones/HTF
+    assert "htf_df=sdf" in part
+    v7 = open(os.path.join(REPO, "analysis", "setups_v7.py"), encoding="utf-8").read()
+    assert "enrich_render(_cand, trigger_df, htf_df=context_df)" in v7
 
 
 def test_every_other_setup_passes_htf_context():
