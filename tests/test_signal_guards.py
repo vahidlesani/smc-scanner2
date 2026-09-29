@@ -995,7 +995,10 @@ def test_break_close_scans_all_bars_not_only_latest():
     lane = str(cand2.metadata.get("tl_fast_break") or "")
     assert "اولین کلوزِ معتبر" in lane and "تایم تأیید" in lane
     assert str(cand2.metadata.get("fast_break_bar") or "")[:13] == "2026-09-13 21"
-    # a pattern-timeframe close beyond the line confirms as well
+    # r60.3 THE multi-TF law (Viva 09-30): the PATTERN-TF close is NO LONGER
+    # a break source — the entry break is the TRIGGER timeframe's own close;
+    # the early lane is the LOWER TF (TOHOM). A break visible only on the
+    # pattern frame must keep waiting, never confirm.
     flat = df.copy()
     for i in range(11, 30):
         flat.iloc[i, flat.columns.get_indexer(["open", "high", "low", "close"])] = [100.0, 100.1, 99.9, 100.0]
@@ -1009,8 +1012,8 @@ def test_break_close_scans_all_bars_not_only_latest():
     cand_b.created_at = (t0 + timedelta(hours=10)).isoformat()
     cand_b.metadata.update({"atr": 1.0, "confirm_tf": "1h", "touched": False})
     ok2, cand3, reason2 = evaluate_confirmation(cand_b, flat, htf_closed_df=htf)
-    assert cand3.metadata.get("tl_fast_break"), reason2
-    assert "تایم الگو" in str(cand3.metadata.get("tl_fast_break"))
+    assert ok2 is False, "a pattern-TF-only break must NOT confirm (trigger-TF law)"
+    assert not cand3.metadata.get("tl_fast_break")
 
 
 def test_main_channel_live_slot_and_preview_dedup():
@@ -1042,7 +1045,9 @@ def test_main_channel_live_slot_and_preview_dedup():
     assert "این تحلیل تا قبل از Retest و بسته‌شدن کندل تأییدی" not in sv
     assert "tech_aids" in sv and "EMA" in sv
     qe = io.open("analysis/quality_engine.py", encoding="utf-8").read()
-    assert "for _frame, _tag in ((closed_df, \"تایم تأیید\"), (htf_closed_df, \"تایم الگو\")):" in qe
+    # r60.3 law: the fast-lane scans the TRIGGER frame only (HTF break is not
+    # an entry source; the early lane is the lower TF via TOHOM).
+    assert 'for _frame, _tag in ((closed_df, "تایم تأیید"),):' in qe
     # helpers render into compact and update captions
     import bot.messages_v7 as mv7
     from test_v7 import make_candidate

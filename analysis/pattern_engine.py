@@ -1329,6 +1329,52 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     except Exception as _exc:
         print(f"TECHCLASSIC LTF stop skipped {getattr(bundle, 'symbol', '?')}: {_exc}")
     tp2 = float(final_target)
+    # ── r60.3 zone-anchored plan (Viva 09-30: «اون باکس‌ها میتونن به تارگت
+    # گذاری و استاپ کمک بکنن»): the PATTERN-TF zone inventory (FVG/flip/OB/
+    # supply-demand — the same boxes the chart draws) snaps TP2 onto the
+    # nearest opposing box EDGE (front-running the box beats stopping inside
+    # it) and a protective box between entry and the structural stop hosts
+    # the stop behind its far edge. Bounded so the tool stays honest.
+    _tp2_zone60 = ""
+    try:
+        from analysis.render_kit import detect_zones as _dz60
+        _zinv60 = _dz60(pat, direction, float(poi["bottom"]), float(poi["top"])) or []
+        _buf60 = structural_buffer(entry)
+        if direction == "LONG":
+            _opp60 = sorted((z for z in _zinv60 if float(z.get("bottom", 0) or 0) > entry),
+                            key=lambda z: float(z["bottom"]))
+        else:
+            _opp60 = sorted((z for z in _zinv60
+                             if 0 < float(z.get("top", 0) or 0) < entry),
+                            key=lambda z: -float(z["top"]))
+        if _opp60:
+            _edge60 = (float(_opp60[0].get("bottom", 0) or 0) if direction == "LONG"
+                       else float(_opp60[0].get("top", 0) or 0))
+            _d60 = abs(_edge60 - entry)
+            _p60 = abs(tp2 - entry)
+            if _p60 > 0 and 0.55 * _p60 <= _d60 <= 1.45 * _p60:
+                tp2 = float(_edge60)
+                _tp2_zone60 = str(_opp60[0].get("kind") or "ZONE")
+        _risk60 = abs(entry - stop)
+        if _risk60 > 0:
+            if direction == "LONG":
+                _prot60 = sorted((z for z in _zinv60 if entry > float(z.get("top", 0) or 0) > 0),
+                                 key=lambda z: -float(z["top"]))
+                _pedge60 = (float(_prot60[0].get("bottom", 0) or 0) - _buf60) if _prot60 else 0.0
+                _between = _prot60 and entry > _pedge60 > stop
+            else:
+                _prot60 = sorted((z for z in _zinv60
+                                  if float(z.get("bottom", float("inf")) or float("inf")) > entry),
+                                 key=lambda z: float(z["bottom"]))
+                _pedge60 = (float(_prot60[0].get("top", 0) or 0) + _buf60) if _prot60 else 0.0
+                _between = _prot60 and entry < _pedge60 < stop
+            if _between:
+                _sl60 = clamp_stop_price(entry, direction, float(_pedge60),
+                                         str(trigger_tf or ""))[0]
+                if 0.45 * _risk60 <= abs(entry - _sl60) <= 1.10 * _risk60:
+                    stop = float(_sl60)
+    except Exception:
+        pass
     _path_full = abs(tp2 - entry)
     tp1 = entry + (tp2 - entry) / 5.0 if direction == "LONG" else entry - (entry - tp2) / 5.0
     try:
@@ -1359,6 +1405,8 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     candidate.entry_zone_top = float(max(entry, line_now) + 0.15 * atr_t)
     try:
         candidate.metadata["path_source"] = cand_path_source
+        if _tp2_zone60:
+            candidate.metadata["tp2_zone"] = _tp2_zone60
         candidate.metadata["stop_source"] = ("STRUCTURE" if abs(entry - stop) > buffer * 1.5
                                             else "BROKEN_LINE")
         candidate.metadata["stop_clamped"] = bool(_stop_was_clamped)

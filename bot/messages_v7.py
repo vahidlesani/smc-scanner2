@@ -993,6 +993,74 @@ def _native_patterns_for_frame(frame, direction: str, chart_tf: str,
     return _fresh
 
 
+def merge_htf_zones(chart_zones, htf_zones, price, direction: str = "") -> list:
+    """r60.3 (Viva 09-30): «الگوی تایم بالاتر باید جدا رسم بشه» + «اون
+    باکس‌هایی که گفتم اگر در چارت هست باید رسم بشه چرا نمیشه؟». enrich_render
+    always stored the higher-TF zone inventory (md["htf_zones"]) but nothing
+    ever drew it — his 4h OB/supply boxes were invisible on LTF charts. Here
+    the NEAREST HTF box per side joins the draw list under its own «HTF·»
+    family: separate label, one parent per side (DECLUTTER), never trimmed by
+    the chart-TF diet. HTF boxes anchor targets above and stops behind."""
+    out = list(chart_zones or [])
+    sides = {"above": None, "below": None}
+    for z in (htf_zones or []):
+        try:
+            zlo = float(z.get("bottom", z.get("lo", 0)) or 0)
+            zhi = float(z.get("top", z.get("hi", 0)) or 0)
+        except Exception:
+            continue
+        if zhi <= 0 or zhi < zlo:
+            continue
+        mid = 0.5 * (zlo + zhi)
+        side = "above" if zlo > price else ("below" if zhi < price else None)
+        if side is None:
+            continue
+        d = abs(mid - price)
+        if sides[side] is None or d < sides[side][0]:
+            sides[side] = (d, z)
+    for side in ("above", "below"):
+        hit = sides[side]
+        if not hit:
+            continue
+        z = dict(hit[1])
+        z["kind"] = "HTF·" + str(z.get("kind") or "ZONE")
+        z["htf"] = True
+        out.append(z)
+    return out
+
+
+def _viva_points_xs(points: list, frame) -> list:
+    """r60.3 THE multi-TF geometry law (Viva 09-30): «در مولتی، الگو یا ترند
+    نباید تغییر بکنه» — the pattern's OWN stored pivots are mapped onto this
+    frame's x-axis by TIME (bar inside the window → its index; a pivot older
+    than the window → extrapolated by the frame's bar duration; a pivot after
+    the last bar likewise). The drawn line is THE pattern line, identical on
+    every timeframe view, never a per-TF refit of it."""
+    idx = pd.DatetimeIndex(frame.index)
+    if len(idx) < 2:
+        return [float(i) for i in range(len(points))]
+    dt = (idx[-1] - idx[0]).total_seconds() / max(len(idx) - 1, 1)
+    t0 = idx[0]
+    xs = []
+    for p in points:
+        try:
+            ts = pd.Timestamp(str(p.get("timestamp")))
+        except Exception:
+            xs.append(float("nan"))
+            continue
+        if ts.tzinfo is not None:
+            ts = ts.tz_localize(None)
+        if t0.tzinfo is not None:
+            t0 = t0.tz_localize(None)
+        if ts < t0 or ts > idx[-1]:
+            # outside the window → time-extrapolate (never clamp: a clamped
+            # pre-window pivot is what bent the line into a fan)
+            xs.append((ts - t0).total_seconds() / dt)
+        else:
+            xs.append(float(idx.searchsorted(ts)))
+    return xs
+
+
 def _viva_points_native(points: list, frame) -> bool:
     """r51: viva_upper/lower_points suffer the same cross-TF collapse as
     render_patterns — every pivot timestamp must sit inside the frame span,
@@ -2352,6 +2420,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         for z8 in sorted(_zs8, key=_zone_importance)[:2]]
             if _clean_zone_view and len(_rz_list) > 2:
                 _rz_list = sorted(_rz_list, key=_zone_importance)[:2]
+        # r60.3: the higher-TF boxes join AFTER the chart-TF diet — nearest
+        # per side under the «HTF·» family, so his OB/supply boxes from the
+        # pattern timeframe finally render on the trigger chart.
+        try:
+            _htf_z60 = (candidate.metadata or {}).get("htf_zones")
+            if _htf_z60:
+                _rz_list = merge_htf_zones(_rz_list, _htf_z60,
+                                           float(frame["close"].iloc[-1]),
+                                           str(candidate.direction or ""))
+        except Exception:
+            pass
         for _z in _rz_list:
             # timestamp-anchored when the zone carries its origin time (every
             # zone detected since 09-20 does); legacy rows keep the old rule.
@@ -3219,9 +3298,23 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # stored pivots, the timestamp re-anchor collapses them onto
                 # x≈0 and the channel's LOWER line vanishes into a fan of
                 # steep red lines. Each TF re-fits BOTH edges on its own tape.
-                if _up0 and not _viva_points_native(_up0, frame):
+                # r60.3 law: the stored pattern-TF pivots are PROJECTED by
+                # time onto this frame (THE same line everywhere). The old
+                # per-TF refit replaced the 4h/1h pattern with a foreign LTF
+                # line — his «ترندلاین‌ها گاهی بی‌منطق/تاریخ‌گذشته» complaint.
+                # Refit remains ONLY as the fallback when nothing was stored.
+                _proj_up = _proj_lo = False
+                if _up0 and len(_up0) >= 2:
+                    _up0 = [{"timestamp": str(p.get("timestamp")),
+                             "price": float(p.get("price") or 0.0)} for p in _up0]
+                    _proj_up = not _viva_points_native(_up0, frame)
+                if _lo0 and len(_lo0) >= 2:
+                    _lo0 = [{"timestamp": str(p.get("timestamp")),
+                             "price": float(p.get("price") or 0.0)} for p in _lo0]
+                    _proj_lo = not _viva_points_native(_lo0, frame)
+                if _up0 and len(_up0) < 2 and not _proj_up:
                     _up0 = _refit_viva_points(frame, "HIGH")
-                if _lo0 and not _viva_points_native(_lo0, frame):
+                if _lo0 and len(_lo0) < 2 and not _proj_lo:
                     _lo0 = _refit_viva_points(frame, "LOW")
                 # The VALID UPPER/LOWER draw loop below re-reads the metadata;
                 # it must paint the SAME per-TF refit points — the foreign
@@ -3248,11 +3341,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     points = md.get(key) or []
                     if len(points) < 2:
                         continue
-                    xs, ys = [], []
-                    for point in points:
-                        ts = pd.Timestamp(str(point.get("timestamp")))
-                        x = float(np.searchsorted(frame.index, ts))
-                        xs.append(x); ys.append(float(point["price"]))
+                    # r60.3: xs come from TIME PROJECTION of the pattern's own
+                    # pivots (outside-window pivots extrapolate, never clamp)
+                    # — searchsorted here used to pin pre-window pivots to x=0
+                    # and bend the line into a fan.
+                    ys = [float(p["price"]) for p in points]
+                    xs = _viva_points_xs(points, frame)
                     if len(xs) < 2 or not all(math.isfinite(v) for v in xs + ys) \
                             or max(xs) - min(xs) < 1e-9:
                         continue

@@ -590,7 +590,14 @@ def evaluate_confirmation(
             return static_edge
         _is_long = candidate.direction == "LONG"
         _buf = 0.10 * _atr
-        for _frame, _tag in ((closed_df, "تایم تأیید"), (htf_closed_df, "تایم الگو")):
+        # ── r60.3 THE multi-TF law (Viva 09-30, twice-dictated): the ENTRY
+        # break is the TRIGGER timeframe's own break — «شکست همون تایم تریگر
+        # واسه ورود باید تایید بشه نه تایم بالاتر ... تایید اما از تایم
+        # پایینتر». The pattern/HTF frame is NO LONGER a break source here
+        # (it drew the line and confirmed on a frame the member never trades);
+        # the EARLY lane is the LOWER timeframe (TOHOM illusion engine), which
+        # stays exactly where r47 put it.
+        for _frame, _tag in ((closed_df, "تایم تأیید"),):
             if _frame is None or len(_frame) < 2:
                 continue
             _scan = _bars_since_candidate(candidate, _frame)

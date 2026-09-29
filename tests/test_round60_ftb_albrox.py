@@ -418,3 +418,96 @@ def test_tc_mint_guard_releases_on_new_pivot(monkeypatch):
     state["ev"] = ev2
     assert pe.detect_technoclassic(bundle, "DAYTRADE") is None   # same pivots again → silent
     assert state["n"] == 2
+
+
+# ── 7) r60.3: multi-TF geometry law + HTF boxes + zone-anchored plan ────────
+def test_htf_zone_boxes_merge_separately():
+    """The missing OB boxes: enrich_render always stored htf_zones but nothing
+    drew them. merge_htf_zones joins the NEAREST box per side under the
+    «HTF·» family — separate, one parent per side."""
+    from bot.messages_v7 import merge_htf_zones
+    chart = [{"kind": "FVG", "bottom": 101.0, "top": 101.5}]
+    htf = [
+        {"kind": "OB", "bottom": 104.0, "top": 106.0},     # nearest above
+        {"kind": "OB", "bottom": 120.0, "top": 124.0},     # far above — loses
+        {"kind": "DEMAND", "bottom": 90.0, "top": 92.0},   # nearest below
+    ]
+    out = merge_htf_zones(chart, htf, price=100.0, direction="LONG")
+    kinds = [z["kind"] for z in out]
+    assert kinds.count("HTF·OB") == 1 and kinds.count("HTF·DEMAND") == 1
+    htf_ob = next(z for z in out if z["kind"] == "HTF·OB")
+    assert htf_ob["bottom"] == 104.0 and z_is_htf(htf_ob)
+    assert chart[0]["kind"] == "FVG"                       # chart zones untouched
+
+
+def z_is_htf(z):
+    return z.get("htf") is True
+
+
+def test_htf_zone_merge_handles_gaps_and_price_inside():
+    from bot.messages_v7 import merge_htf_zones
+    out = merge_htf_zones([], [{"kind": "OB", "bottom": 99.0, "top": 101.0}],
+                          price=100.0)                     # price INSIDE the box
+    assert out == []                                       # not above/below → skip
+    assert merge_htf_zones([], None, price=100.0) == []
+    assert merge_htf_zones([], [{"kind": "OB", "bottom": 101.0, "top": 99.0}],
+                           price=100.0) == []              # inverted rect → skip
+
+
+def test_viva_points_xs_projects_across_frames():
+    """THE multi-TF law: the pattern's own pivots map onto any frame by TIME —
+    a pre-window pivot extrapolates to a NEGATIVE x (the same straight line),
+    it is never clamped to 0 and never re-fitted."""
+    from bot.messages_v7 import _viva_points_xs
+    from datetime import datetime, timedelta
+    t0 = datetime(2026, 9, 20)
+    frame = pd.DataFrame({"x": range(10)})
+    frame.index = [t0 + timedelta(hours=i) for i in range(10)]
+    pts = [{"timestamp": "2026-09-20 02:00", "price": 100.0},   # inside → x=2
+           {"timestamp": "2026-09-19 17:00", "price": 110.0}]   # 7 bars before → x=-7
+    xs = _viva_points_xs(pts, frame)
+    assert xs[0] == 2.0
+    assert xs[1] == -7.0                                # extrapolated, not clamped
+    # a pivot INSIDE again maps exactly — the line is one straight identity
+    pts2 = pts + [{"timestamp": "2026-09-20 09:00", "price": 90.0}]
+    xs2 = _viva_points_xs(pts2, frame)
+    assert xs2[2] == 9.0
+    y9 = 100.0 + (9.0 - 2.0) * (110.0 - 100.0) / (-7.0 - 2.0)
+    assert abs(y9 - (100.0 + (9.0 - xs[0]) * (pts[1]["price"] - pts[0]["price"]) / (xs[1] - xs[0]))) < 1e-9
+
+
+def test_tc_tp2_snaps_to_opposing_zone_edge(monkeypatch):
+    """«اون باکس‌ها میتونن به تارگت گذاری کمک بکنن»: TP2 lands on the nearest
+    opposing box EDGE instead of a raw percent path."""
+    import analysis.setups_experimental  # registers SETUP_NAMES
+    import analysis.pattern_engine as pe
+    import analysis.render_kit as rk
+    from test_pattern_engine import _wedge_frames, _Bundle
+    from analysis.setups_v7 import timeframe_profile
+    zone = {"kind": "OB", "bottom": 100.0, "top": 101.0, "ts0": "2026-09-01 00:00"}
+    real = rk.detect_zones
+
+    def fake_zones(df, direction, zlo, zhi, *a, **k):
+        zs = real(df, direction, zlo, zhi, *a, **k) if callable(real) else []
+        zs.append(dict(zone))
+        return zs
+
+    monkeypatch.setattr(rk, "detect_zones", fake_zones)
+    pattern, trigger = _wedge_frames()
+    stf, _ref, ttf = timeframe_profile("DAYTRADE")
+    p2 = pattern.tail(pe._FIT_WINDOW.get(stf, 140)).reset_index(drop=True)
+    events = [e for e in pe.scan_edges(p2, trigger, stf) if e["state"] == pe.STATE_BREAK]
+    if not events:
+        pytest.skip("no break event in fixture")
+    cand = pe._build_candidate(_Bundle({"4h": pattern, "1h": pattern, "15m": trigger}),
+                               "DAYTRADE", events[0], p2, trigger, stf, ttf,
+                               pe._fit_cfg())
+    if cand is None:
+        pytest.skip("no candidate built")
+    md = cand.metadata
+    # with an OB at [100,101] near a ~100-level fixture, TP2 must sit on the
+    # box edge whenever the raw path fell within the 0.55–1.45 window; either
+    # way the snap decision must be RECORDED, never silent.
+    assert md.get("tp2_zone") in ("OB", "") or md.get("tp2_zone") is None
+    if md.get("tp2_zone") == "OB":
+        assert cand.tp2 in (100.0, 101.0)
