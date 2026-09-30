@@ -839,6 +839,17 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             state = STATE_NEAR
         else:
             continue
+        # ── r61.2 FAILED-BREAK RECLAIM (Viva 09-30, BNB T336567: «الگو به بالا
+        # شکسته اما باز این سیگنال برعکس بریک صادر کرده»): a validated close-
+        # break that the LAST CLOSE has already pulled back through (beyond a
+        # 0.10·ATR wick tolerance) is a FAILED break — dead at the source.
+        # FTB stays safe: a wick-touch of the line is a pullback, only the
+        # close back on the pre-break side kills the event.
+        if state == STATE_BREAK:
+            _still61 = (last_close > line_now - 0.10 * atr_p) if side == "upper" \
+                else (last_close < line_now + 0.10 * atr_p)
+            if not _still61:
+                continue
         # E&M Minimum Price Objective: pattern width projected from the edge
         if width_now is not None:
             height = width_now
@@ -1138,6 +1149,23 @@ def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
     if not events:
         return None
     events.sort(key=lambda e: e["structure_score"], reverse=True)
+    # ── r61.2 THE ONE-BREAK LAW (Viva 09-30, verbatim: «الگو به بالا شکسته
+    # اما باز این سیگنال برعکس بریک صادر کرده» + «این قوانین برای همه ستاپها
+    # بودا»): when BOTH edges of the SAME pattern carry a validated close-
+    # break, the pattern HAS ONE direction — the MOST RECENT break's (tie →
+    # the stronger structure). The opposite-edge event dies here; it can
+    # never outscore the pattern's own break (the BNB bug: a 3-pivot lower
+    # edge outscored the 2-pivot upper edge that had just broken UP).
+    _dir61 = {}
+    for _e61 in events:
+        _age61 = 0 if _e61.get("bars_since_break") is None else int(_e61["bars_since_break"])
+        _d61 = str(_e61.get("direction") or "")
+        _rk61 = (_age61, -int(_e61.get("structure_score") or 0))
+        if _d61 not in _dir61 or _rk61 < _dir61[_d61]:
+            _dir61[_d61] = _rk61
+    if len(_dir61) > 1:
+        _win61 = min(_dir61.items(), key=lambda kv: kv[1])[0]
+        events = [_e61 for _e61 in events if str(_e61.get("direction") or "") == _win61]
     for ev in events:
         # ── r60.2 twin guard: the same visual pattern re-detected on ANOTHER
         # trigger/style lane (his FET case: T446848 trig-1h → T894237

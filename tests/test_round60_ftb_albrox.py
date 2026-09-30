@@ -692,3 +692,98 @@ def test_tlbreak_break_exempt_from_counter_trend_veto():
     cand.metadata["tl_context_conflict"] = True
     ok, _c, reason = evaluate_confirmation(cand, df)
     assert ok is True, reason
+
+
+# ── 11) r61.2: ONE-BREAK law + FAILED-BREAK reclaim ────────────────────────
+def _mk_ev(direction, age, side, score=8):
+    pe = __import__("analysis.pattern_engine", fromlist=["x"])
+    return {"state": pe.STATE_BREAK, "pattern": "P", "side": side,
+            "direction": direction, "line_price": 100.0, "live": 101.0,
+            "touches": 3, "fit_error_atr": 0.3, "structure_score": score,
+            "reactions": {"reject_rate": 0.5},
+            "edge_points": [{"timestamp": "2026-09-01 04:00", "price": 101.0},
+                            {"timestamp": "2026-09-10 08:00", "price": 99.0}],
+            "pattern_tf": "4h", "bars_since_break": age}
+
+
+def test_one_break_law_newest_break_wins(monkeypatch):
+    """«الگو به بالا شکسته اما باز این سیگنال برعکس بریک صادر کرده» — when
+    BOTH edges carry a close-break, the MOST RECENT break is the pattern's
+    direction; the older opposite-edge event may never outscore it (BNB: a
+    3-pivot SHORT beat a 2-pivot UP-break)."""
+    pe = _tc_detect_env(monkeypatch)
+    import analysis.setups_v7 as _sv7
+    from database.bot_kv import set_json as _sj
+    from test_pattern_engine import _wedge_frames, _Bundle
+    monkeypatch.setattr(_sv7, "_ensure_frames", lambda b, tfs: True)
+    pattern, trigger = _wedge_frames()
+    bundle = _Bundle({"4h": pattern, "1h": pattern, "15m": trigger})
+    captured = {}
+    from types import SimpleNamespace as _NS
+
+    def _fake_build(b, style, ev, *a, **k):
+        captured["direction"] = ev.get("direction")
+        return _NS(signal_id="FAKE-1")
+    monkeypatch.setattr(pe, "_build_candidate", _fake_build)
+    # SHORT broke 0 bars ago, LONG broke 3 bars ago, SHORT also scores higher
+    evs = [_mk_ev("LONG", 3, "upper", score=6), _mk_ev("SHORT", 0, "lower", score=9)]
+    monkeypatch.setattr(pe, "scan_edges", lambda *a, **k: [dict(e) for e in evs])
+    for _e in evs:                                # hermetic: clear BOTH sides
+        _sj(pe._mint_guard_key(bundle, _e), {})
+    pe.detect_technoclassic(bundle, "DAYTRADE")
+    assert captured["direction"] == "SHORT"       # newest wins despite score
+    # mirror: the UP-break is the fresh one → the SHORT may never mint
+    evs2 = [_mk_ev("LONG", 0, "upper", score=6), _mk_ev("SHORT", 3, "lower", score=9)]
+    monkeypatch.setattr(pe, "scan_edges", lambda *a, **k: [dict(e) for e in evs2])
+    for _e in evs2:
+        _sj(pe._mint_guard_key(bundle, _e), {})
+    pe.detect_technoclassic(bundle, "DAYTRADE")
+    assert captured["direction"] == "LONG"
+
+
+def test_break_reclaim_blocks_the_confirm():
+    """BNB: the pattern broke UP; the SHORT chain confirmed HOURS later. The
+    confirm gate now checks the break still holds — a CLOSE back through the
+    break line is a FAILED break and verdicts instead of confirming."""
+    from analysis.quality_engine import evaluate_confirmation
+    from test_round60_tc_calibrate import _tc_frame_and_candidate
+    df, cand = _tc_frame_and_candidate("SHORT")
+    close = float(df["close"].iloc[-1])
+    atr = float((df["high"] - df["low"]).tail(14).mean())
+    cand.metadata["viva_break_line"] = close - 1.0 * atr   # line far below
+    cand.metadata["break_edge"] = "LOWER"
+    ok, _c, reason = evaluate_confirmation(cand, df)
+    assert ok is False
+    assert (cand.metadata or {}).get("last_reject_code") == "BREAK_RECLAIMED", reason
+    # FTB-safe: a close near the line (within the wick tolerance) is NOT a reclaim
+    df2, cand2 = _tc_frame_and_candidate("SHORT")
+    cand2.metadata["viva_break_line"] = float(df2["close"].iloc[-1]) + 0.05 * atr
+    cand2.metadata["break_edge"] = "LOWER"
+    _ok2, _c2, _r2 = evaluate_confirmation(cand2, df2)
+    assert (cand2.metadata or {}).get("last_reject_code") != "BREAK_RECLAIMED"
+
+
+def test_reclaimed_break_is_dead_at_source(monkeypatch):
+    """A fresh break_index whose LAST trigger close is back inside the line
+    never yields a BREAK event (failed break, Brooks) — no mint, no SHORT."""
+    import pandas as pd
+    import analysis.setups_experimental  # noqa: F401
+    import analysis.pattern_engine as pe
+    from test_pattern_engine import _wedge_frames
+    pattern, trigger = _wedge_frames().  __class__ and _wedge_frames()
+    stf, _r, ttf = __import__("analysis.setups_v7", fromlist=["timeframe_profile"]).timeframe_profile("DAYTRADE")
+    p2 = pattern.tail(pe._FIT_WINDOW.get(stf, 140)).reset_index(drop=True)
+    evs = [e for e in pe.scan_edges(p2, trigger, stf) if e["state"] == pe.STATE_BREAK]
+    if not evs:
+        pytest.skip("fixture has no break event")
+    trig2 = trigger.copy()
+    ev = evs[0]
+    line = float(ev["line_price"])
+    side = str(ev["side"])
+    # push the LAST close back to the pre-break side (well past the tolerance)
+    new_close = line - 0.5 if side == "upper" else line + 0.5
+    trig2.iloc[-1, trig2.columns.get_loc("close")] = new_close
+    trig2.iloc[-1, trig2.columns.get_loc("open")] = new_close + (0.1 if side == "upper" else -0.1)
+    evs2 = [e for e in pe.scan_edges(p2, trig2, stf) if e["state"] == pe.STATE_BREAK
+            and e.get("side") == side]
+    assert not evs2, "a reclaimed break must be dead at the source"

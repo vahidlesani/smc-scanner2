@@ -540,3 +540,10 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
 - config.chart_enabled default True (diet stays via CHART_ENABLED=0).
 - Superseded-test updates: r46 cap-one, r53 chartless greps, signal_guards (doctrine/identical/preview lifecycle).
 - Suite 768P/1skip. Version 2026.09.30-r61.1. NOTE: his confirm-chart cosmetics («کندل‌ها جمع‌تر، فاصلهٔ TPها») = pill allocator already exists (_slot_alloc/_relayout_pills); deeper render-diet left for his next verdict.
+
+## r61.2 — ONE-BREAK law + FAILED-BREAK reclaim (BNB calibration, 2026-09-30)
+- His verdict: BNB T336567 4h TRENDLINE broke UP yet TC confirmed SHORT («الگو به بالا شکسته اما باز این سیگنال برعکس بریک صادر کرده»); laws must hold for ALL setups; «زوم/تشخیص هنوز باگ دارد — دقیق کالیبره کن».
+- Root causes fixed: ① scan_edges emitted BOTH-edge break events and detect picked by structure_score (3-pivot green SHORT beat the fresh 2-pivot UP-break) → THE ONE-BREAK LAW in detect_technoclassic: filter to the most-recent break's direction (bars_since_break; None=freshest; tie → score); ② fresh_bk31 kept 12-bar-old breaks alive AFTER price reclaimed → FAILED-BREAK RECLAIM guard in scan_edges (last_close back past line by >0.10×ATR → no BREAK event; FTB wicks safe); ③ confirm-time gate in evaluate_confirmation (ALL setups): close back through viva_break_line/viva_breakout_line by >0.10×ATR → reject BREAK_RECLAIMED (invalidation veto, incl. S6 survivors).
+- Test fallout (all doctrine-consistent): geometry fixture now ends in a HELD breakout (its 9-bar-old reclaimed upper-break WAS the bug class); s6-survivor accepts BREAK_RECLAIMED as the invalidation verdict; counter-trend test pops viva_break_line (tests its own gate).
+- New tests: one-break-newest-wins (both mirrors), reclaim blocks confirm + FTB-safe, reclaimed break dead at source. Suite 771P/1skip. Version 2026.09.30-r61.2.
+- His AKE/HBAR pins (risk 0.33%/0.39% SWING) now blocked by the r61.1 sane-zone floor; ENA/ICP pass. Zoom note: detector window = _FIT_WINDOW(pattern TF), render = relaxed 2-touch clone (09-17 law) — direction ownership now makes the drawn lines' break THE break.

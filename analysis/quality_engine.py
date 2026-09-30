@@ -1025,6 +1025,31 @@ def evaluate_confirmation(
 
     row = closed_df.iloc[-1]
     previous = closed_df.iloc[-2]
+    # ── r61.2 BREAK-RECLAIM CONFIRM GATE (Viva 09-30, BNB: the pattern broke
+    # UP yet a SHORT confirmed hours later): between the alert and the
+    # confirm the break must STILL hold. A trigger CLOSE back through the
+    # break line (beyond a 0.10·ATR wick tolerance) is a FAILED break — the
+    # chain verdicts instead of confirming an opposite-context entry. FTB is
+    # safe (wick touches are pullbacks, not reclaims). Every setup carrying
+    # the break line (TC viva_break_line / TLBREAK+ALBROX viva_breakout_line)
+    # is covered — the law is for ALL setups, as he dictated.
+    try:
+        _bl61 = float((candidate.metadata or {}).get("viva_break_line")
+                      or (candidate.metadata or {}).get("viva_breakout_line") or 0.0)
+        if _bl61 > 0:
+            _atr61 = float((candidate.metadata or {}).get("atr") or 0.0) \
+                or float((closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
+            _sd61 = str((candidate.metadata or {}).get("break_edge")
+                        or ("UPPER" if str(candidate.direction).upper() == "LONG" else "LOWER"))
+            _c61 = float(row["close"])
+            _bad61 = (_c61 < _bl61 - 0.10 * _atr61) if _sd61 == "UPPER" \
+                else (_c61 > _bl61 + 0.10 * _atr61)
+            if _atr61 > 0 and _bad61:
+                return reject("BREAK_RECLAIMED", (
+                    "شکستِ مبنا پس از هشدار پس گرفته شده — کلوز به سمتِ پیش از شکست برگشته است؛ "
+                    "شکستِ نامعتبر تأیید نمی‌گیرد و سناریو باطل است."))
+    except Exception:
+        pass
     # --- alternative multi-candle / higher-TF trigger evaluation ----------
     # The pin bar is one sign among several; a base of 2..N closed trigger
     # candles that aggregates into a pin / doji-break / engulf / reclaim at

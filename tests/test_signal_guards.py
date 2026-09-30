@@ -501,8 +501,12 @@ def test_s6_fast_confirm_survives_later_ticks():
     cand2.created_at = cand.created_at
     cand2.metadata.update(dict(cand.metadata, viva_state="S6_CONFIRMED"))
     ok2, _c3, why2 = evaluate_confirmation(cand2, df2)
-    assert ok2 is False and "ابطال" in (why2 or "") or "INVALIDATION" in str(
-        cand2.metadata.get("last_reject_code") or "")
+    # r61.2: price returned through the break line — the FAILED break now
+    # verdicts with the precise BREAK_RECLAIMED code (same veto, sharper name)
+    assert ok2 is False
+    assert ("ابطال" in (why2 or "") or "پس گرفته" in (why2 or "")
+            or "INVALIDATION" in str(cand2.metadata.get("last_reject_code") or "")
+            or cand2.metadata.get("last_reject_code") == "BREAK_RECLAIMED")
 
 
 def test_s6_lane_with_no_trigger_candle_does_not_crash():
@@ -1461,6 +1465,8 @@ def test_counter_trend_touch_only_never_confirms():
     from analysis.quality_engine import evaluate_confirmation
     df, cand = _s6_frame_and_candidate("SHORT")   # frame rallies = bull structure
     cand.metadata["tl_context_conflict"] = True
+    for _k61 in ("viva_break_line", "viva_breakout_line"):
+        cand.metadata.pop(_k61, None)   # r61.2 reclaim gate is a separate law
     ok, _c, reason = evaluate_confirmation(cand, df)
     assert ok is False
     assert cand.metadata.get("last_reject_code") == "COUNTER_TREND_TOUCH_ONLY"
