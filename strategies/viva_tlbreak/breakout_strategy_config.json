@@ -30,7 +30,7 @@
       "trigger_tf": "1H",
       "monitor_confirmation_tf": ["5m"],
       "min_pattern_length_bars_on_structure_tf": 15,
-      "max_pattern_length_bars_on_structure_tf": 90,
+      "max_pattern_length_bars_on_structure_tf": 150,
       "retest_window_bars_on_trigger_tf": 24,
       "max_extension_atr_multiple_without_retest": 2.0,
       "atr_period_for_buffers": 14,

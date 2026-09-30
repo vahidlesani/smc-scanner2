@@ -101,8 +101,19 @@ PATTERN_LIBRARY: Dict[str, Dict] = {
 
 
 def pattern_info(kind: str) -> Dict:
-    """Name / bias / shape / rule for a slug — unknown slugs degrade to NONE."""
+    """Name / bias / shape / rule for a slug — unknown slugs degrade to NONE.
+
+    r61: the patterns16 library (his 16-pattern poster law, E&M/Bulkowski
+    rules + entry side) is the SOURCE OF TRUTH; this older dict only fills
+    slugs the new law does not define."""
     k = str(kind or "").upper()
+    try:
+        from analysis.patterns16 import info16
+        _n = info16(k)
+        if _n.get("key") != "NONE":
+            return _n
+    except Exception:
+        pass
     info = PATTERN_LIBRARY.get(k)
     if info is None:
         return dict(PATTERN_LIBRARY["NONE"], key="NONE")

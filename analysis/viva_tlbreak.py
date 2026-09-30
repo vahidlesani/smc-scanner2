@@ -28,10 +28,20 @@ class VivaTLBreakConfig:
     pivot_right: int = 5
     min_touches: int = 3
     touch_tolerance_atr: float = 0.15
+    # r57 (his shadow law): "outlier" (futures TRADE default, unchanged) or
+    # "bodies" (render/drawing — trend anchors never sit on liquidation wicks)
+    wick_policy: str = "outlier"
     max_fit_residual_atr: float = 0.25
     require_alive: bool = False
     recency_bars: int = 40
     edge_atr: float = 8.0
+    # r31 (Viva 09-26, PYTH): a substantial line whose close-break is inside
+    # this many bars of the right edge stays admissible even when it died
+    # soon after its last defining pivot — the tradeable recognition window.
+    # r33 (Viva 09-26 LAW, verbatim): «بعد از بریک هم باید بمونه … حداقل
+    # ۵۰ کندل بعد از بریک، مگر اینکه ترندلاین معتبر دیگری ارجح باشه» — the
+    # window is 50 bars, for recognition AND retest, never 10/12.
+    fresh_break_bars: int = 50
     min_score: float = 7.0
     retest_window_trigger_bars_daytrade: int = 16
     retest_window_trigger_bars_swing: int = 24
@@ -40,7 +50,10 @@ class VivaTLBreakConfig:
     min_pattern_bars_daytrade: int = 12
     max_pattern_bars_daytrade: int = 80
     min_pattern_bars_swing: int = 15
-    max_pattern_bars_swing: int = 90
+    # r32 (Viva 09-26, DASH 1D wedge missed while 1H fired): a wedge leg on
+    # the daily structure easily spans >90 bars — the old cap discarded it
+    # before scoring. 150 keeps the guard against runaway «patterns».
+    max_pattern_bars_swing: int = 150
     channel_parallel_tolerance_pct: float = 15.0
     triangle_apex_max_progress: float = 0.90
     # R16 phase 3 — log-space calibration. On a window whose price span is
@@ -132,6 +145,10 @@ def fit_validated_line(
         return None
     # R16 phase 3 — is this window drawn on a log axis? Same 3% guard the
     # chart obeys (spot is always log; futures go log when the span demands).
+    # r50 note: on a log axis a 2-point data-space segment renders
+    # SCREEN-straight (matplotlib transforms path vertices only), and this
+    # log-fit line's endpoints are exactly those vertices — so the drawn
+    # trendline is straight on the CryptoCove log chart with no extra work.
     use_log = False
     try:
         _lo = float(df["low"].min())
@@ -140,13 +157,18 @@ def fit_validated_line(
             use_log = True
     except Exception:
         use_log = False
-    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right)
+    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right,
+                      wick_noise_filter=True,
+                      wick_policy=getattr(cfg, "wick_policy", "outlier") or "outlier")
     pts = highs if side == "HIGH" else lows
     n = len(df) - 1
     if len(pts) < 2:
         return None
     tol = max(cfg.touch_tolerance_atr, 0.12) * atr
-    pool = pts[-16:]
+    # r57 (his «لیمیت نداریم که فقط ۵۰ تا یا هرچی» — the old 16-pivot pool
+    # hid the chart's BEST majors; the whole pivot history competes now, the
+    # touches×fit×span score still picks the most valid line).
+    pool = pts[-200:]
     best: Optional[ValidatedLine] = None
     best_score = -1.0
     for i in range(len(pool)):
@@ -238,7 +260,15 @@ def fit_validated_line(
                     continue
                 if x1 - fx < 30:
                     continue
-                if break_at - x1 < 10:
+                # r31 calibration (Viva 09-26, «ترند ماژور ساعتها قبل شکسته
+                # اما سیستم بعلت رسم ترندلاین محلی هنوز منتظر شکست مونده»):
+                # dropping a MAJOR line just because it died soon after its
+                # last defining pivot made the fitter re-arm on a local pair
+                # and wait forever. A substantial line (3+ touches, 30+ span)
+                # whose break is FRESH stays admissible — the engine then
+                # recognises the break instead of watching a local line.
+                _fresh31 = int(getattr(cfg, "fresh_break_bars", 12) or 12)
+                if break_at - x1 < 10 and break_at < n - _fresh31:
                     continue
             elif cfg.require_alive:
                 # ALIVE line: touched price within the last 40 bars AND its
@@ -263,6 +293,11 @@ def fit_validated_line(
                 score *= 0.55
             if break_at is not None:
                 score *= 0.80  # a live trend outranks a finished one
+                # r31: a FRESH break of a substantial line IS the event —
+                # it must outrank the unbroken local pair so the engine
+                # recognises the real major break (PYTH 09-26).
+                if int(break_at) >= n - int(getattr(cfg, "fresh_break_bars", 12) or 12):
+                    score *= 1.6
             # spec §9 context_score: a line price actually sits near right
             # now is the line the chart must show (Viva 09-18: best-of-cands)
             _edge_now2 = float(10.0 ** (_ls * n + _li)) if (_ls or _li) else slope * n + intercept
@@ -330,7 +365,8 @@ def fit_viva_breakout_line(df: pd.DataFrame, direction: str, cfg: Optional[VivaT
     line = fit_validated_line(df, side, cfg)
     if line is None:
         return None
-    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right)
+    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right,
+                      wick_noise_filter=True)
     opposite = lows if side == "HIGH" else highs
     after = [p for p in opposite if p["index"] > line.first_index]
     if not after:
@@ -585,52 +621,8 @@ def line_price_at_time(line: ValidatedLine, timestamp) -> float:
     target = pd.Timestamp(timestamp).timestamp()
     if t1 <= t0:
         return line.price_at(line.last_index)
-    import os as _os
-    if _os.getenv("R317_LEGACY", "0") != "1":
-        # R31.7 audit T5: project the FITTED line (linear or log) by time.
-        # The old secant through the first/last touch PRICES ignored the fit
-        # (touches sit up to max_fit_residual off it) and the log calibration,
-        # so the trigger-TF break level differed from the drawn line.
-        try:
-            i0, i1 = float(first["index"]), float(last["index"])
-            if i1 > i0:
-                sec_per_bar = (t1 - t0) / (i1 - i0)
-                return float(line.price_at(i1 + (target - t1) / sec_per_bar))
-        except Exception:
-            pass
     price_per_second = (float(last["price"]) - float(first["price"])) / (t1 - t0)
     return float(last["price"]) + price_per_second * (target - t1)
-
-
-def breakout_is_fresh(trigger_df: pd.DataFrame, line: ValidatedLine, direction: str,
-                      lookback: int = 3, max_beyond_atr: float = 3.0) -> bool:
-    """R31.7 audit TB1: a TLBREAK break is an EVENT, not a state.
-
-    ``assess_projected_breakout`` accepted ANY close beyond the line — a line
-    broken two weeks earlier (price 7 ATR above it) re-qualified on every
-    green candle, producing LONG alerts whose POI sat 18% under the market
-    (BTC 1D, 2026-09-04). Fresh = one of the previous ``lookback`` trigger
-    closes was still on the inside of the line, and the current close is not
-    a chase (≤ ``max_beyond_atr`` beyond it)."""
-    try:
-        if trigger_df is None or len(trigger_df) < lookback + 2:
-            return True
-        atr = _atr(trigger_df)
-        is_long = str(direction).upper() == "LONG"
-        ts = trigger_df["timestamp"]
-        closes = trigger_df["close"].astype(float)
-        lv = line_price_at_time(line, ts.iloc[-1])
-        beyond = (float(closes.iloc[-1]) - lv) if is_long else (lv - float(closes.iloc[-1]))
-        if atr > 0 and beyond / atr > max_beyond_atr:
-            return False
-        for k in range(2, lookback + 2):
-            c = float(closes.iloc[-k])
-            lk = line_price_at_time(line, ts.iloc[-k])
-            if (c <= lk) if is_long else (c >= lk):
-                return True
-        return False
-    except Exception:
-        return True
 
 
 def _ema(values: pd.Series, span: int) -> pd.Series:
@@ -868,7 +860,8 @@ class WatchLine:
 def fit_two_pivot_watch(df: pd.DataFrame, side: Literal["HIGH", "LOW"], cfg: Optional[VivaTLBreakConfig] = None) -> Optional[WatchLine]:
     """Visible 2-pivot watch only; never eligible for entry/confirmation."""
     cfg = cfg or load_config()
-    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right)
+    highs, lows = pivots(df, cfg.pivot_left, cfg.pivot_right,
+                      wick_noise_filter=True)
     pts = highs if side == "HIGH" else lows
     if len(pts) < 2:
         return None

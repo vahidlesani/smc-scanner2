@@ -173,7 +173,8 @@ def test_spot_lane_is_wired_and_budgeted():
     src = open(os.path.join(root, "main.py"), encoding="utf-8").read()
     assert "def run_spot_scan()" in src and "next_spot" in src
     assert "chat_override=CHAT_ID_SPOT" in src
-    assert "SPOT_MAX_PER_DAY" in src and "SPOT_SCAN_MINUTES" in src
+    assert "SPOT_SCAN_MINUTES" in src
+    assert "SPOT_MAX_PER_DAY" not in src  # r56 (Viva: «محدودیت اسپات نداریم»)
     msg = open(os.path.join(root, "bot", "messages_v7.py"), encoding="utf-8").read()
     assert "_a9.set_yscale(\"log\")" in msg
 

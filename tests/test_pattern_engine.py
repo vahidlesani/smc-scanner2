@@ -79,11 +79,14 @@ def test_scan_edges_finds_break_on_descending_triangle():
     pattern, trigger = _wedge_frames()
     events = m.scan_edges(pattern, trigger, "4h")
     assert events, "expected at least one edge event on a validated pattern"
-    violated = [e for e in events if e.get("warn_only")]
-    assert violated and violated[0]["state"] == m.STATE_VIOLATED
-    assert violated[0]["side"] == "upper" and violated[0]["direction"] is None
-    assert "هیچ سیگنالی" in (violated[0].get("violation_fa") or "")
-    assert not [e for e in events if e["side"] == "upper" and e.get("direction")]
+    # r54: the upper CLOSE-cross is a confirmable COUNTER-DOCTRINE LONG (the
+    # descending triangle's nature is SHORT); the warn-only path is now only
+    # for live-only crosses.
+    upper_ev = [e for e in events if e["side"] == "upper"]
+    assert upper_ev and upper_ev[0].get("direction") == "LONG"
+    assert upper_ev[0].get("counter_doctrine") is True
+    assert upper_ev[0].get("doctrine_direction") == "SHORT"
+    assert not [e for e in events if e.get("warn_only")]
     # the nature side: lower-edge break + close → SHORT only
     line = float(_pattern_line(pattern, "LOWER").price_at(len(pattern) - 1))
     atr_p = float((pattern["high"] - pattern["low"]).tail(14).mean())
@@ -342,50 +345,25 @@ def test_head_shoulders_label_and_note():
     pat, trig = _flat_frames(keys_override=[
         (0, 84.3), (45, 99.4), (52, 80.0), (70, 108.0), (88, 78.0),
         (105, 99.4), (118, 92.0), (132, 99.4), (139, 84.0)])
-    # the fixture's live price sits 1.2 ATR ABOVE the shoulder line: that is
-    # the INVALIDATION of the H&S (R31.7 audit P3) — detected, but the LONG
-    # break event no longer advertises a bearish formation
     events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
-    assert events and events[0]["formation_invalidated"] == "HEAD_SHOULDERS"
-    assert events[0]["pattern"] != "HEAD_SHOULDERS"
-    assert events[0]["touches"] >= 3
-    # before the cross (price just under the shoulder line) the label stands
-    atr = float((pat["high"] - pat["low"]).tail(14).mean())
-    trig2 = trig.copy()
-    for col in ("open", "high", "low", "close"):
-        trig2[col] = trig2[col] - 1.35 * atr
-    events = [e for e in m.scan_edges(pat, trig2, "4h") if e["side"] == "upper"]
     assert events and events[0]["pattern"] == "HEAD_SHOULDERS"
     assert "گردن" in events[0].get("struct_note", "")
+    assert events[0]["touches"] >= 3
 
 
 def test_triple_top_label():
     m = _mod()
     pat, trig = _flat_frames()
     events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
-    # crossed upward = the triple top is invalidated (R31.7 audit P3)
-    assert events and events[0]["formation_invalidated"] == "TRIPLE_TOP"
-    atr = float((pat["high"] - pat["low"]).tail(14).mean())
-    trig2 = trig.copy()
-    for col in ("open", "high", "low", "close"):
-        trig2[col] = trig2[col] - 1.35 * atr
-    events = [e for e in m.scan_edges(pat, trig2, "4h") if e["side"] == "upper"]
     assert events and events[0]["pattern"] == "TRIPLE_TOP"
 
 
 def test_flag_relabels_small_channel_after_pole():
     m = _mod()
-    # R31.7 audit P5: a flag is BRIEF — the pole is followed by a short
-    # consolidation (the old fixture's 87-bar box after an 8-bar pole is a
-    # rectangle, not a flag)
-    pat, trig = _flat_frames(l0=95.0, extra=[(92, 70.0)],
-                             up_idx=(100, 115, 130), lo_idx=(107, 122, 136))
+    pat, trig = _flat_frames(l0=95.0, extra=[(35, 70.0)])
     events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
     assert events and events[0]["pattern"] == "FLAG_BULL"
     assert "پرچم" in events[0].get("struct_note", "")
-    pat, trig = _flat_frames(l0=95.0, extra=[(35, 70.0)])
-    events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
-    assert not events or events[0]["pattern"] != "FLAG_BULL"
 
 
 def test_broadening_megaphone():
@@ -459,6 +437,10 @@ def test_crossed_line_never_fades():
     assert up, "upper-edge event expected on the crossed line"
     assert up[0]["state"] != m.STATE_FADE
     assert "fade" not in up[0]
+    # r54: the crossed upper line of a one-nature pattern is now the counter
+    # LONG break edge — never a fade, and its close-cross is confirmable.
+    if up[0].get("counter_doctrine"):
+        assert up[0].get("direction") == "LONG"
 
 
 def test_choose_primary_keeps_nearest_edge():

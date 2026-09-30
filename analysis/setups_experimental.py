@@ -307,14 +307,6 @@ def _intrabar_base(bundle: MarketBundle, context_df, trigger_tf: str, direction:
     return {"bottom": lo, "top": hi, "kind": "INTRABAR_BASE", "bars": n_in}
 
 
-def _htf_frame(bundle):
-    """FIX (R31.5): `bundle.get("4h") or bundle.get("1h")` evaluated a
-    DataFrame's truth value → ValueError, swallowed by the caller's bare
-    except, so the pin/TL-watch charts silently lost their HTF zones."""
-    df = bundle.get("4h")
-    return df if df is not None else bundle.get("1h")
-
-
 def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
     """Live-paper adapter for isolated Viva-TLBREAK v1.
 
@@ -367,7 +359,7 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             try:  # CHART-8: the WATCH chart paints zones/patterns like every setup
                 from analysis.render_kit import enrich_render
                 enrich_render(candidate, trigger_df,
-                              htf_df=_htf_frame(bundle))
+                              htf_df=bundle.get("4h") or bundle.get("1h"))
             except Exception:
                 pass
             candidate.metadata.update({"strategy_variant":"VIVA_TLBREAK","viva_state":"S0_WATCH","viva_pattern":"TWO_PIVOT_WATCH","viva_watch_line":line_price,"viva_touch_count":2,"viva_watch_points":[dict(watch.first),dict(watch.last)],"public_code":generate_viva_public_code("TLBREAK", style),
@@ -384,12 +376,6 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         breakout = assess_projected_breakout(trigger_df, line, direction)
         if breakout is None or not breakout.passed:
             continue
-        # R31.7 audit TB1: stale breaks (line crossed long ago) never qualify
-        import os as _os317
-        if _os317.getenv("R317_LEGACY", "0") != "1":
-            from analysis.viva_tlbreak import breakout_is_fresh
-            if not breakout_is_fresh(trigger_df, line, direction):
-                continue
         geometry_ok, _geometry_pattern = pattern_geometry_ok(upper, lower, len(refine_df) - 1)
         pattern = classify_pattern_detailed(upper, lower, len(refine_df) - 1)
         # ── Viva 09-23/24 (wedge NATURE law, verbatim): «رایزینگ وج ماهیت
@@ -495,6 +481,10 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             pass
         candidate.metadata.update({
             "strategy_variant": "VIVA_TLBREAK",
+            # r60.6: TLBREAK breaks carry the same direction contract — the
+            # counter-trend touch-veto may never eat a validated break
+            # («همه این ۳ ستاپها جهت شکست رو تایید بکنن»).
+            "break_direction": "UP" if direction == "LONG" else "DOWN",
             "viva_state_machine": VivaTLState(stage="S2_BREAKOUT").payload(),
             # Confirm TF bars: give the retest→rejection→micro-BOS sequence room
             # to complete (previously 16/24 on a lower TF expired too quickly).
@@ -520,6 +510,125 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             "viva_retest_zone": [poi["bottom"], poi["top"]],
         })
         return candidate
+    return _tlbreak_rejection_scalp(bundle, style, refine_df, refine_tf,
+                                    upper, lower, trigger_df, trigger_tf)
+
+
+def _tlbreak_rejection_scalp(bundle, style, refine_df, refine_tf,
+                             upper, lower, trigger_df, trigger_tf):
+    """r60 rejection lane (Viva 09-29 §6, verbatim): price taps the trendline,
+    NO break happens and the candle rejects — the return leg may confirm a
+    COUNTER-TREND SCALP through the TOHOM illusion engine only (sub-TF
+    directional closes + rising volume + confirming candle pattern), with
+    sensible scalp geometry: stop behind the rejection wick, targets inside
+    the trigger-TF band. His candle vocabulary (pin/engulfing) is the anatomy
+    of THIS event only — it never vetoes a real break (breaks carry no
+    anatomy gate; fast lane untouched)."""
+    settings = get_settings()
+    if not getattr(settings, "viva_tlbreak_enabled", False):
+        return None
+    if trigger_df is None or len(trigger_df) < 8 or refine_df is None or len(refine_df) < 20:
+        return None
+    if upper is None and lower is None:
+        return None
+    atr_t = float((trigger_df["high"] - trigger_df["low"]).tail(14).mean() or 0.0)
+    if atr_t <= 0:
+        return None
+    row, prev = trigger_df.iloc[-1], trigger_df.iloc[-2]
+    from analysis.trade_management import structural_buffer, clamp_path_to_band
+    from analysis.models import generate_viva_public_code
+    from analysis.pattern_engine import alert_lineage_key
+    pattern_n = len(refine_df) - 1
+    for line, direction in ((upper, "SHORT"), (lower, "LONG")):
+        if line is None:
+            continue
+        lvl = float(line.price_at(pattern_n))
+        close = float(row["close"])
+        # the line must still sit on the correct side (resistance above / support below)
+        if direction == "SHORT" and lvl <= close + 0.05 * atr_t:
+            continue
+        if direction == "LONG" and lvl >= close - 0.05 * atr_t:
+            continue
+        tap = (float(row["high"]) >= lvl - 0.15 * atr_t) if direction == "SHORT" \
+            else (float(row["low"]) <= lvl + 0.15 * atr_t)
+        if not tap:
+            continue
+        inside = (close < lvl - 0.10 * atr_t) if direction == "SHORT" \
+            else (close > lvl + 0.10 * atr_t)
+        if not inside:
+            continue  # no rejection yet — a break may be forming; not this lane
+        prev_inside = (float(prev["close"]) < lvl) if direction == "SHORT" \
+            else (float(prev["close"]) > lvl)
+        if not prev_inside:
+            continue  # the line was already closed through → break domain
+        rng = max(float(row["high"]) - float(row["low"]), 1e-12)
+        body = abs(close - float(row["open"]))
+        body_top = max(float(row["open"]), close)
+        body_bottom = min(float(row["open"]), close)
+        if direction == "SHORT":
+            pin = (float(row["high"]) - body_top) >= 0.45 * rng
+            engulf = (float(prev["close"]) > float(prev["open"])
+                      and close < float(row["open"])
+                      and float(row["open"]) >= float(prev["close"]))
+        else:
+            pin = (body_bottom - float(row["low"])) >= 0.45 * rng
+            engulf = (float(prev["close"]) < float(prev["open"])
+                      and close > float(row["open"])
+                      and float(row["open"]) <= float(prev["close"]))
+        if not (pin or (engulf and body >= 0.30 * atr_t) or body >= 0.55 * atr_t):
+            continue
+        entry = close
+        wick = float(row["high"]) if direction == "SHORT" else float(row["low"])
+        buffer = structural_buffer(entry)
+        sl = wick + buffer if direction == "SHORT" else wick - buffer
+        risk = abs(entry - sl)
+        if risk <= 0 or risk > 0.035 * entry:
+            continue  # scalp horizon only
+        path, _psrc = clamp_path_to_band(entry, str(trigger_tf), 1.8 * risk)
+        if path <= 0.8 * risk:
+            continue
+        tp1 = entry - min(1.2 * risk, path) if direction == "SHORT" else entry + min(1.2 * risk, path)
+        tp2 = entry - min(1.8 * risk, path) if direction == "SHORT" else entry + min(1.8 * risk, path)
+        cand = SignalCandidate(
+            signal_id=f"viva-tlscalp-{bundle.symbol}-{trigger_tf}-{str(row['timestamp'])[:16]}",
+            symbol=str(bundle.symbol), style=str(style).upper(), setup_code="TLBREAK",
+            setup_name=SETUP_NAMES["TLBREAK"],
+            strategy_fa="VIVA-TLBREAK | اسکلپ ریجکت خط — فقط با تأیید موتور توهم",
+            direction=direction, score=6, status="EDUCATIONAL",
+            entry_zone_bottom=min(entry, lvl) - 0.10 * atr_t,
+            entry_zone_top=max(entry, lvl) + 0.10 * atr_t,
+            planned_entry=entry, sl=float(sl), tp1=float(tp1), tp2=float(tp2),
+            rr_tp1=abs(tp1 - entry) / max(risk, 1e-12),
+            rr_tp2=abs(tp2 - entry) / max(risk, 1e-12),
+            bias="BEARISH" if direction == "SHORT" else "BULLISH",
+            trigger_timeframe=str(trigger_tf),
+            evidence=[EvidenceItem(
+                "tl_rejection", "ریجکت خط روند (بدون شکست)",
+                (f"قیمت به خط {'مقاومتی' if direction == 'SHORT' else 'حمایتی'} {_n2(lvl)} در "
+                 f"{str(trigger_tf).upper()} برخورد کرد و با {'پین‌بار' if pin else 'کندل دفع'} برگشت؛ "
+                 "هیچ کلوزی پشت خط ثبت نشده است. ورود اسکلپ خلاف روند فقط با تأیید موتور توهم "
+                 "(کندل‌های تایم پایین‌تر + رشد حجم + الگوی کندلی) صادر می‌شود."),
+                True, 2, level=lvl, timeframe=str(trigger_tf)),
+            ],
+            warnings=[
+                "این اسکلپ خلاف روند است و فقط با تأیید توهم زودتر از کلوز فعال می‌شود.",
+                f"عبور معتبر قیمت از {_n2(sl)} سناریو را باطل می‌کند.",
+            ],
+            mandatory_gates={"viva_tlbreak_rejection": True},
+        )
+        _lk = alert_lineage_key("TLBREAK", str(bundle.symbol), str(trigger_tf),
+                                str(refine_tf), "rejection", direction,
+                                [dict(p) for p in (line.points or ())], is_break=False)
+        cand.metadata.update({
+            "strategy_variant": "VIVA_TLBREAK", "rejection_scalp": True,
+            "tohom_required": True, "scalp": True,
+            "viva_break_line": lvl, "viva_breakout_line": lvl,
+            "tl_rejection_line": lvl, "atr": atr_t, "touched": True,
+            "public_code": generate_viva_public_code("TLBREAK", style),
+        })
+        if _lk:
+            cand.metadata["alert_lineage_key"] = _lk
+        return cand
     return None
 
 
@@ -713,7 +822,10 @@ SETUP_NAMES_FA["PINVAL"] = "پین‌بار معتبر در ناحیه مهم"
 # structure and materially reduces the 15m noise that was dominating the feed.
 # 15m remains available to the other setup families (TLBREAK/TECHCLASSIC etc.);
 # this change is deliberately local to the PinWall family.
-PINVAL_TF_BY_STYLE = {"SWING": ("1h",), "DAYTRADE": ("30m",), "SCALP": ("5m",)}
+# r48 (Viva 09-27): the SWING pin lane scans the same four trigger TFs the
+# other futures setups use (30m/1h/2h/4h) — one engine, four lanes.
+PINVAL_TF_BY_STYLE = {"SWING": ("30m", "1h", "2h", "4h"),
+                      "DAYTRADE": ("30m",), "SCALP": ("5m",)}
 
 
 def _unmitigated_fvg_edge(df, direction: str, atr_v: float, lookback: int = 60):
@@ -775,11 +887,6 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         return None
     best = None
     for tf in PINVAL_TF_BY_STYLE.get(style, ("15m",)):
-        # R31.5: the 30m DAYTRADE pin stream had never actually run live (the
-        # bundle had no 30m frame). The replay measured it at −0.054 R/trade
-        # (n=328, 120d×10 symbols), so it stays OFF until Viva enables it.
-        if str(tf) == "30m" and not getattr(settings, "pinval_30m_enabled", False):
-            continue
         df = bundle.get(tf)
         if df is None or len(df) < 40:
             continue
@@ -960,11 +1067,7 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         # Viva 09-20 round 11: «فرمول ریسک به ریوارد … اصلا اهمیت نداره» and
         # «همه این تغییرات روی همه ستاپها» → the PINVAL R:R floors are gone
         # (the ratios are reported on the message only).
-        # FIX (R31.5): 30m was missing → it fell back to 300s, and a 30m pin
-        # (age ≥ 1800s at its own close) could never pass the 2×TF freshness
-        # guard below — every DAYTRADE PINVAL was dropped at birth.
-        tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600,
-                      "4h": 14400, "1d": 86400}.get(str(tf), 300)
+        tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}.get(str(tf), 300)
         # Legacy one-direction / one-zone band-aid filters. When the polarity
         # gate is active it already decides correct direction + zone polarity
         # (including valid SHORTs at supply and post-break flips), so these
@@ -994,6 +1097,17 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         try:
             age_s = (pd.Timestamp.utcnow().tz_localize(None) - pd.Timestamp(last_ts)).total_seconds()
             if age_s > 2 * tf_seconds:
+                continue
+        except Exception:
+            pass
+        # r61.1 SANE-ZONE LAW (SUI K264244: the dumbest invalidation — zone
+        # and cancel less than a cent apart): a pin whose stop sits at the
+        # door of its own body-zone is not a setup, it is a trap.
+        try:
+            from analysis.trade_management import sane_zone_geometry_ok as _szg61
+            _a61 = float((df["high"] - df["low"]).tail(14).mean() or 0.0)
+            if not _szg61(min(o, c), max(o, c), float(entry), float(sl),
+                          direction, _a61, str(style)):
                 continue
         except Exception:
             pass
@@ -1118,48 +1232,39 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             _pdf = bundle.get(str(best.trigger_timeframe or "").lower())
             if _pdf is not None:
                 enrich_render(best, _pdf,
-                              htf_df=_htf_frame(bundle))
+                              htf_df=bundle.get("4h") or bundle.get("1h"))
+        except Exception:
+            pass
+        # r40 SETUP-CONSOLIDATION (Viva 09-26, «هر چیز خوب PINWALL-QUALITY در
+        # PINWAL کلاسیک ادغام بشه؛ فقط PINWALL LEGACY بمونه»): the Q lane's
+        # four-component quality audit (anatomy / location / context / HTF
+        # polarity) now rides ON the classic pin as EVIDENCE + metadata — the
+        # separate PINWALLQ candidate is no longer emitted (its detector list
+        # is empty below), legacy PINWALLQ rows keep rendering as history.
+        try:
+            _qdf = bundle.get(str(best.trigger_timeframe or "").lower())
+            if _qdf is not None and len(_qdf) >= 20:
+                _qscore, _qdetails = _pinwall_quality_score(_qdf, best.direction, best)
+                best.metadata["pinwall_quality"] = _qdetails
+                _comp_max = {"anatomy": 30.0, "location": 27.0, "context": 20.0, "bias": 10.0}
+                _comp_fa = {
+                    "anatomy": ("کیفیت آناتومی پین", "نسبت شدو به دامنه، محل کلوز و اندازهٔ بدنه نسبت به ATR."),
+                    "location": ("کیفیت ناحیه و مکان", "نوع ناحیهٔ پین (FVG/فلیپ/عرضه-تقاضای تازه/ناحیهٔ کلیدی) و تازگی لمس."),
+                    "context": ("کامپرشن و کانتکست کندلی", "فشردگی ۵ کندل اخیر نسبت به ATR و کندل‌های دوجی‌مانندِ پیش از پین."),
+                    "bias": ("همسویی بایاس تایم بالاتر", "داوری گیت قطبیت ناحیه — نه جهت خودِ پین."),
+                }
+                for _k in ("anatomy", "location", "context", "bias"):
+                    _v = float(_qdetails.get(_k) or 0.0)
+                    _t, _d = _comp_fa[_k]
+                    best.evidence = list(best.evidence or []) + [EvidenceItem(
+                        f"pinq_{_k}", _t,
+                        f"{_d} امتیاز جزء: {_v:g} از {_comp_max[_k]:g} ({_v / _comp_max[_k]:.0%}).",
+                        _v >= 0.6 * _comp_max[_k], 2, timeframe=best.trigger_timeframe)]
+                if _qscore >= float(getattr(get_settings(), "pinwall_quality_min_score", 78.0)):
+                    best.score = min(10, best.score + 1)
         except Exception:
             pass
     return best
-
-
-def _pin_first_visit(df, direction: str, atr_v: float, lookback: int = 30,
-                     approach_bars: int = 2, tol_atr: float = 0.25) -> bool:
-    """True when the pin's probe (low for LONG / high for SHORT) is the FIRST
-    visit of that price area inside `lookback` bars.
-
-    A prior bar whose low (LONG) reached within `tol_atr`×ATR of the probe —
-    or traded through it — means the zone was already tested; a re-tested
-    zone has less resting liquidity and earns no first-visit credit."""
-    try:
-        n = len(df)
-        if n < approach_bars + 3 or atr_v <= 0:
-            return False
-        pin = df.iloc[-1]
-        start = max(0, n - 1 - lookback)
-        end = n - 1 - approach_bars
-        if end <= start:
-            return True
-        prior = df.iloc[start:end]
-        close = float(pin["close"])
-        if direction == "LONG":
-            probe = float(pin["low"])
-            lows = prior["low"].astype(float)
-            if not bool((lows <= probe + tol_atr * atr_v).any()):
-                return True
-            # a sweep-and-reclaim of the prior visit's extreme is the
-            # liquidity-grab variant of a fresh visit — still credited
-            prior_min = float(lows.min())
-            return probe < prior_min - 0.05 * atr_v and close > prior_min
-        probe = float(pin["high"])
-        highs = prior["high"].astype(float)
-        if not bool((highs >= probe - tol_atr * atr_v).any()):
-            return True
-        prior_max = float(highs.max())
-        return probe > prior_max + 0.05 * atr_v and close < prior_max
-    except Exception:
-        return False
 
 
 def _pinwall_quality_score(df, direction: str, base: SignalCandidate) -> tuple[float, dict]:
@@ -1176,15 +1281,8 @@ def _pinwall_quality_score(df, direction: str, base: SignalCandidate) -> tuple[f
     if body<.5*atr_v: anatomy+=8
     if opp_wick/rng>.15: anatomy=max(0,anatomy-6)
     md=base.metadata or {}; location=15.0 if md.get("pin_zone_kind") in {"FVG","FLIP","SD_FRESH","DEMAND","SUPPLY"} else 0.0
-    # FIX (review 09-25): «first visit» used to read md["touched"], which the
-    # detector ALWAYS sets False at detection time — so every pin got a free
-    # +12 and the 78-point bar was effectively 66. First visit is now measured
-    # on the tape: the pin's probe level must not have been visited by the
-    # earlier bars of the lookback (the 2 approach bars right before the pin
-    # are excluded — they are the leg INTO the zone, not a prior visit).
-    first_visit = _pin_first_visit(df, direction, atr_v)
-    md["pin_first_visit"] = bool(first_visit)
-    if first_visit: location+=12
+    # Existing detector only emits fresh FVG/context candidates; award first-visit quality.
+    if not md.get("touched", False): location+=12
     recent=df.iloc[max(0,len(df)-6):len(df)-1]; avg=float((recent["high"]-recent["low"]).mean()) if not recent.empty else 0
     context=12.0 if atr_v>0 and avg<.6*atr_v else 0.0
     if any(abs(float(r["close"])-float(r["open"]))<=.12*max(float(r["high"])-float(r["low"]),1e-12) for _,r in recent.tail(2).iterrows()): context+=8
@@ -1242,7 +1340,11 @@ def detect_pinwall_quality(bundle: MarketBundle, style: str) -> Optional[SignalC
     return candidate
 
 
-PINWALL_QUALITY_DETECTORS=[detect_pinwall_quality]
+# r40 SETUP-CONSOLIDATION (Viva 09-26): PINWALLQ is no longer emitted — its
+# quality audit was merged INTO the classic pin (detect_pinbar_zone) and the
+# surviving setup is PINWALL LEGACY (PINVAL) only. The detector function and
+# every legacy display branch stay: old PINWALLQ rows must keep rendering.
+PINWALL_QUALITY_DETECTORS: list = []
 
 def _albrox_spike_context(df: np.ndarray | object) -> dict | None:
     # Placeholder marker; detector below works with pandas dataframes.
@@ -1250,152 +1352,198 @@ def _albrox_spike_context(df: np.ndarray | object) -> dict | None:
 
 
 def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
-    """ALBROX original: spike/reclaim → base building → base break.
+    """r60 ALBROX (Viva 09-29 §6, dictated): the UNION setup.
 
-    Pinwall is optional confirmation only; its own strategy remains untouched.
+    Lane A — pattern breaks/fades: the exact TECHCLASSIC engine under the
+    ALBROX name (with-trend only, zones never veto, first-close doctrine).
+    Lane B — zone break/reclaim: FVG / flip / supply-demand / order block —
+    the trigger candle taps the zone and prints the FIRST close beyond its
+    edge (or TOHOM pre-close; the ladder only arms while price stays beyond
+    the level — CLOSE_THROUGH_INVALIDATION and the break contract guard it).
+    Lane C — zone rejection scalp: tap the NEAR edge, close back out with
+    rejection anatomy and NO close-through → counter-trend scalp confirmed
+    ONLY by the TOHOM illusion engine (rejection_scalp + tohom_required).
+    Per his law, zones may only ADD score here — they never gate.
     """
     settings = get_settings()
-    structure_tf, refine_tf, trigger_tf = timeframe_profile(style)
-    if not _ensure_frames(bundle, (structure_tf, refine_tf, trigger_tf)):
+    if not getattr(settings, "albrox_enabled", False):
         return None
-    df, context_df = bundle.get(trigger_tf), bundle.get(structure_tf)
-    if len(df) < 120:
+    try:
+        from analysis.pattern_engine import detect_technoclassic as _tc_engine
+        cand = _tc_engine(bundle, style, setup_code="ALBROX")
+        if cand is not None:
+            return cand
+    except Exception as exc:
+        print(f"ALBROX pattern lane skipped {getattr(bundle, 'symbol', '?')}: {exc}")
+    return _albrox_zone_lane(bundle, style)
+
+
+def _albrox_zones(sdf, bundle, structure_tf: str, atr_s: float) -> list:
+    """Fresh zone inventory (r60): un-mitigated FVGs, pivot SD/flip zones and
+    the freshest order blocks on the structure frame. Inventory only — the
+    trigger is always a trigger-TF close or a TOHOM pre-close confirmation."""
+    zones = []
+    try:
+        for direction in ("LONG", "SHORT"):
+            f = _unmitigated_fvg_edge(sdf, direction, atr_s)
+            if f:
+                zones.append({"kind": "FVG", "bottom": float(f["bottom"]),
+                              "top": float(f["top"]),
+                              "ts": str(sdf["timestamp"].iloc[int(f["index"])]),
+                              "score": 0})
+    except Exception:
+        pass
+    try:
+        for direction in ("LONG", "SHORT"):
+            z = _context_zone(bundle, structure_tf, direction, atr_s)
+            if z:
+                lvl = float(z["level"])
+                zones.append({"kind": str(z["kind"]), "bottom": lvl - 0.25 * atr_s,
+                              "top": lvl + 0.25 * atr_s, "ts": "",
+                              "score": 1 if str(z["kind"]) == "FLIP" else 0})
+    except Exception:
+        pass
+    try:
+        o = sdf["open"].values[-70:]
+        h = sdf["high"].values[-70:]
+        l = sdf["low"].values[-70:]
+        c = sdf["close"].values[-70:]
+        ts70 = sdf["timestamp"].iloc[-70:]
+        for i in range(len(c) - 3, 2, -1):        # bullish OB: last down candle before displacement up
+            if c[i] < o[i] and c[i + 1] > h[i] and c[i + 2] > h[i]:
+                zones.append({"kind": "OB_DEMAND", "bottom": float(l[i]),
+                              "top": float(h[i]), "ts": str(ts70.iloc[i]), "score": 1})
+                break
+        for i in range(len(c) - 3, 2, -1):        # bearish OB: last up candle before displacement down
+            if c[i] > o[i] and c[i + 1] < l[i] and c[i + 2] < l[i]:
+                zones.append({"kind": "OB_SUPPLY", "bottom": float(l[i]),
+                              "top": float(h[i]), "ts": str(ts70.iloc[i]), "score": 1})
+                break
+    except Exception:
+        pass
+    return zones[:6]
+
+
+def _albrox_zone_lane(bundle, style):
+    settings = get_settings()
+    structure_tf, _refine_tf, trigger_tf = timeframe_profile(style)
+    if not _ensure_frames(bundle, (structure_tf, trigger_tf)):
         return None
-    min_spike_atr = float(getattr(settings, "albrox_min_spike_atr", 3.0))
-    min_reclaim = float(getattr(settings, "albrox_min_reclaim_frac", 0.45))
-    base_max_atr = float(getattr(settings, "albrox_base_max_atr", 2.5))
-    ranges = df["high"] - df["low"]
-    # FIX (review 09-25): the spike is measured against the ATR of the bars
-    # BEFORE it — the old rolling window included the spike bar itself, which
-    # inflated its own yardstick.
-    atrs = ranges.rolling(14).mean().shift(1)
-    # Search recent closed spike; enough post-spike candles must exist to form a base.
-    # FIX (review 09-25): newest spike first — the old oldest-first loop
-    # returned the stalest qualifying spike in the 40-bar window.
-    for spike_i in range(len(df)-8, max(14, len(df)-40) - 1, -1):
-        spike = df.iloc[spike_i]
-        atr_i = float(atrs.iloc[spike_i] or 0)
-        if atr_i <= 0 or float(ranges.iloc[spike_i]) < min_spike_atr * atr_i:
+    sdf, tdf = bundle.get(structure_tf), bundle.get(trigger_tf)
+    if sdf is None or len(sdf) < 60 or tdf is None or len(tdf) < 6:
+        return None
+    atr_s = float((sdf["high"] - sdf["low"]).tail(14).mean() or 0.0)
+    atr_t = float((tdf["high"] - tdf["low"]).tail(14).mean() or 0.0) or atr_s
+    if atr_t <= 0:
+        return None
+    zones = _albrox_zones(sdf, bundle, structure_tf, atr_s)
+    row, prev = tdf.iloc[-1], tdf.iloc[-2]
+    close, prev_close = float(row["close"]), float(prev["close"])
+    body = abs(close - float(row["open"]))
+    from analysis.trade_management import structural_buffer, clamp_path_to_band
+    from analysis.models import generate_viva_public_code
+    from analysis.pattern_engine import alert_lineage_key
+    for z in zones:
+        zlo, zhi = sorted((float(z["bottom"]), float(z["top"])))
+        tapped_long = float(row["low"]) <= zhi and float(row["low"]) >= zlo - 0.5 * atr_t
+        tapped_short = float(row["high"]) >= zlo and float(row["high"]) <= zhi + 0.5 * atr_t
+        direction, edge, scalp = None, None, False
+        # Lane B — first close beyond the edge after the tap (break/reclaim)
+        if tapped_long and close > zhi and prev_close <= zhi and body >= 0.25 * atr_t:
+            direction, edge, scalp = "LONG", zhi, False
+        elif tapped_short and close < zlo and prev_close >= zlo and body >= 0.25 * atr_t:
+            direction, edge, scalp = "SHORT", zlo, False
+        # Lane C — rejection at the near edge with pin anatomy, no close-through
+        if direction is None:
+            body_top = max(float(row["open"]), close)
+            body_bottom = min(float(row["open"]), close)
+            rng = max(float(row["high"]) - float(row["low"]), 1e-12)
+            if tapped_short and close < zlo - 0.10 * atr_t and prev_close < zlo \
+                    and (float(row["high"]) - body_top) >= 0.45 * rng:
+                direction, edge, scalp = "SHORT", zlo, True
+            elif tapped_long and close > zhi + 0.10 * atr_t and prev_close > zhi \
+                    and (body_bottom - float(row["low"])) >= 0.45 * rng:
+                direction, edge, scalp = "LONG", zhi, True
+        if direction is None or edge is None:
             continue
-        prior = df.iloc[max(0, spike_i-96):spike_i]
-        if prior.empty:
+        entry = close
+        buffer = structural_buffer(entry)
+        sl = (zlo - buffer) if direction == "LONG" else (zhi + buffer)
+        if (direction == "LONG" and sl >= entry) or (direction == "SHORT" and sl <= entry):
             continue
-        rng = float(ranges.iloc[spike_i])
-        long_spike = float(spike["low"]) < float(prior["low"].min()) and float(spike["close"]) >= float(spike["low"]) + min_reclaim*rng
-        short_spike = float(spike["high"]) > float(prior["high"].max()) and float(spike["close"]) <= float(spike["high"]) - min_reclaim*rng
-        if not (long_spike or short_spike):
+        # r61.1 SANE-ZONE LAW: no 4.7%-wide «zones», no stop glued to the box
+        # («این چه ناحیه ای است که دنبال سیگناله؟؟» / «کمتر از ۱ سنت»).
+        from analysis.trade_management import sane_zone_geometry_ok as _szg61
+        if not _szg61(zlo, zhi, entry, sl, direction, atr_t, str(style)):
             continue
-        direction = "LONG" if long_spike else "SHORT"
-        post = df.iloc[spike_i+1:]
-        # Original Albrox base route: first 6-10 post-spike candles compact,
-        # current close breaks that base in the reclaim direction.
-        if len(post) < 7:
+        risk = abs(entry - sl)
+        if risk <= 0 or risk > 0.06 * entry:
             continue
-        base = post.iloc[:min(10, len(post)-1)]
-        base_low, base_high = float(base["low"].min()), float(base["high"].max())
-        base_atr = float(ranges.iloc[spike_i+1:spike_i+1+len(base)].mean())
-        if base_atr <= 0 or (base_high-base_low) > base_max_atr*base_atr:
+        path, _psrc = clamp_path_to_band(entry, str(trigger_tf), 5.0 * risk)
+        if path <= risk:
             continue
-        current = df.iloc[-1]
-        broke = float(current["close"]) > base_high if direction == "LONG" else float(current["close"]) < base_low
-        if not broke:
-            continue
-        # FIX (review 09-25): the base break must be FRESH — the current
-        # closed candle has to be the FIRST close outside the base. The old
-        # check only compared the current close with the first 10 post-spike
-        # candles, so a base broken 20 bars earlier kept re-firing ALBROX far
-        # from its base (stop behind base_low → clamped, entry late). A close
-        # through the OPPOSITE side means the base failed: no setup.
-        _between = post.iloc[len(base):-1]
-        if not _between.empty:
-            _bc = _between["close"].astype(float)
-            if direction == "LONG" and (bool((_bc > base_high).any()) or bool((_bc < base_low).any())):
-                continue
-            if direction == "SHORT" and (bool((_bc < base_low).any()) or bool((_bc > base_high).any())):
-                continue
-        poi = {"bottom": base_low, "top": base_high, "touches": 0, "type": "ALBROX SPIKE RECLAIM BASE"}
-        context = structure_bias(context_df, 5)
-        impulse = {"index": len(df)-1, "level": base_high if direction=="LONG" else base_low, "valid": True, "direction":"BULLISH" if direction=="LONG" else "BEARISH", "body_atr":abs(float(current["close"])-float(current["open"]))/max(base_atr,1e-12), "volume_ratio":1.0}
-        special = EvidenceItem("albrox_spike", "ALBROX اسپایک و بیس", "کندل اسپایک غیرطبیعی sweep/reclaim ثبت شد؛ بعد از آن بیس 6 تا 10 کندلی ساخته و با Close شکسته شده است.", True, 2, timeframe=trigger_tf)
-        candidate = _base_candidate(bundle, style, "ALBROX", direction, structure_tf, trigger_tf, context, poi, impulse, special, "albrox_spike_base", True)
-        if candidate is None:
-            continue
-        # Albrox owns its structural stop: behind the base distal + the
-        # standard buffer (Viva 09-20 round 11: no ATR term).
-        from analysis.trade_management import structural_buffer as _sb
-        _sbf = _sb(base_low if direction == "LONG" else base_high, candidate.market)
-        candidate.sl = base_low - _sbf if direction == "LONG" else base_high + _sbf
-        from analysis.trade_management import clamp_stop_price as _clamp_ab
-        _ab_sl, _ab_clamped = _clamp_ab(candidate.planned_entry, direction, candidate.sl,
-                                        str(candidate.trigger_timeframe or ""))
-        candidate.sl = float(_ab_sl)
-        candidate.metadata["stop_clamped"] = bool(_ab_clamped)
-        pin = detect_pinbar_zone(bundle, style)
-        pinwall_confirm = bool(pin and pin.direction == direction)
-        candidate.score = min(10, candidate.score + (1 if pinwall_confirm else 0))
-        candidate.mandatory_gates["htf_alignment"] = True
-        candidate.strategy_fa = "ALBROX | اسپایک، بازپس‌گیری و شکست بیس"
-        candidate.metadata.update({
-            "strategy_variant":"ALBROX_ORIGINAL", "albrox_spike_index":spike_i,
-            "albrox_base_range":[base_low,base_high], "albrox_spike_reclaim":True,
-            "albrox_base_candles":len(base), "albrox_pinwall_confirm":pinwall_confirm,
-            "public_code":generate_viva_public_code("ALBROX",style),
+        tp2 = entry + path if direction == "LONG" else entry - path
+        tp1 = entry + (tp2 - entry) / 5.0 if direction == "LONG" else entry - (entry - tp2) / 5.0
+        _kind = str(z["kind"])
+        _ts = str(z.get("ts") or str(row["timestamp"])[:16])
+        cand = SignalCandidate(
+            signal_id=f"viva-albroxz-{bundle.symbol}-{trigger_tf}-{str(row['timestamp'])[:16]}-{_kind}-{direction}",
+            symbol=str(bundle.symbol), style=str(style).upper(), setup_code="ALBROX",
+            setup_name=SETUP_NAMES["ALBROX"],
+            strategy_fa=("آلبروکس | اسکلپ ریجکت ناحیه — فقط با تأیید موتور توهم" if scalp
+                         else f"آلبروکس | شکست ناحیهٔ {_kind} — اولین کلوز یا موتور توهم"),
+            direction=direction, score=min(10, 7 + int(z.get("score") or 0)),
+            status="EDUCATIONAL",
+            entry_zone_bottom=zlo, entry_zone_top=zhi,
+            planned_entry=entry, sl=float(sl), tp1=float(tp1), tp2=float(tp2),
+            rr_tp1=abs(tp1 - entry) / max(risk, 1e-12),
+            rr_tp2=abs(tp2 - entry) / max(risk, 1e-12),
+            bias="BULLISH" if direction == "LONG" else "BEARISH",
+            trigger_timeframe=str(trigger_tf),
+            evidence=[EvidenceItem(
+                "albrox_zone", f"ناحیهٔ {_kind} روی {structure_tf}",
+                (f"ناحیهٔ {_kind} [{_n2(zlo)} تا {_n2(zhi)}] در {structure_tf} لمس شد و کندل "
+                 f"{str(trigger_tf).upper()} " +
+                 ("داخل آن ریجکت کرد" if scalp else "با اولین کلوز از لبهٔ آن عبور کرد") +
+                 f" (لبهٔ {_n2(edge)}). ناحیه‌ها فقط امتیاز می‌دهند؛ تأیید = کلوز معتبر فراتر "
+                 "از لبه یا موتور توهم پیش از کلوز."),
+                True, 2, level=edge, timeframe=str(structure_tf)),
+            ],
+            warnings=[
+                "این تحلیل تا بسته‌شدن کندلِ تأییدیِ معتبر، دستور ورود نیست.",
+                f"عبور معتبر قیمت از {_n2(sl)} سناریوی تحلیلی را باطل می‌کند.",
+            ],
+            mandatory_gates={"albrox_zone_rejection" if scalp else "albrox_zone_break": True},
+        )
+        _lk = alert_lineage_key("ALBROX", str(bundle.symbol), str(trigger_tf),
+                                str(structure_tf), _kind, direction,
+                                [{"timestamp": _ts, "price": edge},
+                                 {"timestamp": str(row["timestamp"]), "price": entry}],
+                                is_break=not scalp)
+        cand.metadata.update({
+            "strategy_variant": "ALBROX_ZONE", "zone_kind": _kind,
+            "viva_break_line": edge, "viva_breakout_line": edge,
+            "break_direction": "UP" if direction == "LONG" else "DOWN",
+            "atr": atr_t, "touched": True, "scalp": bool(scalp),
+            "public_code": generate_viva_public_code("ALBROX", style),
         })
-        # ── Brooks confirmation tiers (Viva 09-18: ALBROX ONLY, labels on
-        # chart + evidence, to collect live feedback before any other setup
-        # touches this doctrine) ─────────────────────────────────────────
-        from analysis.viva_tlbreak import pivots as _pv9
-        _brk9 = df.iloc[-1]
-        _rng9 = float(_brk9["high"]) - float(_brk9["low"])
-        _body9 = abs(float(_brk9["close"]) - float(_brk9["open"]))
-        _p1 = _rng9 > 0 and (_body9 / _rng9) >= 0.50 and (
-            (direction == "LONG" and float(_brk9["close"]) >= float(_brk9["open"]))
-            or (direction == "SHORT" and float(_brk9["close"]) <= float(_brk9["open"])))
-        _bdf9 = base.reset_index(drop=True)
-        try:
-            _ph9, _pl9 = _pv9(_bdf9, 2, 2)
-            _legs9 = 1 + len(_ph9) + len(_pl9)
+        if scalp:
+            cand.metadata["rejection_scalp"] = True
+            cand.metadata["tohom_required"] = True
+        if _lk:
+            cand.metadata["alert_lineage_key"] = _lk
+        try:  # r41 parity: zone-lane charts paint zones/HTF context like every setup
+            from analysis.render_kit import enrich_render
+            enrich_render(cand, tdf, htf_df=sdf)
         except Exception:
-            _legs9 = 1
-        _p3weak = len(base) < 8 or _legs9 < 2
-        if _p3weak:
-            candidate.score = min(candidate.score, 6)
-        _labels9 = [
-            "BROOKS P1 SIGNAL-BAR " + ("OK" if _p1 else "MISSING"),
-            "BROOKS P2 H2/L2 WATCH · STOP BEHIND PULLBACK",
-            "BROOKS P3 " + ("WEAK BASE · EDU ONLY" if _p3weak else "BASE OK"),
-        ]
-        candidate.metadata["brooks_tiers"] = {
-            "p1_signal_bar": bool(_p1), "p2": "WATCH",
-            "p3_weak_base": bool(_p3weak), "base_legs": int(_legs9)}
-        candidate.metadata["brooks_labels"] = _labels9
-        candidate.evidence = list(candidate.evidence or []) + [
-            EvidenceItem("brooks_p1", "پلهٔ ۱ بروکس: سیگنال‌بار",
-                         "کندلِ شکستِ بیس بدنهٔ قوی در جهت شکست دارد و سیگنال‌بار معتبر است؛ ورود روی کلوز آن مجاز است."
-                         if _p1 else
-                         "کندلِ شکستِ بیس سیگنال‌بار معتبر نیست (بدنهٔ ضعیف/جهت مخالف)؛ ورود فقط پس از یک کلوز تأییدی معتبر بعدی.",
-                         bool(_p1), 2, timeframe=trigger_tf),
-            EvidenceItem("brooks_p2", "پلهٔ ۲ بروکس: ورود دوم H2/L2",
-                         "پس از این هشدار، اولین پولبکِ خلاف جهت، ورود دومِ محافظه‌کار است با استاپ پشت کف/سقف پولبک؛ ورود اول با استاپ پشت سیگنال‌بار می‌ماند.",
-                         False, 1, timeframe=trigger_tf),
-            EvidenceItem("brooks_p3", "پلهٔ ۳ بروکس: کیفیت پایه",
-                         "بیس کمتر از ۸ کندل یا بدون دو ساق داخلی است — پایهٔ ضعیفِ بروکسی؛ ستاپ فقط آموزشی می‌ماند تا پایه عمق بگیرد."
-                         if _p3weak else
-                         "بیس حداقل‌های بروکس را دارد (۸+ کندل و دو ساق داخلی)؛ تأییدیه مسیر عادی را می‌رود.",
-                         not _p3weak, 1, timeframe=trigger_tf),
-        ]
-        return candidate
+            pass
+        return cand
     return None
 
-
 ALBROX_DETECTORS = [detect_albrox]
-
 PINVAL_DETECTORS = [detect_pinbar_zone]
-
-
 SETUP_NAMES["TECHCLASSIC"] = "TechnoClassic HTF Pattern Break (4H/1D)"
 SETUP_NAMES_FA["TECHCLASSIC"] = "تکنوکلاسیک | شکست الگوی کلاسیک ۴ساعته/روزانه با پولبک تأییدشده"
-
 
 def detect_technoclassic(bundle, style: str) -> Optional[SignalCandidate]:
     """Stage-5 wrapper: keeps the module gate (experimental symbol allowlists)

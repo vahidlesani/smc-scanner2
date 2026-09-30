@@ -225,7 +225,10 @@ def _recently_broken(line, n: int) -> bool:
         age = n - int(bx)
         # his charts show the break mid-frame (DOT/ADA/ARB ~09-23 16:00 in a
         # 41h window): a line broken within HALF the visible frame stays.
-        return 0 <= age <= max(12, int(0.5 * max(n, 1)))
+        # r33 LAW (Viva 09-26): after the break the line stays dotted/faint
+        # for AT LEAST 50 candles so retest touches stay visible — unless a
+        # better-ranked valid line replaces it (the fitter's best-score pick).
+        return 0 <= age <= max(50, int(0.5 * max(n, 1)))
     except Exception:
         return False
 
@@ -339,9 +342,14 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
         # RENDER-ONLY clone (Viva 09-17): painting tolerates 2-touch lines and
         # a wider residual than TRADE detection ever may — doctrine lines are
         # drawn for the eye here; entries keep the strict fitter.
+        # r57+r58 (his shadow law, refined by him: «نگفتم از بادی بگیر فقط ..
+        # شدوهای معقول رو محاسبه بکنه و وصل بکنه»): HYBRID anchors — an EXTREME
+        # wick (liquidation spike) anchors on the body, reasonable wicks stay
+        # wicks; the winner is scored by touches² (majors win).
         cfg = _dc.replace(load_config(), pivot_left=3, pivot_right=3,
                           min_touches=2, touch_tolerance_atr=0.20,
-                          max_fit_residual_atr=0.45, require_alive=True)
+                          max_fit_residual_atr=0.45, require_alive=True,
+                          wick_policy="hybrid")
         # R16 phase 3: fit in the space the chart is drawn in. A linear chart
         # keeps the linear fit (futures look untouched); a log chart fits in
         # log10 so the painted line lands exactly on its pivots.
@@ -368,7 +376,7 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                     prox = 1.0 / (1.0 + max(0.0, _d - 1.0))
             except Exception:
                 prox = 1.0
-            return touch * fit * (span ** 0.5) * prox
+            return (touch ** 2) * fit * (span ** 0.5) * prox  # r57: majors win
 
         def _best(side: str):
             """Best-fitting validated line across lookback windows —
@@ -470,7 +478,23 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                 price_at=lambda X, _d=d: line_y(_d, X))
 
         if gu is not None and gl is not None:
-            shape = classify_shape(_ns(gu), _ns(gl), n)
+            # r61 ROLE LAW (HYPE 09-30: the eye reads edges, not window OLS):
+            # at the live bar the UPPER edge must sit ABOVE the lower one. A
+            # scissored pair (the stale rally support now ABOVE the falling
+            # recent-highs edge) is not a pattern — fall back to its sub-line
+            # or to two honest trendlines.
+            if line_y(gu, n) < line_y(gl, n):
+                _gl_ok = None
+                if sub_l is not None and line_y(gu, n) >= line_y(sub_l, n):
+                    _gl_ok = sub_l
+                if _gl_ok is not None:
+                    gl = _gl_ok
+                else:
+                    gu, gl = None, None    # honest: no live two-edge pattern
+            if gu is not None and gl is not None:
+                shape = classify_shape(_ns(gu), _ns(gl), n, df=df)
+            else:
+                shape = 'NONE'
             if shape in ("NONE", ""):
                 # converging pair = wedge (global coords! the old check mixed
                 # per-window local x and misfired on CRV)
@@ -634,14 +658,19 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
         if _atr_d > 0 and _n_d > 10:
             _mid_x = _n_d / 2.0
             _end_x = float(_n_d)
+            # r59.2 (Viva 09-29, «بعضی چارتها خط‌خطی و شلوغ شده .. برای یک
+            # ناحیه چند ترند میکشه»): ONE parent line per side — a second
+            # parent is the clutter he circled; a child survives only if it
+            # is CLEARLY separated (≥0.8×ATR at both ends) from the parent.
             _kept = {"HIGH": [], "LOW": []}   # (p_mid, p_end, child)
-            _limits = {"HIGH": [2, 1], "LOW": [2, 1]}  # [parents, children]
+            _limits = {"HIGH": [1, 1], "LOW": [1, 1]}  # [parents, children]
             _counts = {"HIGH": [0, 0], "LOW": [0, 0]}
 
             def _same_line(side, sl, ic, child):
                 pm, pe = sl * _mid_x + ic, sl * _end_x + ic
+                _tol = 0.80 * _atr_d if child else 0.55 * _atr_d
                 for qm, qe, _c in _kept.get(side, []):
-                    if abs(pm - qm) <= 0.35 * _atr_d and abs(pe - qe) <= 0.35 * _atr_d:
+                    if abs(pm - qm) <= _tol and abs(pe - qe) <= _tol:
                         return True
                 return False
 
@@ -678,7 +707,31 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                 out = _trimmed
     except Exception:
         pass
-    return out[:3]
+    # r61 THE 16-PATTERN LAW (Viva 09-30: poster rules from the international
+    # source, coded): the pivot-sequence family the two-line fitter can never
+    # see — double top/bottom, H&S (+inverse), cup & handle. At most ONE,
+    # alive near price, its neckline not a duplicate of a drawn line.
+    try:
+        _atr_p = _atr(df)
+        if _atr_p > 0 and len(df) >= 40:
+            from analysis.patterns16 import detect_pivot_patterns as _dpp16
+            _have_sides = [(float(ln["slope"]) * (len(df) - 1) + float(ln["intercept"]),
+                            str(ln.get("side") or ""))
+                           for it in out for ln in (it.get("lines") or [])
+                           if "slope" in ln and "intercept" in ln]
+            for _pp in _dpp16(df.reset_index(drop=True), _atr_p):
+                _neck_v = float(_pp.get("neckline") or 0.0)
+                if abs(_neck_v - float(df["close"].iloc[-1])) > 6.0 * _atr_p:
+                    continue                       # a fossil, not a live pattern
+                _my_side = str((_pp.get("lines") or [{}])[0].get("side") or "")
+                if any(abs(_neck_v - _v) <= 0.35 * _atr_p and _s == _my_side
+                       for _v, _s in _have_sides):
+                    continue                       # same line already drawn
+                out.append(_pp)
+                break                              # one pivot pattern per chart
+    except Exception:
+        pass
+    return out[:4]
 
 
 def enrich_render(candidate, trigger_df: pd.DataFrame,
@@ -795,7 +848,7 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
     # Viva 09-18 (his CRV note): the higher-TF pattern must be ANNOUNCED on
     # the trigger chart — «وج باید در ۴ ساعته یا روزانه پیدا بشه و اعلام بشه».
     try:
-        _hp = detect_patterns(htf_df.tail(170),
+        _hp = detect_patterns(htf_df.tail(240),
                               getattr(candidate, "direction", ""),
                               log_axis=_chart_will_be_log(candidate, htf_df)) \
             if htf_df is not None and len(htf_df) >= 60 else []
@@ -808,12 +861,8 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
             _ln = _p["lines"][0]
             _xe = float(_ln.get("x1", 0))
             _ye = line_y(_ln, _xe)
-            # FIX (review 09-25): `_atr = _atr(...)` made `_atr` a LOCAL name
-            # for the whole function → UnboundLocalError on every FLAG pattern,
-            # which aborted enrich_render before base_watch/base_gate/
-            # gate_ladder/htf_zones were applied (swallowed by the caller).
-            _flag_atr = _atr(trigger_df)
-            _band = max(0.15 * _flag_atr, 1e-9)
+            _atr = _atr(trigger_df)
+            _band = max(0.15 * _atr, 1e-9)
             md["render_zones"] = [{
                 "kind": "FLAG-LIMIT",
                 "bottom": _ye - _band, "top": _ye + _band,
@@ -949,3 +998,39 @@ def gate_ladder(candidate, base) -> None:
     if locked:
         candidate.metadata["tp_gates"] = {"level": float(level),
                                           "locked": locked}
+
+
+def merge_htf_zones(chart_zones, htf_zones, price, direction: str = "") -> list:
+    """r60.3 (Viva 09-30): «الگوی تایم بالاتر باید جدا رسم بشه» + «اون
+    باکس‌هایی که گفتم اگر در چارت هست باید رسم بشه چرا نمیشه؟». enrich_render
+    always stored the higher-TF zone inventory (md["htf_zones"]) but nothing
+    ever drew it — his 4h OB/supply boxes were invisible on LTF charts. Here
+    the NEAREST HTF box per side joins the draw list under its own «HTF·»
+    family: separate label, one parent per side (DECLUTTER), never trimmed by
+    the chart-TF diet. HTF boxes anchor targets above and stops behind."""
+    out = list(chart_zones or [])
+    sides = {"above": None, "below": None}
+    for z in (htf_zones or []):
+        try:
+            zlo = float(z.get("bottom", z.get("lo", 0)) or 0)
+            zhi = float(z.get("top", z.get("hi", 0)) or 0)
+        except Exception:
+            continue
+        if zhi <= 0 or zhi < zlo:
+            continue
+        mid = 0.5 * (zlo + zhi)
+        side = "above" if zlo > price else ("below" if zhi < price else None)
+        if side is None:
+            continue
+        d = abs(mid - price)
+        if sides[side] is None or d < sides[side][0]:
+            sides[side] = (d, z)
+    for side in ("above", "below"):
+        hit = sides[side]
+        if not hit:
+            continue
+        z = dict(hit[1])
+        z["kind"] = "HTF·" + str(z.get("kind") or "ZONE")
+        z["htf"] = True
+        out.append(z)
+    return out

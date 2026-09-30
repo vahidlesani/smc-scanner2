@@ -100,7 +100,9 @@ def test_out_of_reach_needs_the_right_direction_and_two_atr():
     assert M._scenario_out_of_reach(cand, 28.785) is True      # his VVV case
     assert M._scenario_out_of_reach(cand, 18.9) is False       # still at the zone
     assert M._scenario_out_of_reach(cand, 19.6) is False       # ~1 ATR: a fast break
-    assert M._scenario_out_of_reach(cand, 15.0) is False       # below the zone (other exit path)
+    # r33 nearest-EDGE law: far below the zone the premise is gone too
+    # (symmetric) — only NEAR the zone is a chain «still waiting».
+    assert M._scenario_out_of_reach(cand, 15.0) is True
     assert M._scenario_out_of_reach(cand, None) is False
 
 
@@ -118,9 +120,13 @@ def test_the_fast_break_exemption_is_bounded():
 
 
 def test_the_per_candle_heartbeat_is_capped():
-    assert _get_settings().max_chain_heartbeats == 12
+    # r51 (Viva 09-27): «فقط زمانی آپدیت بیاد که ورود تایید بشه یا ابطال بشه
+    # یا هشدار نهایی و آمادگی ورود باشه» — the heartbeat is RETIRED outright
+    # (r28 had capped it 12 → 3; the cap was still three useless updates).
+    assert _get_settings().max_chain_heartbeats == 3
     src = io.open("main.py", encoding="utf-8").read()
-    assert 'candidate.metadata.get("hb_count")' in src and "_hb_sent < _hb_max" in src
+    assert 'candidate.metadata.get("hb_count")' not in src
+    assert "گزارشِ پایانِ کندل" not in src
 
 
 def test_a_permanent_thrust_no_longer_repeats_the_live_break_note():

@@ -53,15 +53,18 @@ def _split_telegram_text(text: str, limit: int = 4000):
     return chunks
 
 
-def send_message(text: str, chat_id: str = None) -> bool:
+def send_message(text: str, chat_id: str = None) -> int:
+    """r57: returns the LAST sent message_id (0 on failure) so lanes can
+    reply-chain their updates — the old bool was only used as truthiness."""
     if not chat_id:
         chat_id = CHAT_ID_ADMIN
     if not TOKEN or not chat_id:
         print("Message skipped: missing TELEGRAM_TOKEN or chat_id")
-        return False
+        return 0
 
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     ok = True
+    mid = 0
     try:
         for chunk in _split_telegram_text(text):
             r = requests.post(url, data={
@@ -72,38 +75,52 @@ def send_message(text: str, chat_id: str = None) -> bool:
             if not r.ok:
                 print(f"Message error {r.status_code}: {r.text[:200]}")
                 ok = False
+            else:
+                try:
+                    mid = int(((r.json() or {}).get("result") or {}).get("message_id") or 0) or mid
+                except Exception:
+                    pass
     except Exception as e:
         print(f"Message error: {e}")
-        return False
-    return ok
+        return 0
+    return mid if ok else 0
 
 
-def send_photo(image_bytes: bytes, caption: str, chat_id: str = None) -> bool:
+def send_photo(image_bytes: bytes, caption: str, chat_id: str = None,
+               reply_to_message_id: int = 0) -> int:
+    """r57: returns the sent message_id (0 on failure) + supports reply-chain
+    («آپدیت‌ها به اولین هشدار ریپلای بشه، بعدی با قبلی»)."""
     if not chat_id:
         chat_id = CHAT_ID_ADMIN
     if not TOKEN or not chat_id:
         print("Photo skipped: missing TELEGRAM_TOKEN or chat_id")
-        return False
+        return 0
 
     url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
     try:
-        r = requests.post(
-            url,
-            data={
+        _data = {
                 "chat_id": chat_id,
                 "caption": caption[:1024],
                 "parse_mode": "HTML"
-            },
+        }
+        if reply_to_message_id:
+            _data["reply_to_message_id"] = int(reply_to_message_id)
+        r = requests.post(
+            url,
+            data=_data,
             files={"photo": ("chart.png", image_bytes, "image/png")},
             timeout=30
         )
         if not r.ok:
             print(f"Photo error {r.status_code}: {r.text[:200]}")
-            return False
-        return True
+            return 0
+        try:
+            return int(((r.json() or {}).get("result") or {}).get("message_id") or 0)
+        except Exception:
+            return 1
     except Exception as e:
         print(f"Photo error: {e}")
-        return False
+        return 0
 
 
 def generate_chart(df: pd.DataFrame, sig: dict) -> bytes:

@@ -49,7 +49,7 @@ def test_confirmed_ladder_tp1_snaps_to_ltf_swing():
 
 def test_ladder_without_ltf_keeps_legacy_geometry():
     lad = build_ladder(100.0, 97.0, "LONG", {}, 112.0, trigger_tf="4h")
-    step = (float(lad["final_target"]) - 100.0) / 5.0   # TF cap may shrink the path
+    step = (float(lad["final_target"]) - 100.0) / 3.0   # r40: three equal parts
     assert abs(float(lad["targets"][0]) - (100.0 + step)) < 1e-6
 
 

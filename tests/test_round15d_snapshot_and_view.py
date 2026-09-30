@@ -142,7 +142,9 @@ def test_a_tool_wider_than_its_own_tape_steps_up_even_without_escape(monkeypatch
     view, escaped, note = M._lifecycle_view_plan(
         cand, now=pd.Timestamp("2026-09-21 12:00"), frame=frame)
     assert view == "1h" and escaped == 0
-    assert "کش" in note and "1H" in note
+    # r45: the span note speaks Persian («۱ ساعته») and carries the trigger
+    # TF parenthetical, mirroring the r44 chart-title stamp.
+    assert "کش" in note and "۱ ساعته" in note and "تایم تریگر: ۱۵ دقیقه" in note
 
 
 def test_inside_the_designed_tape_the_view_stays_on_the_trigger_tf():

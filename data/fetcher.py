@@ -452,6 +452,10 @@ def _derive_from_base(
             out[tf] = _resample_ohlcv(base_15m, "1h", 4)
         elif tf == "30m":
             out[tf] = _resample_ohlcv(base_15m, "30min", 2)
+        elif tf == "2h":
+            # r48: the 2h trigger lane rides the SAME 15m base (8×15m) — no
+            # extra venue request, honest OHLCV aggregation.
+            out[tf] = _resample_ohlcv(base_15m, "2h", 8)
         elif tf == "8h":
             out[tf] = _resample_ohlcv(base_4h, "8h", 2)
         elif tf == "12h":
@@ -509,10 +513,11 @@ def get_market_bundle(
 
     # Derived 8h/12h views must retain enough source 4h candles to preserve
     # the same structural lookback that a direct feed would have provided.
+    # r52 CryptoCove counts (his dictation): 8h→170, 12h→210 candles.
     need_4h_bars = max(
-        int(limits.get("4h", 170)),
+        int(limits.get("4h", 200)),
         int(limits.get("8h", 170)) * 2 if "8h" in requested else 0,
-        int(limits.get("12h", 170)) * 3 if "12h" in requested else 0,
+        int(limits.get("12h", 210)) * 3 if "12h" in requested else 0,
     )
     base_4h = get_klines(
         symbol, "4h", max(60, need_4h_bars), closed_only=True
@@ -520,10 +525,23 @@ def get_market_bundle(
 
     # 1D is the economical long-history anchor. For 3D/1W, request enough
     # daily bars to produce the requested number of complete higher bars.
-    daily_need = int(limits.get("1d", 120))
-    daily_need = max(daily_need, int(limits.get("3d", 45)) * 3 + 6)
-    daily_need = max(daily_need, int(limits.get("1w", 45)) * 7 + 7)
-    daily = get_klines(symbol, "1d", daily_need, closed_only=True) if need_1d else None
+    # r52 (Viva 09-28): 3d→300 and 1w→210 candles need 906/1477 daily bars —
+    # beyond a single venue call, so anything deep rides the ONE-TIME
+    # history store (fetch deep once, tail-refresh after; Railway cost law).
+    daily_need = int(limits.get("1d", 200))
+    daily_need = max(daily_need, int(limits.get("3d", 300)) * 3 + 6)
+    daily_need = max(daily_need, int(limits.get("1w", 210)) * 7 + 7)
+    daily = None
+    if need_1d:
+        if daily_need > 900:
+            try:
+                from data.history_store import get_deep_daily
+                daily = get_deep_daily(symbol, daily_need)
+            except Exception:
+                daily = None
+        if daily is None:
+            daily = get_klines(symbol, "1d", min(daily_need, 1000),
+                               closed_only=True)
 
     # Direct fallbacks for unusual requested frames not covered by the local
     # resampler. They preserve backward compatibility without changing callers.

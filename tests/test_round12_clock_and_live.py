@@ -81,7 +81,10 @@ def test_timing_lines_state_candle_clock_detection_and_send():
     assert "شناسایی" in text and "ارسال به تلگرام" in text
     assert "فاصلهٔ بسته‌شدن کندل تا شناسایی" in text
     # 39 minutes late on a 1h trigger → the past-market warning must speak
-    assert "دقیقه بعد از بسته‌شدن کندل منتشر شد" in text
+    # r30 (Viva 09-26): update timing says NOW + elapsed-since-origin,
+    # never «this message arrived late».
+    assert "از کندلِ هشدارِ اولیه" in text and "این پیام همین حالا ارسال شده" in text
+    assert "دقیقه بعد از بسته‌شدن کندل منتشر شد" not in text
 
 
 def test_a_fresh_alert_carries_no_late_warning():

@@ -1,7 +1,6 @@
 """Orchestrates separate Swing/Scalp engines and candidate confirmation."""
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
@@ -21,11 +20,19 @@ class SwingEngine:
     required_frames = ("1d", "4h", "1h")
 
     def scan(self, bundle: MarketBundle) -> List[SignalCandidate]:
-        # mid-term swing = TWO trigger streams: 1h and 4h (Viva 09-16)
+        # mid-term swing trigger streams. Viva 09-16 gave TWO (1h, 4h);
+        # r48 (Viva 09-27, «۳۰ دقیقه و ۲ ساعته بعنوان تریگر جدید به ۴ ستاپ
+        # فیوچرز اضافه بشه») adds 30m and 2h. The zones come from the SAME
+        # engines (his rule: «از فرمول بدست بیاد، دوباره اسکن نشه») — these
+        # are extra streams over the identical bundle, and the 30m/2h tapes
+        # are resampled locally from the 15m/4h bases (zero extra requests).
         from analysis import setups_v7
         out: List[SignalCandidate] = []
-        for trig in ("1h", "4h"):
-            setups_v7.PROFILE_OVERRIDE["SWING"] = ("1d", "4h", trig)
+        for trig, profile in (("30m", ("2h", "1h", "30m")),
+                              ("1h", ("1d", "4h", "1h")),
+                              ("2h", ("1d", "4h", "2h")),
+                              ("4h", ("1d", "4h", "4h"))):
+            setups_v7.PROFILE_OVERRIDE["SWING"] = profile
             try:
                 out.extend(scan_setups(bundle, self.name))
             finally:
@@ -185,14 +192,6 @@ def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
         for candidate in candidates:
             candidate.metadata["money_management_error"] = str(_mm_outer_exc)[:180]
 
-    # R31.5 (opt-in, HTF_TREND_GATE=4h): against-trend candidates become
-    # DEAD_GATE (educational only). No-op when the env var is unset.
-    try:
-        from analysis.quality_filters import apply_trend_gate
-        apply_trend_gate(bundle, candidates)
-    except Exception:
-        pass
-
     # R29: non-blocking MTF candle and classical-pattern explanations.
     try:
         from analysis.mtf_candles import analyze_mtf_candles, classic_pattern_explanations
@@ -224,9 +223,36 @@ def is_expired(candidate: SignalCandidate) -> bool:
 
 
 def is_invalidated(candidate: SignalCandidate, current_price: float) -> bool:
-    if candidate.direction == "LONG":
-        return current_price <= candidate.sl
-    return current_price >= candidate.sl
+    """r30 (Viva 09-26, «ابطال نمی‌تونه بین ناحیه باشه» + «موقع شکست نباید
+    ابطال بشه»): (1) an invalidation line INSIDE the entry zone is meaningless
+    — rallying INTO the zone (the whole point of a pre-confirm chain) crossed
+    it and murdered the scenario (LTC 69.404 inside 63.6-70.9). A pre-confirm
+    invalidation only counts when price CLOSES beyond a line that sits on the
+    PROTECTIVE side of the zone. (2) Once a chain is confirmed, the trade
+    lifecycle owns the stop — this gate steps aside."""
+    try:
+        px = float(current_price)
+        sl = float(candidate.sl or 0)
+        if sl <= 0:
+            return False
+        zb = float(candidate.entry_zone_bottom or 0)
+        zt = float(candidate.entry_zone_top or 0)
+        md = candidate.metadata or {}
+        if md.get("technical_confirmation_complete"):
+            if candidate.direction == "LONG":
+                return px <= sl
+            return px >= sl
+        if candidate.direction == "LONG":
+            if zb > 0 and sl >= zb:
+                return False
+            return px <= sl
+        if candidate.direction == "SHORT":
+            if zt > 0 and sl <= zt:
+                return False
+            return px >= sl
+        return False
+    except Exception:
+        return False
 
 
 def approaching_entry(candidate: SignalCandidate, current_price: float) -> Tuple[bool, float]:
@@ -429,20 +455,6 @@ def _project_watch_level(watch: dict, when) -> float:
     return y1 + (y1 - y0) / dt * (t - t1).total_seconds()
 
 
-# Review 09-25: the fast lane projects the fitted trendline PAST its second
-# anchor (same maths as main._watch_edge_at and the chart). Set
-# CONFIRM_TL_EXTRAPOLATE=0 to restore the 09-23 clamp (line flat at anchor B).
-_TL_EXTRAPOLATE = str(os.getenv("CONFIRM_TL_EXTRAPOLATE", "1")).strip().lower() not in {"0", "false", "no", "off"}
-
-# Metadata written by evaluate_confirmation that describes a *plan change* —
-# restored to its pre-call value whenever the evaluation ends in a reject.
-_REJECT_TRANSIENT_KEYS = (
-    "viva_entry_type", "internal_entry", "internal_wall", "internal_path_fa",
-    "internal_entry_note_fa", "stop_clamped", "stop_clamp_note",
-    "target_cap_note", "raw_structural_tp2", "technical_confirmation_complete",
-)
-
-
 def evaluate_confirmation(
     candidate: SignalCandidate, closed_df: pd.DataFrame,
     htf_closed_df: Optional[pd.DataFrame] = None,
@@ -452,32 +464,7 @@ def evaluate_confirmation(
     No live/incomplete candle can confirm a trade. A candidate score may gain one
     trigger point, but missing mandatory gates can never be compensated by score.
     """
-    # FIX (review 09-25): a REJECTED evaluation must not leave a rewritten
-    # plan behind. The internal-lane rewrite, the stop clamp and the TP2 cap
-    # used to mutate entry/SL/TP permanently even when a later gate rejected
-    # the bar — the next cycle then judged invalidation against a stop the
-    # member was never shown, and a breakout silently became an INTERNAL
-    # trade. Snapshot the plan and restore it on every reject.
-    _missing = object()
-    _plan0 = {k: getattr(candidate, k, None) for k in (
-        "planned_entry", "sl", "tp1", "tp2", "rr_tp1", "rr_tp2",
-        "status", "confirmed_at")}
-    _md0 = candidate.metadata if candidate.metadata is not None else {}
-    _transient0 = {k: _md0.get(k, _missing) for k in _REJECT_TRANSIENT_KEYS}
-
     def reject(code: str, message: str) -> Tuple[bool, SignalCandidate, str]:
-        for _k, _v in _plan0.items():
-            try:
-                setattr(candidate, _k, _v)
-            except Exception:
-                pass
-        if candidate.metadata is None:
-            candidate.metadata = {}
-        for _k, _v in _transient0.items():
-            if _v is _missing:
-                candidate.metadata.pop(_k, None)
-            else:
-                candidate.metadata[_k] = _v
         candidate.metadata["last_reject_code"] = code
         return False, candidate, message
 
@@ -508,6 +495,18 @@ def evaluate_confirmation(
     after = _bars_since_candidate(candidate, closed_df)
     if after is None or after.empty:
         return reject("NO_NEW_BAR", "هنوز کندلی بعد از ایجاد ستاپ بسته نشده است.")
+
+    # ── r60 TOHOM-only lanes (Viva 09-29 §6): rejection scalps (TLBREAK/
+    # ALBROX) confirm ONLY through the illusion engine — sub-TF directional
+    # closes + rising volume + a confirming candle pattern at the line/zone.
+    # A bare close may never confirm them. Candle patterns remain the
+    # CONFIRMER here only; they still never veto break signals (fast lane
+    # unchanged, per his law).
+    _md60 = candidate.metadata or {}
+    if _md60.get("rejection_scalp") and not _md60.get("tohom"):
+        return reject("WAIT_TOHOM_SCALP", (
+            "اسکلپ ریجکت فقط با تأیید موتور توهم صادر می‌شود: کندل‌های هم‌جهت تایم "
+            "پایین‌تر + رشد حجم + الگوی کندلی روی خط/ناحیه؛ هنوز ثبت نشده است."))
 
     # ── ONE-CLOSE LAW, EVERY SETUP (Viva 2026-09-12, final) ──────────────
     # «کی به تو گفته تأیید سیگنال حتماً باید ریتست ناحیه باشه؟!» — nobody.
@@ -581,33 +580,24 @@ def evaluate_confirmation(
         except Exception:
             _la = _lb = None
         def _edge_at(ts, static_edge: float) -> float:
-            # FIX (review 09-25): the line is evaluated at the bar's REAL
-            # timestamp on one tz plane and EXTRAPOLATED past its second
-            # anchor — exactly like main._watch_edge_at and the chart. The old
-            # code received the frame's integer row index as `ts` (so every
-            # bar was "1970" → clamped to the FIRST anchor's price) and also
-            # clamped frac to [0, 1], flattening every sloped line at the
-            # anchor. Result: TLBREAK fast-lane waited for a close beyond the
-            # oldest pivot instead of the line the member sees on the chart.
-            if _la is not None and _lb is not None:
-                try:
-                    _t, _a = _tz_match(ts, _la[0])
-                    _t2, _b = _tz_match(ts, _lb[0])
-                    _dt = (_b - _a).total_seconds()
-                    if _dt > 0:
-                        _frac = max(0.0, (_t - _a).total_seconds() / _dt)
-                        if not _TL_EXTRAPOLATE:
-                            # legacy 09-23 behaviour (env opt-in): flat at anchor B
-                            _frac = min(1.0, _frac)
-                        _v = float(_la[1] + (_lb[1] - _la[1]) * _frac)
-                        if _v > 0:
-                            return _v
-                except Exception:
-                    pass
+            if _la is not None and _lb is not None and _lb[0] != _la[0]:
+                _dt = (_lb[0] - _la[0]).total_seconds()
+                if _dt:
+                    _frac = max(0.0, min(1.0, (
+                        (pd.Timestamp(ts) - _la[0]).total_seconds() / _dt
+                    )))
+                    return float(_la[1] + (_lb[1] - _la[1]) * _frac)
             return static_edge
         _is_long = candidate.direction == "LONG"
         _buf = 0.10 * _atr
-        for _frame, _tag in ((closed_df, "تایم تأیید"), (htf_closed_df, "تایم الگو")):
+        # ── r60.3 THE multi-TF law (Viva 09-30, twice-dictated): the ENTRY
+        # break is the TRIGGER timeframe's own break — «شکست همون تایم تریگر
+        # واسه ورود باید تایید بشه نه تایم بالاتر ... تایید اما از تایم
+        # پایینتر». The pattern/HTF frame is NO LONGER a break source here
+        # (it drew the line and confirmed on a frame the member never trades);
+        # the EARLY lane is the LOWER timeframe (TOHOM illusion engine), which
+        # stays exactly where r47 put it.
+        for _frame, _tag in ((closed_df, "تایم تأیید"),):
             if _frame is None or len(_frame) < 2:
                 continue
             _scan = _bars_since_candidate(candidate, _frame)
@@ -633,11 +623,7 @@ def evaluate_confirmation(
             # guard is a tick-scale epsilon (2% of the frame's own ATR) so a
             # mathematically equal close is not treated as a break.
             _f_buf = max(0.02 * _f_atr, 0.0)
-            _has_ts = "timestamp" in _scan.columns
-            for _ix, _r in _scan.iterrows():
-                # the row LABEL is a RangeIndex int in production frames —
-                # the bar's time lives in the "timestamp" column
-                _ts = _r["timestamp"] if _has_ts else _ix
+            for _ts, _r in _scan.iterrows():
                 _edge_t = _edge_at(_ts, _edge if _edge > 0 else _zone_edge)
                 _out = bool(float(_r["close"]) >= _edge_t + _f_buf) if _is_long \
                     else bool(float(_r["close"]) <= _edge_t - _f_buf)
@@ -730,6 +716,34 @@ def evaluate_confirmation(
                     continue
                 _tnow = pd.Timestamp(str(_row20["timestamp"]))
                 _lvl = _project_watch_level(_ln, _tnow)
+                # r40 CONFIRM-GATE (Viva 09-26, «لانگ روی ترندی که رو به پایین
+                # شکسته تأیید نشه» / SEI·POL 09-26): the old relevance filter
+                # below skipped lines price had ALREADY walked away from —
+                # exactly the freshly-broken ones. Scan the last 6 closed bars
+                # FIRST: a close through the line AGAINST the trade direction
+                # vetoes the confirmation outright, no matter where price sits
+                # now. Closing through in the trade's OWN direction (the
+                # break/retest lane) stays allowed.
+                try:
+                    for _bi in range(max(1, len(closed_df) - 6), len(closed_df)):
+                        _brow = closed_df.iloc[_bi]
+                        _blvl = _project_watch_level(_ln, pd.Timestamp(str(_brow["timestamp"])))
+                        _bcl = float(_brow["close"])
+                        _bs6 = str(_ln.get("side") or "").upper()
+                        if _atr20 > 0 and candidate.direction == "LONG" and _bs6 == "LOW" \
+                                and _bcl < _blvl - 0.10 * _atr20:
+                            return reject("BREAK_SIDE_MISMATCH", (
+                                f"ترند/خط حمایتی {_blvl:.8g} در ۶ کندل اخیر رو به پایین "
+                                f"با کلوز {_bcl:.8g} شکسته شده؛ طبق قانون، لانگ روی "
+                                "ساختارِ شکسته‌شده به پایین تأیید نمی‌شود."))
+                        if _atr20 > 0 and candidate.direction == "SHORT" and _bs6 == "HIGH" \
+                                and _bcl > _blvl + 0.10 * _atr20:
+                            return reject("BREAK_SIDE_MISMATCH", (
+                                f"ترند/خط مقاومتی {_blvl:.8g} در ۶ کندل اخیر رو به بالا "
+                                f"با کلوز {_bcl:.8g} شکسته شده؛ طبق قانون، شورت روی "
+                                "ساختارِ شکسته‌شده به بالا تأیید نمی‌شود."))
+                except Exception:
+                    pass
                 # only lines that are still RELEVANT to the live price may veto
                 # (a dead line projected far away is history, not context)
                 # relevant = the line is still within a few ATR of the price
@@ -761,7 +775,9 @@ def evaluate_confirmation(
         _contract = (candidate.metadata or {})
         _contract_kind = str(_contract.get("strategy_variant") or "").upper()
         _contract_break = str(_contract.get("break_direction") or "").upper()
-        if _contract_kind == "VIVA_TLBREAK" and _contract_break in {"UP", "DOWN"}:
+        # r60: TECHCLASSIC breaks now carry the same canonical contract —
+        # a break UP may only ever trade LONG, a break DOWN only SHORT.
+        if _contract_kind in ("VIVA_TLBREAK", "TECHNOCLASSIC", "ALBROX_ZONE") and _contract_break in {"UP", "DOWN"}:
             _expected = "LONG" if _contract_break == "UP" else "SHORT"
             if str(candidate.direction).upper() != _expected:
                 return reject("BREAK_SIDE_MISMATCH", (
@@ -782,8 +798,15 @@ def evaluate_confirmation(
         _pattern_kind20 in {"RANGE", "RECTANGLE", "CHANNEL"}
         or _pattern_kind20.startswith("CHANNEL_")
     )
+    # r40 CONFIRM-GATE (Viva 09-26, «داخل رنج/کانال فقط ابروکس و PINVAL اجازهٔ
+    # تأیید دارند»): the INTERNAL edge-entry lane is a RANGE trade, not a
+    # breakout — only the pin family (PINVAL/PINWALLQ legacy) and ALBROX may
+    # take it. TECHCLASSIC/TLBREAK inside a range fall through to the
+    # containment gate and are rejected (INSIDE_PATTERN_NO_BREAK).
+    _internal_setup_ok = str(getattr(candidate, "setup_code", "") or "").upper() in {
+        "ALBROX", "PINVAL", "PINWALLQ"}
     if (_band_lo20 is not None and _band_hi20 is not None
-            and _internal_allowed20
+            and _internal_allowed20 and _internal_setup_ok
             and str(_md20.get("viva_entry_type") or "").upper() != "INTERNAL"):
         try:
             _w20 = max(_band_hi20 - _band_lo20, 1e-12)
@@ -821,7 +844,7 @@ def evaluate_confirmation(
                         "direction": "LONG", "entry": _close20,
                         "sl": _sl_base - _buf20i,
                         "wall": float(_band_hi20),
-                        "tp1": _close20 + _path / 5.0 if _path > 0 else _wall,
+                        "tp1": _close20 + _path / 3.0 if _path > 0 else _wall,
                         "tp2": _wall,
                         "pattern": str(_band20.get("kind") or "RANGE"),
                     }
@@ -842,7 +865,7 @@ def evaluate_confirmation(
                         "direction": "SHORT", "entry": _close20,
                         "sl": _sl_base + _buf20i,
                         "wall": float(_band_lo20),
-                        "tp1": _close20 - _path / 5.0 if _path > 0 else _wall,
+                        "tp1": _close20 - _path / 3.0 if _path > 0 else _wall,
                         "tp2": _wall,
                         "pattern": str(_band20.get("kind") or "RANGE"),
                     }
@@ -854,10 +877,10 @@ def evaluate_confirmation(
                                    for k, v in _internal_plan.items()}
         _md20["internal_wall"] = float(_internal_plan.get("wall") or 0.0)
         _md20["internal_path_fa"] = (
-            f"هدف: تا کف الگو ({_internal_plan['tp2']:.8g}) — خروج در TP1..TP3 یعنی "
-            f"۶۰٪ مسیر، پیش از رسیدن به ضلع مقابل." if _internal_plan["direction"] == "SHORT" else
-            f"هدف: تا سقف الگو ({_internal_plan['tp2']:.8g}) — خروج در TP1..TP3 یعنی "
-            f"۶۰٪ مسیر، پیش از رسیدن به ضلع مقابل.")
+            f"هدف: تا کف الگو ({_internal_plan['tp2']:.8g}) — نردبان سه‌پله‌ای، "
+            f"TP3 روی ضلع مقابل." if _internal_plan["direction"] == "SHORT" else
+            f"هدف: تا سقف الگو ({_internal_plan['tp2']:.8g}) — نردبان سه‌پله‌ای، "
+            f"TP3 روی ضلع مقابل.")
         _md20["internal_entry_note_fa"] = (
             f"ورود از کف {_internal_plan['pattern']} با تأیید کندل بسته‌شده؛ استاپ پشت "
             "کانال با بافر و اهداف زیر سقف کانال." if _internal_plan["direction"] == "LONG" else
@@ -1002,6 +1025,31 @@ def evaluate_confirmation(
 
     row = closed_df.iloc[-1]
     previous = closed_df.iloc[-2]
+    # ── r61.2 BREAK-RECLAIM CONFIRM GATE (Viva 09-30, BNB: the pattern broke
+    # UP yet a SHORT confirmed hours later): between the alert and the
+    # confirm the break must STILL hold. A trigger CLOSE back through the
+    # break line (beyond a 0.10·ATR wick tolerance) is a FAILED break — the
+    # chain verdicts instead of confirming an opposite-context entry. FTB is
+    # safe (wick touches are pullbacks, not reclaims). Every setup carrying
+    # the break line (TC viva_break_line / TLBREAK+ALBROX viva_breakout_line)
+    # is covered — the law is for ALL setups, as he dictated.
+    try:
+        _bl61 = float((candidate.metadata or {}).get("viva_break_line")
+                      or (candidate.metadata or {}).get("viva_breakout_line") or 0.0)
+        if _bl61 > 0:
+            _atr61 = float((candidate.metadata or {}).get("atr") or 0.0) \
+                or float((closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
+            _sd61 = str((candidate.metadata or {}).get("break_edge")
+                        or ("UPPER" if str(candidate.direction).upper() == "LONG" else "LOWER"))
+            _c61 = float(row["close"])
+            _bad61 = (_c61 < _bl61 - 0.10 * _atr61) if _sd61 == "UPPER" \
+                else (_c61 > _bl61 + 0.10 * _atr61)
+            if _atr61 > 0 and _bad61:
+                return reject("BREAK_RECLAIMED", (
+                    "شکستِ مبنا پس از هشدار پس گرفته شده — کلوز به سمتِ پیش از شکست برگشته است؛ "
+                    "شکستِ نامعتبر تأیید نمی‌گیرد و سناریو باطل است."))
+    except Exception:
+        pass
     # --- alternative multi-candle / higher-TF trigger evaluation ----------
     # The pin bar is one sign among several; a base of 2..N closed trigger
     # candles that aggregates into a pin / doji-break / engulf / reclaim at
@@ -1040,20 +1088,26 @@ def evaluate_confirmation(
         event_map = {"S3_RETEST": "RETEST", "S4_REJECTION": "REJECTION", "S5_MICRO_BOS": "MICRO_BOS"}
         if state in event_map:
             machine = advance_viva_state(machine, event_map[state], max_retest_bars=int(candidate.metadata.get("viva_retest_window_bars", 16)))
+        # ── r52 SUFFOCATION LAW (Viva 09-28, verbatim: «گیت گذاشتی باید پولبک
+        # بزنه بعلاوه bos … اصلا نباید شرط تایید باشه — نقطه ورود پوزیشن
+        # بعدی»): Retest → Rejection → Micro-BOS is NO LONGER a confirmation
+        # path of THIS signal — not as a requirement and not as a fast lane.
+        # The machine keeps running as the NEXT position's entry map
+        # (pullback_entry_ready) and never gates the verdict. THIS signal
+        # confirms ONLY on the first valid close beyond the edge (fast lane
+        # / one-close law) or TOHOM — exactly what was dictated.
         if ready:
             machine = advance_viva_state(machine, "CONFIRM", max_retest_bars=int(candidate.metadata.get("viva_retest_window_bars", 16)))
+            candidate.metadata["pullback_entry_ready"] = True
+            candidate.metadata["pullback_entry_note"] = (
+                "پولبک/ریجکشن/BOS کامل شد — نقشهٔ ورودِ پوزیشن بعدی؛ شرط تأییدِ این سیگنال نیست.")
+            ready = False
         candidate.metadata["viva_state"] = state
         candidate.metadata["viva_state_machine"] = machine.payload()
         if not ready and alt is not None and state in ("S3_RETEST", "S4_REJECTION"):
-            # Cluster/MTF rejection at the retest counts as the rejection+BOS
-            # event pair compressed into one base — the state machine may
-            # confirm through it (fast lane), never the other way around.
-            ready = True
-            state = "S5_MICRO_BOS"
-            machine = advance_viva_state(machine, "CONFIRM", max_retest_bars=int(candidate.metadata.get("viva_retest_window_bars", 16)))
-            candidate.metadata["viva_state"] = state
-            candidate.metadata["viva_state_machine"] = machine.payload()
-            candidate.metadata["viva_fast_alt"] = alt.kind
+            # r52: a rejection cluster at the pullback is entry-quality data
+            # for the NEXT position — never a confirmation of this one.
+            candidate.metadata["viva_fast_alt"] = str(getattr(alt, "kind", "") or "")
         if not ready and fast_lane:
             machine = advance_viva_state(machine, "FAST_CONFIRM",
                                          max_retest_bars=int(candidate.metadata.get("viva_retest_window_bars", 16)))
@@ -1069,7 +1123,7 @@ def evaluate_confirmation(
             # expiry keep full veto over the scenario; the close itself does not.
             state, ready = "S6_CONFIRMED", True
         if not ready:
-            return reject("VIVA_TLBREAK_WAIT_" + state, "VIVA-TLBREAK در انتظار Retest → Rejection → BOS پنج‌دقیقه‌ای است.")
+            return reject("WAIT_FIRST_CLOSE_" + state, "در انتظار اولین کلوزِ معتبرِ فراتر از خط/لبه (یا تأییدِ هوشمندِ توهم) — پولبک و BOS شرطِ تأیید نیستند.")
     close, open_price = float(row["close"]), float(row["open"])
     previous_high, previous_low = float(previous["high"]), float(previous["low"])
     displacement = candle_displacement(closed_df, -1, atr_multiple=0.55)
@@ -1313,11 +1367,9 @@ def evaluate_confirmation(
         candidate.score = min(10, candidate.score + 1)
     if candidate.score < SETTINGS.execution_min_score:
         return reject("SCORE_LOW", f"امتیاز نهایی {candidate.score} کمتر از حد اجرای {SETTINGS.execution_min_score} است.")
-    # FIX (review 09-25): CONFIRMED/technical_confirmation_complete are set
-    # only AFTER the counter-trend gate below. They used to be set first, so a
-    # COUNTER_TREND_TOUCH_ONLY reject left technical_confirmation_complete=True
-    # behind and main.monitor_candidates' «retry publication» branch published
-    # the rejected setup on the very next cycle.
+    candidate.status = "CONFIRMED"
+    candidate.confirmed_at = candidate.confirmed_at or iso_now()
+    candidate.metadata["technical_confirmation_complete"] = True
     # ── Viva 09-19/20 counter-trend & MTF-zone confirmation laws ──────────
     # (a) A TOUCH is never a confirmation against the structure: counter
     #     setups need a closed structure break in the trade direction (close
@@ -1347,11 +1399,27 @@ def evaluate_confirmation(
                 _brk = _close_px < float(_prior["low"].min())
             else:
                 _brk = _close_px > float(_prior["high"].max())
-            if not _brk:
+            # ── r60 TC calibration (Viva 09-29, dictated law, his prime
+            # suspect): for a TECHCLASSIC BREAK the validated break IS the
+            # signal — a lagging parent-TF trend may no longer veto it
+            # («چرا این ستاپ‌ها موقعیت رو می‌شناسن اما تایید نمی‌کنن؟»).
+            # The opposed parent becomes a visible warning only. Counter-trend
+            # FADEs and every other setup keep the hard veto untouched.
+            # r60.6: contract-based, not setup-based — TECHCLASSIC, TLBREAK
+            # and ALBROX (pattern & zone) all confirm the BREAK's direction;
+            # «خلاف روند» is reserved for rejections (TLBREAK/ALBROX scalps).
+            _tc_break60 = (
+                str((candidate.metadata or {}).get("break_direction") or "").upper() in ("UP", "DOWN")
+            )
+            if not _brk and not _tc_break60:
                 return reject("COUNTER_TREND_TOUCH_ONLY", (
                     "سیگنال خلاف جهت ساختار است: برخورد به خط/ناحیه فقط هشدار است؛ "
                     "تأیید نیازمند کلوز معتبر فراتر از سوینگ هم‌جهت است "
                     "(سلرها/خریداران در برخورد شکار می‌شوند)."))
+            if _tc_break60:
+                candidate.metadata["mtf_context_warning_tc"] = (
+                    "روند تایم والد هنوز مخالف است؛ طبق قانون تکنوکلاسیک جهت با "
+                    "شکستِ اعتبارسنجی‌شده قفل شد و این فقط هشدار زمینه است.")
             if _trg_tf == "1d" and _pdf is not None and len(_pdf) >= 12:
                 _pp = _pdf.iloc[-11:-1]
                 if candidate.direction == "SHORT":
@@ -1379,26 +1447,6 @@ def evaluate_confirmation(
     except Exception as _gexc:
         candidate.metadata["mtf_gate_error"] = str(_gexc)[:120]
 
-    # R31.5 (opt-in, MIN_STOP_FLOOR): a stop tighter than the TF floor is the
-    # most-hunted class in the replay — refuse the confirmation (plan restored).
-    try:
-        from analysis.quality_filters import stop_floor_violation
-        _sf_msg = stop_floor_violation(candidate)
-    except Exception:
-        _sf_msg = None
-    if _sf_msg:
-        return reject("STOP_BELOW_FLOOR", _sf_msg)
-    try:
-        from analysis.quality_filters import weak_confirm_bar
-        _wb_msg = weak_confirm_bar(candidate, closed_df)
-    except Exception:
-        _wb_msg = None
-    if _wb_msg:
-        return reject("WEAK_CONFIRM_BAR", _wb_msg)
-
-    candidate.status = "CONFIRMED"
-    candidate.confirmed_at = candidate.confirmed_at or iso_now()
-    candidate.metadata["technical_confirmation_complete"] = True
     # a confirmed scenario must never keep a stale reject code (the ETHFIUSDT
     # replay showed last_reject_code="INSIDE_PATTERN_NO_BREAK" on a CONFIRMED
     # row — the log then blamed a gate that had already been overruled).

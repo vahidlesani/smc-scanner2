@@ -126,6 +126,14 @@ def fear_greed() -> Dict:
         prev = row[1] if len(row) > 1 else {}
         return {"value": int(latest.get("value")),
                 "label": str(latest.get("value_classification") or ""),
+                # r57 (Viva: «کلمات انگلیسی اول اومده بهم ریخته») — the card
+                # must read FULLY Persian: the FA label is resolved at source.
+                "label_fa": {
+                    "extreme fear": "ترسِ شدید", "fear": "ترس",
+                    "neutral": "خنثی", "greed": "طمع",
+                    "extreme greed": "طمعِ شدید",
+                }.get(str(latest.get("value_classification") or "").strip().lower(),
+                      str(latest.get("value_classification") or "")),
                 "prev": int(prev.get("value")) if prev.get("value") else None}
     except Exception:
         return {}

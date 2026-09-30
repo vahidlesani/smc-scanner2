@@ -459,14 +459,12 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
                  fee_pct: float = 0.0, trigger_tf: str = "",
                  wall_level: Optional[float] = None,
                  ltf_df=None, ltf_cap_pct: float = 0.0) -> Dict:
-    """Five-pill exit ladder — the ORIGINAL approved tool shape (Viva
-    09-19/20 revisit): five equal price segments entry→final, TP1 distance
-    exactly as before (no 1R floor), exits 40/30/30 on TP1..TP3, TP4/TP5
-    information-only (zero weight).
-
-      • After TP1 the stop moves to NET breakeven (entry plus the round-trip
-        fee/slippage allowance — professional point 5), after each later
-        target to just beyond the previous target (5 ticks).
+    """Three-pill exit ladder — r40 (Viva 09-26, verbatim: «TP4 و TP5 رو حذف
+    کن»): the path entry→final is split into THREE equal segments, exits
+    40/30/30 land on TP1..TP3 and the ladder stops there. TP1 distance keeps
+    the structural/LTF snap rules; after TP1 the stop moves to NET breakeven
+    (entry plus the round-trip fee/slippage allowance — professional point 5),
+    after each later target to just beyond the previous target (5 ticks).
       • Between targets a formula-based protection floor trails the stop
         (band_trailing) — adaptive ratios, ratchet-only, never loosens.
       • The position closes when the exit weight is exhausted (TP3) or the
@@ -514,7 +512,9 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
         _path = _limit
     final_price = entry + sign * _path
     dist = abs(final_price - entry)
-    step = _path / 5.0                      # the five-part split
+    # r40 (Viva 09-26): THREE equal parts — TP4/TP5 are removed from the
+    # ladder; the third pill IS the final target.
+    step = _path / 3.0
     tp1 = entry + sign * step
     # a structural first level may SNAP the first pill, but only when it is
     # within ±20% of the five-part step (a deeper level is a different trade,
@@ -543,8 +543,8 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
     except Exception:
         pass
     targets = []
-    for i in range(5):
-        _lv = tp1 + sign * min(step, max(0.4 * step, abs(final_price - tp1) / 4.0)) * i
+    for i in range(3):
+        _lv = entry + sign * step * (i + 1)
         if sign > 0:
             _lv = min(_lv, final_price)
         else:
@@ -944,3 +944,33 @@ def advance_ladder(state: Dict, high: float, low: float) -> Dict:
         out["closed"] = True
         events.append({"event": "LADDER_COMPLETE", "realized_r": out["realized_r"]})
     return {"state": out, "events": events}
+
+
+def sane_zone_geometry_ok(zone_lo: float, zone_hi: float, entry: float,
+                          stop: float, direction: str, atr_trig: float,
+                          style: str = "") -> bool:
+    """r61.1 SANE-ZONE LAW (Viva 09-30, verbatim): «این چه ناحیه ای است که
+    دنبال سیگناله؟؟» (a 4.7%-wide supply box hunting signals) + «احمقانه
+    ترین ابطالی که دیدم — فاصلهٔ ناحیه و ابطال کمتر از ۱ سنت» (SUI pin:
+    zone 1.147-1.149, cancel 1.142). Two honest floors:
+      ① a watch ZONE must be a zone — height ≤ max(2.5×ATR_trig, 1.5%);
+      ② the RISK (entry→stop) must clear the style's floor —
+         SCALP max(0.8×ATR, 0.25%) · DAYTRADE max(1.0×ATR, 0.4%) ·
+         SWING/GRAND max(1.5×ATR, 0.8%).
+    A setup whose whole structure is smaller than noise is a trap, not a
+    trade — skipped, never alerted. Fail-open on degenerate input."""
+    try:
+        zlo, zhi = sorted((float(zone_lo), float(zone_hi)))
+        en = float(entry)
+        sl = float(stop)
+        a = float(atr_trig or 0.0)
+        if en <= 0 or sl <= 0 or zhi <= zlo:
+            return True
+        if (zhi - zlo) > max(2.5 * a, 0.015 * en):
+            return False
+        _st = str(style or "").upper()
+        mult, pct = {"SCALP": (0.8, 0.0025), "DAYTRADE": (1.0, 0.004),
+                     "SWING": (1.5, 0.008), "GRAND": (1.5, 0.008)}.get(_st, (1.0, 0.004))
+        return abs(en - sl) >= max(mult * a, pct * en)
+    except Exception:
+        return True

@@ -151,7 +151,7 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         # the preview body is the FINAL-WARNING skeleton, registry-unique
         # T-code kept at the tail.
         import re as _re
-        assert _re.fullmatch(r"VIVA-TECLASSIC-T\d{6}", code), code
+        assert _re.fullmatch(r"VIVA-TECHCLASSIC-T\d{6}", code), code
         _hdr = cap.split("\n")
         assert _hdr[0] == "🏷 <b>VIVA __ TecnoClasic</b>"
         assert _hdr[1] == M.VIVA_SEP and "<code>" in cap
@@ -163,7 +163,7 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
                       "📏 فاصله زنده تا خط:",
                       "⚖️ تاریخچۀ برخورد روی این خط:",
                       "🌀 کامپرشن:",
-                      "سیگنال واقعی فقط با Close معتبرِ شکست + پولبک اول + BOS تایم پایین"):
+                      "سیگنال واقعی فقط با Close معتبرِ شکست (یا تأیید هوشمندِ توهم) — پولبک/BOS فقط نقشهٔ ورود پوزیشن بعدی"):
             assert _need in cap, _need
         assert "🧠" not in cap and "⚡ <b>هشدار الگو" not in cap
 
@@ -171,13 +171,15 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         assert M.send_technoclassic_preview(dict(ev)) is False
         assert len(photos) == 1
 
-        # state advances → a NEW numbered update post, replying to the anchor;
-        # the superseded message is deleted (Viva 2026-09-12 latest-update law)
+        # state advances → r61.1 THE UPDATE FLOW LAW: the ONE update between
+        # alert and confirm is the final warning WITHOUT a chart — a plain
+        # text message replying to the anchor («اونهم فقط یک موضوع و اون هم
+        # هشدار نهایی است بدون چارت»).
         deletes = []
         monkeypatch.setattr(M, "delete_message", lambda chat, mid: deletes.append(int(mid)) or True)
         ev2 = dict(ev, state="REJECTION_FADE", fade=fade)
         assert M.send_technoclassic_preview(ev2) is True
-        assert len(edits) == 0 and len(photos) == 2 and len(texts) == 3  # appended pair
+        assert len(edits) == 0 and len(photos) == 1 and len(texts) == 3  # text-only update
         upd1 = texts[2]
         assert upd1[3] == "-100TEST" and upd1[2] == pro_mid         # updates stay in the MAIN channel under the preview anchor
         assert "\U0001f501" in upd1[1] and "\u0622\u067e\u062f\u06cc\u062a \u06f1" in upd1[1]   # «آخرین آپدیت • آپدیت ۱»
@@ -190,22 +192,19 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         # …and now NOTHING at all is posted into the alerts channel
         assert not [t for t in texts if len(t[1]) > 2500]
 
-        # further advance → update ۲ lands as the newest message, update ۱ is DELETED
+        # r61.1: the single update slot is spent — further preview states stay
+        # silent (no «آپدیت ۲», no chart, nothing).
         ev3 = dict(ev, state="BREAK_READY", ref_ts="2026-01-24T21:00:00")  # new pattern bar
-        assert M.send_technoclassic_preview(ev3) is True
-        assert len(photos) == 3 and len(edits) == 0 and len(texts) == 4
-        upd2 = texts[3]
-        assert upd2[2] == pro_mid and upd2[3] == "-100TEST" and "آپدیت ۲" in upd2[1]
-        # the superseded update's text AND its chart bubble go; anchor stays
-        assert deletes == [upd1[0], photos[1][0]]
-        assert not upd2[4]
+        assert M.send_technoclassic_preview(ev3) is False
+        assert len(photos) == 1 and len(edits) == 0 and len(texts) == 3
         chain = KV.get_json("tc_chain|GTTSTUSDT|4h", {})
-        assert chain.get("anchor") == pro_mid and chain.get("update") == upd2[0]
-        assert chain.get("edu") == edu_mid and chain.get("upd_n") == 2
+        assert chain.get("anchor") == pro_mid and chain.get("update") == upd1[0]
+        assert chain.get("edu") == edu_mid and chain.get("upd_n") == 1
         # the confirmation link still points at the PRO anchor, never at an update
+        # (its state is the last SPOKEN state — the capped update never spoke)
         link = KV.get_json("tc_link|GTTSTUSDT|4h", {})
         assert link.get("mid") == pro_mid
-        assert link.get("state") == "BREAK_READY"
+        assert link.get("state") == "REJECTION_FADE"
     os.environ.pop("CANDIDATE_DB_BACKEND", None)
     os.environ.pop("CANDIDATE_DB_PATH", None)
     KV._TABLE_READY["done"] = False
@@ -221,7 +220,7 @@ def test_family_block_template_everywhere():
     for needle in ("🏷 <b>VIVA ✦", "<b>هشدار نهایی | آماده‌سازی ورود</b>",
                    "🪙 <b>BTCUSDT</b>", "🔎 در آستانه تأیید",
                    "📍 ناحیه:", "🎯 جهت محتمل پس از تأیید معتبر:",
-                   "📏 فاصله زنده تا ناحیه: 0.31 ATR", "⚖️", "🌀",
+                   "📏 فاصلهٔ زنده تا ناحیه: 0.31 ATR", "⚖️", "🌀",
                    "سیگنال واقعی فقط با Close معتبرِ شکست", "🆔 <code>"):
         assert needle in cap, needle
 
@@ -302,18 +301,16 @@ def test_setup_chain_final_doctrine(monkeypatch):
         assert not deletes_u                              # the compact is NEVER deleted anymore
         assert "🔁 <b>آخرین آپدیت • آپدیت ۱</b>" in up1[1]
 
-        _aged()
-        assert M.send_setup_update(cand, None, note_fa="ادامه") is True
-        up2 = [x for x in posts if "به‌روزرسانی رصد" in x[1]][-1]
-        assert "آپدیت ۲" in up2[1] and up2[3] == compact_mid
-        assert deletes_u == [up1[0]]                      # only the superseded UPDATE dies
-        # same-minute twins are now structurally impossible:
+        # r61.1 (Viva 09-30: «آپدیت فقط یکبار بین هشدار ابتدایی و پیام
+        # کانفرمد بیشتر نباید بیاد»): the ONE chatter slot is spent — further
+        # non-critical updates are dead. Same-minute twins stay impossible.
+        assert M.send_setup_update(cand, None, note_fa="ادامه") is False
         assert M.send_setup_update(cand, None, note_fa="توهمی") is False
 
         # final alert: a NEW message replying to the LAST update (any number)
         assert M.send_approaching(cand, 99.7, 0.31) is True
         fin = [x for x in posts if "⚡<b>هشدار نهایی" in x[1]][0]
-        assert fin[3] == up2[0]                           # «ریپلای به آخرین آپدیت با هر شماره‌ای»
+        assert fin[3] == up1[0]                           # «ریپلای به آخرین آپدیت با هر شماره‌ای»
         assert not edits_t and not edits_c                # nothing was overwritten
         chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
         assert chain.get("approach") == fin[0]
@@ -447,12 +444,12 @@ def test_viva_exact_format_detailed_and_compact():
 
 
 def test_teclassic_public_code_family():
-    """«VIVA-TECLASSIC-T000000» — the zeros become unique digits; own letter for
+    """«VIVA-TECHCLASSIC-T000000» — the zeros become unique digits; own letter for
     TechnoClassic, K stays for the rest."""
     import re
     from analysis.models import generate_viva_public_code
     tc = generate_viva_public_code("TECHCLASSIC", "SWING")
-    assert re.fullmatch(r"VIVA-TECLASSIC-T\d{6}", tc), tc
+    assert re.fullmatch(r"VIVA-TECHCLASSIC-T\d{6}", tc), tc
     digits = tc.rsplit("T", 1)[1]
     assert len(set(digits)) >= 2          # never a uniform block
     tlb = generate_viva_public_code("TLBREAK", "SWING")
@@ -504,8 +501,12 @@ def test_s6_fast_confirm_survives_later_ticks():
     cand2.created_at = cand.created_at
     cand2.metadata.update(dict(cand.metadata, viva_state="S6_CONFIRMED"))
     ok2, _c3, why2 = evaluate_confirmation(cand2, df2)
-    assert ok2 is False and "ابطال" in (why2 or "") or "INVALIDATION" in str(
-        cand2.metadata.get("last_reject_code") or "")
+    # r61.2: price returned through the break line — the FAILED break now
+    # verdicts with the precise BREAK_RECLAIMED code (same veto, sharper name)
+    assert ok2 is False
+    assert ("ابطال" in (why2 or "") or "پس گرفته" in (why2 or "")
+            or "INVALIDATION" in str(cand2.metadata.get("last_reject_code") or "")
+            or cand2.metadata.get("last_reject_code") == "BREAK_RECLAIMED")
 
 
 def test_s6_lane_with_no_trigger_candle_does_not_crash():
@@ -766,20 +767,14 @@ def test_identical_updates_are_swallowed():
             n1 = sent["n"]
             assert M.send_setup_update(c, None, note_fa="تازه") is False   # identical → swallowed
             assert sent["n"] == n1                                          # nothing new posted
-            # Viva 2026-09-14 single-writer law: even DIFFERENT content waits
-            # the chain update gap — the «۶ پیام در ۲۶ ثانیه» era is over.
+            # r61.1 (Viva 09-30): the chain has ONE chatter slot — a distinct
+            # note no longer opens a second one, gap or no gap.
             assert M.send_setup_update(c, None, note_fa="ناحیه جابه‌جا شد") is False
             assert sent["n"] == n1
-            # after the gap it speaks again…
-            ch = KV.get_json("setup_chain|VIVA-TLBREAK-K333333", {}) or {}
-            ch["upd_ts"] = __import__("time").time() - 400
-            KV.set_json("setup_chain|VIVA-TLBREAK-K333333", ch)
-            assert M.send_setup_update(c, None, note_fa="ناحیه جابه‌جا شد") is True
-            assert sent["n"] == n1 + 1
             # …and a verdict (⛔/❌/⚡) never waits — invalidation is instant.
             assert M.send_setup_update(c, None, note_fa="باطل شد",
                                        state_fa="⛔ <b>ستاپ بسته شد</b>") is True
-            assert sent["n"] == n1 + 2
+            assert sent["n"] == n1 + 1
         finally:
             F.get_klines = old_kl
     finally:
@@ -995,7 +990,10 @@ def test_break_close_scans_all_bars_not_only_latest():
     lane = str(cand2.metadata.get("tl_fast_break") or "")
     assert "اولین کلوزِ معتبر" in lane and "تایم تأیید" in lane
     assert str(cand2.metadata.get("fast_break_bar") or "")[:13] == "2026-09-13 21"
-    # a pattern-timeframe close beyond the line confirms as well
+    # r60.3 THE multi-TF law (Viva 09-30): the PATTERN-TF close is NO LONGER
+    # a break source — the entry break is the TRIGGER timeframe's own close;
+    # the early lane is the LOWER TF (TOHOM). A break visible only on the
+    # pattern frame must keep waiting, never confirm.
     flat = df.copy()
     for i in range(11, 30):
         flat.iloc[i, flat.columns.get_indexer(["open", "high", "low", "close"])] = [100.0, 100.1, 99.9, 100.0]
@@ -1009,8 +1007,8 @@ def test_break_close_scans_all_bars_not_only_latest():
     cand_b.created_at = (t0 + timedelta(hours=10)).isoformat()
     cand_b.metadata.update({"atr": 1.0, "confirm_tf": "1h", "touched": False})
     ok2, cand3, reason2 = evaluate_confirmation(cand_b, flat, htf_closed_df=htf)
-    assert cand3.metadata.get("tl_fast_break"), reason2
-    assert "تایم الگو" in str(cand3.metadata.get("tl_fast_break"))
+    assert ok2 is False, "a pattern-TF-only break must NOT confirm (trigger-TF law)"
+    assert not cand3.metadata.get("tl_fast_break")
 
 
 def test_main_channel_live_slot_and_preview_dedup():
@@ -1042,7 +1040,9 @@ def test_main_channel_live_slot_and_preview_dedup():
     assert "این تحلیل تا قبل از Retest و بسته‌شدن کندل تأییدی" not in sv
     assert "tech_aids" in sv and "EMA" in sv
     qe = io.open("analysis/quality_engine.py", encoding="utf-8").read()
-    assert "for _frame, _tag in ((closed_df, \"تایم تأیید\"), (htf_closed_df, \"تایم الگو\")):" in qe
+    # r60.3 law: the fast-lane scans the TRIGGER frame only (HTF break is not
+    # an entry source; the early lane is the lower TF via TOHOM).
+    assert 'for _frame, _tag in ((closed_df, "تایم تأیید"),):' in qe
     # helpers render into compact and update captions
     import bot.messages_v7 as mv7
     from test_v7 import make_candidate
@@ -1104,7 +1104,9 @@ def test_gate_demotion_and_tolerant_liquidity():
     mn = _io.open("main.py", encoding="utf-8").read()
     assert "def _live_break_watch" in mn and "def _watch_edge_at" in mn
     assert "_live_break_watch(candidate" in mn
-    assert 'if _trg in ("1h", "4h", "1d")' in mn and "hb_bar" in mn
+    # r51 update-event law: the heartbeat is RETIRED (updates only on
+    # confirm / invalidation / final readiness); the live-break watch stays.
+    assert 'if _trg in ("1h", "4h", "1d")' not in mn and "hb_bar" not in mn
     assert '"4h": 14400, "1d": 86400}.get(tf, 300)' in mn
     assert "monitor_summary" in mn
 
@@ -1165,7 +1167,9 @@ def test_link_chain_laws_2026_09_14():
     assert "def _fit_caption" in src
     # 2) Compact is the permanent anchor; updates quote it and replace each other.
     assert 'chain["anchor_pro"] = int(mid)' in src
-    assert 'reply_to=int(chain.get("anchor_pro") or chain.get("edu_short") or 0)' in src
+    # r57: spot chains reply to their OWN newest message (alert→confirm→updates)
+    assert ('reply_to=(_spot_reply57 or' in src
+            and 'int(chain.get("anchor_pro") or chain.get("edu_short") or 0)) or None)' in src)
     # 3) The update gap is enforced IN the single writer (not only callers).
     up = src.split("def send_setup_update", 1)[1].split("def _approaching_ai_hint", 1)[0]
     assert "update_min_gap_seconds" in up
@@ -1181,7 +1185,10 @@ def test_link_chain_laws_2026_09_14():
     assert mn.count("attach_results_link(") >= 3
     # 6) The chart title is the TRIGGER TF — pattern TF is only a PAT note.
     assert "_tf_disp = (md.get(\"tl_context_tf\")" not in src
-    assert "_tf_disp = str(candidate.trigger_timeframe" in src
+    # r44 (Viva 09-26, «هر چارتی تایم خودش رو باید بگیره»): the title stamp
+    # names the DRAWN tape TF — trigger rides in parentheses on step-ups.
+    # The pattern TF still never overrides the title (the old 09-14 intent).
+    assert "_tf_disp = _chart_tf_token(candidate, frame)" in src
     # 7) Unconfirmed charts carry NO target/TP chips (zone+invalidation+trend).
     assert "EXPECTED MOVE" not in src
     # 8) Settlement: fee-only round trip (no invented slippage cut).
@@ -1230,10 +1237,10 @@ def test_zec_protected_exit_settlement_is_win():
                        trigger_tf="15m")
     # Round-11 doctrine: the only level (1112.07 = 2.1%) sits below the 15m
     # band floor (3%) and there is no previous extreme in the ladder call, so
-    # the path is the band middle (4%) split in five → TP1 = entry − 0.8%.
-    assert abs(lad["targets"][0] - 1127.32) < 0.05
-    assert lad["weights"] == [40.0, 30.0, 30.0, 0.0, 0.0]
-    step = advance_ladder(lad, 1131.0, 1124.8)               # TP1 printed (round-10 path)
+    # the path is the band middle (4%); r40: split in three → TP1 = entry − 1.33%.
+    assert abs(lad["targets"][0] - (1136.41 - 0.04 * 1136.41 / 3.0)) < 0.05
+    assert lad["weights"] == [40.0, 30.0, 30.0]
+    step = advance_ladder(lad, 1131.0, 1121.0)               # TP1 printed (round-10 path)
     assert step["state"]["hit_index"] == 1
     assert abs(step["state"]["current_sl"] - 1136.36) < 1e-6  # entry −5 ticks (short)
     step2 = advance_ladder(step["state"], 1136.40, 1136.30)  # trail executes
@@ -1349,7 +1356,9 @@ def test_slot_never_emits_detached_continuation_2026_09_16():
     assert "ادامه" not in out
 
 
-def test_chart_pills_match_ladder_exits():
+def test_chart_pills_match_ladder_exits(monkeypatch):
+    import data.fetcher as _f
+    monkeypatch.setattr(_f, "get_klines", lambda *a, **k: None)
     """Viva 09-19: the confirmed chart must show EVERY ladder exit pill.
     Guards the de-indent regression that silently dropped TP1/TP2 pills."""
     import numpy as np
@@ -1393,14 +1402,15 @@ def test_chart_pills_match_ladder_exits():
     finally:
         m7._level_tag = orig
     # Round-22 law: ONE pill per level (the old 3%-merge produced mega-chips).
-    # Round-24 refinement — Viva 09-24: «ابزار لانگ و شورت در ۵ ستاپ فقط با
-    # tp1 تا tp5 مشخص بشه» — the tool tags are the bare numbers 1..5 (one
-    # each, no big TP labels over the candles), ENTRY/FIRST STOP stay.
+    # r40 (Viva 09-26): TP4/TP5 removed — the tool tags are the bare numbers
+    # 1..3 (one each, no big TP labels over the candles).
     joined = " | ".join(tags)
-    assert "ENTRY" in joined and "FIRST STOP" in joined
-    for i in range(1, 6):
+    # r32 (Viva 09-26): the tool column carries ONLY the bare numbers —
+    # ENTRY/FIRST STOP words moved to the price axis + bottom-right ledger.
+    assert "ENTRY" not in joined and "FIRST STOP" not in joined
+    for i in range(1, 4):
         assert str(i) in tags, (i, joined)
-    assert joined.count("ENTRY") == 1 and tags.count("1") == 1
+    assert tags.count("1") == 1
     assert not any(t.startswith("TP") for t in tags), joined  # no big TP labels
 
 
@@ -1455,6 +1465,8 @@ def test_counter_trend_touch_only_never_confirms():
     from analysis.quality_engine import evaluate_confirmation
     df, cand = _s6_frame_and_candidate("SHORT")   # frame rallies = bull structure
     cand.metadata["tl_context_conflict"] = True
+    for _k61 in ("viva_break_line", "viva_breakout_line"):
+        cand.metadata.pop(_k61, None)   # r61.2 reclaim gate is a separate law
     ok, _c, reason = evaluate_confirmation(cand, df)
     assert ok is False
     assert cand.metadata.get("last_reject_code") == "COUNTER_TREND_TOUCH_ONLY"

@@ -33,7 +33,7 @@ def _bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    version: str = "v9.4-vivamon"
+    version: str = "2026.09.30-r61.2"
     strategy_version: str = "smc-core-7.0"
     channel_name: str = "VivaSignals Pro"
 
@@ -67,7 +67,6 @@ class Settings:
     core_v7_setups_enabled: bool = False
     # Pinbar-in-zone alerts (5m/15m/1h) — bullish 🔴/🟢 alert + verdict reply
     pinv_enabled: bool = True
-    pinval_30m_enabled: bool = False      # R31.5: DAYTRADE 30m pin stream (replay: negative) — opt-in
     albrox_enabled: bool = True
     albrox_symbols: str = ""
     # ALBROX spike/reclaim detection thresholds (env-tunable). The original
@@ -159,11 +158,20 @@ class Settings:
     # runaway price must not keep a chain «waiting» for days.
     fast_break_max_chase_atr: float = 1.5      # exemption ceiling for fast breaks
     scenario_out_of_reach_atr: float = 2.0     # beyond this the premise is gone → close
-    max_chain_heartbeats: int = 12             # per-candle updates per chain
+    # r28 (Viva 09-25, «نباید اینقدر آپدیت‌های بی‌خاصیت بیاد»): the per-candle
+    # «🕐 این کندل بسته شد» heartbeat spammed every pending chain up to 12
+    # times — each with a fresh countdown (content-hash never swallowed it)
+    # and a full chart re-render (Railway CPU). Three reports per chain keep
+    # the confirm-after-close monitoring without the noise.
+    max_chain_heartbeats: int = 3              # per-candle updates per chain
     # Candidates born with a failing mandatory gate can never confirm. When
     # enabled, they are educational-only: they are not tracked for monitoring
     # and therefore never send Approaching messages or lock their symbol.
     skip_dead_gate_candidates: bool = True
+    # r47 TOHOM (Viva 09-27): the early-confirmation engine — sub-TF closes may
+    # confirm before the trigger candle closes. TOHOM_ENABLED=0 restores the
+    # pure one-close law («اگر بد شد نتیجه بگم برگردونی»).
+    tohom_enabled: bool = True
     # Experimental P1234 detector: minimum Wilder ADX(14) on the trigger
     # timeframe at detection time. 0.0 disables the regime filter.
     p1234_min_adx: float = 0.0
@@ -184,7 +192,9 @@ class Settings:
     technoclassic_cooldown_hours: float = 8.0
     technoclassic_symbols: str = ""
     # reality build (Viva bug report 2026-09-10)
-    technoclassic_pattern_tfs: str = "1h,4h,1d"
+    # r30 (Viva 09-26 verdict): «۳۰ دقیقه و ۲ ساعته هم بد نیست، خوبه —
+    # کیفیت بهتری داره» → 30m and 2h join the TechnoClassic pattern TFs.
+    technoclassic_pattern_tfs: str = "30m,1h,2h,4h,1d"
     technoclassic_reject_rate: float = 0.6
     technoclassic_stale_atr: float = 1.5
     technoclassic_htf_scoring: bool = True
@@ -258,11 +268,17 @@ class Settings:
     bybit_cache_seconds: int = 45
     run_scan_on_start: bool = True
     startup_message_enabled: bool = False
+    # r61 chart-diet experiment (Viva 09-30 «چارت رو از اپلیکیشن فعلا حذف
+    # بکن») measured — r61.1 restores the default ON: the TELEGRAM charts are
+    # the product itself (his same-night dictation is all about chart LAWS).
+    # The diet stays available for cost experiments: CHART_ENABLED=0.
+    chart_enabled: bool = True
 
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
             version=os.getenv("APP_VERSION", cls.version),
+            chart_enabled=_bool("CHART_ENABLED", cls.chart_enabled),
             strategy_version=os.getenv("STRATEGY_VERSION", cls.strategy_version),
             channel_name=os.getenv("CHANNEL_NAME", cls.channel_name),
             full_scan_minutes=_int("FULL_SCAN_MINUTES", cls.full_scan_minutes),
@@ -276,7 +292,6 @@ class Settings:
             candidate_monitor_seconds=_int("CANDIDATE_MONITOR_SECONDS", cls.candidate_monitor_seconds),
             core_v7_setups_enabled=_bool("CORE_V7_SETUPS_ENABLED", cls.core_v7_setups_enabled),
             pinv_enabled=_bool("PINVAL_ENABLED", cls.pinv_enabled),
-            pinval_30m_enabled=_bool("PINVAL_30M_ENABLED", cls.pinval_30m_enabled),
             albrox_enabled=_bool("ALBROX_ENABLED", cls.albrox_enabled),
             albrox_symbols=os.getenv("ALBROX_SYMBOLS", cls.albrox_symbols),
             albrox_min_spike_atr=_float("ALBROX_MIN_SPIKE_ATR", cls.albrox_min_spike_atr),
@@ -331,6 +346,7 @@ class Settings:
             scenario_out_of_reach_atr=_float("SCENARIO_OUT_OF_REACH_ATR", cls.scenario_out_of_reach_atr),
             max_chain_heartbeats=_int("MAX_CHAIN_HEARTBEATS", cls.max_chain_heartbeats),
             skip_dead_gate_candidates=_bool("SKIP_DEAD_GATE_CANDIDATES", cls.skip_dead_gate_candidates),
+            tohom_enabled=_bool("TOHOM_ENABLED", cls.tohom_enabled),
             p1234_min_adx=_float("P1234_MIN_ADX", cls.p1234_min_adx),
             experimental_p1234_enabled=_bool("EXPERIMENTAL_P1234_ENABLED", cls.experimental_p1234_enabled),
             experimental_p1234_symbols=os.getenv("EXPERIMENTAL_P1234_SYMBOLS", cls.experimental_p1234_symbols),

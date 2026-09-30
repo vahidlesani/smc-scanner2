@@ -1,0 +1,127 @@
+"""r32 (Viva 09-26 night feedback): tool redesign, ledger, zoom lift, engine
+gates (target-vs-live, one-candle floor, channel volume confirm), wedge cap,
+confirm mirror, score box."""
+import math
+import os
+import re
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pandas as pd
+import pytest
+
+REPO = "/home/user/smc-scanner2"
+
+
+# ── 1. info box never shows a wrong 0/10 ──────────────────────────────────
+def test_info_box_score_snapshot_and_zero_hidden():
+    src = open(f"{REPO}/bot/messages_v7.py", encoding="utf-8").read()
+    assert 'publish_score' in src and "if _sc32 > 0:" in src
+    # the raw unguarded f-string score line is gone
+    assert 'f"SCORE  {candidate.score}/10"' not in src
+
+
+def test_publish_score_snapshot_written_at_discovery():
+    src = open(f"{REPO}/main.py", encoding="utf-8").read()
+    assert 'candidate.metadata["publish_score"] = int(candidate.score or 0)' in src
+    # snapshot lands BEFORE the public code reservation (all published rows)
+    assert src.index('publish_score') < src.index('reserve_public_code(candidate)')
+
+
+# ── 2. tool column = numbers only; ledger carries the words ───────────────
+def test_tool_pills_numeric_only_and_ledger_exists():
+    src = open(f"{REPO}/bot/messages_v7.py", encoding="utf-8").read()
+    assert "if all(str(_lb).isdigit() for _lb, _pc, _c in _items):" in src
+    # r34: ENGLISH abbreviations in the bottom-right ledger (Viva 09-26)
+    assert "ENTRY  " in src and "INITIAL STOP  " in src and "TRAILING  " in src
+    assert "LIVE  " in src and "fontsize=7.6" in src
+    # LIVE pill no longer drawn on confirmed charts
+    seg = src[src.index("if not confirmed:"):]
+    assert " LIVE " in src  # still exists for unconfirmed
+
+
+def test_tool_lines_are_faint_dashed_connectors():
+    src = open(f"{REPO}/bot/messages_v7.py", encoding="utf-8").read()
+    assert "count + 4.9, color=color" in src
+    assert 'linestyle=(0, (3, 2)), alpha=0.55' in src
+
+
+# ── 3. smart zoom (r40 CHART-FILL supersedes the r32 LTC lift) ────────────
+def test_smart_zoom_recent_structure_floor():
+    """r32 used to LIFT dead June history (ylo>50). r40 CHART-FILL (Viva
+    09-26: «کندل‌ها از لبهٔ چپ تا کندل لایو، بالا تا پایین») makes the WHOLE
+    tape a hard bound instead — an early bar may never render invisible, so
+    the window now includes the full rise and the ladder above it."""
+    import bot.messages_v7 as mv
+    # 96 daily bars rising 40 → 80; recent 40-bar low ≈ 68; TP ladder to 84
+    n = 96
+    lows = [40 + 0.42 * i for i in range(n)]
+    highs = [l + 3.0 for l in lows]
+    highs[-1] = 80.0
+    win = mv._smart_y_window(min(lows), max(highs), atr=2.5,
+                             ov_lo=63.0, ov_hi=84.0,
+                             recent_lo=min(lows[-40:]))
+    assert win is not None
+    ylo, yhi = win
+    assert yhi > 84.0                      # ladder fully inside
+    assert ylo <= min(lows), f"every candle visible edge to edge, got {ylo}"
+    assert yhi >= max(highs)               # nothing sticks out above the tape
+
+
+# ── 4. engine gates ────────────────────────────────────────────────────────
+def test_engine_target_clamp_and_one_candle_floor_in_source():
+    src = open(f"{REPO}/analysis/pattern_engine.py", encoding="utf-8").read()
+    assert "target = max(target, live + 1.5 * atr_p)" in src
+    assert "height = max(height, 2.0 * _lr32)" in src
+    assert "_vr32 < 1.3 and not _counter54:" in src and "startswith(\"CHANNEL\")" in src  # r54: counter close-law bypasses the volume gate
+
+
+def test_engine_math_import_present():
+    src = open(f"{REPO}/analysis/pattern_engine.py", encoding="utf-8").read()
+    assert re.search(r"^import math$", src, re.M)
+
+
+# ── 5. wedge cap: daily legs up to 150 bars ───────────────────────────────
+def test_swing_pattern_cap_allows_long_daily_wedge():
+    from analysis.viva_tlbreak import load_config
+    cfg = load_config()
+    assert cfg.max_pattern_bars_swing == 150
+    import json
+    raw = json.load(open(f"{REPO}/strategies/viva_tlbreak/breakout_strategy_config.json"))
+    assert raw["timeframe_profiles"]["swing"]["max_pattern_length_bars_on_structure_tf"] == 150
+
+
+# ── 6. confirm mirror: 30m → MID, 4h → SHORT ──────────────────────────────
+def test_confirm_mirror_mapping():
+    # r53 (Viva 09-28: «بازهم قاطی پاتی میاد»): the r48 mirror TABLE is gone —
+    # the channel IS the setup lane, chosen by _setup_announce_channel; no
+    # TF-routed primary, no mirror copies, one signal → ONE announce channel.
+    src = open(f"{REPO}/bot/messages_v7.py", encoding="utf-8").read()
+    part = src.split("def _setup_announce_channel")[1].split("def tf_channel_publish_confirmed")[0]
+    assert '"PINVAL", "PINWALLQ", "PINWALL"' in part and "CHAT_ID_SWING_SHORT" in part
+    assert '"ALBROX", "TLBREAK"' in part and "CHAT_ID_SWING_MID" in part
+    assert '"TECHCLASSIC"' in part and "CHAT_ID_SWING_LONG" in part
+    assert "_setup_routes" not in src and "confirm_mirror" not in src
+    assert "TF-channel mirror failed" not in src
+
+
+# ── 7. clamp math sanity ───────────────────────────────────────────────────
+def test_target_clamp_direction_math():
+    live, atr = 71.15, 0.5
+    assert max(70.824, live + 1.5 * atr) == live + 0.75  # LTC case fixed
+    assert min(70.9, 71.15 - 1.5 * atr) == 70.4          # SHORT symmetric
+
+
+# ── r34: the app results board — leverage/margin PnL math ────────────────
+def test_webapp_results_board_math_and_wiring():
+    src = open(f"{REPO}/webapp_viva.py", encoding="utf-8").read()
+    # per-row leverage math on the feed rows
+    assert "pnl_lev=(round(float(pnl) * float(leverage or 0), 2)" in src
+    assert "pnl_usd=(round(float(margin_usd or 0) * float(pnl or 0)" in src
+    # board payload + render (r36: Control tab replaces the old resultsBoard)
+    assert "usd_total" in src and 'id="ctlTable"' in src and 'id="ctlTiles"' in src
+    assert "کنترل نتایج" in src
+    # math sanity: 2.8% price × 10× lev on $100 margin = $28
+    price_pct, lev, margin = 2.8, 10, 100
+    assert round(margin * price_pct * lev / 100.0, 2) == 28.0
+    assert round(price_pct * lev, 1) == 28.0

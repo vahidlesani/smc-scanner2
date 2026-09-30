@@ -86,7 +86,11 @@ def test_wedge_upper_break_confirms_long_and_never_short():
                 setup_code="PINVAL", setup_name="پین‌بار", strategy_fa="مدل وج",
                 score=9, status="PENDING", rr_tp1=1.5, rr_tp2=4.0,
                 trigger_timeframe="1d", mandatory_gates={"zone": True},
-                created_at=TS[140].isoformat())
+                # wall-clock-proof (r28): the fixture tape ends 2026-09-24; a
+                # default created_at=now() silently emptied `_bars_since_candidate`
+                # once the calendar moved past the last bar (NO_NEW_BAR at
+                # 09-25). The candidate is pinned BEFORE its own tape forever.
+                created_at="2026-09-20T00:00:00+00:00")
     long = SignalCandidate(
         direction="LONG", bias="BULLISH",
         entry_zone_bottom=zone_top - 0.0035, entry_zone_top=zone_top,
@@ -109,7 +113,11 @@ def test_wedge_upper_break_confirms_long_and_never_short():
 
 # ── Round-24: the numeric tool — «ابزار لانگ و شورت در ۵ ستاپ فقط با
 #    tp1 تا tp5 مشخص بشه» (no big labels over candles/tool) ─────────────────
-def test_tool_pills_are_bare_numbers_with_axis_values():
+def test_tool_pills_are_bare_numbers_with_axis_values(monkeypatch):
+    # r32: no network — a real live candle would spike the frame range and
+    # blow up the pill-grouping tolerance on this synthetic 100-tape.
+    import data.fetcher as _f
+    monkeypatch.setattr(_f, "get_klines", lambda *a, **k: None)
     import numpy as _np
     from datetime import datetime, timedelta, timezone
     import bot.messages_v7 as m7
@@ -147,12 +155,15 @@ def test_tool_pills_are_bare_numbers_with_axis_values():
     finally:
         m7._level_tag = orig
     joined = " | ".join(tags)
-    # bare numbers 1..5 (near-identical levels may share one pill — the r22
-    # _tol grouping); NO big TPxx/percent labels anywhere on the tool.
-    for i in range(1, 6):
+    # bare numbers 1..3 (r40: TP4/TP5 removed; near-identical levels may
+    # share one pill — the r22 _tol grouping); NO big TPxx labels on the tool.
+    for i in range(1, 4):
         assert str(i) in joined, (i, joined)
     assert not any(t.strip().startswith("TP") for t in tags), joined
-    assert "ENTRY" in joined and "FIRST STOP" in joined
+    # r32 (Viva 09-26, «لیبل‌های اطراف ابزار رو بردار»): ENTRY/FIRST STOP
+    # pills are GONE from the tool column — numbers only; their values live
+    # on the price axis + the bottom-right ledger.
+    assert "ENTRY" not in joined and "FIRST STOP" not in joined
 
 
 # ── Round-24b: the broken-blue-line law — «آیا این خط آبی شناسایی شده

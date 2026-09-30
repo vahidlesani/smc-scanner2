@@ -35,6 +35,7 @@ Consequences encoded here (Viva bug-report of 2026-09-10 screenshots):
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import threading
 import time
@@ -84,22 +85,76 @@ _EDGE_RULES.update({
     "CHANNEL_ASCENDING": {"upper": "LONG"},
     "CHANNEL_DESCENDING": {"lower": "SHORT"},
 })
+
+# r54 (Viva 09-28, LIT falling-wedge short — verbatim: «این الگو ذاتا صعودی
+# است و با بریک ضلع بالا تایید میشه … اگر نزولی قراره بده اون هم با بریکِ
+# ترند پایین و کلوز یا سیستم توهم باید تایید بشه»): every ONE-NATURE pattern
+# carries its DOCTRINE direction; a trade AGAINST it is a counter-doctrine
+# trade and exists only through (a) the opposite side's break + valid close,
+# (b) TOHOM on that same edge, or (c) explicit supporting judgment — which
+# MUST be stated in the confirmation message.
+_DOCTRINE_DIRECTION = {}
+for _p54, _sides54 in _EDGE_RULES.items():
+    _dirs54 = {str(_d).upper() for _d in _sides54.values() if _d}
+    if len(_dirs54) == 1:
+        _DOCTRINE_DIRECTION[str(_p54).upper()] = _dirs54.pop()
+
+
+def _counter_support_factors(bundle, direction: str, trigger_df):
+    """The (c) path's evidence — multi-TF structure / momentum pressure in the
+    trade's own direction. Empty list = NO supporting judgment exists."""
+    factors = []
+    want = "BULLISH" if str(direction).upper() == "LONG" else "BEARISH"
+    fa = "صعودی" if want == "BULLISH" else "نزولی"
+    try:
+        from analysis.indicators import structure_bias as _sb54
+    except Exception:
+        _sb54 = None
+    try:
+        for tf in ("4h", "1d"):
+            _f = bundle.get(tf) if bundle is not None else None
+            if _f is None or len(_f) < 60:
+                continue
+            _b = (_sb54 or structure_bias)(_f.reset_index(drop=True)) if False else _sb54(_f.reset_index(drop=True))
+            if str(_b.get("bias") or "").upper() == want:
+                factors.append(f"ساختار سوئینگِ تایم‌فریم بالاتر ({tf}) {fa} است و جهتِ این معامله را تأیید می‌کند")
+                break
+    except Exception:
+        pass
+    try:
+        d = trigger_df.tail(5).reset_index(drop=True)
+        sign = 1.0 if str(direction).upper() == "LONG" else -1.0
+        atr = float((d["high"] - d["low"]).tail(14).mean() or 0.0) or 1e-12
+        press = sum(sign * (float(r["close"]) - float(r["open"])) for _, r in d.iterrows())
+        if press / atr >= 1.5:
+            factors.append("فشارِ بدنه‌ای کندل‌های اخیرِ تایم تریگر هم‌جهتِ این معامله است ( displacement تأییدی)")
+    except Exception:
+        pass
+    return factors
+
+
+def _counter_doctrine_gate(pattern: str, direction: str, is_break: bool,
+                           bundle, trigger_df):
+    """Pure r54 gate: returns (allowed, factors, doctrine_direction).
+
+    * counter BREAK (the opposite side closed through its line): allowed by
+      the (a)/(b) paths — the one-close law / TOHOM confirm on that edge.
+    * counter FADE (rejection-based, no break): allowed ONLY with at least
+      one supporting factor — the (c) path — which the confirm message must
+      display; otherwise the candidate is never minted."""
+    doctrine = _DOCTRINE_DIRECTION.get(str(pattern or "").upper())
+    if not doctrine or str(direction).upper() == doctrine:
+        return True, [], doctrine
+    factors = _counter_support_factors(bundle, direction, trigger_df)
+    if is_break:
+        return True, factors, doctrine
+    return bool(factors), factors, doctrine
 # patterns whose ONLY valid break is their nature side; the other side warns
-_ONE_NATURE = frozenset((
-    "WEDGE_FALLING", "WEDGE_RISING", "TRIANGLE_ASCENDING", "TRIANGLE_DESCENDING",
-    "FLAG_BULL", "FLAG_BEAR", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING",
-    "HEAD_SHOULDERS", "INV_HEAD_SHOULDERS", "DOUBLE_TOP", "DOUBLE_BOTTOM",
-    # R31.7 audit P4: _structural_refine emits the LONG spelling — the short
-    # alias above never matched anything.
-    "INVERSE_HEAD_SHOULDERS",
-))
-
-
 def alert_lineage_key(setup: str, symbol: str, trigger_tf: str, pattern_tf: str,
                       side, direction: str, points, is_break: bool = True) -> str:
-    """R31.7: stable identity of one edge scenario across rescans (see
-    ``_build_candidate``). Empty when the edge has <2 timestamped pivots or
-    the kill switch is on."""
+    """R31.7 (cherry-pick r29e): stable identity of one edge scenario across
+    rescans. Empty when the edge has <2 timestamped pivots or the kill
+    switch is on."""
     if _legacy317():
         return ""
     try:
@@ -115,18 +170,15 @@ def alert_lineage_key(setup: str, symbol: str, trigger_tf: str, pattern_tf: str,
 
 
 def _legacy317() -> bool:
-    """R31.7 kill switch: ``R317_LEGACY=1`` restores the pre-audit behaviour
-    of the behaviour-changing fixes (fresh-break gate, live-time line value,
-    structure-bias CHoCH). Pure bug fixes are not switchable."""
-    return os.getenv("R317_LEGACY", "0") == "1"
+    """R31.7 kill switch: R317_LEGACY=1 restores the pre-audit behaviour."""
+    return os.getenv("R317_LEGACY", "").strip().lower() in {"1", "true", "on", "yes"}
 
 
-# R31.7 audit P3: a special-formation label must agree with the break it
-# describes — a close UP through the flat line of a triple top is the
-# INVALIDATION of that top, not a "triple top" signal (and vice versa).
-_BEAR_FORMATIONS = frozenset(("HEAD_SHOULDERS", "TRIPLE_TOP", "DOUBLE_TOP"))
-_BULL_FORMATIONS = frozenset(("INVERSE_HEAD_SHOULDERS", "INV_HEAD_SHOULDERS",
-                              "TRIPLE_BOTTOM", "DOUBLE_BOTTOM"))
+_ONE_NATURE = frozenset((
+    "WEDGE_FALLING", "WEDGE_RISING", "TRIANGLE_ASCENDING", "TRIANGLE_DESCENDING",
+    "FLAG_BULL", "FLAG_BEAR", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING",
+    "HEAD_SHOULDERS", "INV_HEAD_SHOULDERS", "DOUBLE_TOP", "DOUBLE_BOTTOM",
+))
 
 PATTERN_FA = {
     "WEDGE_FALLING": "گوه نزولی (فالینگ‌وج)",
@@ -229,9 +281,17 @@ def base_side_bonus(df: pd.DataFrame, price: float, direction: str) -> float:
 
 
 # ── geometry validity (the "reality" gate; fixes the screenshot bugs) ──────
-def classify_shape(upper, lower, n) -> str:
+def classify_shape(upper, lower, n, df=None) -> str:
     """Wedge-vs-triangle honest classifier: 'flat' only when TOTAL drift is
-    small vs pattern height (per-bar slope comparisons mislabel wedges)."""
+    small vs pattern height (per-bar slope comparisons mislabel wedges).
+
+    r61 HYPE law (Viva 09-30: «این الان کجاش رایزینگ وج هست؟؟ … اگر ضلع بالا
+    رسم بشه فالینگ وج هست»): a WEDGE_RISING claim must survive the TAIL test —
+    the upper edge's LAST segment (the one the eye reads) may not contradict
+    the window-OLS slope — and, when the frame is given, the ENTRY-SIDE test:
+    a converging both-slopes-up structure that price entered from ABOVE after
+    a vertical rally is a top being carved, never a rising wedge."""
+    from analysis.patterns16 import tail_slope as _ts61, entry_side as _es61
     if upper is None and lower is None:
         return "NONE"
     if upper is None or lower is None:
@@ -283,6 +343,17 @@ def classify_shape(upper, lower, n) -> str:
         # «نه کانال» (his sheets); it renders as two honest trendlines.
         if (sgn_u == 0) != (sgn_l == 0):
             return "TRIANGLE"
+        # V3 §29: a channel needs SIMILAR slopes («both lines rise with
+        # similar slope»). When one edge DOMINATES (drift > 2.2× the other)
+        # the pair is a triangle hugging a dominant line, not a parallel
+        # channel — measured live: SHIB 1H rising-bottom + mildly-rising top
+        # was labelled CHANNEL_ASCENDING and read wrong to the eye.
+        _span_c = max(1, int(n) - max(int(getattr(upper, "first_index", 0)),
+                                      int(getattr(lower, "first_index", 0))))
+        _du = abs(float(upper.slope)) * _span_c
+        _dl = abs(float(lower.slope)) * _span_c
+        if max(_du, _dl) > 2.2 * max(min(_du, _dl), 1e-12):
+            return "TRIANGLE"
         sgn = sgn_u or sgn_l
         return "CHANNEL_ASCENDING" if sgn > 0 else "CHANNEL_DESCENDING" if sgn < 0 else "CHANNEL_FLAT"
     if flat_u and not flat_l and lower.slope > tol:
@@ -294,6 +365,21 @@ def classify_shape(upper, lower, n) -> str:
     if upper.slope <= 0 and lower.slope <= 0:
         return "WEDGE_FALLING"
     if upper.slope >= 0 and lower.slope >= 0:
+        # r61 honest-tail + entry-side audit (docstring)
+        start = max(int(upper.first_index), int(lower.first_index))
+        tol_t = 0.025 * width_now / max(1, min(12, span))
+        tu = _ts61(upper.price_at, n, start)
+        tl = _ts61(lower.price_at, n, start)
+        es = _es61(df, start, float(upper.price_at(n)), float(lower.price_at(n))) \
+            if df is not None else "ANY"
+        if tu < -tol_t or es == "ABOVE":
+            # the upper edge price actually tests LATE is FALLING (or price
+            # came in from above) — «فالینگ وج» by the eye's honest edges
+            if tl < -tol_t:
+                return "WEDGE_FALLING"
+            if tl > tol_t:
+                return "TRIANGLE_SYMMETRICAL"
+            return "TRIANGLE_DESCENDING"
         return "WEDGE_RISING"
     return "TRIANGLE"
 
@@ -305,7 +391,13 @@ def _line_alive(line, n) -> bool:
         if line is None or int(getattr(line, "touch_count", 0)) < 3:
             return False
         age = n - int(line.last_index)
-        if age > max(6, int(0.30 * n)):          # dead edge nobody touched lately
+        # r40 (Viva 09-26, «پیوتها و سوئینگهای معتبر قدیمیتر از ۵۰ کندل نباید
+        # کشته بشن»): the old 0.30·n gate murdered exactly the MAJOR edges —
+        # a line last touched ~50 bars ago (price consolidating under it)
+        # is the trend, not archaeology. Liveness now only rejects a true
+        # fossil (≥85% of the window untouched, min 90 bars); floating is
+        # already handled by the fitters' edge-proximity checks.
+        if age > max(90, int(0.85 * n)):          # dead edge nobody touched lately
             return False
         if int(line.last_index) - int(line.first_index) < max(4, int(0.15 * n)):
             return False                          # too young/crowded to matter
@@ -375,8 +467,11 @@ def fit_edge_line(df: pd.DataFrame, side: str, cfg, n: int):
         if atr <= 0:
             return None
         recent = pts[-6:]
-        if int(recent[-1]["index"]) > n or n - int(recent[-1]["index"]) > max(6, int(0.30 * n)):
+        if int(recent[-1]["index"]) > n or n - int(recent[-1]["index"]) > max(40, int(0.75 * n)):
             return None  # newest pivot must be recent — no archaeology
+        # r40: the «recent» bound above is 0.75·n (min 40) now — the old
+        # 0.30·n (~50 candles on a 164-bar window) killed valid ranges whose
+        # newest test was older than 50 bars (Viva 09-26 law ②).
         best = None
         for drop in range(len(recent) - 1):
             chosen = tuple(p for i, p in enumerate(recent) if i != drop)
@@ -466,14 +561,6 @@ def _flagpole_strength(df: pd.DataFrame, line, side: str, n: int,
             return None
         if (pole > 0) != (side == "upper"):
             return None
-        # R31.7 audit P5: a flag consolidates SIDEWAYS or AGAINST its pole
-        # (E&M) and is brief. A channel drifting WITH the pole is a trend
-        # channel / wedge, never a flag.
-        drift = float(line.slope) * float(pts[-1] - pts[0])
-        if (pole > 0 and drift > 0.35 * height) or (pole < 0 and drift < -0.35 * height):
-            return None
-        if pts[-1] - pts[0] > 40:
-            return None
         return round(pole, 1)
     except Exception:
         return None
@@ -498,13 +585,31 @@ def pattern_id_for(pattern, pattern_tf: str, upper, lower, n: int) -> str:
     """§28 stable id: deterministic hash of kind + both fitted lines + span.
     Same geometry → same id across rescans; a materially refitted line is a
     DIFFERENT pattern (structural replacement), never a silent mutation."""
+    # r60 bug-D: identity now lives in the DEFINING PIVOTS, not the fit.
+    # The old slope/intercept hash re-minted the same visual pattern on every
+    # refit — each new candle slid the polyfit slightly, the id changed, and
+    # the engine «discovered» the identical pattern again (his ARB 09-29 case:
+    # T138451 FINAL WATCH → T490695 CONFIRMED ten minutes apart). Pivot prices
+    # (3 significant digits) + relative pivot spacings are invariant to window
+    # slide and micro-refits; a genuinely new/lost pivot is still a different
+    # pattern (structural replacement), never a silent mutation.
     parts = [str(pattern), str(pattern_tf)]
     for line in (upper, lower):
         if line is None:
             parts.append("none")
-        else:
+            continue
+        pts = tuple(line.points or ())
+        if len(pts) < 2:
             parts.append("%.8g|%.8g|%d" % (float(line.slope), float(line.intercept),
                                            int(line.first_index)))
+            continue
+        sig, prev_idx = [], None
+        for p in pts:
+            idx = int(float(p.get("index", 0)))
+            gap = 0 if prev_idx is None else idx - prev_idx
+            prev_idx = idx
+            sig.append("%.3g~%d" % (float(p.get("price", 0.0)), gap))
+        parts.append("+".join(sig))
     parts.append(str(int(n)))
     digest = hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:12]
     return "%s-%s" % (str(pattern).lower(), digest)
@@ -648,65 +753,56 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         "BROADENING": ("UNKNOWN", 25), "TRENDLINE": ("UNKNOWN", 30),
         "HEAD_SHOULDERS": ("REVERSAL", 70), "DOUBLE_TOP": ("REVERSAL", 70),
         "INV_HEAD_SHOULDERS": ("REVERSAL", 70), "DOUBLE_BOTTOM": ("REVERSAL", 70),
-        "INVERSE_HEAD_SHOULDERS": ("REVERSAL", 70),
     }
     _role9, _rolec9 = _ROLE9.get(str(pattern).upper(), ("UNKNOWN", 30))
     ev_ref9 = str(trigger_df["timestamp"].iloc[-1])
-    _legacy = _legacy317()
-    # R31.7 audit P6: the line is evaluated at the LIVE moment, not at the
-    # open of the last closed pattern bar (that lagged 1–2 pattern bars —
-    # on a sloped 4h line several tenths of an ATR, more than the 0.15-ATR
-    # READY band itself).
-    _x_live = float(n)
-    if not _legacy:
-        try:
-            _tp = pd.to_datetime(pattern_df["timestamp"])
-            _tt = pd.to_datetime(trigger_df["timestamp"])
-            _dt_p = (_tp.iloc[-1] - _tp.iloc[-2]).total_seconds()
-            _dt_t = (_tt.iloc[-1] - _tt.iloc[-2]).total_seconds()
-            _t_live = _tt.iloc[-1] + pd.Timedelta(seconds=_dt_t)
-            if _dt_p > 0:
-                _x_live = float(n) + min(3.0, max(0.0, (_t_live - _tp.iloc[-1]).total_seconds() / _dt_p))
-        except Exception:
-            _x_live = float(n)
-    _pattern0 = pattern
     for side, line in (("upper", upper), ("lower", lower)):
-        # R31.7 audit P2: the per-side structural/flag relabel must not leak
-        # into the other side's event (it used to overwrite `pattern`).
-        pattern = _pattern0
         if not _line_alive(line, n):
             continue
         direction = rules.get(side)
+        _counter54 = False
         if not direction:
-            # Viva 09-24 («هم برخورد هم بعد از کلوز تنها باید هشدار و
-            # توضیحاتش بیاد اما نباید سیگنال صعودی بده یا حتی نزولی»): the
-            # wrong-side break of a ONE-NATURE pattern emits a WARN-ONLY
-            # violation event — never a candidate.
+            # Viva 09-24: the wrong-side break of a ONE-NATURE pattern was
+            # warn-only. r54 (his 09-28 law, superseding): a wrong-side CLOSE
+            # break IS the counter-doctrine confirmation («اگر نزولی قراره
+            # بده اون هم با بریکِ ترند پایین و کلوز یا توهم باید تایید بشه»)
+            # — it now runs the NORMAL break machinery as a counter candidate;
+            # a live-only cross (wick, no close) stays a WARN-ONLY event.
             if str(pattern).upper() not in _ONE_NATURE:
                 continue
-            _ln9 = float(line.price_at(_x_live))
+            _ln9 = float(line.price_at(n))
             _cross9 = (live > _ln9) if side == "upper" else (live < _ln9)
             if not _cross9:
                 continue
-            events.append({
-                "pattern": pattern, "pattern_fa": PATTERN_FA.get(pattern, pattern),
-                "side": side, "direction": None, "state": STATE_VIOLATED,
-                "warn_only": True, "distance_atr": round(abs(live - _ln9) / max(atr_p, 1e-12), 3),
-                "break_edge": "UPPER" if side == "upper" else "LOWER",
-                "break_direction": "UP" if side == "upper" else "DOWN",
-                "line_price": _ln9, "live": live, "pattern_tf": pattern_tf,
-                "ref_ts": str(trigger_df["timestamp"].iloc[-1]),
-                "approach_direction": approach_direction,
-                "pattern_role": _role9, "role_confidence": _rolec9,
-                "legality": "WARNING_ONLY",
-                "event_id": f"{side}|{pattern}|{STATE_VIOLATED}|{ev_ref9}",
-                "violation_fa": (
-                    f"الگوی {PATTERN_FA.get(pattern, pattern)} در تایم‌فریم {pattern_tf} "
-                    f"نقض شد — بریک و کلوز از ضلعِ {'بالا' if side == 'upper' else 'پایین'} "
-                    "در خلافِ ماهیت الگو است. هیچ سیگنالی تأیید نمی‌شود؛ فقط هشدار."),
-            })
-            continue
-        line_now = float(line.price_at(_x_live))
+            _cc54 = (last_close > _ln9) if side == "upper" else (last_close < _ln9)
+            if not _cc54:
+                events.append({
+                    "pattern": pattern, "pattern_fa": PATTERN_FA.get(pattern, pattern),
+                    "side": side, "direction": None, "state": STATE_VIOLATED,
+                    "warn_only": True, "distance_atr": round(abs(live - _ln9) / max(atr_p, 1e-12), 3),
+                    "break_edge": "UPPER" if side == "upper" else "LOWER",
+                    "break_direction": "UP" if side == "upper" else "DOWN",
+                    "line_price": _ln9, "live": live, "pattern_tf": pattern_tf,
+                    "ref_ts": str(trigger_df["timestamp"].iloc[-1]),
+                    "approach_direction": approach_direction,
+                    "pattern_role": _role9, "role_confidence": _rolec9,
+                    "legality": "WARNING_ONLY",
+                    "event_id": f"{side}|{pattern}|{STATE_VIOLATED}|{ev_ref9}",
+                    "violation_fa": (
+                        f"الگوی {PATTERN_FA.get(pattern, pattern)} در تایم‌فریم {pattern_tf} "
+                        f"نقض شد — بریک و کلوز از ضلعِ {'بالا' if side == 'upper' else 'پایین'} "
+                        "در خلافِ ماهیت الگو است. هیچ سیگنالی تأیید نمی‌شود؛ فقط هشدار."),
+                })
+                continue
+            # r54: a wrong-side CLOSE-cross falls through to the normal break
+            # machinery below with the counter direction (SHORT via the lower
+            # line of a falling wedge / LONG via the upper line of a
+            # descending triangle).
+        if direction is None:
+            # close-cross confirmed above — promote to the counter direction
+            _counter54 = True
+            direction = "LONG" if side == "upper" else "SHORT"
+        line_now = float(line.price_at(n))
         if side == "upper":
             dist = (line_now - live) / atr_p
             crossed = live > line_now
@@ -723,34 +819,17 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         rejected_now = bool(wick_beyond and ((last_close <= line_now) if side == "upper"
                                              else (last_close >= line_now))) \
             or (dist <= 0.15 and not crossed)
-        if crossed and not _legacy:
-            # R31.7 audit P1 (why TECHCLASSIC «is silent» and the ones that
-            # appear are late): a break is only an event while it is FRESH —
-            # one of the last TC_FRESH_BARS (4) closed pattern bars was still
-            # inside the line — or while price hovers within 0.5 ATR of it;
-            # never a chase beyond TC_MAX_BEYOND_ATR (1.5).
-            # A line broken days ago re-emitted READY/BREAK on every scan,
-            # 3–5 ATR away; lifecycle then killed it as out-of-reach.
-            _fresh_bars = max(1, int(os.getenv("TC_FRESH_BARS", "4") or 4))
-            _inside_recent = False
-            for _kk in range(n, max(0, n - _fresh_bars) - 1, -1):
-                _ck = float(pattern_df["close"].iloc[_kk])
-                _lk = float(line.price_at(_kk))
-                if (_ck <= _lk) if side == "upper" else (_ck >= _lk):
-                    _inside_recent = True
-                    break
-            _beyond = -dist
-            if _beyond > float(os.getenv("TC_MAX_BEYOND_ATR", "1.5") or 1.5) \
-                    or not (_inside_recent or _beyond <= 0.5):
-                continue
-            # a BREAK needs a displacement candle IN the break direction that
-            # CLOSED beyond the line (a big red bar under a broken-up line
-            # was scored as an upside break)
-            _o = float(trigger_df["open"].iloc[-1])
-            _dir_ok = (last_close > _o) if side == "upper" else (last_close < _o)
-            _closed_beyond = (last_close > line_now) if side == "upper" else (last_close < line_now)
-            displacement = bool(displacement and _dir_ok and _closed_beyond)
-        if crossed and displacement:
+        # r31 calibration (Viva 09-26, PYTH): when the fitted line is a
+        # substantial line whose close-break already happened within the
+        # fresh window, the break IS the event — recognise it now without
+        # demanding a fresh displacement bar (the break candle closed bars
+        # ago; waiting re-arms the engine on a weaker local line forever).
+        _bk31 = getattr(line, "break_index", None)
+        _fw31 = int(getattr(cfg, "fresh_break_bars", 12) or 12)
+        _fresh_bk31 = _bk31 is not None and 0 <= n - int(_bk31) <= _fw31
+        if _fresh_bk31:
+            state = STATE_BREAK
+        elif crossed and displacement:
             state = STATE_BREAK
         elif crossed:
             state = STATE_READY
@@ -760,6 +839,17 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             state = STATE_NEAR
         else:
             continue
+        # ── r61.2 FAILED-BREAK RECLAIM (Viva 09-30, BNB T336567: «الگو به بالا
+        # شکسته اما باز این سیگنال برعکس بریک صادر کرده»): a validated close-
+        # break that the LAST CLOSE has already pulled back through (beyond a
+        # 0.10·ATR wick tolerance) is a FAILED break — dead at the source.
+        # FTB stays safe: a wick-touch of the line is a pullback, only the
+        # close back on the pre-break side kills the event.
+        if state == STATE_BREAK:
+            _still61 = (last_close > line_now - 0.10 * atr_p) if side == "upper" \
+                else (last_close < line_now + 0.10 * atr_p)
+            if not _still61:
+                continue
         # E&M Minimum Price Objective: pattern width projected from the edge
         if width_now is not None:
             height = width_now
@@ -769,7 +859,6 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             height = max(float(pattern_df["high"].iloc[max(0, n - 40):n + 1].max()) - line_now, 1.5 * atr_p)
         height = min(height, 45.0 * atr_p)
         # ── E&M special formations & flag-pennant overlay (labels only) ─────
-        _base_pattern = pattern
         pattern, struct_note = _structural_refine(pattern_df, line, side, n, height, pattern)
         _fp = _flagpole_strength(pattern_df, line, side, n, atr_p, height)
         if _fp is not None:
@@ -783,6 +872,36 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             continue
         direction = (_canonical_direction or direction).upper()
         target = line_now + height if direction == "LONG" else line_now - height
+        # r32 (Viva 09-26; r28 leftover LTC-15m TC TARGET 70.824 < LIVE
+        # 71.15): a LONG target at/below the live price is not a target —
+        # the projection keeps a 1.5·ATR minimum beyond the market.
+        if direction == "LONG":
+            target = max(target, live + 1.5 * atr_p)
+        else:
+            target = min(target, live - 1.5 * atr_p)
+        # r32 (Viva 09-26, AERO 15m: entry/stop/TP inside ONE doji candle):
+        # the projection floor is 2× the last trigger candle's range — a
+        # «setup» whose whole geometry fits one candle is noise.
+        _lr32 = float(trigger_df["high"].iloc[-1]) - float(trigger_df["low"].iloc[-1])
+        if math.isfinite(_lr32) and _lr32 > 0:
+            height = max(height, 2.0 * _lr32)
+            target = line_now + height if direction == "LONG" else line_now - height
+            if direction == "LONG":
+                target = max(target, live + 1.5 * atr_p)
+            else:
+                target = min(target, live - 1.5 * atr_p)
+        # r32 (Viva 09-26, CHANNEL-TRADE law — APT 15m mid-channel): a
+        # channel BREAK must carry volume expansion; without it the engine
+        # is trading the middle of a range on a whisper.
+        if str(pattern).upper().startswith("CHANNEL") and state == STATE_BREAK:
+            try:
+                _v32 = trigger_df["volume"].astype(float)
+                _vm32 = float(_v32.tail(21).head(20).mean())
+                _vr32 = (float(_v32.iloc[-1]) / _vm32) if _vm32 > 0 else 0.0
+            except Exception:
+                _vr32 = 0.0
+            if _vr32 < 1.3 and not _counter54:
+                continue   # volume gate for LEGAL breaks; r54 counter close-law is its own authority
         pct = (target - live) / live * 100.0 if live else 0.0
         ev = {
             "pattern": pattern, "pattern_fa": PATTERN_FA.get(pattern, pattern),
@@ -793,13 +912,19 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                                  f"{'شکست ضلع بالا' if side == 'upper' else 'شکست ضلع پایین'}"),
             "line_price": line_now, "live": live, "distance_atr": round(abs(dist), 3),
             "touches": int(line.touch_count), "fit_error_atr": round(float(line.fit_residual_atr), 3),
+            "edge_points": [dict(p) for p in (line.points or ())],
             "structure_score": structure_score(line, cfg), "reactions": react,
             "measured": {"from": line_now, "to": target, "pct": round(pct, 1),
                          "height": height, "last_close": live},
             "compression": comp, "pattern_tf": pattern_tf,
             "approach_direction": approach_direction,
             "pattern_role": _role9, "role_confidence": _rolec9,
+            "counter_doctrine": bool(_counter54),
+            "doctrine_direction": (_DOCTRINE_DIRECTION.get(str(pattern).upper())
+                                   if _counter54 else None),
             "legality": "LEGAL",
+            "fresh_break_recognition": bool(_fresh_bk31),
+            "bars_since_break": (n - int(_bk31)) if _bk31 is not None else None,
             "event_id": f"{side}|{pattern}|{state}|{ev_ref9}",
             "upper_points": [dict(p) for p in (upper.points if upper else ())],
             "lower_points": [dict(p) for p in (lower.points if lower else ())],
@@ -816,7 +941,7 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             ev["structure_score"] = min(10, int(ev.get("structure_score") or 0) + 1)
             ev["support_note_fa"] = (f"نرخ دفع تاریخِ این خط {int(float(react['reject_rate']) * 100)}٪ "
                                      "— کمک‌تأییدِ مثبت (نه شرط قطعی)")
-        if fade_enabled and is_parallel and react["touches"] >= 3 \
+        if fade_enabled and not _counter54 and is_parallel and react["touches"] >= 3 \
                 and abs(dist) <= 0.35 and (not crossed or rejected_now):
             fdir = "SHORT" if side == "upper" else "LONG"
             opp = lower if side == "upper" else upper
@@ -866,24 +991,10 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                       f"→ سیگنالِ {('صعودی' if direction == 'LONG' else 'نزولی')} با هدفِ اندازه‌گیری‌شده"),
             "prob": "هیچ‌کدام ۱۰۰٪ نیست؛ همه احتمالی‌ست مگر تأییدِ کاملِ زنجیره",
         }
-        # R31.7 audit P3: once price has CROSSED the line against a special
-        # formation (close up through a triple top / H&S shoulder line, down
-        # through a triple bottom / IH&S), the formation is INVALIDATED — the
-        # break event keeps the base geometry name instead of advertising a
-        # bearish pattern on a LONG (or a bullish one on a SHORT).
-        if crossed and ev["state"] in (STATE_BREAK, STATE_READY):
-            _d3 = str(ev.get("direction") or "").upper()
-            if (ev["pattern"] in _BEAR_FORMATIONS and _d3 == "LONG") \
-                    or (ev["pattern"] in _BULL_FORMATIONS and _d3 == "SHORT"):
-                ev["formation_invalidated"] = ev["pattern"]
-                ev["pattern"] = _base_pattern
-                ev["pattern_fa"] = PATTERN_FA.get(_base_pattern, _base_pattern)
-                ev.pop("struct_note", None)
-                ev["event_id"] = f"{side}|{_base_pattern}|{ev['state']}|{ev_ref9}"
         events.append(ev)
     # V3 §27/§28: identity + lifecycle bookkeeping on every emitted event,
     # then exact-duplicate dedupe (same event_id only).
-    _meta9 = {"pattern": str(_pattern0), "pattern_tf": str(pattern_tf),
+    _meta9 = {"pattern": str(pattern), "pattern_tf": str(pattern_tf),
               "span": int(n - _start_idx)}
     for ev in events:
         ev.setdefault("pattern_id", pid)
@@ -973,9 +1084,36 @@ def _fit_cfg():
     return load_config()
 
 
-def detect_technoclassic(bundle, style: str):
+_MINT_GUARD_TTL_S = 12 * 3600  # r60.2: one live alert per visual pattern across lanes
+
+
+def _mint_guard_key(bundle, ev) -> str:
+    """Pattern-level identity for the twin guard: symbol + pattern TF + kind +
+    edge + the edge's FIRST and LAST pivot timestamps. A new pivot (a genuine
+    structural change) yields a new key and may alert again; a mere refit
+    yields the SAME key and stays silent. No trigger TF in the key — that is
+    the whole point (FET trig-1h vs trig-15m twins)."""
+    pts = [str(p.get("timestamp") or p.get("ts") or "")[:16]
+           for p in (ev.get("edge_points") or ())]
+    if not pts:
+        pts = [str(getattr(bundle, "symbol", ""))]
+    # r60.6: DIRECTION is NOT in the key — «جهت شکست رو تایید بکنن»: once a
+    # break of this pattern owns a live chain, the OPPOSITE-direction break of
+    # the same pattern may not mint a rival scenario (his ONDO complaint: the
+    # engine kept hunting SHORTS after the downtrend had already broken UP).
+    # A new pivot still changes the key and frees the pattern.
+    return "|".join(("TCMINT", str(getattr(bundle, "symbol", "")).upper(),
+                     str(ev.get("pattern_tf") or ev.get("pattern") or ""),
+                     str(ev.get("pattern") or ""), str(ev.get("side") or ""),
+                     pts[0], pts[-1]))
+
+
+def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
     """TECHCLASSIC live detector: only this setup issues pattern signals
-    (breakouts AND confirmed edge-fades). Other setups untouched."""
+    (breakouts AND confirmed edge-fades). Other setups untouched.
+    r60: setup_code is injectable — ALBROX's pattern lane is THIS engine
+    under the ALBROX name (his union law: ALBROX = TLBREAK + TECHCLASSIC +
+    zones; the zone lanes live in setups_experimental)."""
     settings = _s()
     if not getattr(settings, "technoclassic_enabled", False):
         return None
@@ -998,18 +1136,80 @@ def detect_technoclassic(bundle, style: str):
         live = float((getattr(bundle, "ticker", None) or {}).get("last_price") or 0.0)
     except Exception:
         live = 0.0
+    # ── r60.2 THE LAW (Viva 09-30, verbatim): «تکنوکلاسیک نباید سیگنال
+    # داخلی قبل از شکست ترند یا الگو بگیره» — ONLY a validated CLOSE through
+    # an edge may mint a signal (break UP → LONG, break DOWN → SHORT). The
+    # edge-fade lane (internal rejection inside the still-unbroken pattern —
+    # his AAVE/FET/ETC 09-29 complaint) is DEAD here: rejections belong to
+    # TLBREAK's scalp lane and ALBROX's zone-rejection lane, where the TOHOM
+    # illusion engine governs them.
     events = [e for e in scan_edges(pat, trig, structure_tf,
                                     live_price=(live if live > 0 else None))
-              if e["state"] in (STATE_BREAK, STATE_FADE)]
+              if e["state"] == STATE_BREAK]
     if not events:
         return None
-    events.sort(key=lambda e: (e["state"] == STATE_BREAK, e["structure_score"]), reverse=True)
-    fade_enabled = bool(getattr(settings, "technoclassic_fade_signals", True))
+    events.sort(key=lambda e: e["structure_score"], reverse=True)
+    # ── r61.2 THE ONE-BREAK LAW (Viva 09-30, verbatim: «الگو به بالا شکسته
+    # اما باز این سیگنال برعکس بریک صادر کرده» + «این قوانین برای همه ستاپها
+    # بودا»): when BOTH edges of the SAME pattern carry a validated close-
+    # break, the pattern HAS ONE direction — the MOST RECENT break's (tie →
+    # the stronger structure). The opposite-edge event dies here; it can
+    # never outscore the pattern's own break (the BNB bug: a 3-pivot lower
+    # edge outscored the 2-pivot upper edge that had just broken UP).
+    _dir61 = {}
+    for _e61 in events:
+        _age61 = 0 if _e61.get("bars_since_break") is None else int(_e61["bars_since_break"])
+        _d61 = str(_e61.get("direction") or "")
+        _rk61 = (_age61, -int(_e61.get("structure_score") or 0))
+        if _d61 not in _dir61 or _rk61 < _dir61[_d61]:
+            _dir61[_d61] = _rk61
+    if len(_dir61) > 1:
+        _win61 = min(_dir61.items(), key=lambda kv: kv[1])[0]
+        events = [_e61 for _e61 in events if str(_e61.get("direction") or "") == _win61]
     for ev in events:
-        if ev["state"] == STATE_FADE and not fade_enabled:
-            continue
-        candidate = _build_candidate(bundle, style, ev, pat, trig, structure_tf, trigger_tf, cfg)
+        # ── r60.2 twin guard: the same visual pattern re-detected on ANOTHER
+        # trigger/style lane (his FET case: T446848 trig-1h → T894237
+        # trig-15m two hours later) must not post twice. The guard key lives
+        # at PATTERN level (no trigger TF), so any lane meeting the same
+        # pivots within the freshness window stays silent.
+        _guard = _mint_guard_key(bundle, ev)
+        try:
+            from database.bot_kv import get_json as _gj
+            _seen = _gj(_guard, {}) or {}
+            if float(_seen.get("ts") or 0) > __import__("time").time() - _MINT_GUARD_TTL_S:
+                # ── r60.5 (his «یعنی چی هر الگو در هر ۱۲ ساعت یکبار؟؟»): the
+                # 12h window is only a BACKSTOP. The real rule is one LIVE
+                # chain per pattern: while the previous alert for this exact
+                # pattern still lives (alert/trade running), stay silent; the
+                # moment it RESOLVES (cancelled / expired / closed), a fresh
+                # break of the same pattern may alert again immediately.
+                _sid60 = str(_seen.get("signal_id") or "")
+                _st60 = ""
+                if _sid60:
+                    try:
+                        from database.candidate_store import candidate_status as _cs60
+                        _st60 = _cs60(_sid60)
+                    except Exception:
+                        _st60 = ""
+                if _st60 in ("CANCELLED", "EXPIRED", "CLOSED", "DEAD_GATE", "SUPERSEDED"):
+                    pass                                   # resolved → allow re-mint
+                elif not _sid60 or _st60 in ("", "EDUCATIONAL", "APPROACHING",
+                                             "CONFIRMED", "NEAR_CONFIRM"):
+                    continue                               # live or unknown → silent
+                else:
+                    pass                                   # any other terminal state → allow
+        except Exception:
+            _seen = {}
+        candidate = _build_candidate(bundle, style, ev, pat, trig, structure_tf, trigger_tf, cfg,
+                                     setup_code=setup_code)
         if candidate is not None:
+            try:
+                from database.bot_kv import set_json as _sj
+                import time as _t60
+                _sj(_guard, {"ts": _t60.time(),
+                             "signal_id": str(getattr(candidate, "signal_id", "") or "")})
+            except Exception:
+                pass
             return candidate
     return None
 
@@ -1037,7 +1237,7 @@ def measured_target(entry: float, direction: str, trigger_tf: str,
     return float(target), source
 
 def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
-                     trigger_tf: str, cfg):
+                     trigger_tf: str, cfg, setup_code: str = "TECHCLASSIC"):
     from analysis.indicators import structure_bias
     from analysis.models import EvidenceItem, generate_viva_public_code
     from analysis.patterns import pattern_info
@@ -1048,6 +1248,19 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     is_break = ev["state"] == STATE_BREAK
     fade = ev.get("fade") or {}
     direction = (ev["direction"] if is_break else str(fade.get("direction") or ev["direction"])).upper()
+    # ── r54 DOCTRINE GATE (Viva 09-28, LIT falling-wedge short): a trade
+    # against the pattern's own nature exists only via the opposite-side
+    # close-break / TOHOM, or with stated supporting judgment; a counter
+    # FADE with zero support is never minted.
+    try:
+        _ok54, _factors54, _doc54 = _counter_doctrine_gate(
+            str(ev.get("pattern") or ""), direction, bool(is_break), bundle, trig)
+    except Exception as _g54_exc:
+        print(f"counter-gate skipped {getattr(bundle, 'symbol', '?')}: {_g54_exc}")
+        _ok54, _factors54, _doc54 = True, [], None
+    if not _ok54:
+        return None
+    _counter54 = bool(_doc54 and str(direction).upper() != str(_doc54).upper())
     atr_p = _atr(pat)
     atr_t = _atr(trig) or atr_p
     if atr_p <= 0 or atr_t <= 0:
@@ -1058,6 +1271,25 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     upper = fit_validated_line(pat, "HIGH", cfg)
     lower = fit_validated_line(pat, "LOW", cfg)
     opp = lower if direction == "LONG" else upper
+    # ── r60.6 CHANGE OF CHARACTER (Viva 09-30, verbatim): «وقتی ترند نزولی
+    # میشکنه به بالا دیگه اسمش خلاف روند نیست ... احتمال چنج آف کارکتر هست
+    # که باید امتیاز بالاتری بده به پوزیشن نه اینکه خفه کنه». A VALIDATED
+    # falling line closed ABOVE = CHoCH UP (a broken rising line closed below
+    # = CHoCH DOWN): the trade takes the BREAK's side, the counter-doctrine
+    # label is lifted and the setup is REWARDED, never suppressed.
+    _choch60 = ""
+    try:
+        if is_break:
+            _broken60 = upper if str(ev.get("side") or "").lower() == "upper" else lower
+            _sl60 = float(getattr(_broken60, "slope", 0.0) or 0.0)
+            if direction == "LONG" and _sl60 < 0:
+                _choch60 = "UP"
+            elif direction == "SHORT" and _sl60 > 0:
+                _choch60 = "DOWN"
+    except Exception:
+        _choch60 = ""
+    if _choch60:
+        _counter54 = False          # a CHoCH break is never «خلاف ماهیت»
     # stop = NEAREST recent opposite validated touch (never the global min/max
     # that produced Viva's absurd 74%-away shorts).
     # Viva 09-20 round 11: «بدون atr … پشت آخرین سویینگ با بافر» → the buffer
@@ -1125,7 +1357,7 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         return None
     poi = {"bottom": line_now - 0.15 * atr_t, "top": line_now + 0.15 * atr_t,
            "touches": int(ev.get("touches") or 0),
-           "type": f"TECHNOCLASSIC {ev['pattern']} {'BREAK' if is_break else 'FADE'}"}
+           "type": f"{setup_code} {ev['pattern']} {'BREAK' if is_break else 'FADE'}"}
     bias = structure_bias(pat, 5)
     context = {"bias": bias.get("bias", "NEUTRAL")}
     impulse = {"index": len(trig) - 1, "level": line_now, "valid": True,
@@ -1139,12 +1371,25 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
          ("کلوز شکست با جابه‌جایی ثبت شد." if is_break else
           f"برخوردِ دفع‌شده در ضلع؛ نرخ دفع تاریخی {int(float(ev['reactions']['reject_rate'])*100)}٪ (قانون آلفونسو).")),
         True, 2, level=line_now, timeframe=structure_tf)
-    gate = "technoclassic_break_closed" if is_break else "technoclassic_rejection_confirmed"
-    candidate = _base_candidate(bundle, style, "TECHCLASSIC", direction, structure_tf,
+    gate = f"{setup_code.lower()}_break_closed" if is_break else f"{setup_code.lower()}_rejection_confirmed"
+    candidate = _base_candidate(bundle, style, setup_code, direction, structure_tf,
                                trigger_tf, context, poi, impulse,
                                special, gate, True)
     if candidate is None:
         return None
+    # ── r60 bug-D: TC/ALBROX candidates now carry the same stable alert
+    # lineage TLBREAK has had since R31.7 (pivot-timestamp identity), so a
+    # refit re-detection of the SAME pattern supersedes the older row at the
+    # store instead of minting a twin alert.
+    try:
+        _lk = alert_lineage_key(setup_code, str(bundle.symbol), str(trigger_tf),
+                                str(structure_tf), str(ev.get("side") or ""),
+                                direction, [dict(p) for p in (ev.get("edge_points") or ())],
+                                bool(is_break))
+        if _lk:
+            candidate.metadata["alert_lineage_key"] = _lk
+    except Exception:
+        pass
     # chain-link (same contract as the legacy setups): the confirmation message
     # must quote the edge-alert that announced this level — persisted in KV so
     # it survives the 5-minute gap and any restart.
@@ -1156,6 +1401,13 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
             candidate.metadata["approaching_message_id"] = int(link["mid"])
     except Exception:
         pass
+    if _choch60:
+        candidate.evidence.append(EvidenceItem(
+            "choch", "تغییر کاراکتر (CHoCH)",
+            (f"ترند {'نزولی' if _choch60 == 'UP' else 'صعودی'} اعتبارسنجی‌شده در جهت مخالف با کلوزِ معتبر "
+             f"شکسته شد — {'صعودی' if _choch60 == 'UP' else 'نزولی'} شدنِ ساختار؛ امتیاز +2 "
+             "(تغییر کاراکتر تقویت است، نه خلاف‌روند)."),
+            True, 1, level=line_now, timeframe=str(structure_tf)))
     candidate.sl = float(stop)
     # ── Viva 09-23 (his chart ruling, verbatim): «استاپ باید از کف بیس ۴
     # ساعته در بیاد … اگر استاپ و تی‌پی‌ها رو از نواحی تایم پایین‌تر از تایم
@@ -1179,6 +1431,75 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     except Exception as _exc:
         print(f"TECHCLASSIC LTF stop skipped {getattr(bundle, 'symbol', '?')}: {_exc}")
     tp2 = float(final_target)
+    # ── r60.3 zone-anchored plan (Viva 09-30: «اون باکس‌ها میتونن به تارگت
+    # گذاری و استاپ کمک بکنن»): the PATTERN-TF zone inventory (FVG/flip/OB/
+    # supply-demand — the same boxes the chart draws) snaps TP2 onto the
+    # nearest opposing box EDGE (front-running the box beats stopping inside
+    # it) and a protective box between entry and the structural stop hosts
+    # the stop behind its far edge. Bounded so the tool stays honest.
+    _tp2_zone60 = ""
+    try:
+        # ── r60.4 THE zone-anchor priority (Viva 09-30, verbatim): «من در تایم
+        # تریگر ساپلای و دیمند منطقی میخوام که ریفاین شده باشه» و «تی پی و
+        # استاپ اگر در تایم تریگر دیده نمیشه با توجه به تایم بالاتر محاسبه
+        # بشه». The anchor reads the TRIGGER-TF refined inventory FIRST (the
+        # same boxes his chart shows), then the pattern-TF for context; the
+        # higher-TF metadata inventory joins ONLY when neither showed an
+        # opposing/protective box — for CALCULATION, never for drawing.
+        from analysis.render_kit import detect_zones as _dz60
+        _zinv60 = list(_dz60(trig, direction, float(poi["bottom"]), float(poi["top"])) or [])
+        try:
+            _zinv60 += list(_dz60(pat, direction, float(poi["bottom"]), float(poi["top"])) or [])
+        except Exception:
+            pass
+        _buf60 = structural_buffer(entry)
+        if direction == "LONG":
+            _opp60 = sorted((z for z in _zinv60 if float(z.get("bottom", 0) or 0) > entry),
+                            key=lambda z: float(z["bottom"]))
+        else:
+            _opp60 = sorted((z for z in _zinv60
+                             if 0 < float(z.get("top", 0) or 0) < entry),
+                            key=lambda z: -float(z["top"]))
+        if not _opp60:
+            # fallback: the higher-TF inventory (calculation only, never drawn)
+            _htf60 = list((candidate.metadata or {}).get("htf_zones") or [])
+            if _htf60:
+                _zinv60 = _zinv60 + _htf60
+                if direction == "LONG":
+                    _opp60 = sorted((z for z in _htf60 if float(z.get("bottom", 0) or 0) > entry),
+                                    key=lambda z: float(z["bottom"]))
+                else:
+                    _opp60 = sorted((z for z in _htf60
+                                     if 0 < float(z.get("top", 0) or 0) < entry),
+                                    key=lambda z: -float(z["top"]))
+        if _opp60:
+            _edge60 = (float(_opp60[0].get("bottom", 0) or 0) if direction == "LONG"
+                       else float(_opp60[0].get("top", 0) or 0))
+            _d60 = abs(_edge60 - entry)
+            _p60 = abs(tp2 - entry)
+            if _p60 > 0 and 0.55 * _p60 <= _d60 <= 1.45 * _p60:
+                tp2 = float(_edge60)
+                _tp2_zone60 = str(_opp60[0].get("kind") or "ZONE")
+        _risk60 = abs(entry - stop)
+        if _risk60 > 0:
+            if direction == "LONG":
+                _prot60 = sorted((z for z in _zinv60 if entry > float(z.get("top", 0) or 0) > 0),
+                                 key=lambda z: -float(z["top"]))
+                _pedge60 = (float(_prot60[0].get("bottom", 0) or 0) - _buf60) if _prot60 else 0.0
+                _between = _prot60 and entry > _pedge60 > stop
+            else:
+                _prot60 = sorted((z for z in _zinv60
+                                  if float(z.get("bottom", float("inf")) or float("inf")) > entry),
+                                 key=lambda z: float(z["bottom"]))
+                _pedge60 = (float(_prot60[0].get("top", 0) or 0) + _buf60) if _prot60 else 0.0
+                _between = _prot60 and entry < _pedge60 < stop
+            if _between:
+                _sl60 = clamp_stop_price(entry, direction, float(_pedge60),
+                                         str(trigger_tf or ""))[0]
+                if 0.45 * _risk60 <= abs(entry - _sl60) <= 1.10 * _risk60:
+                    stop = float(_sl60)
+    except Exception:
+        pass
     _path_full = abs(tp2 - entry)
     tp1 = entry + (tp2 - entry) / 5.0 if direction == "LONG" else entry - (entry - tp2) / 5.0
     try:
@@ -1209,6 +1530,8 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     candidate.entry_zone_top = float(max(entry, line_now) + 0.15 * atr_t)
     try:
         candidate.metadata["path_source"] = cand_path_source
+        if _tp2_zone60:
+            candidate.metadata["tp2_zone"] = _tp2_zone60
         candidate.metadata["stop_source"] = ("STRUCTURE" if abs(entry - stop) > buffer * 1.5
                                             else "BROKEN_LINE")
         candidate.metadata["stop_clamped"] = bool(_stop_was_clamped)
@@ -1220,16 +1543,26 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     squeeze = bool((ev.get("compression") or {}).get("squeeze_ok"))
     raw = float(ev.get("structure_score") or 0.0) + (2.0 if is_break else 1.0) \
         + (2.0 if squeeze else 0.0) + min(2.0, 2.0 * float(ev["reactions"]["reject_rate"])) \
-        + min(2.0, 0.5 * int(ev.get("touches") or 3))
+        + min(2.0, 0.5 * int(ev.get("touches") or 3)) \
+        + (2.0 if _choch60 else 0.0)   # r60.6: CHoCH is a REWARD, not a veto
     candidate.score = min(10, max(6, int(round(raw))))
     comp_bonus, _comp = (0.0, {})
     try:
         comp_bonus, _comp = compression_bonus(pat)
     except Exception:
         pass
-    candidate.mandatory_gates["htf_alignment"] = True
+    # ── r60 TC calibration (Viva 09-29, dictated law): TECHCLASSIC is the
+    # WITH-TREND BREAK lane — the validated break itself is the signal. The
+    # multi-TF alignment reading stays as evidence/score, but it may never be
+    # a MANDATORY gate for a break (his prime suspect: the multi-TF snapshot
+    # vetoing the trigger-TF confirm). BREAK events drop the gate entirely;
+    # FADEs keep the forced-pass (a fade must still declare trend harmony).
+    if is_break:
+        candidate.mandatory_gates.pop("htf_alignment", None)
+    else:
+        candidate.mandatory_gates["htf_alignment"] = True
     candidate.strategy_fa = (f"تکنوکلاسیک | " +
-                             (f"شکست {fa_pattern} در {structure_tf} — پولبک اول + BOS تأیید"
+                             (f"شکست {fa_pattern} در {structure_tf} — تأیید با اولین کلوز (توهم هوشمند)"
                               if is_break else
                               f"دفع از ضلعِ کانالِ موازی در {structure_tf} — کمک‌تأییدِ قانون آلفونسو؛ "
                               f"ورودِ بازگشتی فقط با کندلِ دفع/تأییدِ تایم‌پایین"))
@@ -1259,6 +1592,10 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         "role_confidence": ev.get("role_confidence"),
         "pattern_id": ev.get("pattern_id"),
         "lifecycle": ev.get("lifecycle"),
+        "counter_doctrine": _counter54,
+        "choch": _choch60 or None,
+        "doctrine_direction": (_doc54 if _counter54 else None),
+        "direction_why_fa": (_factors54 if _counter54 else []),
         "viva_structure_score": float(ev.get("structure_score") or 0.0),
         "viva_final_score": raw, "viva_state": stage + "_CLOSED",
         "tl_context_tf": structure_tf, "tl_line": line_now,
@@ -1274,7 +1611,7 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     # random signal_id for the SAME broken edge; the zone (a sloped line)
     # drifts every 15 minutes, so the lineage test (0.08 ATR) failed and the
     # alert was re-created / superseded before any confirm-TF close. The
-    # lineage is the broken EDGE itself — identified by its defining pivots'
+    # lineage is the broken EDGE itself - identified by its defining pivots
     # timestamps, which do not move as the fit window slides.
     _lk = alert_lineage_key("TECHCLASSIC", bundle.symbol, trigger_tf, ev.get("pattern_tf") or structure_tf,
                             ev.get("side"), direction,
@@ -1282,6 +1619,33 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
                             is_break)
     if _lk:
         candidate.metadata["alert_lineage_key"] = _lk
+    # r30 (Viva 09-26): «ابطال نمی‌تونه بین ناحیه باشه» — the pre-confirm
+    # invalidation line must sit BEYOND the entry zone (protective side),
+    # never inside it; otherwise approaching the zone (the whole point)
+    # invalidates the scenario (LTC 69.404 inside 63.6-70.9).
+    try:
+        _zb30 = float(candidate.entry_zone_bottom)
+        _zt30 = float(candidate.entry_zone_top)
+        _sl30 = float(candidate.sl or 0)
+        if _sl30 > 0 and direction == "LONG" and _sl30 >= _zb30:
+            candidate.sl = round(_zb30 - buffer, 8)
+        elif _sl30 > 0 and direction == "SHORT" and 0 < _sl30 <= _zt30:
+            candidate.sl = round(_zt30 + buffer, 8)
+    except Exception:
+        pass
+    # ── r61.1 SANE-ZONE LAW (Viva 09-30: «ناحیه های بررسی و ابطال عقلانی و
+    # اصولی باشه»): a watch zone must be a zone and its invalidation must sit
+    # a real distance beyond it — a setup glued to its door is skipped.
+    try:
+        from analysis.trade_management import sane_zone_geometry_ok as _szg61
+        if not _szg61(float(candidate.entry_zone_bottom),
+                      float(candidate.entry_zone_top),
+                      float(candidate.planned_entry or (candidate.entry_zone_bottom + candidate.entry_zone_top) / 2.0),
+                      float(candidate.sl or 0), direction, float(atr_t or 0.0),
+                      str(getattr(candidate, "style", "") or "")):
+            return None
+    except Exception:
+        pass
     # ── Viva 09-23 (round 20 ENTRY LAW): remember the MAJOR-pivot trendline
     # opposing this break (highest-TF validated 1d/4h/1h line on the break's
     # side) — confirmation must be a CLOSE beyond it, not just the tool line.

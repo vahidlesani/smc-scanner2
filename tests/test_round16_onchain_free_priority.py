@@ -72,7 +72,7 @@ def test_fear_greed_and_dex_parse(oc, monkeypatch):
         "dex": {"total24h": 11_278_257_432.2, "change_1d": -18.99},
     }.get("fng" if "alternative" in url else "dex"))
     fng = oc.fear_greed()
-    assert fng == {"value": 71, "label": "Greed", "prev": 78}
+    assert fng == {"value": 71, "label": "Greed", "label_fa": "طمع", "prev": 78}
     tide = oc.dex_tide()
     assert tide["change_1d_pct"] == pytest.approx(-18.99)
     assert tide["volume_24h"] > 1e10

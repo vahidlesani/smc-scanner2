@@ -235,3 +235,31 @@
 - dashboard/app.py: _BOOT_SHA priority RAILWAY_GIT_COMMIT_SHA → COMMIT_SHA → BUILD_INFO file → "unknown"; /health now returns boot_sha + boot_at (legacy keys intact).
 - tests/test_health_fingerprint.py 2/2 (module-reload pattern for env pinning); suite 432P/1skip.
 - Note for future rounds: fresh containers wipe .git/config AND pip deps — reinstall list + remote rebuild from tokens.env (GITHUB_TOKEN rotated 09-24 after old ghp_ token revoked).
+
+## Round-28 — smart zoom + line locality + heartbeat cap (his 11-screenshot audit)
+- ROOT CAUSES (evidence): (1) y-finalize = min/max(candles ∪ entry ∪ SL ∪ TP) + 6% → DASH 1D stop 13.3 vs price 62 crammed candles into top ~14%; (2) no floor/occupancy → WLD 1H 80% fill on ~5-cent span; (3) TECHCLASSIC lines reused TLBREAK full-frame left-extension → RENDER 4H chart-edge «X»; (4) heartbeat 12/chain per candle with fresh countdown → hash never swallows + full re-render each (Railway CPU).
+- Fixes: _smart_y_window() (candle box = 72% of axis, floor max(4·ATR, 2.5% mid, 0.5·span), overlay extension capped 0.45·span/side, 5% pad) wired into generate_chart finalize; tc_clean lines pivot-local (≤15% lead-in), TLBREAK edge law untouched; max_chain_heartbeats 12→3 (env override).
+- Wall-clock-fragile fixture fixed: test_round23_model_law created_at pinned before its tape (NO_NEW_BAR after calendar roll).
+- tests/test_round28_smart_zoom.py 6/6; suite 438P/1skip.
+- Leftover spotted: DASH lifecycle FIRST STOP 13.297 (−79% from live) violates the stop-ceiling law (1d ≤ 8%) — separate round queued.
+
+## Round-29 — spot lane rescue + TP pill order + render freeze (his 11 screenshots + txt)
+- SPOT DEAD 2 DAYS: lane alive, found 48/pass, published 0 since R30 deploy. Fix: (1) _spot_stamp stamped BEFORE the send — one failed chart/Telegram try burned the (sym,tf,shape) for the window; marker now written ONLY after successful publish (commit flag). (2) zero_sent reason + counters (stamp_skip/send_fail/chart_fail/last_error/dur/budget) surfaced in /app/api/state — a dead sender can no longer masquerade as green «فعال».
+- TP PILL SCRAMBLE (SHIB 2,4,5,3,1): finalize allocated pills mid-out; crowded columns inverted numeric order. Allocation now strictly level-ascending → displayed stack always monotone with price (LONG 1→5 up, SHORT 1→5 down).
+- RENDER FREEZE («از اولین تأیید شکل و زوم عوض نشه»): first confirmed render freezes the smart price window in metadata; later renders reuse it verbatim (survives TF-bump); when live price escapes the box, window recomputes + re-freezes (the legal mutation, noted by the escape law).
+- Queue (told user): BTC structural 4H stop + saner targets = V3 §18/§19 slices; DASH stop 13.297 violation; patches A–M of the parallel agent await his approval; MTF TF-labeling (§ setup/confirmation/execution) queued.
+- Suite 468P/1skip.
+
+## Round-29c — §29 channel slope-similarity + labels never on candles
+- Pattern misnaming audit: header «PAT 4H · X» comes from render_htf_pattern ← render_kit.detect_patterns — which ALREADY routes through classify_shape V3 (render_kit ~line 472). Remaining misnames were §29's unenforced «similar slope»: dominant-edge pairs (SHIB rising-bottom + mildly-rising top) fell through to CHANNEL. Fix: classify_shape channel branch now requires drift dominance < 2.2×; beyond that → TRIANGLE.
+- Labels-on-candles: zone chips' in-box chooser already avoided the candle envelope; the TOP-EDGE FALLBACK did not — it now walks the chip up in 0.035·yr steps (≤8) until clear of the envelope in its own x-range.
+- Backup-branch audit: r30-spot-mtf-chart-handoff content ALREADY fully in main (git diff empty on spot_engine); old 09-06/09-09 branches (pinval-zone-polarity, stage4-zone-policy) share NO merge base with main → direct merge forbidden (audit law); their zone-polarity ideas → future hand-ported patch. arena/01a0d606 branch = third agent's replay/floating-line fixes — queued for audited merge with approval.
+- tests/test_round29c_similarity_labels.py 3/3; suite 471P/1skip.
+
+## Round-29e — app SWR + confirmation-lineage rescue + funnel surface (his «هنداف بروز» round)
+- APP HANG («اپلیکیشن بالا نمیاد»): /app/api/state rebuilt INLINE on every 8s-TTL miss; one rebuild ≈60s on Railway → every poll spun. Fix: serve-while-revalidate (fresh≤8s instant; stale answered INSTANTLY + ONE bg thread rebuilds; cold boot builds once). SW shell cache bump viva-shell-r31→r29d (his browser drops the stale shell).
+- 2H/4H NO CONFIRMATIONS (since yesterday): cherry-picked R31.7b lineage fix — every rescan minted a NEW signal_id for the SAME broken edge (sloped line drifts 0.2 ATR/scan → 0.08-ATR lineage failed → alert re-created/superseded → confirm clock reset). Now alert_lineage_key = pivots' TIMESTAMPS (never move); keyed match only replaces on >1.0 ATR relocation; kill switch R317_LEGACY=1. Regression tests 2/2.
+- Cherry-pick discipline: their commit bundled audit-0925b P2/P5/P6 (live-time line value, flag drift gate, relabel leak) — NOT taken wholesale; first attempt replaced my pattern_engine (caught by suite: r26b/r29c source asserts red) → restored my file, hand-injected ONLY lineage (fns + _build_candidate hook). P2/P5/P6 + their 18-test audit = queued for full audited merge.
+- Funnel surfaced: payload.funnel = scan_summary KV in /app/api/state (per-cycle gate counters).
+- Railway wins today: heartbeat 12→3, render freeze, SWR single-rebuild, chart cache; state build off the request path.
+- Suite 473P/1skip.

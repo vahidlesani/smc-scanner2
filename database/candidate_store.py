@@ -540,6 +540,25 @@ def open_chains_for(symbol: str, setup_code: str, trigger_tf: str | None = None)
     return [SignalCandidate.from_json(row["payload"]) for row in rows]
 
 
+def candidate_status(signal_id: str) -> str:
+    """r60.5: current status of ONE stored candidate (empty when unknown).
+    The pattern mint-guard uses it to distinguish «a live alert exists» from
+    «the previous alert already resolved» — a resolved pattern may re-alert
+    immediately, without waiting out the TTL backstop."""
+    sid = str(signal_id or "")
+    if not sid:
+        return ""
+    try:
+        with _connection() as conn:
+            row = conn.execute(
+                "SELECT status FROM signal_candidates WHERE signal_id=?",
+                (sid,),
+            ).fetchone()
+        return str(row["status"] or "") if row else ""
+    except Exception:
+        return ""
+
+
 def chains_last_24h(symbol: str, setup_code: str, trigger_tf: str | None = None) -> int:
     """How many alert-chains this symbol+setup (+trigger, when given) started
     in the last 24 hours — Viva's rotating-licence capacity is per timeframe."""

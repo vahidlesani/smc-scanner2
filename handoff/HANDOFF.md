@@ -1,6 +1,3 @@
-> **R31.4 — 2026-09-25 (code review, branch `arena/01a0d606-smc-scanner2`):** ۷ باگ مسیر ستاپ‌ها رفع شد — fast-lane خط روند از شمارهٔ ردیف به‌جای timestamp می‌خواند (سطح تأیید = پیوت اول؛ حالا خط امتداد می‌یابد، `CONFIRM_TL_EXTRAPOLATE=0` = clamp قدیم) · ریجکت ضدروند با retry انتشار دور زده می‌شد · reject دیگر entry/SL/TP را تغییر نمی‌دهد · ALBROX فقط شکست تازهٔ بیس · first-visit واقعی PINWALLQ · look-ahead تریلینگ R29 · UnboundLocal `_atr` در render_kit.
-> جزئیات + پیشنهادهای طراحی (replay آماری، کف R:R، حالت سقف استاپ، ...): `docs/REVIEW_2026-09-25.md`. تست‌ها: **470 passed / 1 skipped**. دیپلوی نشده.
->
 > **R30 — 2026-09-24 (current working branch):** مرجع تصویری سبک CryptoCove دقیق شد: منظور فقط منطق هندسی/تشخیص و ترسیم الگوهاست، نه رنگ‌بندی. نمونه‌ها شامل کانال نزولی/ترندلاین و Bullish Rectangle هستند. موتور تشخیص مستقل از رندر است.
 > - **Spot horizons restored to six:** 4H/8H = کوتاه‌مدت، 12H/1D = میان‌مدت، 3D/1W = بلندمدت. Spot remains LONG-only for confirmation; opposite-side touches/breaks remain warnings.
 > - **MTF base architecture:** 5M and 15M are fetched directly; 1H/30M are resampled from 15M; 8H/12H are resampled from the 4H structural tape; 3D/1W are resampled from the 1D macro tape. 5M is never reconstructed from 15M. 4H/1D stay direct because reconstructing enough long history from 5M/15M would cost more API calls, not fewer.
@@ -151,9 +148,402 @@ HANDOFF.md — smc-scanner2 (VivaSignals Pro)
 - سوئیچ‌ها: `ONCHAIN_FREE_ENABLED` (پیش‌فرض on) · `ONCHAIN_CACHE_TTL_SECONDS` · `SPOT_FLOW_HEAD` (۶) · `TLBREAK_LOG_FIT_MIN_SPAN` (۰.۰۳).
 - وضعیت: ۴۰۴ تست سبز / ۱ اسکیپ · دیپلوی با commitSha انجام و لاگ تمیز · گزارش + پروف برای ویوا ارسال شد.
 
-## ۰۹-۲۵ — R31.4/R31.5 (برنچ `arena/01a0d606-smc-scanner2`، PR #5، دیپلوی نشده)
-- فیکس‌های A1 تا A12، از جمله استریم 30m که مرده بود و حالا پشت `PINVAL_30M_ENABLED` و پیش‌فرض خاموش است. بررسی کد: `docs/REVIEW_2026-09-25.md`.
-- هارنس replay: `experiments/replay_live_setups.py` و workflow `replay` (بازوها در `ARMS`). گزارش: `docs/REPLAY_2026-09-25.md`.
-- فیلترهای opt-in: `HTF_TREND_GATE=4h` و `MIN_STOP_FLOOR=1` در `analysis/quality_filters.py`. این دو با هم در replay ‎+0.028R‎ دادند (base ‎−0.024‎). قدم بعدی: paper forward با این دو. `MIN_CONFIRM_BAR` (B4) رد شده و نباید روشن شود. تست‌ها: **482 passed / 1 skipped**.
-- R31.6 (راند ۴): گیت نرم `HTF_TREND_BAND=1.0` اضافه شد. توصیهٔ paper حالا این است: `HTF_TREND_GATE=4h` + `HTF_TREND_BAND=1.0` + `MIN_STOP_FLOOR=1`، با ‎+0.042R‎ و ۶۳۴ معامله. هارنس حالا سرنوشت کاندیدها (`fates__*.jsonl`) و نتیجهٔ سایه را هم می‌نویسد. علت سکوت TECHCLASSIC و پیشنهاد راند ۵: `docs/REPLAY_2026-09-25.md` §۹.
-- R31.7: ممیزی موتورهای کندل، الگو، روند و چارت (`docs/AUDIT_2026-09-25b.md`). شکستِ کهنه، خطوطِ معلق، CHoCH و سشن اصلاح شدند و ۱۶ تست اضافه شد. ابزار: `experiments/chart_debug.py` و `REPLAY_CHARTS_DIR`، روی نمونهٔ کندلِ واقعیِ `experiments/sample_klines/`. کلید برگشت: `R317_LEGACY=1`.
+## ۰۹-۲۵ شب — r28→r29e (گزارشِ نجاتِ چارت/اسپات/تأیید) · لایو `7455e53`
+**زمینه:** ویوا ۱۱ اسکرین‌شات + فایلِ اصلاحیه داد؛ سه ضربهٔ اصلی در یک روز:
+1. **زومِ هوشمند چارت (r28):** finalizeِ قبلی min/max(کندل‌ها∪ورود∪استاپ∪TP)+۶٪ بود → DASH جفت‌شده در ۵٪ بالا / WLD ۸۰٪ پر. حالا `_smart_y_window` (اشغالِ ۷۲٪، کفِ ۴·ATR، کپِ اورلی ۴۵٪·اسپن) + **قفلِ رندر از اولین تأیید** (`chart_zoom_frozen`؛ خروجِ قیمت از جعبه = بازمحاسبه = همان قانونِ TF-bump).
+2. **اسپاتِ مرده (r29):** `_spot_stamp` قبل از ارسال مهر می‌زد → یک تلاشِ ناموفق، (نماد،تایم،الگو) را می‌سوزاند؛ حالا مهر فقط بعد از موفقیت + شمارنده‌های `stamp_skip/send_fail/chart_fail/last_error` + وضعیتِ `zero_sent` در اپ.
+3. **هیچ تأییدی در 2H/4H (r29e):** هر اسکن برای همان لبهٔ شکسته signal_id نو می‌ساخت (خطِ شیبدار ۰.۲ATR دریفت → تستِ 0.08ATR lineage رد → supersede → ساعتِ تأیید صفر). فیکسِ R31.7b cherry-pick شد: `alert_lineage_key` = timestamp پیوت‌ها (ثابت)؛ تعویض فقط با >۱ATR جابه‌جایی؛ کلیدِ خاموش `R317_LEGACY=1`.
+- **اپ:** serve-while-revalidate روی `/app/api/state` (بیلدِ ~60s از مسیرِ درخواست خارج شد؛ پاسخِ آنی + یک نوسازِ پس‌زمینه) + SW bump `viva-shell-r29d` (مرورگرِ ویوا شلِ کهنه را می‌اندازد). فانلِ کشف (`scan_summary`) حالا در `payload.funnel` است.
+- **قاطی‌پاتیِ شمارهٔ TP (r29):** تخصیصِ pillها صعودیِ مونوتون (قبلاً mid-out بود). **اسمِ الگوها (r29c):** درِ شباهتِ شیبِ §29 — ضلعِ غالب >۲.۲× = TRIANGLE نه CHANNEL. **لیبل روی کندل:** فالبکِ چیپ بالای پاکتِ کندل راه می‌رود.
+- **دستنخورده‌ها:** TLBREAK full-frame edge law · PILLS-EXIST · CONFIRM-AFTER-CLOSE · تک‌طبیعه.
+- **صف (به ترتیبِ توافق):** (۱) خواندنِ پاسِ اسپات از state (اگر send_fail بالا → سمتِ تلگرام)، (۲) ادغامِ ممیزی‌شدهٔ بقیهٔ audit-0925b (P2/P5/P6 + ۱۸تست — برنچ `arena/01a0d606`)، (۳) استاپِ ساختاری 4H + سقفِ قانونی (V3 §18 — BTC/DASH پرونده‌ها)، (۴) TP ساختاری (§19 — RENDER targetِ زیرِ قیمت)، (۵) Trailing v2: BE@TP1، خروجِ کامل بعد از تاچِ TP2 + خروجِ زودتر با الگوی برگشتیِ کندلیِ تایمِ کوتاه‌تر، (۶) بک‌تستِ Entry2، (۷) Material-Event Engine (پچ J)، (۸) 15m/30m=SCALP (تصمیمِ ویوا: DAYTRADE@30m بماند یا SCALP شود؟)، (۹) آپدیت-۵۱ ($18→$28).
+- **حکمِ برنچ‌ها:** `r30-spot-mtf-chart-handoff` = محتوا کامل در main (خالی). `feat/pinval-zone-polarity` + `exp/stage4-zone-policy` = بدون merge-base (ریپوی جدا — مرج ممنوع؛ ایده → پچِ دستیِ Direction). `arena/01a0d606` = عاملِ سوم — فقط R31.7b گرفته شد؛ بقیه در صفِ ممیزی.
+- **زیرساخت:** توکنِ GitHub ۰۹-۲۵ رِووک شد → توکنِ نو در tokens.env (هر چرخشِ کانتینر: `.git/config` + pip پاک — لیست: flask waitress mplfinance arabic-reshaper python-bidi). Railway token فقط project-scoped و لیستِ پروژه ممنوع → تأییدِ دیپلوی فقط `/health` → `boot_sha` (از r27b).
+
+## 09-26 round r30 — `6ddfb3a` (LIVE boot_sha 6ddfb3afd125, boot 2026-09-25T21:15:16Z)
+Suite 484P/1skip. Bug file «باگهای 😵‍💫😵‍💫.txt» + 17 screenshots → 8 laws shipped:
+1. **NO-SOFT-INVALIDATION** (quality_engine.is_invalidated): pre-confirm invalidation only from the PROTECTIVE side — sl inside the zone never fires (LTC 69.404-in-63.6..70.9 kill); confirmed chains keep lifecycle stop.
+2. **Builder clamp** (pattern_engine._build_candidate): break-stop clamped beyond zone edge (± buffer).
+3. **OROR break-guard** (main._scenario_out_of_reach): touched/live_break_bar/JUST_BROKE + price beyond zone in direction → never «out of reach» (LTC 6.56-ATR cancel during breakout); untouched runaway still cancels (09-21 law preserved).
+4. **Tombstones** (main._tombstone_write/_hit, KV `cancel_tombstones`, TTL 12h): cancelled scenario fingerprint (sym|setup|dir|zone-mid) blocks rediscovery — the invalidate→re-find→113-msg loop is dead. Tally counter: `dup` bucket reused.
+5. **Iran clock** (messages_v7): update caption clock Asia/Tehran + «به وقتِ ایران» (was UTC).
+6. **Update wording**: «از کندلِ هشدارِ اولیه N دقیقه می‌گذرد — این پیام همین حالا ارسال شده…» (never «arrived late»); r12 test re-anchored.
+7. **Final result text-only** (send_trade_close_event): no fresh render — verdict replies under the last TP anchor (Viva: «نتیجه نهایی نیاز به چارت لایو نداره»); CPU saved.
+8. **Atomic chart+text** (_post_chart_then_text + _chat_send_lock): per-chat lock — no more interleaved captions (charts detached from messages).
+9. **30m/2h triggers** (config): TECHCLASSIC_PATTERN_TFS default = «30m,1h,2h,4h,1d» (Viva verdict: «۳۰ دقیقه و ۲ ساعته هم بد نیست، کیفیتی بهتر داره»). WATCH: CPU/scan-load on Railway with 2 extra pattern TFs.
+INFRA: repo slug = **vahidlesani/smc-scanner2** (github token in tokens.env is the vahidlesani PAT — query api.github.com/user/repos if remote lost again). pip wipe list: flask waitress mplfinance arabic-reshaper python-bidi.
+OPEN from bug file (next round): spot-pill «SCORE 0/10» vs text 8/10; AERO 15m one-candle entry/stop/TP sanity floor + PINWALL pin-bar validation; DASH 1D wedge miss (pattern-window zoom); mid-channel trade ban (APT) — CHANNEL-TRADE law not yet enforced in code; LTC-15m TARGET<LIVE class (RENDER leftover); re-measure post-r30 churn (complaint timestamps predated r29e deploy).
+
+## 09-26 round r31 — `1b5fa94` (LIVE boot_sha 1b5fa94db2df, boot 2026-09-25T22:45:10Z)
+Suite 490P/1skip. Screenshot round (PYTH T676953 + 2 TradingView):
+1. **TECHCLASSIC typo** (models.generate_viva_public_code label_map): «VIVA-TECLASSIC» → «VIVA-TECHCLASSIC» (born 09-12; tests re-anchored). New codes spell it right; old reserved codes keep their IDs.
+2. **Chart clocks = TEHRAN everywhere**: axis tick formatter + in-panel live pill + figure LIVE stamp all Asia/Tehran (UTC suffix gone).
+3. **Exact render-moment live candle** (_live_candle): forming candle displayed at datetime.now(UTC) (bucket-open read hours-old on 1H+) + probe bypasses klines cache (use_cache=False, 3-bar call) — «چارت ۱:۵۷ اومده ⟶ مهر ۰۱:۵۷».
+4. **Fresh-major-break recognition** (viva_tlbreak + pattern_engine): a substantial line (3+ touches, 30+ span) broken within `fresh_break_bars` (new cfg, default 12) is ADMITTED even when it died <10 bars after its last pivot; pattern_engine has a recognition branch (break_index fresh → STATE_BREAK without demanding a fresh displacement bar; ev gains fresh_break_recognition/bars_since_break). Ancient breaks stay history-only. Fixture lesson: pivot fixtures must be strictly-monotone sawtooths — plateaus crowd the pivot pool.
+OPEN (user asked «قبلی‌ها همه؟»): score-pill 0/10 vs text 8/10; AERO one-candle sanity floor; DASH 1D wedge miss; CHANNEL-TRADE mid-channel ban; LTC-15m TARGET<LIVE class; CPU watch with 30m/2h TFs; 0925b audited merge still queued.
+
+## 09-26 round r32 — `ce3953a` (LIVE boot_sha ce3953aa9237, boot 2026-09-25T23:40:56Z)
+Suite 500P/1skip. User night feedback (5 screenshots) — ALL fixes setup-agnostic (30m/2h stays TC-triggers-only):
+1. **Chart tool redesign** (Viva verbatim): tool column = bare TP numbers 1..5 ONLY (ENTRY/FIRST STOP/SL/LIVE pills removed); every level = faint dashed connector (0,(3,2) α.55) reaching its VALUE on the price axis (blue entry / green TPs / red stop, no words); **bottom-right Persian LEDGER**: ورود / استاپ اولیه (+✓ once trailed) / تریلینگ استاپ (— until set) / TP1..5 (+✓ on hit) / قیمت لایو — fa_chart() shaped; ledger via fig.text at ax corner (messages_v7 ~:2962).
+2. **LIVE pill removed from confirmed charts** (lives in ledger now); unconfirmed keeps it.
+3. **Info box**: publish_score snapshot (main.py sets metadata['publish_score'] before reserve) — 0/10 never printed; score hidden when both row+snapshot are 0.
+4. **Smart zoom recent-floor**: `_smart_y_window(..., recent_lo=tail(40).min)` lifts dead history below a rising market (LTC 1D candles-at-top) — ladder keeps 45% cap headroom.
+5. **Engine gates** (pattern_engine, all setups): LONG target < live impossible (≥ live+1.5·ATR; SHORT mirrored — LTC-15m class closed); height floor = 2× last trigger candle range (AERO one-candle); CHANNEL+STATE_BREAK requires ≥1.3× 20-bar avg volume (APT mid-channel ban = CHANNEL-TRADE law in code).
+6. **DASH 1D wedge**: swing max_pattern_bars 90→150 (json + dataclass).
+7. **Confirm mirror**: 30m confirm → MID channel, 4h confirm → SHORT channel (plain copy, primary keeps chain+link; Viva: extend to other setups if it reads well).
+TEST LESSON: chart-pill tests MUST monkeypatch data.fetcher.get_klines→None — a real live candle on a synthetic ~100 tape blows up _tol grouping (this was the invisible flake). Visual harness: r32_render.png (LTC-like 1D render, verified).
+APP (webapp) — QUEUED r33: «سیگنال‌های امروز» empty (feed = publishes; gates quiet ⇒ list empty — verify funnel) + RESULTS page overlapping/garbled cards (screenshots 02:51-52) needs layout repair + «سیگنال‌های امروز» design pass. PINVAL merge + Railway backup/migration = user-scheduled tomorrow. Railway cost optimization: partial (final-result no-render r30; full audit pending with store-retention).
+
+## 09-26 round r33 — `7175631` (LIVE boot_sha 7175631e0194, boot 2026-09-26T00:18:23Z = 03:48 Tehran)
+Suite 509P/1skip. Channel-screenshot forensics (03:15-03:28 Tehran):
+1. **OUT_OF_REACH ROOT CAUSE (the big one)**: distance was measured from the zone MID — FIL 4H live 1.018 INSIDE 0.889-1.05 zone read «4.59 ATR away» → cancelled; LTC 72.35 inside 63.37-72.4 → cancelled. FIXED: inside-zone → NEVER; distance to the NEAREST EDGE; r30 touched-breakout exemption kept (beyond-zone in-direction + touched → exempt). Cancel message now prints edge-based ATR.
+2. **Zone-stop heal** (`_heal_zone_stop`, wired in monitor pre-approach): pre-r30 chains still DISPLAYING an invalidation inside the zone (LTC 70.244 in 63.37-72.4) get one protective repair (LONG → below floor / SHORT → above ceiling, structural buffer) + persist + stop_clamped flag. Confirmed chains untouched.
+3. **LINE LIFECYCLE LAW (Viva verbatim 09-26)**: `fresh_break_bars` 12 → **50** (recognition + admission + retest); render `_recently_broken` floor 12 → **50** (broken line paints dotted ≥50 candles for retest visibility; replaced only by a better-ranked valid line). NOTE for next chat: user asked «چرا ۱۰ شده ۱۲؟» — the old `break_at - x1 < 10` was MIN-LIFE-BEFORE-BREAK, never post-break persistence; the real law is now 50.
+4. **RENDER IDENTITY** (Viva: «ترندلاین‌ها با تغییر زوم بهم میریزند»): patterns/trendlines detected ONCE per chain, stored in bot_kv `render_identity:{signal_id}` and REUSED on every zoom/update — never re-fitted per render. Zoom freeze also persisted: `zoom_freeze:{signal_id}` (metadata copy was lost between reloaded rows → zoom changed between messages).
+5. **«ATR 0.00» display**: distance lines now say «قیمت همین حالا داخل ناحیهٔ بررسی است» when distance=0 (approaching + final-watch builders).
+TEST LESSON: SimpleNamespace test doubles must carry symbol/signal_id if the prod path prints them; chart-pill tests must monkeypatch get_klines (r32). Re-anchored r12 (15.0 below-zone now True — symmetric edge law) and r30 tests.
+OPEN: PINVAL merge + Railway backup/migration (user-scheduled 09-27); app feed «سیگنال‌های امروز» + RESULTS page layout (r33+); Railway cost audit; spot publish-rate watch (gates still filtering 48/48).
+
+## 09-26 round r34 — `40d270c` (LIVE boot_sha 40d270cc604f, boot 2026-09-26T01:02:55Z = 04:32 Tehran)
+Suite 510P/1skip. User's 3-item night list:
+1. **Chart ledger → ENGLISH** (Viva: «با entry و مخفف انگلیسی بنویس، خوانا، نه خیلی بزرگ»): ENTRY / INITIAL STOP (+✓) / TRAILING (— until set) / TP1..5 (+✓) / LIVE, fontsize 7.6.
+2. **App RESULTS CONTROL board** («داشبورد کنترل… سود زیان به‌ازای لوریج»): payload.results = same-day closed rows with pnl_lev (price%×lev) + pnl_usd (margin×pnl%×lev/100) + usd_total/win/loss tiles; table UI (#resultsBoard, .rtable CSS) + feed card shows $ PnL. App charts were ALREADY mirror-only (zero render) — verified again, no re-render path.
+3. **Railway cost**: report file `/home/user/گزارش-هزینه-ریلوی.md` (real funnel numbers: TC 11 dup / PINVAL 3 / TLBREAK 1 filtered; SWR 0s; savings table + next 3 levers: live-probe share, retention, off-peak scan).
+MIGRATION BACKUP: `/home/user/railway_backup/export_backup.py` (fixed: POST /app/api/login JSON) + state-*.json (feed 16, chains 24, funnel) + health-*.json. DB full dump still needs Railway dashboard pg_dump at migration day.
+Re-anchored: r32 ledger test (English). Lint lesson: py-compat linter flags any string literal containing an unclosed `{` on one line (naive PEP701 check) — keep braces balanced inside test string literals.
+OPEN: PINVAL merge (user-scheduled 09-27); app «سیگنال‌های امروز» design pass + RESULTS layout polish after his review; cost lever #2 retention.
+
+## 09-26 round r35 — `33bfd5f` (LIVE boot_sha 33bfd5f05f12, boot 2026-09-26T01:22:43Z = 04:52 Tehran)
+Suite 516P/1skip. User: «قوانین امشب روی اسپات هم اعمال بشه»:
+1. **VERIFIED — spot DOES inherit everything**: both spot publishers (confirmed + ladder) render via the shared bot.messages_v7.generate_chart ⇒ Tehran clocks, 50-bar line lifecycle, render identity/frozen zoom, numeric-only pills, English ledger, smart-zoom recent floor, zone-stop heal… all already apply. Nothing to port.
+2. **CryptoCave-clean spot charts**: market=SPOT ⇒ no FVG/IFVG strips + no POI zone boxes (only the measured green box + the shape's own lines + tool). Both-side touches/breaks stay in the TEXT (ladder).
+3. **Budgets un-strangled**: SPOT_MAX_PER_DAY 2→16, SPOT_ALERT_MAX_PER_DAY 8→30. Dedup stamps + stage cooldowns remain the anti-spam layer (r29e pass was found 48 / published 0 with cap 2 + 72h/36h stamps).
+4. **On-chain REFERENCE block on confirmed spot cards**: free witness engine (analysis/onchain_free — CoinGecko markets + Fear&Greed + DefiLlama, cached 10-30min, fail-open) was built & enabled but never displayed; now renders ≤4 lines under the TP ladder («رفرنس آنچین — فقط زمینه، هرگز شرطِ سیگنال نیست»). Classic 12-16 pattern set: spot engine uses render_kit.detect_patterns (full classical set incl. wedges/flags/H&S) — touch/break of BOTH sides announced by ladder (TOUCH/NEAR_BREAK/BREAK_DOWN), signals only on bullish close above (opposite side = warn-only by construction).
+BUG LESSON: r35 first cut used _spot_clean35 before defining it AND deleted the original _rz assignment — renderer died («cannot access local variable '_rz'») on every chart; 7 tests caught it. Order matters inside the 3000-line render fn: define at FIRST use.
+Render proof: r35_spot_render.png (DOGE spot, clean view + English ledger).
+OPEN: PINVAL merge (today per user); app RESULTS polish after review; retention; TP-pill visibility when ladder far from candles (smart-zoom cap clips by design — check on real spot posts).
+
+## 09-26 round r36 — `bc100bc` (LIVE boot_sha bc100bc11f6e, boot 2026-09-26T02:06:15Z = 05:36 Tehran)
+Suite 516P/1skip. User sent 12 screenshots: 10 = bolt.new «VivaSignals Pro» reference (design-only), 2 = current app broken on phone (overlapping cards, broken chart img). User: «اپلیکیشن هم اینو میخوام در نهایت» + «انگار به اندازه موبایل اهمیت نمیده».
+1. **APP_HTML fully rebuilt (webapp_viva.py)** — mobile-first, LTR navy/teal like reference. 5 bottom tabs: **Home** (4 KPI tiles TOTAL/WINRATE/AVG PNL/CUM PNL + SVG equity curve from today's closed trades [pnl_usd when all present else pnl%] + Result-Distribution donut + Top-3 strategies + 5 recent signals) / **Signals** (chips ALL/PENDING/WIN/LOSS/SPOT with counts + compact cards, tap → detail bottom-sheet: Entry/SL/TP1/TP2 tiles, Score/Leverage/Margin/PnL%, PnL مارجین/PnL دلاری rows, chart img with onerror placeholder «نمودار این سیگنال در دسترس نیست», telegram text) / **Strategies** (rows_active cards + expandable 9-stat grid + rows_archive) / **Alerts** (Notification.permission honest status + enable button + hits history) / **Control** (PnL خالص/سودها/باخت‌ها/اسکنر tiles + results table SYM/RES/PRICE/LEV/MARGIN/USD + master-pause & per-setup switches → existing /app/api/control + funnel tally). NO absolute-positioned cards anywhere → overlap structurally impossible; all flow layout, max-width 640.
+2. Data: same /app/api/state contract, zero API changes. SW cache bumped viva-shell-r29d→r36 (only fonts/icons cached; HTML always network). Demo bar unchanged.
+3. Tests: re-anchored r32 results-board test `resultsBoard`→`ctlTable`/`ctlTiles` (r34 board now lives in Control tab). Verified via node --check on served JS + jsdom end-to-end (tabs render, chips counts, sheet opens, placeholder fires, switches toggle). Login env name: VIVA_APP_PASSWORD (not VIVA_APP_PW).
+LESSON: APP_HTML is a NON-raw Python string — `\'` inside becomes `'` (ate the escape → JS syntax error). No backslash escapes in the block now; keep it that way. Bash pkill/pgrep -f with a pattern that appears in your own command kills the shell itself — use printf-built patterns or start_process.
+OPEN (queued): PINWAL merge + Railway migration 09-27; user's live phone review of r36 may spawn polish round r37 (fonts/colors per his taste, «سیگنال‌های امروز» empty-state copy).
+
+## 09-26 round r37 — `dceeb3a` (LIVE boot_sha dceeb3a86118, boot 2026-09-26T03:11:14Z = 06:41 Tehran)
+Suite 531P/1skip (new tests/test_round37_chart_laws.py ×15). User sent 17 screenshots: zoom/tool/label/target/stop/live-clock breakage on BOTH futures + spot. Root causes + fixes, ALL unified across every setup:
+1. ZOOM «کندلها مرکز صفحه»: _smart_y_window rewritten — centers the RECENT 40-bar block (≥60% target, symmetric), includes entry/SL/TP/box overlays IN FULL (the r28 45%/side CLIP law was the «نصفه ابزار» bug — dead now); growth cap max(base, 2.2×span) keeps the r28 DASH far-stop clamp.
+2. «ترندهای ماژور/مینور رسم نمیشن»: r33 identity anchors could fall OUTSIDE the per-render lookback → lines clamped to x=0 and floated. Render window now WIDENS (≤2.2×) to cover stored anchors before cutting the frame.
+3. «برچسب ترندلاین و اسم الگوها رو بردار»: the dark right-column name pills (TRENDLINE/WEDGE_RISING/CHANNEL_ASCENDING…) deleted from the renderer — geometry still draws, words live in the text.
+4. SPOT «ابزار لانگ/شورت نداره؛ فقط باکس سبز»: _is_spot flag set at render top → the whole futures tool (fills, dashed guides, pills, axis tags, INFO box, bottom ledger) is SKIPPED on market=SPOT; green box anchors at the shape's UPPER EDGE AT THE LAST CANDLE → up to spot_box_top (live-anchored / descending boxes impossible), panel clamps REMOVED (they squashed it to a 2% sliver), NO arrow inside. Spot keeps: clean tape + shape lines + DEMAND/FLIP chips + corner notes + LIVE ladder tag.
+5. LIVE clock «ساعت لایو درست نیست»: _live_clock + figure _live_stamp = Tehran render moment NOW (bucket stamps froze on 12h/3d/1w); NEW _synthetic_live_candle — 3d/1w only (aggregate TFs have no forming bucket by round-15 law) synthesize from a 1h probe; other TFs keep the r12 closed-tape honesty.
+6. «تارگت‌ها احمقانه» (ENA 1d +9.8%): tc_projection is NOT drawn when it outruns max(ladder)+1% or the TF sanity band (15m 5% … 1d 15%). Pills (the trade's real targets) unchanged.
+7. SPOT stops «احمقانه» (DOGE −10.00% artifacts): scan_spot_symbol used min(swing, pattern lower edges) → every stop dragged to the pattern base → cap printed mechanical −10%. NEW spot_risk_levels(): stop = minor swing only (10% cap law unchanged); targets anchor on real overhead resistance (last-120-bar highs inside 1.15×path) with ATR floors + monotone guarantee; raw fractions only as fallback.
+PROOFS: /home/user/r37_futures_proof.png (tool whole, no name pills, stamp=now) + /home/user/r37_spot_proof.png (box-only, no tool/arrow).
+NOTE for his review: r29/r33 freeze laws still apply — chains already frozen keep their frozen zoom until price exits the box; every NEW chain/render uses the r37 engine.
+OPEN: his phone re-check; PINWAL merge + Railway migration 09-27.
+
+## 09-26 round r38 — `6a73d1c` (LIVE boot_sha 6a73d1cbfe5a, boot 2026-09-26T03:31:35Z = 07:01 Tehran)
+Suite 537P/1skip (new tests/test_round38_about_brand.py ×6). User: owner brand in the app + an About section:
+1. REAL logo (assets/vivasignals-logo.png, the golden diamond = channel avatar) now served at /app/icons/brand-logo.png and used in: shell header (replaced the 🎯 placeholder), a NEW Home hero card (logo + VIVA-MON.labs + «Macro & Political-Economy Strategy · SMC Scanner v7»), and the About page hero.
+2. Header title → **VIVA-MON.labs** («VivaSignals Pro · SMC Scanner v7» subtitle).
+3. NEW 6th nav tab **About** (معرفی): bilingual owner bio — وحید لساتی «ویوا»، کارشناس و تحلیلگر اقتصاد کلان و استراتژیست اقتصاد سیاسی، تریدر، تحصیلات مدیریت بانکی دانشگاه شاهرود، فعال از ۱۳۹۶ در سهام و کریپتو / EN mirror (Shahroud University, since 2017) + chips; project blurb (EN + FA: private SMC scanner, modular engines, 500+ tests); FORMAL bilingual IP notice (trademark VIVA-MON.labs/VivaSignals, golden-diamond logo, app + GitHub repo exclusively Vahid Lesani's; no reproduction without written consent) + © 2026 footer.
+4. SW cache r36→r38, app-version R38. About verified end-to-end via jsdom (6 tabs, 3 cards, images) + live prod (logo 200 = the real 73,817-B PNG).
+OPEN: his phone review of r37 charts + r38 brand; PINWAL merge + Railway migration 09-27.
+
+## 09-26 round r39(+r39b) — `bb1e2bb`/`f8817ac` (LIVE boot_sha f8817acfadac, boot 2026-09-26T11:25:33Z = 14:55 Tehran)
+Suite 545P/1skip (new tests/test_round39_app_freshness.py ×8). His morning report + About corrections:
+1. **APP NEVER UPDATES** («کلا ۲۷ پوزیشن... دیگه آپدیت نمیشه»): root causes found — (a) the PWA shell had NO Cache-Control (old HTML/JS could persist), (b) state polling relied on the 60s interval only. Fixes: Cache-Control no-store+must-revalidate on /app, /app/login, no-store on /app/api/state; JS now ALSO reloads on visibilitychange (resume) and pageshow (persisted nav). SW cache r38→r39, app-version R39.
+2. **CONFIRM CHART NEVER APPEARED**: /app/api/chart was MIRROR-ONLY (Telegram file_id or 404) — any signal whose app_chart|sid KV missed rendered nothing, ever. Fix: mirror-FIRST (unchanged), then a bounded RENDER FALLBACK: signals row → _candidate_from_row (+spot laws log_scale/spot_measured_box/engine for spot rows) → get_klines(view_tf, 190, cached) → generate_chart (r33 identity/freeze KV makes it faithful) → 30-min cache. Verified live: viva-pinv-AAVEUSDT-1h chart = 200, real PNG, tool+ledger+live-now stamp.
+3. **r39b**: price-axis tags sat ON the ladder numbers («159.9210.00») — now placed under their number (x=1.052, va=top).
+4. **About copy**: surname «لسانی» (لساتی everywhere purged), «مالکیت تجاریِ ایده» added to the IP notice (FA+EN), «در حال توسعهٔ مداوم» in project + IP cards, NEW formal bilingual Disclaimer card: no financial offer/solicitation to any person/entity; signal-use losses entirely the user's responsibility; project & developer assume no legal liability.
+5. **Flaky test root-caused**: test_round23 law_guard hit LIVE BTC via get_klines inside quality_engine (green offline at boot, red once the sandbox had network + BTC dumped) → autouse fixture get_klines→None (same isolation law as chart pills).
+LIVE PROOF at 14:53-14:55 Tehran: /app no-store headers ✓, state 53 rows ✓, confirm chart 200 ✓.
+OPEN: his device review of r39 (feed freshness + confirm charts); PINWAL merge + Railway migration 09-27.
+
+## 09-26 round r40 — `cc1abbb` (LIVE boot_sha cc1abbb8a41a, boot 2026-09-26T14:06:08Z = 17:36 Tehran)
+Suite 556P/1skip (new tests/test_round40_laws.py ×11; ladder geometry tests re-anchored to 3 pills). His evening report + 20 screenshots; diagnosis FIRST (I viewed the charts myself — SEI/POL/TAO/PYTH), then patch-only fixes, spot + all five setups:
+1. **CHART-FILL / «زوم هوشمند رو کالیبره بکن»**: ROOT CAUSE FOUND — r37 _smart_y_window guaranteed ONLY the recent-40 block + overlays; on a pumped frame (SEI/POL 15m) the early candles sat BELOW the window and rendered INVISIBLE → the left half of the PRICE panel looked empty while VOLUME painted full (panels share xlim, not ylim). Fix: the whole rendered tape is now a HARD BOUND (ylo=min(...,c_lo), yhi=max(...,c_hi) before AND after the overlay cap); high volatility → axis grows (shorter candles), the tool still fits, nothing sticks out; trendline/pattern geometry recalibrates because y now always covers the tape its anchors live on. Pills number 1..3 only. Info box «PATH x% → 3 PARTS».
+2. **50-candle pivot-age cap «نباید ترندهای معتبر رو بکشه»**: three gates — (a) pattern_engine _line_alive 0.30·n (~49 bars on 164) → max(90, 0.85·n); (b) range/edge newest-pivot recency 0.30·n → max(40, 0.75·n); (c) render_kit HTF pattern window 170 → 240 bars. viva_tlbreak fitters had NO 50-bar pivot-age cap (its liveness keys off recency_bars=40/edge_atr=8 only when require_alive — unchanged).
+3. **CONFIRM-GATE «قبل از بریک تأیید نشه؛ لانگ روی ترند شکسته‌به‌پایین ممنوع»**: root cause — the r12 BREAK-SIDE veto only saw lines within 3·ATR of price; a FRESHLY broken line is walked away from fast → skip → LONG confirmed on a down-broken support. Fix: before the relevance filter, the last 6 closed bars are scanned — any close through a LOW-side line below it vetoes LONG (mirror SHORT) with BREAK_SIDE_MISMATCH. Own-direction closes stay allowed (break/retest lane). INSIDE ranges/channels the INTERNAL edge-entry lane is now restricted to ALBROX + pin family (PINVAL/PINWALLQ) — TECHCLASSIC/TLBREAK inside a range fall to the containment gate (INSIDE_PATTERN_NO_BREAK).
+4. **PINWAL merge «فقط PINWALL LEGACY بمونه»**: PINWALL_QUALITY_DETECTORS = [] (no new PINWALLQ candidates; budget saved); detect_pinbar_zone now folds the Q audit (anatomy/location/context/bias, +1 score when ≥78) into the classic pin as evidence + metadata pinwall_quality. detect_pinwall_quality and all legacy display branches stay for old rows.
+5. **LADDER «TP4 و TP5 حذف بشه»**: build_ladder splits the path into THREE equal thirds; targets=[⅓,⅔,3/3], TP3 IS the final target; weights (40,30,30); trail_stops/band_floors/BE laws unchanged; internal-lane tp1 now path/3; ledger prints 3 TPs. WHY the tool correlated with wrong-side confirms (his question): it did NOT cause them — the confirm bug was the veto gap in (3); the 5-pill ladder only made bad confirms LOUD (5 targets, tall stack). Report delivered in-chat.
+6. **Trend-engine debug**: major/minor chains = viva_tlbreak fit_validated_line (render clone in render_kit, identity KV r33); the «ترندها دیده نمیشن» family traces to the r37 window-widen + (2) age gates — both fixed; live POL re-render verified: whole tape edge-to-edge, shorter ladder, nothing clipped (r40_live_chart_POL.png + r40_zoom_proof.png).
+LIVE PROOF 17:43 Tehran: /health cc1abbb8a41a ✓; login+state no-store ✓ (55 feed rows); /app/api/chart POLUSDT 200 = 3600×2040 PNG, viewed ✓.
+OPEN: his device review of r40; older opens: ENA-15M FIRST-STOP-above-ENTRY2 path; SEI/AXS 8-min dedupe; UNI-3D INSIDE-RANGE co-display; Railway migration 09-27.
+
+## 09-26 round r41(+b/c/d) — `934c573`→`25a85da` (LIVE boot_sha 25a85daa1e52, boot 2026-09-26T15:20:34Z = 18:50 Tehran)
+Suite 567P/1skip (new tests/test_round41_app_live.py ×11). His message after reviewing r40 charts («مولتی تایم واقعی ریفاین واقعی»):
+1. **APP LADDER = TELEGRAM DATA VERBATIM** («نردبان اپ اشتباه میشه … از دیتای تلگرام استفاده کنه»): ROOT CAUSE — the chart fallback rebuilt a FAKE 2-pill ladder from raw tp1/tp2 columns + ±0.1% synthetic zone. Fix: _candidate_from_row now restores the PUBLISH-TIME build_ladder state (row.target_state_json: targets/weights/entry/original_sl) VERBATIM + the real entry_zone columns; legacy rows fall back cleanly.
+2. **REAL-LIVE APP, both perpetual + spot** («بدون تاخیر»): NEW /app/api/version = ONE cheap SQL fingerprint (counts/max timestamps of signals); JS polls it every 10s and pulls the heavy state ONLY on change; 5-min full reload fallback kept; no-store everywhere. Railway CPU stays flat.
+3. **LIVE CARDS + TOUCH NOTIFICATIONS** («کارت هرکدام تیپی‌ها و قیمت لایو و استاپ … اگر تاچ شد نوتیف بیاد»): cards now show ENTRY / SL (SL TRAIL marker once the trailing ratchets) / TP1..TP3 with ✓ per hit / LIVE price. NEW /app/api/prices = the bot's OWN venue feed (r41d: get_ourbit_tickers like main._live_price_map; binance/bybit direct stay CloudFront-blocked on the box — r41b/c found it the hard way), 10s in-process cache, fail-open. JS price poll (10s) fires toast + Notification on EVERY TP touch and stop hit, exactly once per event per signal.
+4. **MTF/refine parity**: verified wired — TLBREAK watch (htf 4h/1h), v7 common lane incl. TECHCLASSIC (context_df), pin family (4h/1h), and r41 wired the ONE missing setup ALBROX (was safety-net-only, no HTF). Spot = its own engine across 4h/8h/12h/1d/3d/1w (multi-TF intrinsic) + its measured-box renderer; safety net adds trigger-TF zones at chart time.
+5. **پینوال یکی شد؟ YES** — r40 #4: PINWALLQ no longer emitted; the Q quality audit (anatomy/location/context/bias) rides the classic PINVAL; surviving brand = PINWALL LEGACY only.
+LIVE PROOF 18:55 Tehran: /health 25a85daa1e52 ✓; prices 6/6 symbols real values ✓; version fingerprint stable+no-store ✓; POL chart 200 = 412KB render w/ publish ladder ✓; shell R41/viva-shell-r41 ✓.
+OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages kept as-is (app cards already minimal, detail page holds the full text); older opens: ENA-15M path, SEI/AXS dedupe, UNI-3D co-display, Railway migration.
+
+## r42 (2026-09-26 شب) — بهداشت پیام‌ها · کامیت `9a69200` (pushed) · **دیپلوی بلاک: توکن Railway منقضی**
+- «اهداف ۴ و ۵ از همه پیام‌ها حذف + درصدهای خروج اشتباه» → جدول وضعیت TP (`_tp_status_lines`) حالا نردبان واقعی ۳ پله‌ای با خروج‌های واقعی 40/30/30 را نشان می‌دهد (وزن‌های رویدادِ مانیتور اگر باشد برنده است)؛ تیبلِ مردهٔ 35/35/20/5/5 پاک شد؛ متادیتای چارت چرخهٔ عمر هم [40,30,30].
+- «چند پیام تکراری» → ریشه: راچتِ کفِ حفاظتی در هر چرخهٔ مانیتور رویداد PROFIT_FLOOR می‌ساخت (ETHFI 19:19/19:25 + خروج‌هشدار همان دقیقه‌ها). حالا `send_trailing_note` فقط نخستین فعال‌سازی هر سطح TP و جهش‌های ≥0.20٪ قیمت را به تلگرام می‌دهد؛ ریز-راچت‌ها فقط در اپ (KV کلید `floor_note|sid|hit`، fail-open).
+- «جارت ثابت بکسگتال» (موجی‌بیک روی گوش او) → `_fa_guard`: کدپوینت‌های Presentation-Form عربی (U+FB50–FEFF) از لیبل‌ها حذف (NFKC)؛ لیبل منطقی دست‌نخورده می‌گذرد.
+- «اسپات قالب مختصر فیوچرز» → `send_spot_alert`: دو پاراگراف هندسه/معنا در «یک» خط تحلیل ادغام شد؛ شاهد حجم یک‌خطی ماند.
+- تست: `tests/test_round42_laws.py` ×7؛ مجموع 574P/1skip؛ انکر r35 به فرم ادغام‌شده به‌روز شد.
+- **مانع:** `.railway_token` → Unauthorized (rotated?)؛ ریل‌وی می‌خواهد توکن تازه از Account Settings → Tokens. تا آن موقع لایو روی r41d (`25a85da`) می‌ماند.
+- **افزودهٔ ۲۶ سپتامبر شب:** توکن Railway چرخید → `.railway_token` (محلی، هرگز کامیت نمی‌شود) = Team/Workspace token؛ نکته: `whoami` با توکن تیمی همیشه Unauthorized می‌دهد — تشخیصِ اشتباه نده؛ اعتبارسنجی درست = کوئری GraphQL `projects{edges{node{id name}}}` → پروژهٔ «gleaming-sparkle» (d040648e). دیپلوی با push به گیت‌هاب خودکار است؛ توکن فقط برای `railway up` دستی/SSH لازم است.
+
+## r44 (2026-09-26 نیمه‌شب) — قانون «هر چارتی تایمِ خودش»
+- گزارش او: چارتِ هشدار ابتدایی کندل ۱ ساعته داشت ولی تیترش «15M» (تایم تریگر) می‌زد.
+- ریشه: تیترِ روی خودِ چارت (`_tf_disp`) همیشه از فیلد `trigger_timeframe` پر می‌شد؛ نوارِ واقعیِ رندرشده هیچ‌وقت خوانده نمی‌شد (گلوگاه: مرحلهٔ بالاتر «عدم تغییر ابزار» / span).
+- رفع: `_infer_chart_tf` تایمِ واقعی را از فاصلهٔ میانهٔ کندل‌های همان فریمی که به رندرر می‌رسد می‌خواند (شامل 3d/1w تجمیعی اسپات)؛ `_chart_tf_token` مُهر تیتر می‌سازد — تایم خودِ چارت، و اگر با تریگر فرق داشت: «1H (TRIG 15M)». مسیرهای lifecycle (chart_view_tf) همچنان برنده‌اند.
+- تست: `tests/test_round44_chart_tf_law.py` ×7؛ انکر ۰۹-۱۴ در test_signal_guards به فرم r44 به‌روز شد (قصد قدیمی: تایمِ الگو هرگز تیتر را نسازد — محفوظ). مجموع 587P/1skip.
+
+## r46 (2026-09-27 سپیده‌دم) — آتش‌نشانیِ «کل سیستم بهم ریخت» · مرتب‌سازی با دادهٔ واقعی
+- تحقیق با GraphQL ریل‌وی + اتصال مستقیم به پستگرس (Supabase): **هیچ داده‌ای پاک نشده** — جدول signals ۳۰۵۰ ردیف دارد (۱۳۱۹W/۹۷۹L/۴۴۵ pending)؛ تأییدها هر ساعت ۱-۶ عدد جریان داشته (صفر نشده)؛ کرش‌لوب نیست (errors=0 در همه اسکن‌ها).
+- ریشهٔ «اپ خالی شد»: ژورنال اپ فقط «از نیمه‌شب UTC» بود — ۳۰ دقیقه بعد از نیمه‌شب همهٔ سرتیترها صفر می‌شد (۴ سیگنال!). r46: پنجرهٔ اپ ALL-TIME شد (آخرین ۱۲۰)؛ جدول استراتژی‌ها و هیت‌ها هم بدون کات‌آف؛ متن خالی «ثبت نشده» به‌جای «امروز».
+- ریشهٔ «آپدیت ۳۰»: شمارندهٔ آپدیتِ زنجیره بی‌سقف بود (قانون UPDATE-SPAM(3) اعمال نشده بود). r46: بعد از سومین آپدیت، زنجیره ساکت می‌شود (تأیید/استاپ/نتیجه همچنان می‌آید).
+- «روزانه جمع‌تر»: lookback چارت 1d از ۹۶ به ۱۷۶ کندل (و 4h به ۱۴۰) — رفرنس کریپتوکاو.
+- **کشف مهم کانال‌های سوئینگ (r32):** متغیرهای CHAT_ID_TF_15M_1H / CHAT_ID_TF_2H_4H / CHAT_ID_TF_1D در env دیپلوی **وجود ندارند** (فقط CHAT_ID_RESULTS هست) → آینهٔ کانال‌های ۳۰دقیقه/۲ساعته/روزانه بی‌صدا خاموش است. رفع: باید شناسهٔ سه کانال را کاربر بدهد یا vars اضافه شود (از GraphQL variableUpsert هم می‌شود).
+- «شناسایی صفر»: دروازه‌های chain_license_cap (سقف ۳ زنجیره/نمود/ستاپ/۲۴ساعت) و same_zone_quiet طبیعی کار می‌کنند؛ new در اسکن‌ها ۰ تا ۹ — نوسان بازار شبانه، نه خرابی.
+
+## r47 (2026-09-27 بامداد) — «TOHOM» انجین تأیید زودهنگام · نامش را خود کاربر انتخاب کرد
+- دیکتهٔ او: «انجین هوشمند ورود قبل از کلوز تایم تریگر — دقیقاً شبیه خروج هوشمند، برای ورود از تایم پایین‌تر». نام: توهم (TOHOM) تا اگر بد شد بگوید «برگردون».
+- قانون پیاده‌شده (analysis/tohom.py): در میانهٔ کندلِ تریگر، N کلوزِ بستهٔ تایمِ پایین‌تر (نیم‌نردبان: 1d→4h، 4h→1h، 2h→30m، 1h→15m، 30m/15m→5m) — N=3 عادی، N=2 با اطمینان بالا (اسکور≥۹ و حجم≥۲×) — همهٔ کلوزها یک‌جهت + کلوز آخر از لبهٔ شکستِ همان قانونِ یک-کلوز (پین→خطوط viva→خط major→لبهٔ ناحیه) + حجم ≥۱٫۳× میانگینِ ۲۰کندلِ قبل و بالاتر از کندلِ قبل + یک الگوی موافق (پین‌بار/انگلفینگ/قدرتی). Fail-closed کامل؛ TOHOM_ENABLED=0 = قانونِ خالصِ یک-کلوز. هُک: main.py بعد از تلاشِ late-bound، آخرین شانس تأیید.
+- کارت تأیید یک ردیف «⚡ تأیید زودهنگام توهم: …» می‌گیرد (از متادیتا؛ کارت عادی دست‌نخورده).
+- مسیریابی کانال‌ها طبق دیکتهٔ جدید: PINVAL/PINWALL→کوتاه‌مدت، TECHCLASSIC→بلندمدت، ALBROX/TLBREAK→دوتایی (میان+بلند). env: CHAT_ID_TF_15M_1H / _2H_4H / _1D — هنوز شناسهٔ کانال‌ها را کاربر نداده؛ بدون env بی‌صدا می‌گذرد.
+- اسپات: محور قیمت LOG شد (کریپتوکاو) + lookback چارت برای 8h/12h/3d/1w اضافه شد (اسکنِ این تایم‌ها فاز بعد).
+- دادهٔ واقعی ۲۶ ساعت: ۶۳ تأیید واقعی؛ ۵۶ زنجیره در انتظار کلوز تریگر (AKE/ETH/RENDER روزانه…) — دقیقاً دردِ TOHOM. جواب «چرا تأیید نداد»: قانون r40 منتظر کلوزِ کندل تریگر می‌ماند؛ TOHOM همان را وسط کندل می‌گیرد.
+- تست: test_round47_tohom.py ×11 (مجموع 605P/1skip).
+
+## r48 (2026-09-27 سحر) — لاین‌های ۳۰د/۲س + نقشهٔ نهایی کانال‌ها + لگاریتم هوشمند
+- **اصلاح خطای دیروز:** CHAT_ID_TF_15M_1H / _2H_4H / _1D از اول در env بودند (فیلترم «SWING» می‌گشت!) — هر سه کانال زنده بودند؛ سه کانالِ تغییرنام‌شدهٔ کاربر (Pival / AlboroxAndTLB / TECH) همان‌ها هستند.
+- **نقشهٔ نهایی (دیکتهٔ 04:50):** جداسازی با «ستاپ» نه تایم: PINVAL/PINWALL→SHORT(TF_15M_1H=Pival) · TECHCLASSIC→LONG(TF_1D=TECH) · ALBROX+TLBREAK→MID(TF_2H_4H=AlboroxAndTLB، تنها کانالِ دوسطاپی). آینهٔ TF-محور r32 حذف شد (دوباره‌کاری نمی‌زند).
+- **تریگرهای جدید ۳۰دقیقه/۲ساعته برای ۴ ستاپ فیوچرز:** SwingEngine چهار جریان شد (30m/1h/2h/4h با پروفایل‌های (2h,1h,30m)/(1d,4h,1h)/(1d,4h,2h)/(1d,4h,4h))؛ PINVAL SWING هم همان ۴ تایم. همان موتورها/فرمول‌ها («دوباره اسکن نشه»)؛ کندل 2h از ریسَمپل 15m×8 (صفر کال اضافه)؛ باندلِ discovery هر ۷ فریم را حمل می‌کند؛ انقضا: 30m→48h، 2h→168h.
+- **لگاریتم هوشمند (دیکتهٔ 04:47):** اسپات همیشه LOG؛ فیوچرز LOG فقط وقتی span پنجره ≥ ۳۰٪ (تایم کوتاه بدون تفاوت، خطِ مظلوم نجات).
+- ۸ساعت به بالا: هنوز سؤالِ دقیق از کاربر باز است (تریگر اسکن اسپات یا فقط نمایش؟) — via ask_user پرسیده شد.
+- تست: test_round48_lanes.py ×9 + انکرهای r32/r47 به نقشهٔ نهایی (مجموع 614P/1skip).
+
+## r49 (2026-09-27 صبح) — کپشنِ یکنواخت چارت هشدار
+- دیکتهٔ 05:43: «کپشن چارت پینوال رو برداری مثل بقیه بشه — همه شبیه هم باشن، هر ستاپ واسه خودش».
+- ریشه: در send_educational_setup شاخهٔ PINVAL کپشنِ مفصلِ خودش را داشت (ناحیه/قطبیت/قوانین روی عکس) در حالی که بقیه قالب استاندارد چهارخطی می‌گرفتند و آن اطلاعات در متنِ پیام هم هست.
+- رفع: شاخهٔ ویژهٔ پین‌وال حذف شد؛ همهٔ چارت‌های هشدار قالب واحد: «📚 نماد • استایل • ستاپ / ⛔ تأیید ورود نیست / 🕓 ایران / 🆔».
+- تست: test_round49_uniform_caption.py ×2 (مجموع 616P/1skip).
+
+## r50 (2026-09-27 صبح) — پیوتِ بی‌نویز + تراکم کریپتوکاو + لگاریتم
+- **فیلتر شدوی نویز (دیکتهٔ او):** `pivots(indicators)` پارامتر `wick_noise_filter` گرفت: شدویی که ≥۲× میانهٔ شدوهای ۲۰کندلِ اخیر و ≥۱× بدنه و ≥۰٫۵× ATR14 باشد → نقطهٔ لنگرِ خطِ ترند/الگو = اکسترممِ بدنه (anchor="body"، raw_price حفظ می‌شود). فقط ۳ سایتِ fit در viva_tlbreak فعالش کردند (trade+render+watch). پیوت‌های ساختاری (سوئیپ/BOS/استاپ) خام می‌مانند — سوئیپ یعنی خودِ شدو. fail-open روی فریم‌های بی open/close. نسخهٔ اول (۱٫۵×بدنه+۰٫۳×ATR) دو تست رفتاری را شکست (کاتل‌های بدنه‌کوتاه سینتتیک) → با معیارِ پرت‌بودنِ نسبی اصلاح شد.
+- **تراکم کریپتوکاو (سنجش واقعی با FFT/خوشه روی ۷ رفرنس):** پراکندگی ۹۰-۱۹۰ کندل (عرض پنجرهٔ مرورگر متغیر)؛ علامت مشترک: نوار متراکم ~۱۵۰-۱۹۰ + پنل خالی بزرگ + LOG. lookback چارت: 4h→190، 8h→176، 12h→160، 3d→150، 1w→140 (1d همان 176). باندل اسپات عمق‌ها را می‌گیرد (4h:200، 1d:1000، 1w:140≈۹۸۵ کندل روزانه = یک کال). SPOT_TRIGGERS از قبل 4h/8h/12h/1d/3d/1w داشت (پاسخ «لاین‌های اسکن»: لاین‌ها بودند، تراکم نبود).
+- **اقتصاد لنگر واحد (پیشنهاد ۸ساعت به‌جای همه):** رد شد با استدلال — ۸ساعت→۴ساعت تقسیمِ کندل می‌خواهد (غیرممکن در OHLCV)؛ 1d از ۸ساعت = صفحه‌بندی ۳کاله. معماری فعلی (۴ساعت+۱د مستقیم، بقیه مشتق) بهینه است.
+- **LOG-aware:** fit ترندها از r16 در فضای log است (گارد log_fit_min_span)؛ روی محور log، سگمنتِ ۲نقطه‌ایِ matplotlib صفحه‌مستقیم رندر می‌شود (ترنسفورم فقط روی رأس‌ها) → خطِ log-fit روی چارت log صاف است؛ مستند شد. انکرِ بدنه‌ای روی log هم بصری‌تر است.
+- تست: test_round50_wick_and_cove.py ×6 + انکر r47 (مجموع 622P/1skip).
+
+## r51 (2026-09-27 شب) — قانون مولتی-تایم‌فریم + قانون آپدیت-رویداد + محور قیمت
+- دستهٔ جدید فیدبک (۱۵ فایل، WLD/RAY/ADA/FIL/DASH). شش قانون او:
+- **① مولتی-تایم‌فریم (مهم‌ترین):** «باید توی هر تایمی که میره ترندلاین ها و الگوها رو دقیق نشون بده … در همه ستاپ ها باید اصلاح بشه». ریشه‌یابی: پیوت‌های ذخیره‌شدهٔ detect-tape وقتی روی فریمِ تایمِ دیگر/کوتاه‌تر رندر می‌شوند با searchsorted به x≈0 له و بادبزکِ خطوط قرمز درهم می‌سازند (WLD 2H/1H/30m، RAY 1H) و خطِ پایینِ کانال حذف می‌شود (tz-crash کل overlay را می‌کشت).修复: bot/messages_v7.py — `_native_patterns_for_frame` (اگر هر انکرِ ts بیرونِ بازهٔ فریم باشد → بازفیتِ detect_patterns روی نوارِ خودِ فریم؛ کشِ (chain,tf,bar) با سقف 512) و `_viva_points_native/_refit_viva_points` (دو خطِ VALID از نو روی تیپِ همین تایم؛ **نتیجه داخل md بازنویسی می‌شود** چون حلقهٔ رسم از متادیتا می‌خواند — بدون بازنویسی، همان خطای قبلی). r33 «بازفیت ممنوع» اکنون per-TF است: داخلِ یک کندل هیچ بازفیتی نیست.
+- **② فوریتِ تأیید:** DASH T242271 از 63 به 74 رفت و برگشت؛ تنها آپدیتش بعدِ ۱۶۷۰ دقیقه «هنوز در ناحیه» بود. علت: `_candidate_market_frames` فقط داخل `_tf_fetch_window` (پنجرهٔ duty-cycle) فریم می‌گیرد. قانون جدید main.py: لاین‌های ساختاری (TLBREAK/TECHCLASSIC/ALBROX) که قیمتِ زنده‌شان از لبهٔ شکست عبور کرده (`_structural_break_edge`: tl_line/viva_breakout_line، وگرنه لبهٔ سمتِ سناریو) بلافاصله فریمِ تأیید را fetch می‌کنند — یک bypass / ۱۰دقیقه / زنجیره (break_bypass_at).
+- **③ قانون آپدیت-رویداد:** «محدودیت هم نداره آپدیت .. اما فقط زمانی آپدیت بیاد که ورود تایید بشه یا ابطال بشه یا هشدار نهایی و آمادگی ورود باشه» — ضربانِ پایانِ کندل (r14/r28) کامل حذف شد؛ آپدیت فقط: تأیید / ابطال‌لغو / ⚡ عبورِ زنده / readiness نهایی. انکرهای قانونِ قدیم در test_round12/round28/guards به قانونِ حذف به‌روز شد.
+- **④ محور قیمت:** سایتِ LOGِ r48 (اسپات/span≥30%) فرمتِ ساده را دور می‌ریخت → 10⁰ و 2.8×10⁻¹ روی FIL/ADA/WLD. اکنون بعد از هر set_yscale فرمت‌دهِ `_axis_price` + NullFormatter برای minorها دوباره سوار می‌شود؛ `_axis_price` زیرِ ۱۰۰۰۰۰۰۰۰۰ بدون صفرهای انتهایی (0.2338/0.2352 دیگر دیوارِ رقم نمی‌سازند).
+- ⑤ تعداد کندل اسپات: منتظر اعدادِ دقیقِ خودش («خودم بهت میگم»). ⑥ بازفیتِ الگو در LOG خودش log_fit می‌گیرد (audit r50 ِباز است).
+- تست: test_round51_per_tf_and_confirm.py ×11 + ۳ انکرِ قانون (مجموع 633P/1skip). اسموکِ بصری: رندرِ ذی‌وزیر WLD-مانند — بادبزک حذف، خط روی پیوت‌های خودِ فریم، محور دهدهی.
+
+## r52 (2026-09-28 نیمه‌شب) — دیکتهٔ اعدادِ کریپتوکاو + فروشگاه تاریخچه + قانونِ غیرخفه
+- دستور verbatim: «ببین و بخون و دقیق انجام بده». چهار جبهه:
+- **① اعدادِ خودش (خداحافظ اندازه‌گیری):** «خودم بهت میگم» → نقشهٔ رندر: 4h/8h→۱۷۰ (بازهٔ ۱۴۰-۲۰۰)، 12h/1d→۲۱۰ (۱۷۰-۲۵۰)، 3d→۳۰۰ (۲۵۰-۳۵۰)، 1w→۲۱۰ (۱۷۰-۲۵۰)؛ فریم‌های کم‌تاریخچه هرچه دارند. پنجرهٔ رندر اکنون سقفِ سخت است — **widenِ r37 بازنشسته شد** (چارت سوزن‌سوزنِ یک‌ماههٔ SUI دیگر ممکن نیست؛ انکرهای عمیق‌تر از پنجره به r51 بازفیت per-TF می‌روند). fetcher: 8h→170×2، 12h→210×3 (تیپ 4h یک کال 630تایی)؛ main bundle: {4h:200, 8h:200, 12h:210, 1d:210, 3d:300, 1w:210}.
+- **② فروشگاه تاریخچهٔ عمیق (دستور: «فقط یکبار اسکن بلند مدت روزانه بکنه و ذخیره کنه … مصرف ریلوی کنترل بشه»):** data/history_store.py — دیلیِ هر نماد یک‌بار paginated تا ~۱۵۰۰ کندل کشیده و در bot_kv (پستگرسِ ساپابیس در پرود) ذخیره می‌شود؛ اسکن‌های بعدی فقط دُمِ بسته‌شده را merge می‌کنند (+ مموری-کش ۱۰دقیقه‌ای). get_market_bundle برای daily_need>900 از فروشگاه می‌خواند؛ fail-open کامل. 1w×210 ≈ ۱۴۷۷ دیلی — یک‌بار برای همیشه.
+- **③ قانونِ غیرخفه (خشمِ 00:57):** «گیت گذاشتی باید پولبک بزنه بعلاوه bos … اصلا نباید شرط تایید باشه — پوزیشن بعدی». quality_engine: مسیرِ ready ماشین (Retest→Rejection→Micro-BOS) دیگر تأیید نمی‌دهد و نمی‌بندد — فقط `pullback_entry_ready` (نقشهٔ ورودِ بعدی) ثبت می‌شود؛ fast-laneِ کلاسترِ S3/S4 هم حذف شد. تأییدِ این سیگنال فقط: اولین کلوزِ معتبر فراتر از خط/لبه (one-close) یا توهم. پیامِ انتظار: «در انتظار اولین کلوز معتبر… پولبک و BOS شرطِ تأیید نیستند». عنوانِ ستاپ: «تأیید با اولین کلوز (توهم هوشمند)»؛ جملهٔ آموزشی: «پولبک/BOS فقط نقشهٔ ورود پوزیشن بعدی».
+- **④ چارت‌های خرابِ سیگنال‌های دیروز — سه ریشه:** (a) لیبلِ تایم: `_infer_chart_tf` ستون timestamp می‌خواست ولی فریمِ رندر index-محور است → از r44 تاکنون همیشه fail بود؛ حالا index می‌خواند (SUI واقعی: تیپ 4h با لیبل «15M»!) و `_chart_tf_token` تیپ را بر متادیتا مقدم کرد. (b) محور LOG زیرِ دهده: LogLocator(subs='all') + فرمت ساده + minorهای خاموش در یک کیت مرکزی `_log_axis_decorate` روی هر ۳ سایت set_yscale (SUI: فقط 1.0 و خط‌چین‌های لخت!). (c) عرضهٔ SUI به‌عنوان نمونه بازسازی شد: ۲۰۰ کندل 4h متراکم، محور 0.8/0.9/1.0/1.3، لیبل «4H (TRIG 15M)» ✓.
+- تست: test_round52_dictation.py ×9 + انکرهای r37/r44/r46/r47/r50/r51/guards/formats به قوانین جدید (مجموع 642P/1skip).
+
+## r53 (2026-09-28 سحر) — قانونِ نهاییِ سه کانال + عمقِ مانیتورِ اسپات + پادزهرِ پوزیشنِ شبح
+- سه دیکتهٔ نیمه‌شب:
+- **① مسیریابی نهایی (سومین بار — «گفتی انجام دادی اما انجام نشده»):** ریشهٔ قاطی‌پاتی: پستِ اصلی هنوز tf_channel_id(تریگر) بود + mirrorِ ستاپی رویش → هر تأیید در ۲ کانال (یکی اشتباه). اکنون: `_setup_announce_channel` — فقط ستاپ: PINVAL/PINWALLQ/PINWALL→کوتاه‌مدت (Pival)، ALBROX+TLBREAK→میان‌مدت قدیمی، TECHCLASSIC→بلندمدت قدیمی؛ بقیه (اسپات) از override. **بدون هیچ mirror و بدون هیچ بعدِ تایم‌فریمی** — یک سیگنال دقیقاً یک کانال. هر کارت لینکِ «پیام تأیید در کانال اصلی» به همان شناسه می‌گیرد؛ خطِ «آخرین نتیجه» و لینک‌شدنِ نتایج به پیام‌های hit دست‌نخورده؛ متن کارت‌ها همان قبلی.
+- **② چارت مانیتور/آپدیت اسپات با اعدادِ دیکته‌شده:** `_CHART_CANDLE_COUNTS` (تک‌منبعِ حقیقت: 4h/8h 170، 12h/1d 210، 3d 300، 1w 210) + `_chart_fetch_size` — چارت‌های لایف‌سایکل/آپدیت دیگر ۱۸۰ کورکورانه نمی‌گیرند؛ «از این به بعد منتظر شکست ترندها/الگوها در ۴س/۸س/۱۲س/روزانه/۳روزه/هفتگی» با همین تراکم می‌آید.
+- **③ شیبای شبح (+۳۰۹$ روزانه، «فروش روی 0.00001»):** علت: تارگت‌های سمتِ اشتباهِ ورود (LONG با TP زیر ورود) → بردِ آنیِ جعلی در ladder advance + کلونِ روزانهٔ همان پوزیشن (twin). سه لایه: (a) build_spot_candidate تارگت‌های پشتِ ورود را می‌ریزد و نردبان را از مسیر پیش‌فرض می‌سازد؛ (b) `classify_phantom` خالص: نردبانِ سمت‌اشتباه + دوقلوها (همان symbol/source/direction با چند PENDING — فقط جدیدترین زنده)؛ (c) `void_phantom_positions` هر سایکلِ ریل‌تایم قبلِ هر تسویه → result='VOID' (بیرون از همهٔ آمارها). رگولوشن هشدار شد ولی کافی نبود — تسویه باید بسته شود.
+- تست: test_round53 ×9 + انکرهای r32/r47/r48/r52 (مجموع 651P/1skip). دودی: چارت اسپات هفتگی ۲۱۰کندله LOG-دهدهی ✓.
+
+## r54 (2026-09-28) — قانونِ ماهیتِ الگو + «چرا این جهت؟» + خطوطِ روی‌هم‌افتادهٔ LIT
+- دیکتهٔ LITUSDT (T407790، تأییدِ ۰۳:۰۷): «دلیل اینکه اینجا در وسط یک فالینگ وج سیگنال نزولی داده چیه؟؟» + سه قانون verbatim.
+- **① ریشه (پاسخ به «چرا»):** الگوی آن اسکن `TRIANGLE_DESCENDING` کلاسیفای شد (فیتِ بالا/پایین آن هندسه چنین برچسبی می‌دهد) و برخلاف وج، مثلث نزولی **دو-طبیعتی** است: fade (پازیشن خلاف جهتنما از ضلع بالا با ≥۳ تاچ و |فاصله|≤۰٫۳۵ATR) مجاز شمرده می‌شد → SHORTِ وسط-الگو. یعنی قانونِ «وجِ نزولی ذاتاً صعودی» سالم بود و اجرا نشد چون برچسب الگو وج نبود. **② اصلاحِ دکترین:** برای هر الگوی ONE-NATURE جهتِ DOCTRINE از _EDGE_RULES استخراج می‌شود (WEDGE_FALLING→LONG، WEDGE_RISING→SHORT، مثلث صعودی/نزولی، پرچم‌ها، H&S، کف/سقف دوقلو، کانال جهت‌دار). معاملهٔ خلافِ ماهیت فقط از سه دروازه: (a) بریکِ ضلعِ مقابل + کلوزِ معتبر (قانونِ یک‌کلوز) — مسیرِ warn-onlyِ r24 فقط برای کراسِ زنده/ویک ماند؛ (b) توهم روی همان ضلع؛ (c) قضاوتِ پشتیبان — و در گیتِ `_counter_doctrine_gate` فِیدِ خلافِ ماهیتِ بدونِ پشتوانه هرگز کاندید نمی‌شود. **③ «چرا این جهت؟»:** عواملِ پشتیبان (`_counter_support_factors`: بایاسِ ساختاری 4h/1d با structure_bias، فشارِ بدنه‌ای ≥۱٫۵ATR تایمِ تریگر) در متادیتا (`counter_doctrine`/`doctrine_direction`/`direction_why_fa`) و در کارتِ تأیید زیرِ «🧭 چرا این جهت (خلافِ ماهیت الگو)» نمایش و توضیح داده می‌شوند — اگر از مسیر بریک باشد، خطِ «تأیید روی شکستِ ضلعِ مقابل با کلوز معتبر». گیتِ حجمِ r32 برای بریکِ کانتر معاف است (قانونِ کلوز خودش مرجع است). **④ زیباییِ رسم (LIT: VALID UPPER قرمز و VALID LOWER سبز روی هم):** ریشه — هر دو خطِ همگرا تا لبهٔ بوم خط‌چین می‌شدند و در انتهای نمودار روی هم می‌افتادند. اکنون جفتِ همگرا **در رأس (apex) تمام می‌شود** (حلِ تقاطع در فضای fit همان خط، فقط وقتی رأس داخلِ بوم است)؛ واگراها دست‌نخورده. همهٔ ستاپ‌ها از همین کدِ واحد رسم می‌کنند (قانونِ زیبایی).
+- تست: test_round54_doctrine.py ×8 + بازنویسیِ ۳ انکرِ قانونِ 09-24 به قانونِ 09-28 (round24/pattern_engine/round27) + انکرِ گیتِ حجمِ r32 (مجموع **659P/1skip**). دودی: LIT-مانندِ همگرا → دو خط در رأس به هم می‌رسند و قطع می‌شوند (r54_apex_clip.png)؛ کارت با بلوکِ «چرا این جهت» ✓.
+
+## r55 (2026-09-28 صبح) — اپِ لایو مثل تلگرام + پوش واقعی گوشی + تشخیصِ خاموشیِ اسپوت/ستاپ‌ها
+- سه دیکته: «بقیه ستاپها کم‌کار شدند و اسپات کلا قطع شده — ببین طبیعیه یا گیت خفه‌کننده یا باگ؟» + «اپ باید مثل تلگرام لحظه‌ای باشه — آخرین پندینگ ۸ ساعت قبل و تعداد همون ۱۲۰ دیروز» + «اوایل نوتف فعال بود، الان به گوشی نمیاد».
+- **① اپِ فریز‌شده — ریشه‌یابی و ضدگلوله‌سازی:** `_rebuild_state` اگر وسطِ کار exception می‌خورد یا به بردِ DEMO می‌پرید یا (با کشِ serve-stale) برای همیشه اسنپ‌شاتِ کهنه را می‌فرستاد — دقیقاً «آخرین پندینگ ۸ ساعت قبل». اکنون: خطا در `_LAST_STATE_ERROR` ثبت و روی /health دیپلوی می‌شود؛ آخرین اسنپ‌شاتِ سالم سرو می‌شود (نه demo). سه سکشنِ SQL (winrate/hits/live_positions) گاردِ مستقل گرفتند. **باگِ خفه:** بلوکِ live_positions ده ستون SELECT می‌کرد و ۱۵تا unpack — از همان روز هرگز اجرا نشده بود (except-pass خاموش)؛ اصلاح شد. ژورنال ۱۲۰→۲۰۰.
+- **② لایو مثل تلگرام:** pollV نسخه‌سنج ۱۰ث→۳ث (تأیید ≤ ~۱۱ث روی اپ)؛ pollPrices ۱۰ث→۸ث؛ رفرش روی visibility (موجود). سکشنِ «⚡ تأییدهای زنده — همان لحظهٔ تأیید» بالای صفحهٔ Signals از STATE.hits (kind=confirm) با نقطهٔ سبزِ پالس — هر رفرشِ state به‌روز می‌شود.
+- **③ پوش واقعی گوشی (VAPID Web Push):** database/app_push.py — جفت‌کلید VAPID یک‌بار ساخته و در bot_kv (هیچ‌وقت در ریپو)؛ /app/api/push/key|subscribe|unsubscribe (پشتِ لاکِ fail-closed)؛ sw.js حالا push + notificationclick دارد و در کلاینت register می‌شود (قبلاً اصلاً register نبود — علتِ «نوتف نمیاد»! قبلی‌ها فقط new Notification درون-صفحه‌ای بود)؛ دکمهٔ Enable حالا permission+register+subscribe می‌کند و سابسکرپشن‌های قدیمی را هم re-sync می‌کند. «تِیلِرِ» ۵ثانیه‌ای در وب‌پروسس: هر ردیفِ signals که confirmed_at/tp1_hit_at/closed_at جدید بگیرد (هر لِین، هر مسیر کدی) → پوش «تأیید شد/هدف اول هیت شد/بسته شد» — watermark + seen در bot_kv، pass اولِ بعدِ بوت ساکت prime می‌شود (بدون اسپمِ تاریخچه)؛ 410/404 → حذف سابسکرپشن. requirements += pywebpush. تِیلِر در boot dashboard/app.py استارت می‌شود.
+- **④ تشخیصِ «طبیعیه یا گیت یا باگ؟» بدون حدس:** /health حالا diag دارد: app_state (خطای آخرین rebuild/سنِ کش/جدیدترین pending)، lanes_24h (هر ستاپ: total/confirmed/آخرین created/confirmed)، void_24h، spot_last، heartbeat (اسکنر)، spot_lane (reason/stats آخری‌پاس)، push_tail. بعد از دیپلوی خوانده می‌شود و علت با دیتا اعلام می‌شود.
+- **⑤ اصلاحِ over-VOID ر53:** قانونِ twin حالا trigger_timeframe را هم در کلید دارد — اسپاتِ همان نماد/جهت در دو تایم‌فریم (4h+1d) دیگر «دوقلو» VOID نمی‌شود؛ کلونِ هم‌TF همان‌طور شکار می‌شود (تست r53 به‌روز + تستِ cross-TF).
+- تست: test_round55 ×13 + به‌روزرسانیِ round39/46/53 (مجموع **672P/1skip**).
+
+- **r55.1 (همان روز، دیتای زندهٔ /health):** علتِ سکوتِ اسپوت **گیتِ بودجه** بود نه باگ: پاسِ ۰۰:۴۳Z با found=87 «همهٔ» سقفِ 16تاییِ روزِ UTC را در یک پاسِ ۸.۵ دقیقه‌ای سوزاند و budget_left=0 ماند → سکوت تا نیمه‌شبِ UTC بعدی. اصلاح: تاریخِ بودجه = روزِ **تهران** + سقفِ per-pass (SPOT_MAX_PER_PASS=3) → انتشار قطره‌ای در طول روز (ضدِ بورست، ضدِ گرسنگی). باگِ dialectِ probe‌های /health (attribute 'db' غلط) هم اصلاح شد.
+- r55.2: پروب‌های ۲۴ساعتهٔ /health با castِ درستِ text اجرا شدند — دیتا: PINVAL 34/24h (آخرین تأیید 01:50Z)، TECHCLASSIC 27 (00:05Z)، TLBREAK 4 (23:36Z)، ALBROX 0؛ spot reason=ok با found=87/published=16/**budget_left=0** → سکوتِ اسپوت = بودجه، نه باگ (r55.1 پیس شد). HEAD `dccafe2`.
+
+## r56 (2026-09-28) — حذفِ کاملِ بودجهٔ اسپوت + پاسِ غیربلاک‌کننده (بهینه‌سازی ریلوی)
+- دیکته: «من کی گفتم ۱۶ تا؟؟ در کدام قانون؟؟ اشتباهه اگر هست — محدودیت اسپات نداریم … شاید یک نماد در چند تایم‌فریم در یک روز ناحیه الگو/ترند مهمی رو بشکنه و تایید بشه … هر وقت موقعیت بود بیام بده + بهینه‌سازی ریلوی فراموش نشه».
+- **منشأ ۱۶:** پیش‌فرضِ مهندسیِ راندِ ۱۶ (تولد لاین) بود که r35 از ۲→۱۶ بالا برد — هرگز قانونِ او نبود. **r56:** کل خانوادهٔ بودجه حذف شد: SPOT_MAX_PER_DAY، SPOT_MAX_PER_PASS (که r55.1 گذاشته بود)، SPOT_ALERT_MAX_PER_DAY + چهار تابع شمارنده. تنها لایهٔ ضداسپم: استمپِ (symbol, tf, pattern) با پنجرهٔ ۳۶/۷۲ساعت — بریکِ همان نماد در تایم‌فریم‌های مختلف همه منتشر می‌شوند. معماریِ او (اسکن عمیق یک‌بار سیو + مانیتورِ تغییرات) همان r52 history_store است: دیلیِ عمیق یک‌بار fetch/merge، پاس‌ها فقط تغییرات را می‌بینند؛ چارت‌ها با اعداد r52 (4h/8h→170، 12h/1d→210، 3d→300، 1w→210).
+- **بهینه‌سازی ریلوی (مکانیکی):** پاسِ ~۸.۵ دقیقه‌ایِ اسپوت INLINE در حلقهٔ اسکنر اجرا می‌شد و سایکل‌های مانیتور/تأیید را در آن پنجره بلاک می‌کرد — علتِ مکانیکیِ دومِ «کم‌کاری» — اکنون در تردهای single-flight خودش (skip-slot بدونِ انبارش). DB per-cursor باز می‌شود → الگوی تردهای موجود حفظ است.
+- تست: test_round55 ×16 + انکرهای r15e/r29/r35 به قانونِ بدونِ سقف (مجموع **675P/1skip**).
+
+## r57 (2026-09-28 ۰۶:۰۰) — کیفیتِ ترند/الگو و اسپات (دیکتهٔ ۵ چارت) + به‌روزرسانیِ قوانین ریپو
+- دیکته با ۵ چارتِ اسپوت (PENGU/WLD/ARB/DASH/XRP — 3d SPOTBREAK) + قوانین جدید. سندِ مرجعِ چت‌های آینده: **docs/VIVA_RULES.md** (قانونِ صفر: قانون فقط با تأیید و درخواستِ خودِ ویوا تغییر می‌کند).
+- **① شدو (رسم):** pivots پارامتر `wick_policy` گرفت — render_kit حالا `"bodies"` (انکرِ همیشه‌بدنه؛ ویکِ DASH/ARB دیگر ترند را خم نمی‌کند)؛ فیتِ معاملهٔ فیوچرز outlier مثل قبل («فیوچرز بهم نریزه»). **② بدونِ سقفِ پیوت:** استخرِ فیت ۱۶→۲۰۰ («لیمیت نداریم») + امتیازِ touches² — خطِ ماژورِ چند-لمس بر خطِ محلی می‌چربد. **③ لاگِ همیشگی:** use_log=True بدونِ شرط، اسپات و فیوچرز. **④ زومِ خدمتگزارِ الگو:** پدِ تایپ ۰.۰۱۵/۰.۰۲۵ برای کندلِ بلند. **⑤ تناسبِ تی‌پی:** MIN_PATH_PCT_BY_TF = 6/8/10/14/20/28 (4h→1w) + TP1ِ هوای خالی ۰٫۳۵×مسیر («تی‌پی یک‌سنی» مُرد) — انکرِ مقاومتِ واقعی r37 دست‌نخورده. **⑥ آنچینِ فارسی از منبع:** fear_greed label_fa (طمع/ترس/...) + کارت فقط label_fa. **⑦ ریپلای-چین اسپات:** send_photo/send_message (telegram_bot) حالا message_id برمی‌گردانند؛ send_spot_alert mid را در kv نگه می‌دارد؛ تأییدِ اسپات reply_to=هشدار اول؛ send_setup_update برای SPOT به last/confirm ریپلای می‌شود؛ spot_chain در kv. **⑧ رویداد-آپدیتِ فقط-مهم:** scan_spot_update_events (حجم ≥۱٫۸× / بدنه ≥۱٫۵×ATR / تاچِ سقف‌کفِ ساختاری) + dedup ۱۲ساعت + send_spot_event (کارتِ مختصر) + commit بعد از ارسال موفق. **⑨ مولتی‌تی‌افِ اسپات:** _mtf_bias_fa (4h/1d با structure_bias) روی کارتِ تأیید اسپات. **⑩ چیپِ نواحی روی کندل ممنوع:** چیپ‌ها به بعدِ زومِ نهایی defer → in-box→walk-up→آسمان (band خالی زیر لبهٔ بالا). **⑪ دیتای مرده (WLD 3d خالی):** گاردِ میانه‌باند (۰٫۰۲×med) در _clean_render_frame + _sane_ohlcv در اسکن اسپوت. تیپ‌های placeholder رندر نمی‌شوند.
+- تست: test_round57_spot_quality.py ×17 + انکرهای r16/r37/signal_guards (مجموع **692P/1skip**). دودی: ویکِ ۳۵٪ خط را خم نکرد (r57_body_anchor.png)؛ لاگ همیشگی؛ چیپ در جای خالی.
+
+## r58 — 2026-09-28 (hybrid wick + superiority + urgent spot watch)
+- **Wick-HYBRID (Viva corrected r57):** «نگفتم از بادی بگیر فقط .. شدوهای معقول رو
+  محاسبه بکنه و وصل بکنه» → `indicators.pivots`: wick anchors AT THE WICK unless
+  EXTREME (≥2× median wick AND ≥1×ATR → body); render_kit cfg `wick_policy="hybrid"`;
+  futures trade fit stays "outlier". test_round57 anchor updated to hybrid.
+- **Superiority law:** per (symbol,tf) winner = `_structural_weight` = span×touches
+  (path only tie-breaks) — «آن معتبرتر است و باید ملاک قرار بگیره».
+- **Urgent spot watch (Railway-opt):** pass pins NEAR_BREAK/TOUCH symbols into
+  bot_kv `spot_urgent_watch` (2h TTL, ≤6 symbols); `main._spot_urgent_recheck` runs
+  every monitor cycle (5 min) — mini-pass re-scans ONLY pinned symbols via
+  history_store, publishes with stamps + reply-chains → confirm ≤5 min after the
+  trigger close, zero extra full passes.
+- **WLD 3d completion:** `_clean_render_frame` sets `dropped_dead_rows`; renderer
+  invalidates `chart_zoom_frozen` + `zoom_freeze:<sid>` kv when dead rows were
+  dropped → re-freeze on clean tape. (r57 guard fixed the scan; this fixes the
+  already-frozen charts.)
+- **Naming:** bullish range-top break on spot cards reads «مستطیل صعودی (شکست سقف
+  رنج)»; spot lane probes use setup_code+public_code too (dashboard probe fix).
+- Stall probe verdict: lanes were NOT dead — spot pass 02:53Z published 60;
+  TLBREAK/TECHCLASSIC silence started exactly at the r54 confirm-gate deploy
+  (23:36Z/00:05Z) = gate working as designed, NOT a bug. ALBROX 0/24h = law.
+- Tests: tests/test_round58_hybrid_superiority.py (11) → suite 703P/1skip.
+- Visual smoke: /home/user/r58_hybrid.png — extreme wick ignored, reasonable
+  wicks connected.
+- **r58.1 (same day): «آپدیتهایی که در اسپوت میاد هم با چارت زنده و لایو بیاد»** →
+  `messages_v7._spot_event_candidate` (SPOT stub anchored on the event close);
+  `send_spot_event(event, chart=)` posts the PHOTO reply-chained (text fallback on
+  upload failure); main renders the live chart from the SAME bundle (zero refetch).
+  Update charts draw structure only: POI/entry band, FIRST STOP line+label, and
+  entry/stop level list are all skipped when `metadata.update_event` — chip-on-
+  candles law holds, no fake stop on an analysis post. Tests +3 → 706P/1skip.
+- **r59 (same day): the CHART DICTATION** → ① far classic patterns (>2×ATR) BLUE,
+  near/trends keep red-above/green-below; ② zone boxes above/below price = fill-only
+  family shades (SR/FVG/OB/FLAG × red-above, green-below), name parked in the right
+  notes margin as a legend; ③ every trend/pattern/TLBREAK-legacy line solid→LIVE,
+  dashed→canvas; ④ cryptocove green/red candles behind CHART_CANDLE_STYLE=cryptocove
+  (default ink until Viva approves); ⑤ all chart fetch paths now use the dictated
+  candle counts (180/150 stragglers unified); ⑥ backup of the pre-r59 renderer:
+  git tag backup-render-r58 + docs/RENDER_BACKUP_r58.md. 4 real-data CryptoCove
+  samples rendered for judgment (BTC 4h futures, ONDO 3d spot update, LINK 4h spot,
+  GRAM 15m futures). Tests: tests/test_round59_chart_laws.py (9) → 715P/1skip.
+- **r59.1 (same day): far-major preserve + three fixes.** Probe on real ONDO 4h
+  data exposed a law conflict: the window-refit (r51) replaced the stored far
+  TRIANGLE with the near ascending channel → blue never fired in production
+  windows. Fix: stored classic shapes >2.5×ATR survive the refit as
+  `far_major` (blue, thin 1.8, exempt from the flat→band branch) + far-major
+  edges join the zoom frame (clamped 2.5×window-span). Also: workspace diet
+  135MB→17MB (275 used-up uploads + old render/scratch files removed — Viva:
+  «سبکش کن»); INJ-style red dashed mid-box line on spot BREAK cards identified
+  as the TP-gate fragment (lat-close ladder), untouched (trade geometry);
+  candles stay ink per Viva («فعلا همین رنگ بمونه» — cryptocove switch stays
+  opt-in). Old spot-alert charts keep their published chain; only future
+  sends inherit new laws. Tests 715P/1skip.
+- **r59.2 (09-29, the audit dictation — NO confirm/entry law touched):**
+  ① APP-LIVE ROOT FIX: webapp feed was re-fetched every 5 MINUTES → now 20s
+  (state server-cache is 8s); SW shell viva-shell-r41 was cache-first even for
+  navigations (months-old JS after deploys) → navigations NETWORK-FIRST in a
+  fresh viva-shell-r59 + old-shell sweep on activate + r39 anchor updated.
+  ② clutter: ONE parent line per side (was 2+2), child must be ≥0.8×ATR clear.
+  ③ live-line mid-air stop fixed (PENGU): line paints THROUGH the live bar.
+  ④ render-side smart-break fallback: ≥3 closes beyond a line by ≥0.8×ATR ends
+  the solid leg (XLM solid-across-price bug). ⑤ extension law: broken edges
+  extend only for CONFIRMED trades (reaction validator), else 3-bar stub.
+  ⑥ zones re-refined on the RENDER TF (his «باکسها در هر تایم فریم باید
+  ریفاین همون تایم باشن») + ≤2 direction-matching far zones get the
+  «🎯 TARGET» margin legend (his ONDO drawing: supply above = short's? no —
+  LONG's final target). Probes: CRV/XLM/PENGU/BCH real-data renders — single
+  red line, clean flat line, solid→LIVE then dotted. Tests 715P/1skip.
+- **r59.3 (09-29): RAILWAY-DIET + the app-live/livedata follow-ups.** Cost cuts
+  (no law broken — publishes stay uncapped): ① per-render zone refinement now
+  memoized per (candidate, tf, bar) in bot_kv; ② update-event CHART renders
+  budgeted 12/pass (events beyond publish TEXT-ONLY — publish count untouched);
+  ③ urgent-watch pins per (SYMBOL|TF), TTL 1h → mini-pass scans one TF not six;
+  ④ webapp state poll 20→30s + server state cache 8→20s (rebuilds ÷3, prices
+  still 8s + instant first paint). App LIVE price on cards exists for PENDING
+  cards via pollPrices (x.live→LIVE tile) — was dead only because of the stale
+  r41 shell; now ships fresh. Config version → "2026.09.29-r59.3" (/health).
+  Cost math: render was ~1.5-2s CPU/chart × 28/pass + uncached zone detect +
+  6×TF rechecks + 20s full-SQL app polls ≈ the bulk of the ~$0.90/2d; cuts
+  ≈50-70% of steady-state compute.
+- **r59.4 (09-29): the APP live-strip clarification (Viva: «منظور از کانال
+  اپلیکیشن بود»).** Verified server pipeline: monitor_confirmed_trades has NO
+  entry_filled gate → spot rows ARE lifecycle-monitored (tp1_hit/result update
+  correctly); the app freeze was the stale r41 shell + 5-min poll (fixed
+  r59.2/r59.3). REAL gap found & fixed: the app's live strip rendered ONLY
+  kind=confirm — TP1/WIN/LOSS events were hidden. Now the strip mirrors the
+  Telegram channel: confirm 🟢 · TP1 🎯 · برد ✅ · استاپ/باخت 🛑 with colors;
+  header «رویدادهای زنده». Test added (test_app_live_strip_carries_full_
+  lifecycle). Push (true phone notifications) still needs his Enable (subs=0).
+
+## r60 — TECHCLASSIC calibration (2026-09-29)
+- User sent 8 annotated charts (uploads/IMG_20260929_163813..171040) + dictated: blue=entry, red=stop, green=TPs, light-red box=supply that must render; saved as docs/TC_TLBREAK_REFERENCE.md (laws + case archive + TLBREAK-vs-TC difference: TLBREAK may confirm counter-trend zone rejections via TOHOM illusion engine; TC strictly with-trend).
+- Code (scope: TECHCLASSIC only): quality_engine counter block — locked TC BREAKs (setup TECHCLASSIC + metadata break_direction UP/DOWN) no longer reject COUNTER_TREND_TOUCH_ONLY; opposed parent = metadata warning `mtf_context_warning_tc`. pattern_engine TC builder — htf_alignment popped from mandatory_gates for BREAK events (FADEs keep it). Contract lock (break UP→LONG only) now explicit for TECHNOCLASSIC variant too.
+- KEY correction found while testing: htf_alignment was force-stamped True at TC build end (:1314) — it was NEVER the discovery killer for TC; the real veto was COUNTER_TREND_TOUCH_ONLY at confirm. Fix C (counter block runs after CONFIRMED set) left as-is for other setups per NO-CONFIRM-CHANGE.
+- Tests: tests/test_round60_tc_calibrate.py (4) — suite 720P/1skip. config version 2026.09.29-r60.
+- Queued next: projection-drift bug D (ARB detected twice 10min apart: T138451 FINAL WATCH → T490695 CONFIRMED); ADA retest-entry preference question; render items in reference doc §2 (red supply boxes, best-line selection SUI, HBAR base rectangle, ADA arrow overlap); PINVAL round (NEAR bad confirm, BCH reference pattern); TLBREAK personalization round.
+- r60b (same day): user dictated full TLBREAK/FTB/ALBROX spec — recorded in docs/TC_TLBREAK_REFERENCE.md §6. Key: TOHOM FTB early-confirm for TC+TLBREAK (add doji/reverse-pin to tohom patterns, explain early confirm), candle patterns never veto breaks, TLBREAK counter-trend rejection scalps via TOHOM, ALBROX = union + zone-entry lane (break+first-close or TOHOM pre-close, conditioned on actual level break; supply-reject→SHORT, demand-reject→LONG; scalp-sized). Pullback entry stays. Bug-D analysis delivered: pattern_id_for hashes fitted slope/intercept (engine docstring: refit = DIFFERENT pattern) + sliding-window refit per 5-min pass → same visual pattern re-mints (ARB T138451→T490695) and dedupe can't catch; frozen-candidate line vs fresh-fit line vs rendered line divergence → false INSIDE_PATTERN/BREAK_SIDE rejects; fix plan = pivot-anchored stable id + candidate-scoped frozen geometry + discovery suppression window.
+
+## r60.1 — «همه رو درست کن» (2026-09-29)
+- Bug-D: pattern_id_for → pivot-based stable hash (prices %.3g + relative gaps); TC/ALBROX candidates carry alert_lineage_key (R31.7) → store supersede_alert_lineage kills twin alerts (ARB T138451/T490695 family). Collateral fixed: ALBROX span replacement had deleted ALBROX_DETECTORS/PINVAL_DETECTORS/SETUP_NAMES[TECHCLASSIC] — restored.
+- TOHOM: +doji +reverse-pin vocabulary; FTB half-margin when touched/S3; one counter substep allowed (need>=3); reason text explains pre-close confirm + FTB.
+- TLBREAK rejection lane: _tlbreak_rejection_scalp (tap+anatomy+no-close-through → counter-trend scalp, TOHOM-only via quality_engine WAIT_TOHOM_SCALP gate; scalp horizon 3.5%, stop behind wick).
+- ALBROX union rebuild: detect_albrox = TC engine (setup_code param added to detect_technoclassic/_build_candidate) + _albrox_zone_lane (break/reclaim first-close + rejection scalp TOHOM-only; zones score-only; break_direction contract; lineage; enrich_render). Contract lock now covers ALBROX_ZONE. albrox_enabled default True.
+- Test fixes: round47 test leaked mutated singleton tohom_enabled=False (restored attr in finally); round41 albrox wiring test updated to union routing; suite 732P/1skip. version 2026.09.29-r60.1.
+- Open/next: watch real-feed ALBROX volume first day (tune zone freshness if noisy); projection-drift false-reject D2/D3 (frozen-vs-render single source) still queued; PINVAL round; TLBREAK personalization round.
+
+## r60.2 — internal-signal ban + twin/dup-send guards (2026-09-30)
+- User verdict on 09-29/30 charts (AAVE/FET/ETC CONFIRMED): TC was still minting edge-FADE internal signals (my r60 kept them — wrong call, now dead). detect_technoclassic keeps ONLY STATE_BREAK events; fades unreachable for TC+ALBROX (they live on in TLBREAK scalp / ALBROX zone lanes under TOHOM).
+- Twin guard: _mint_guard_key (symbol|pattern_tf|pattern|side|direction|first/last edge pivot ts, NO trigger TF) + bot_kv TCMINT key, TTL 12h; new pivot ⇒ new key ⇒ re-alert allowed (tested).
+- Send idempotency: main._educate posts each signal_id once (bot_kv posted|id TTL 36h, set only after successful send; deferred retries unaffected; stats dup_send_blocked). Covers INJ×2/OKB×2/LINK1d×2/ALGO K795612×2 family.
+- Chart-render root causes identified (NOT yet fixed, dedicated pass next): LTF-trigger charts re-fit pattern edges on the chart tape (_refit_viva_points) replacing the 4h/1h line; PAT-4h variant overlay inconsistent across the two render paths; best-trendline selection (SUI complaint) still open. version 2026.09.30-r60.2. Suite 735P/1skip.
+
+## r60.3 — multi-TF geometry law + HTF boxes + zone-anchored TP/SL (2026-09-30)
+- Law (dictated twice): pattern/trend must NOT change across TF views; HTF pattern drawn separately; entry break = TRIGGER TF close only; early confirm = LOWER TF (TOHOM). Implemented: (1) quality_engine fast-lane scans (closed_df,"تایم تأیید") ONLY — htf_closed_df dropped as break source (2 old tests updated to the new law); (2) messages_v7 _viva_points_xs = time-projection of stored pattern pivots (extrapolate outside window, never clamp) replaces the r51 per-TF refit (refit only as <2-points fallback); draw loop uses projected xs; helper bug fixed (searchsorted clamped pre-window ts to 0 → fan).
+- Missing OB boxes root cause: enrich_render stores md["htf_zones"] but NOTHING drew it. New merge_htf_zones (module-level, tested) appends nearest HTF box per side under «HTF·» kind after the chart-TF zone diet; wired at the r59.2 site in generate_chart.
+- TC zone anchors: TP2 snapped to nearest opposing pattern-TF box edge (0.55–1.45× path window; metadata tp2_zone); stop hosted behind protective box between entry and structural stop (bounded 0.45–1.10× risk, clamp applied; in _build_candidate after tp2, using render_kit.detect_zones on pat).
+- Suite 739P/1skip. version 2026.09.30-r60.3. Next: visual pass on live charts (he judges), best-line selection polish, PINVAL round, TLBREAK personalization.
+
+## r60.4 — box law + update law (2026-09-30)
+- REVERTED r60.3 HTF-box draw (his BTC 15m complaint: giant 1-2-TF-higher boxes useless). Charts draw ONLY trigger-TF refined zones. merge_htf_zones moved to render_kit (unwired from draw); htf_zones = TP/stop CALC fallback only in the TC anchor: inventory = detect_zones(trig) + detect_zones(pat); opposing/protective search on that; HTF metadata appended only when no opposing box found. Anchor priority tested (trigger-FVG beats pattern-OB at 0.70× vs 1.35× clamped path).
+- Update law: live-break block no longer sends (note stored in metadata, ONE DB write per NEW bar); kills the 23:46+3-repeats family and a big chunk of ~1000 msgs/2h + render cost. Remaining senders: approaching once/candidate, stale-confirm note, material absorb, confirmations, verdicts.
+- Engine-alive: end-to-end detection tests green; TC volume drops by design (fades banned + 12h mint guard per pattern).
+- version 2026.09.30-r60.4. Suite 742P/1skip. Tomorrow (his plan): refine the whole entry/stop/TP management engine; render polish (NEAR thick green line, short dashed tail on 1h charts).
+- r60.5: mint guard is lifecycle-aware now — candidate_status() added to candidate_store; pattern re-alerts allowed immediately once the previous alert for the SAME pattern resolves (CANCELLED/EXPIRED/CLOSED/DEAD_GATE/SUPERSEDED); 12h TTL = backstop only (unknown/purged id → stays silent). Suite 742→744P/1skip. version 2026.09.30-r60.5.
+
+## r60.6 — CHoCH + direction lock + dashed projection (2026-09-30)
+- CHoCH: falling-line-closed-above (rising-below) = choch UP/DOWN metadata, +2 raw score, counter_doctrine cleared, EvidenceItem("choch") bullet; block lives AFTER upper/lower fit (first placement was before their definition — NameError→silent, caught by test).
+- Mint guard key DIRECTION-AGNOSTIC (one live scenario per pattern regardless of direction; ONDO case); guard tests hermetic-clear their keys (test pollution via shared TCMINT keys).
+- Counter-trend veto exemption now CONTRACT-based (any break_direction) — TLBREAK carries break_direction too; test = TLBREAK+VIVA_TLBREAK variant+S6_CONFIRMED passes parent-opposed (fixture needed viva_state S6 for the machine gate at quality_engine:1091).
+- Dashed post-LIVE projection bolded (lw2.0 α.95 (5,3)).
+- Suite 747P/1skip. version 2026.09.30-r60.6. Note for his «پیام‌ها کوتاه‌تر شده؟»: removed htf-alignment gate line + counter-doctrine branding blocks shortened some messages (content-only, his own law changes); CHoCH bullet adds one back.
+
+## r61 — THE 16-PATTERN LAW + HYPE honest edges + chart diet (2026-09-30)
+- His verdicts: HYPEUSDT 4h SPOTBREAK labeled «گوه صعودی (رایزینگ‌وج)» on a chart whose UPPER edge FALLS («این الان کجاش رایزینگ وج هست؟؟ … اگر ضلع بالا رسم بشه فالینگ وج هست»); 16-pattern poster (uploads/images (6).jpeg) = the law source; app chart removal order; migration-kit order.
+- analysis/patterns16.py NEW: PATTERN16_LIBRARY (16+ slugs w/ entry side), tail_slope, entry_side, classify16, _swings (SLICE BUG fixed: h[i+1:i+1+right]), detect_pivot_patterns (DTOP/DBOT/HS/IHS/CUP w/ neckline+measured+shape "single"+staging side), parent_range/inside_parent.
+- classify_shape(upper,lower,n,df=None): WEDGE_RISING branch audited by tail slopes + entry side → relabels WF/TS/TD (HYPE law). render_kit.detect_patterns: scissored pair → sub-line fallback else two trendlines; classify gets df; ONE pivot pattern appended (alive ≤6 ATR, dedup neck, out[:4]). patterns.pattern_info → patterns16-first.
+- spot_engine.scan_spot_alerts: parent_range annotation (1w/3d/1d) + in_parent per item.
+- Chart diet: config.chart_enabled=False default (CHART_ENABLED=1 to restore); generate_chart early-return None; tests/conftest.py autouse swaps module SETTINGS to charts-ON (frozen dataclass → module-attr replace).
+- GOTCHAS: Settings frozen+get_settings() returns FRESH instance (patch module SETTINGS, never mutate); .git/config vanishes per turn (re-add origin from tokens.env); mplfinance needed by messages_v7 imports in tests.
+- Suite 759P/1skip. Version 2026.09.30-r61.0. Next: his validation of pattern names → then perp TC nested scoring + PINVAL round + entry/stop/TP engine (his "tomorrow").
+
+## r61.1 — THE UPDATE FLOW LAW + ONE-CHART-ONE-TF + SANE ZONES (2026-09-30, night)
+- His verdicts: SUI K264244 cancel-update WITH live chart + zone/cancel <1 cent («احمقانه ترین ابطالی»); ATOM K285903 «تأیید شد» update 28s AFTER the confirm; ARB «1H (TRIG 15M)» + ATOM «15M (TRIG 1H)» charts; SEI K978460 4.7%-wide supply box («این چه ناحیه ای است»); «والد و بچه … کلا حذف کن — مولتی تایم فقط در توضیحات»; charts (his own 09-14 law) restored.
+- send_setup_update: TEXT-ONLY (chart block + own-frame fetch deleted; param chart_df kept-but-ignored), post-confirm BLOCK (confirmed_at/status/confirmation_message_sent → False), cap upd_n>1 for non-critical (critical ❌⚪⛔✅⚡ single events still close the slot). Caption: «📄 بدون چارت» line when has_chart=False (format follows his law).
+- send_verdict_reply: ok=True + confirmed → False (the ✅ verdict IS the confirm message).
+- send_technoclassic_preview: cap 1 (was 3) + text-only send_message.
+- send_confirmed: frame audited by _infer_chart_tf; non-trigger frame (r60.3 LTF leak) re-fetched on TRIGGER TF.
+- trade_management.sane_zone_geometry_ok(zone_lo,zone_hi,entry,stop,dir,atr,style): zone height ≤ max(2.5×ATR,1.5%); RISK floor by style (SCALP .8A/.25%, DAYTRADE 1A/.4%, SWING/GRAND 1.5A/.8%) → wired into pattern_engine._build_candidate, albrox zone lane, PINVAL builder (skip, never alert). SUI/SEI fixtures as tests.
+- Reverted r61 parent/child nesting (spot annotations + patterns16.parent_range helpers deleted; tests pruned).
+- config.chart_enabled default True (diet stays via CHART_ENABLED=0).
+- Superseded-test updates: r46 cap-one, r53 chartless greps, signal_guards (doctrine/identical/preview lifecycle).
+- Suite 768P/1skip. Version 2026.09.30-r61.1. NOTE: his confirm-chart cosmetics («کندل‌ها جمع‌تر، فاصلهٔ TPها») = pill allocator already exists (_slot_alloc/_relayout_pills); deeper render-diet left for his next verdict.
+
+## r61.2 — ONE-BREAK law + FAILED-BREAK reclaim (BNB calibration, 2026-09-30)
+- His verdict: BNB T336567 4h TRENDLINE broke UP yet TC confirmed SHORT («الگو به بالا شکسته اما باز این سیگنال برعکس بریک صادر کرده»); laws must hold for ALL setups; «زوم/تشخیص هنوز باگ دارد — دقیق کالیبره کن».
+- Root causes fixed: ① scan_edges emitted BOTH-edge break events and detect picked by structure_score (3-pivot green SHORT beat the fresh 2-pivot UP-break) → THE ONE-BREAK LAW in detect_technoclassic: filter to the most-recent break's direction (bars_since_break; None=freshest; tie → score); ② fresh_bk31 kept 12-bar-old breaks alive AFTER price reclaimed → FAILED-BREAK RECLAIM guard in scan_edges (last_close back past line by >0.10×ATR → no BREAK event; FTB wicks safe); ③ confirm-time gate in evaluate_confirmation (ALL setups): close back through viva_break_line/viva_breakout_line by >0.10×ATR → reject BREAK_RECLAIMED (invalidation veto, incl. S6 survivors).
+- Test fallout (all doctrine-consistent): geometry fixture now ends in a HELD breakout (its 9-bar-old reclaimed upper-break WAS the bug class); s6-survivor accepts BREAK_RECLAIMED as the invalidation verdict; counter-trend test pops viva_break_line (tests its own gate).
+- New tests: one-break-newest-wins (both mirrors), reclaim blocks confirm + FTB-safe, reclaimed break dead at source. Suite 771P/1skip. Version 2026.09.30-r61.2.
+- His AKE/HBAR pins (risk 0.33%/0.39% SWING) now blocked by the r61.1 sane-zone floor; ENA/ICP pass. Zoom note: detector window = _FIT_WINDOW(pattern TF), render = relaxed 2-touch clone (09-17 law) — direction ownership now makes the drawn lines' break THE break.

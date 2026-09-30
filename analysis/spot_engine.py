@@ -49,7 +49,11 @@ SPOT_SETUP_CODE = "SPOTBREAK"
 
 # his band law for these timeframes (round 15): the ladder never sits closer
 # than this to the entry, whatever the structure says
-MIN_PATH_PCT_BY_TF = {"4h": 5.0, "8h": 5.5, "12h": 6.0, "1d": 5.0, "3d": 6.0, "1w": 7.0}
+# r57 (Viva: «ترند ۳ روزه شکسته واسش ۳ تا تی پی یک سنی اعلام شده؟؟ تناسب
+# کجاست؟»): the path must be PROPORTIONAL to the timeframe — a 3d break
+# cannot promise a one-hour move. Bigger candle → bigger honest path.
+MIN_PATH_PCT_BY_TF = {"4h": 6.0, "8h": 8.0, "12h": 10.0,
+                      "1d": 14.0, "3d": 20.0, "1w": 28.0}
 SPOT_WEIGHTS = (40.0, 30.0, 30.0)
 
 # his stop law for spot (09-22): «استاپ هم ۱۰ درصد خوبه» — the structural stop
@@ -127,6 +131,111 @@ def _fresh(d: pd.DataFrame, tf: str) -> bool:
         return True
 
 
+def spot_risk_levels(close: float, upper: float, lower_vals: list,
+                     atr: float, path_abs: float, swing_low: float,
+                     df_highs=None) -> dict:
+    """r37 (Viva 09-26, «تارگت‌ها احمقانه است گاهی و استاپ هم احمقانه است»).
+
+    STOP — the invalidation is the MINOR SWING the breakout stands on. The
+    old code took min(swing, pattern lower edges) which dragged every stop to
+    the far pattern base and let the 10% cap print a mechanical «exactly
+    −10%» number (DOGE 0.08905). The 10% ceiling law is unchanged; the stop
+    just stops being gratuitously far.
+
+    TARGETS — rungs anchor on REAL resistance overhead (swing highs of the
+    last 120 bars inside 1.15×path); ATR floors keep TP1 honest when the
+    tape above is virgin air; the raw 0.2/0.6/1.0 fractions are only the
+    fallback. Output is always monotone tp1 < tp2 < tp3.
+
+      close      entry (the confirming close)
+      upper      the broken upper edge
+      lower_vals pattern line values at the break bar (context only now)
+      atr        ATR of the trigger TF (absolute price)
+      path_abs   measured-move path in PRICE units (already ≥ TF floor)
+      swing_low  minor swing low (absolute price)
+      df_highs   iterable of recent highs (defaults to nothing)
+    """
+    close = float(close)
+    path = float(path_abs)
+    atr = float(atr) if atr and atr > 0 else path / 4.0
+    # ── stop: the RAW minor swing (the caller applies its own buffer) ──
+    sl = float(swing_low)
+    if not (sl > 0 and sl < close):
+        sl = close * (1.0 - 0.02)
+    # ── targets: structural first ──
+    try:
+        _hs = sorted({float(v) for v in (df_highs or [])
+                      if close * 1.002 < float(v) <= close + 1.15 * path})
+    except Exception:
+        _hs = []
+    # r57: virgin air (no real resistance inside the window) → TP1 scales
+    # WITH THE TIMEFRAME'S path — never a one-sun first pill on a 3d break
+    tp1 = min(_hs) if _hs else close + max(0.8 * atr, 0.35 * path)
+    # r57: the «یک‌سُن» TP1 came from the TF-flat path floors (3d was 6% →
+    # 0.45×path = 2.7%). With MIN_PATH_PCT_BY_TF now proportional to the TF,
+    # the resistance anchor AND the 45%-of-path bound both scale honestly.
+    tp1 = min(max(tp1, close + 0.6 * atr), close + 0.45 * path)
+    tp1 = max(tp1, close * 1.005)
+    above = [r for r in _hs if r > tp1 * 1.005]
+    tp3 = max(above) if above else close + path
+    tp3 = min(max(tp3, tp1 + 0.8 * atr, close + 0.55 * path), close + 1.10 * path)
+    mids = [r for r in above if r < tp3 * 0.995]
+    tp2 = min(mids) if mids else 0.5 * (tp1 + tp3)
+    tp2 = min(max(tp2, tp1 + 0.15 * atr), tp3 - 0.01 * path)
+    return {"sl": float(sl), "targets": [float(tp1), float(tp2), float(tp3)]}
+
+
+def _structural_weight(pat: dict) -> float:
+    """r58 SUPERIORITY LAW (Viva: «اگر از دورتر و با کندل‌های بیشتری ببینیم یک
+    ترند دیگر بالای قیمت است یا ضلع یک الگو بالای قیمت است، آن معتبرتر است و
+    باید ملاک قرار بگیره»): the reference structure is the WIDER-SPAN, MORE-
+    TOUCH one — span of the drawn edges × their validated touch count."""
+    try:
+        x0 = min(float(l.get("x0", 0)) for l in (pat.get("lines") or []))
+        x1 = max(float(l.get("x1", 0)) for l in (pat.get("lines") or []))
+        touches = sum(len(l.get("points") or []) for l in (pat.get("lines") or []))
+        span = max(1.0, x1 - x0)
+        return span * max(1.0, float(touches))
+    except Exception:
+        return 0.0
+
+
+def _sane_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    """r57 (the WLD 3d blank chart): corrupt near-zero placeholder candles
+    (OHLC ≈ 1e-9 with real volume) pass every >0 filter, draw invisible
+    zero-height candles and crush the price axis. Rows beyond a median band
+    are dead data — dropped before ANY scan or render touches them."""
+    try:
+        d = df.copy()
+        med = float(pd.Series(d["close"]).astype(float).median() or 0.0)
+        if med > 0:
+            d = d[(d["close"].astype(float) > 0.02 * med)
+                  & (d["close"].astype(float) < 50.0 * med)]
+        return d if len(d) else df
+    except Exception:
+        return df
+
+
+def _mtf_bias_fa(frames: Dict[str, pd.DataFrame]) -> List[str]:
+    """r57 (his «در اسپات هم تحلیل مولتی تایم فریم فعاله؟ اگر نیست باید بشه»):
+    the swing-structure verdict of 4h and 1d, as Persian lines for the spot
+    card — data-only, never a gate."""
+    out: List[str] = []
+    try:
+        from analysis.indicators import structure_bias
+        _FA = {"BULLISH": "صعودی 🟢", "BEARISH": "نزولی 🔴", "NEUTRAL": "خنثی ⚪️"}
+        for tf, name in (("4h", "۴ساعته"), ("1d", "روزانه")):
+            f = frames.get(tf)
+            if f is None or len(f) < 60:
+                continue
+            b = structure_bias(f.reset_index(drop=True))
+            bias = str(b.get("bias") or "NEUTRAL").upper()
+            out.append(f"ساختار تایم‌فریم {name}: {_FA.get(bias, bias)}")
+    except Exception:
+        pass
+    return out
+
+
 def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                      buffer_pct: float = 0.10) -> List[dict]:
     """Confirmed spot setups for one symbol across 4h/8h/12h/1d/3d/1w.
@@ -144,7 +253,7 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
         if df is None or len(df) < 45:
             continue
         try:
-            d = df.reset_index(drop=True)
+            d = _sane_ohlcv(df.reset_index(drop=True))
             atr = _atr(d)
             if atr <= 0:
                 continue
@@ -180,26 +289,31 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 if upper is None or close <= upper + eps:
                     continue                      # no valid close above the area yet
                 kind = str(pat.get("type") or "NONE").upper()
+                _rect_fa = None
+                if kind == "RANGE" and str(pat.get("break_direction") or "") != "DOWN":
+                    _rect_fa = "مستطیل صعودی (شکست سقف رنج)"
                 lower_vals = []
                 for _l in (pat.get("lines") or []):
                     from analysis.render_kit import line_y as _ly2
                     lower_vals.append(float(_ly2(_l, n)))
+                # r37: stop = minor swing − buffer (NOT the far pattern base,
+                # which only dragged every stop to the 10% cap); targets anchor
+                # on real overhead resistance — see spot_risk_levels.
                 sl_struct = _minor_swing_low(d)
-                if lower_vals:
-                    sl_struct = min(sl_struct, min(lower_vals))
-                sl = sl_struct * (1.0 - float(buffer_pct) / 100.0)
-                if sl >= close:
-                    sl = close * (1.0 - 0.02)
-                # targets: the shape's own measured move, never closer than the
-                # timeframe's band, always independent of the stop
                 measured = close + (upper - min(lower_vals)) if lower_vals else close * 1.06
                 floor_path = close * MIN_PATH_PCT_BY_TF.get(tf, 5.0) / 100.0
                 path = max(measured - close, floor_path)
-                targets = [close + path * f for f in (0.2, 0.6, 1.0)]
+                _risk = spot_risk_levels(
+                    close, upper, lower_vals, atr, path, sl_struct,
+                    df_highs=list(d["high"].tail(120)))
+                sl = _risk["sl"] * (1.0 - float(buffer_pct) / 100.0)
+                if sl >= close:
+                    sl = close * (1.0 - 0.02)
+                targets = _risk["targets"]
                 out.append({
                     "symbol": symbol.upper(), "tf": tf, "pattern": kind,
                     "horizon": ("SHORT" if tf in SPOT_SHORT_TFS else "MID" if tf in SPOT_MID_TFS else "LONG"),
-                    "pattern_fa": pattern_info(kind)["fa"],
+                    "pattern_fa": (_rect_fa or pattern_info(kind)["fa"]),
                     "label": state_label(kind, str(pat.get("break_direction") or "")),
                     "rule_fa": pattern_info(kind)["rule_fa"],
                     "entry": close, "sl": float(sl), "targets": targets,
@@ -209,18 +323,23 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                     "break_bar_ts": str(d["timestamp"].iloc[-1]),
                     "pattern_commands": [pat],
                     "atr": float(atr),
+                    "mtf_fa": _mtf_bias_fa(frames),
                     "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 })
         except Exception as exc:
             print(f"spot scan warning {symbol} {tf}: {exc}")
             continue
-    # one setup per (symbol, tf): the strongest shape (largest path) wins
+    # one setup per (symbol, tf): r58 SUPERIORITY — the most VALID structure
+    # (span × touches) is the reference; path breaks the tie. «معتبرتر ملاک».
     best: Dict[tuple, dict] = {}
     for item in out:
         key = (item["symbol"], item["tf"])
-        if key not in best or item["path_pct"] > best[key]["path_pct"]:
+        _w = _structural_weight((item.get("pattern_commands") or [{}])[0])
+        item["_weight"] = _w
+        if key not in best or (_w, item["path_pct"]) > (
+                best[key]["_weight"], best[key]["path_pct"]):
             best[key] = item
-    return list(best.values())
+    return [b for b in best.values()]
 
 
 def _next_spot_public_code() -> str:
@@ -258,6 +377,12 @@ def build_spot_candidate(item: dict):
     if entry > 0 and sl > 0 and (entry - sl) / entry > cap:
         sl = entry * (1.0 - cap)
     targets = [float(x) for x in (item.get("targets") or [])]
+    # r53 result-integrity: a LONG spot target AT/BELOW the entry can only
+    # produce an instant fictitious win (the SHIB phantom family) — drop it
+    # and rebuild the ladder from the default path when none survives.
+    targets = [t for t in targets if entry > 0 and t > entry]
+    if not targets:
+        targets = [entry * 1.05, entry * 1.10]
     weights = [float(x) for x in (item.get("weights") or SPOT_WEIGHTS)]
     meta = {
         "market": "SPOT", "engine": "SPOT", "log_scale": True,
@@ -277,6 +402,7 @@ def build_spot_candidate(item: dict):
         "viva_state": "S6_CONFIRMED",
         "technical_confirmation_complete": True,
         "confirmed_snapshot_fa": "سیگنال اسپات روی کلوز معتبر بالای سقف الگو صادر شد.",
+        "mtf_fa": list(item.get("mtf_fa") or []),
     }
     cand = SignalCandidate(
         signal_id=f"viva-spot-{str(item.get('symbol') or '').upper()}-{tf}-"
@@ -410,12 +536,15 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
     out: List[dict] = []
     if not frames:
         return out
+    # r61.1 (Viva 09-30): parent/child multi-TF nesting REMOVED by his order —
+    # «والد و بچه و اینام ولش کن کلا حذف کن؛ مولتی تایم فقط در بند توضیحات
+    # تحلیل بشه». Multi-TF lives in the TEXT bias lines only.
     for tf in SPOT_TRIGGERS:
         df = frames.get(tf)
         if df is None or len(df) < 45:
             continue
         try:
-            d = df.reset_index(drop=True)
+            d = _sane_ohlcv(df.reset_index(drop=True))
             atr = _atr(d)
             if atr <= 0 or not _fresh(d, tf):
                 continue
@@ -469,6 +598,73 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
         if cur is None or STAGE_RANK[item["stage"]] > STAGE_RANK[cur["stage"]]:
             best[item["sig"]] = item
     return list(best.values())
+
+
+def scan_spot_update_events(symbol: str, frames: Dict[str, pd.DataFrame],
+                            cooldown_h: float = 12.0) -> List[dict]:
+    """r57 (Viva: «الکی آپدیت نده» — only MAJOR events become spot updates):
+      • حجم: the last candle's volume ≥ 1.8× its 20-candle average;
+      • دیس‌پلیس‌منت: a body ≥ 1.5×ATR (either direction, with its side);
+      • برخورد: price touching EITHER structural extreme of the pattern
+        window (last-120-bar high or low) within 0.3×ATR.
+    Deduped per (symbol, tf, kind) via bot_kv stamps (12h default) — reads
+    only, markers are written by commit_spot_update_events AFTER a send."""
+    from database.bot_kv import get_json as _g
+    import time as _t
+    now = _t.time()
+    state = _g("spot_update_events", {}) or {}
+    out: List[dict] = []
+    for tf in SPOT_TRIGGERS:
+        df = frames.get(tf)
+        if df is None or len(df) < 45:
+            continue
+        try:
+            d = _sane_ohlcv(df.reset_index(drop=True))
+            atr = _atr(d)
+            if atr <= 0 or not _fresh(d, tf):
+                continue
+            close = float(d["close"].iloc[-1])
+            v20 = float(d["volume"].tail(20).mean() or 0.0)
+            vlast = float(d["volume"].iloc[-1] or 0.0)
+            vr = (vlast / v20) if v20 > 0 else 0.0
+            body = abs(float(d["close"].iloc[-1]) - float(d["open"].iloc[-1]))
+            hi120 = float(d["high"].tail(120).max())
+            lo120 = float(d["low"].tail(120).min())
+            cands = []
+            if vr >= 1.8:
+                side_fa = "خرید" if close >= float(d["open"].iloc[-1]) else "فروش"
+                cands.append(("vol", f"جهش حجم ≈ {vr:.1f}× میانگین ۲۰کندله — سمتِ {side_fa}"))
+            if body >= 1.5 * atr:
+                dir_fa = "صعودی" if close >= float(d["open"].iloc[-1]) else "نزولی"
+                cands.append(("disp", f"کندلِ دیس‌پلیس‌منت {dir_fa} (بدنه ≥ ۱٫۵×ATR)"))
+            if hi120 - 0.3 * atr <= close <= hi120 + 0.3 * atr:
+                cands.append(("touch_high", "برخورد به سقفِ ساختاری الگو/ترند"))
+            elif lo120 + 0.3 * atr >= close >= lo120 - 0.3 * atr:
+                cands.append(("touch_low", "برخورد به کفِ ساختاری الگو/ترند"))
+            for kind, text_fa in cands:
+                key = f"{symbol}|{tf}|{kind}"
+                if now - float((state.get(key) or {}).get("ts", 0)) < cooldown_h * 3600.0:
+                    continue
+                out.append({"symbol": symbol.upper(), "tf": tf, "kind": kind,
+                            "text_fa": text_fa, "event_key": key,
+                            "close": close, "vol_ratio": vr,
+                            "ts": str(d["timestamp"].iloc[-1])})
+        except Exception as exc:
+            print(f"spot update-event warning {symbol} {tf}: {exc}")
+            continue
+    return out
+
+
+def commit_spot_update_events(events) -> None:
+    """Stamp the sent events (handoff law: marker AFTER success)."""
+    from database.bot_kv import get_json as _g, set_json as _s
+    import time as _t
+    now = _t.time()
+    state = {k: v for k, v in (_g("spot_update_events", {}) or {}).items()
+             if now - float((v or {}).get("ts", 0)) < 7 * 24 * 3600.0}
+    for e in events or []:
+        state[str(e.get("event_key") or "")] = {"ts": now}
+    _s("spot_update_events", state)
 
 
 def spot_alert_check(item: dict) -> bool:

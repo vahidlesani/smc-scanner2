@@ -36,27 +36,30 @@ def test_entry_fill_requires_a_real_ohlc_touch():
 # ── Viva 09-19/20 ladder v3: original 5-pill shape, exits 40/30/30 ────────
 
 
-def test_ladder_v3_five_pills_forty_thirty_thirty():
+def test_ladder_v40_three_pills_forty_thirty_thirty():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
-    # five equal segments entry→final — the approved tool shape; TP1 keeps
-    # its original distance (no 1R floor); TP4/TP5 are INFO (zero weight).
-    assert p["targets"] == [102.0, 104.0, 106.0, 108.0, 110.0]
-    assert p["weights"] == [40.0, 30.0, 30.0, 0.0, 0.0]
-    assert p["version"] == 2
+    # r40 (Viva 09-26): TP4/TP5 removed — THREE equal thirds entry→final,
+    # exits 40/30/30 on TP1..TP3, TP3 IS the final target.
+    assert len(p["targets"]) == 3
+    assert abs(p["targets"][0] - (100.0 + 10.0 / 3.0)) < 1e-6
+    assert abs(p["targets"][1] - (100.0 + 20.0 / 3.0)) < 1e-6
+    assert p["targets"][2] == 110.0
+    assert p["weights"] == [40.0, 30.0, 30.0]
     assert p["trail_stops"][0] == 100.05          # net BE, fee 0 → 5 ticks
-    result = advance_ladder(p, 102.1, 100.2)
+    result = advance_ladder(p, float(p["targets"][0]) + 0.1, 100.2)
     assert result["events"][0]["event"] == "TP1"
     assert result["state"]["current_sl"] == 100.05
     assert result["state"]["hit_index"] == 1
-    assert abs(result["state"]["realized_r"] - 0.4) < 1e-9   # 1R × 40%
+    assert abs(result["state"]["realized_r"] - 0.4 * p["target_r"][0]) < 1e-9
 
 
 def test_ladder_closes_when_weight_exhausted_at_tp3():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
-    out = advance_ladder(p, 106.5, 100.2)["state"]   # TP1+TP2+TP3 same candle
+    out = advance_ladder(p, 110.5, 100.2)["state"]   # TP1+TP2+TP3 same candle
     assert out["closed"]
     assert out["hit_index"] == 3
-    assert abs(out["realized_r"] - (0.4 * 1.0 + 0.3 * 2.0 + 0.3 * 3.0)) < 1e-9
+    _expected = sum(w / 100.0 * r for w, r in zip(p["weights"], p["target_r"]))
+    assert abs(out["realized_r"] - _expected) < 1e-9
 
 
 def test_ladder_stop_is_conservative_when_same_candle_hits_tp():
@@ -66,11 +69,13 @@ def test_ladder_stop_is_conservative_when_same_candle_hits_tp():
     assert result["state"]["closed"]
 
 
-def test_ladder_short_five_segments_and_trail():
+def test_ladder_short_three_segments_and_trail():
     p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01}, 90, trigger_tf="1d")
-    assert p["targets"] == [98.0, 96.0, 94.0, 92.0, 90.0]
-    assert p["weights"] == [40.0, 30.0, 30.0, 0.0, 0.0]
-    result = advance_ladder(p, 99.9, 97.9)
+    assert len(p["targets"]) == 3
+    assert abs(p["targets"][0] - (100.0 - 10.0 / 3.0)) < 1e-6
+    assert p["targets"][2] == 90.0
+    assert p["weights"] == [40.0, 30.0, 30.0]
+    result = advance_ladder(p, 99.9, 96.5)
     assert result["events"][0]["event"] == "TP1"
     assert result["state"]["current_sl"] == 99.95
 
@@ -86,9 +91,9 @@ def test_net_breakeven_includes_roundtrip_cost():
 
 def test_band_trailing_ratchets_to_profit_floor_long():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
-    st = advance_ladder(p, 102.1, 100.1)["state"]
+    st = advance_ladder(p, float(p["targets"][0]) + 0.1, 100.1)["state"]
     assert st["hit_index"] == 1
-    assert abs(st["band_floors"][0] - 100.7) < 1e-9   # 1R band → k=0.35
+    assert abs(st["band_floors"][0] - (100.0 + 0.35 * 10.0 / 3.0)) < 1e-9   # 1-step band → k=0.35
     candles = [{"open": 104.0, "high": 104.2, "low": 103.6,
                 "close": 104.0, "volume": 10.0} for _ in range(25)]
     candles[-1] = {"open": 105.0, "high": 105.5, "low": 104.8,
@@ -107,8 +112,8 @@ def test_band_trailing_ratchets_to_profit_floor_long():
 
 def test_band_trailing_short_mirrors():
     p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01}, 90, trigger_tf="1d")
-    st = advance_ladder(p, 99.9, 97.9)["state"]
-    assert abs(st["band_floors"][0] - 99.3) < 1e-9
+    st = advance_ladder(p, 99.9, 96.5)["state"]
+    assert abs(st["band_floors"][0] - (100.0 - 0.35 * 10.0 / 3.0)) < 1e-9
     candles = [{"open": 95.8, "high": 96.2, "low": 95.6,
                 "close": 95.8, "volume": 10.0} for _ in range(25)]
     candles[-1] = {"open": 95.0, "high": 95.2, "low": 94.5,
@@ -124,7 +129,7 @@ def test_band_trailing_short_mirrors():
 
 def test_band_trailing_ignores_legacy_v1_ladders():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
-    st = advance_ladder(p, 102.1, 100.1)["state"]
+    st = advance_ladder(p, 103.5, 100.1)["state"]
     st["version"] = 1
     candles = [{"open": 105.0, "high": 105.5, "low": 104.8,
                 "close": 105.2, "volume": 10.0} for _ in range(25)]
@@ -137,13 +142,13 @@ def test_band_floor_ratios_adapt_to_band_width():
     # Round 14 (his verbatim: «لطفا ارتباطی بین تی پی و استاپ نذار»): k is
     # measured in LADDER STEPS — a pure price distance — never in R.
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
-    assert [round(k, 3) for k in p["band_ks"]] == [0.35] * 4   # uniform 1-step bands
-    assert abs(p["band_floors"][0] - 100.7) < 1e-9
-    assert abs(p["band_floors"][1] - 102.7) < 1e-9
+    assert [round(k, 3) for k in p["band_ks"]] == [0.35] * 2   # uniform 1-step bands
+    assert abs(p["band_floors"][0] - (100.0 + 0.35 * 10.0 / 3.0)) < 1e-9
+    assert abs(p["band_floors"][1] - (100.0 + 1.35 * 10.0 / 3.0)) < 1e-9
     # the 1h ceiling (5%) caps the same ladder; the ratio stays step-based
     r = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1h")
     assert r["target_capped"] is True and abs(r["final_target"] - 105) < 1e-9
-    assert [round(k, 3) for k in r["band_ks"]] == [0.35] * 4
+    assert [round(k, 3) for k in r["band_ks"]] == [0.35] * 2
     # PROOF of decoupling: move the stop 1.0 and NOTHING in the TP path changes
     r2 = build_ladder(100, 97, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1h")
     assert r2["targets"] == r["targets"]
@@ -166,18 +171,18 @@ def test_tf_target_ceiling_clamps_far_structural_targets():
                           trigger_tf="15m")
     assert ladder["target_capped"] is True
     assert ladder["raw_final_target"] == 1.119
-    assert abs(ladder["targets"][0] - 1.3672) < 1e-4   # TP1 ≈ 1%
-    assert abs(ladder["targets"][4] - 1.3119) < 1e-4   # TP5 = 5% ceiling
+    assert abs(ladder["targets"][0] - (1.381 - 0.05 * 1.381 / 3.0)) < 1e-4   # TP1 = ⅓ of the 5% path
+    assert abs(ladder["targets"][-1] - 1.31195) < 1e-4   # TP3 = 5% ceiling
     # a target already inside the ceiling is untouched
     _px2, capped2, _ = cap_final_target(1.381, 1.34, "SHORT", "15m")
     assert not capped2 and _px2 == 1.34
 
 
-def test_zero_weight_info_pills_never_emit_receipts():
-    """Exits end at TP3 (40/30/30); a candle that also prints TP4/TP5 INFO
-    closes the ladder at TP3 and produces no receipts for zero-weight pills."""
+def test_ladder_events_end_at_tp3():
+    """r40: TP4/TP5 removed — one candle that sweeps the whole tape closes
+    the ladder at TP3 (40/30/30) with exactly three receipts."""
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="15m")
-    assert p["weights"] == [40.0, 30.0, 30.0, 0.0, 0.0]
+    assert p["weights"] == [40.0, 30.0, 30.0]
     step = advance_ladder(p, 200.0, 99.0)   # one candle sweeps every pill
     assert [e["event"] for e in step["events"]] == ["TP1", "TP2", "TP3", "LADDER_COMPLETE"]
     assert step["state"]["closed"] is True
@@ -185,15 +190,15 @@ def test_zero_weight_info_pills_never_emit_receipts():
 
 def test_vol_stop_scales_with_atr_n_argument():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
-    st = advance_ladder(p, 102.1, 100.1)["state"]
+    st = advance_ladder(p, 103.5, 100.1)["state"]
     candles = [{"open": 104.0, "high": 104.2, "low": 103.6,
                 "close": 104.0, "volume": 10.0} for _ in range(25)]
     candles[-1] = {"open": 105.0, "high": 105.5, "low": 104.8,
                    "close": 105.2, "volume": 10.0}
     tight = band_trailing(st, candles)["state"]["current_sl"]
     loose = band_trailing(st, candles, atr_n=50.0)["state"]["current_sl"]
-    assert tight > loose > st["current_sl"]
-    assert abs(loose - 100.7) < 1e-6        # pure progress interpolation
+    assert tight > loose > st["current_sl"]   # wider ATR window → lazier trail
+    assert loose >= st["current_sl"] + 0.5 * (st["band_floors"][0] - st["current_sl"])
 
 
 def test_monitor_tf_hierarchy_and_sqrt_scaling():
@@ -228,7 +233,7 @@ def test_smart_exit_disarmed_before_tp1():
 
 def test_smart_exit_red_closes_on_two_or_more_signs():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
-    armed = advance_ladder(p, 102.1, 100.1)["state"]
+    armed = advance_ladder(p, 103.5, 100.1)["state"]
     win = _flat_window()
     assert smart_exit_scan("LONG", win, armed)["level"] == ""
     win[-2] = {"open": 100.0, "high": 100.6, "low": 99.9,
@@ -244,7 +249,7 @@ def test_smart_exit_two_signs_close_not_warn():
     """Viva 09-19/20 (verbatim): in the protection phase two concurrent
     reversal signs must CLOSE the remainder — never «فقط هشدار»."""
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
-    armed = advance_ladder(p, 102.1, 100.1)["state"]
+    armed = advance_ladder(p, 103.5, 100.1)["state"]
     win = _flat_window()
     win[-2] = {"open": 100.0, "high": 100.6, "low": 99.9,
                "close": 100.5, "volume": 100.0}
@@ -257,7 +262,7 @@ def test_smart_exit_two_signs_close_not_warn():
 
 def test_smart_exit_single_sign_only_warns():
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
-    armed = advance_ladder(p, 102.1, 100.1)["state"]
+    armed = advance_ladder(p, 103.5, 100.1)["state"]
     win = _flat_window()
     win[-1] = {"open": 100.1, "high": 100.15, "low": 99.9,
                "close": 99.95, "volume": 400.0}
@@ -267,7 +272,7 @@ def test_smart_exit_single_sign_only_warns():
 
 def test_smart_exit_single_sign_short_mirror():
     p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01}, 90, trigger_tf="1d")
-    armed = advance_ladder(p, 98.1, 97.5)["state"]
+    armed = advance_ladder(p, 98.1, 96.5)["state"]
     win = _flat_window()
     win[-1] = {"open": 99.9, "high": 100.1, "low": 99.85,
                "close": 100.05, "volume": 400.0}
@@ -277,7 +282,7 @@ def test_smart_exit_single_sign_short_mirror():
 
 def test_smart_exit_short_mirror_red():
     p = build_ladder(100, 102, "SHORT", {"tick_size": 0.01}, 90, trigger_tf="1d")
-    armed = advance_ladder(p, 98.1, 97.5)["state"]
+    armed = advance_ladder(p, 98.1, 96.5)["state"]
     win = _flat_window()
     win[-2] = {"open": 100.0, "high": 100.1, "low": 99.4,
                "close": 99.5, "volume": 100.0}
@@ -314,7 +319,7 @@ def test_protection_phase_two_signs_close_semantics():
     # Viva 09-19/20: in the protection phase TWO concurrent signs close the
     # remainder at the monitor candle close (score>=2), ONE sign warns only.
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
-    armed = advance_ladder(p, 102.1, 100.1)["state"]
+    armed = advance_ladder(p, 103.5, 100.1)["state"]
     win = _flat_window()
     win[-2] = {"open": 100.0, "high": 100.6, "low": 99.9,
                "close": 100.5, "volume": 100.0}
@@ -371,7 +376,7 @@ def test_single_confirmed_reverse_pin_close_is_a_red_close():
     """«مدیریت ویوا» §6.1: a closed reverse pin bar on the monitor frame exits
     the remainder even when it is the only sign on that frame."""
     p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
-    armed = advance_ladder(p, 102.1, 100.1)["state"]
+    armed = advance_ladder(p, 103.5, 100.1)["state"]
     win = _flat_window()
     win[-1] = {"open": 100.0, "high": 101.0, "low": 99.95,
                "close": 99.98, "volume": 90.0}   # reversed pin, no volume spike

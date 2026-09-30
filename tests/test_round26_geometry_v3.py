@@ -104,7 +104,10 @@ def test_edge_events_carry_approach_role_and_event_id():
     pre = np.linspace(0.26, 0.215, 30)
     mid = np.interp(np.arange(n, dtype=float), xs, ys)
     mid[:30] = pre
-    mid[141:] = np.linspace(0.1910, 0.1868, 9)   # close between the two edges
+    mid[141:147] = np.linspace(0.1910, 0.1868, 6)   # dip toward the lower edge…
+    mid[147:] = [0.1900, 0.1905, 0.1908]         # …then a REAL breakout close
+    # r61.2 reclaim law: a break event only exists while the LAST close still
+    # holds beyond its edge — the fixture now ends in a held upper-line break.
     mid += rng.normal(0, 0.0002, n)
     df = pd.DataFrame({
         "timestamp": TS, "open": mid * 0.999,

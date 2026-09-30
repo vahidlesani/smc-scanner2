@@ -77,22 +77,22 @@ def test_every_engine_uses_the_shared_path_and_no_rr_gate():
     assert "(tp2 - entry) / 5.0" in pe
 
 
-def test_ladder_from_a_valid_level_splits_five_ways_with_303040():
+def test_ladder_from_a_valid_level_splits_three_ways_with_303030():
     lad = build_ladder(100.0, 98.4, "SHORT", {"tick_size": 0.01}, 95.0, trigger_tf="15m")
     tg = [float(t) for t in lad["targets"]]
-    assert len(tg) == 5 and lad["weights"] == [40.0, 30.0, 30.0, 0.0, 0.0]
+    assert len(tg) == 3 and lad["weights"] == [40.0, 30.0, 30.0]
     assert abs(tg[-1] - 95.0) < 1e-9                       # the level itself
-    gaps = [round(tg[i] - tg[i + 1], 6) for i in range(4)]
-    assert max(gaps) - min(gaps) < 1e-9, gaps              # five equal parts
-    assert lad["targets"][2] < 100.0                       # TP3 (60%) before the level
+    gaps = [round(tg[i] - tg[i + 1], 6) for i in range(2)]
+    assert max(gaps) - min(gaps) < 1e-9, gaps              # three equal parts (r40)
+    assert lad["targets"][1] < 100.0                       # TP2 (2/3) before the level
 
 
 def test_internal_lane_path_is_the_wall_and_exits_before_it():
     lad = build_ladder(100.0, 98.6, "LONG", {"tick_size": 0.01}, 0.0,
                        trigger_tf="15m", wall_level=104.0)
     assert abs(lad["path_pct"] - 4.0) < 1e-9               # wall distance is the path
-    assert abs(float(lad["targets"][4]) - 104.0) < 1e-9
-    assert float(lad["targets"][2]) < 104.0                # exits under the ceiling
+    assert abs(float(lad["targets"][-1]) - 104.0) < 1e-9   # r40: TP3 IS the wall
+    assert float(lad["targets"][0]) < 104.0 and float(lad["targets"][1]) < 104.0
 
 
 def test_tf_target_distance_keeps_wall_priority_over_the_band():

@@ -372,12 +372,12 @@ class V7PersistenceTests(unittest.TestCase):
         cand.signal_id = "viva-familyguard-cross-0001"
         cand.metadata["public_code"] = "VIVA-TLBREAK-K999999"
         code = reserve_public_code(cand)
-        self.assertRegex(code, r"^VIVA-TECLASSIC-T\d{6}$")
+        self.assertRegex(code, r"^VIVA-TECHCLASSIC-T\d{6}$")
         same = make_candidate()
         same.setup_code = "TECHCLASSIC"
         same.signal_id = "viva-familyguard-same-0002"
-        same.metadata["public_code"] = "VIVA-TECLASSIC-T222222"
-        self.assertEqual(reserve_public_code(same), "VIVA-TECLASSIC-T222222")
+        same.metadata["public_code"] = "VIVA-TECHCLASSIC-T222222"
+        self.assertEqual(reserve_public_code(same), "VIVA-TECHCLASSIC-T222222")
 
     def test_unconfirmed_cannot_enter_signal_history(self):
         from database.repository_v7 import save_confirmed_signal
