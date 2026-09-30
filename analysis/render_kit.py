@@ -257,9 +257,12 @@ def _line_contradicts(line, side: str, direction: str, df: pd.DataFrame,
             slope = float(getattr(line, "slope", 0.0) or 0.0)
             inter = float(getattr(line, "intercept", 0.0) or 0.0)
         n = len(df) - 1
-        y_last = line_y({"log_fit": bool(getattr(line, "log_fit", False)),
-                         "log_slope": float(getattr(line, "log_slope", 0.0) or 0.0),
-                         "log_intercept": float(getattr(line, "log_intercept", 0.0) or 0.0),
+        # R62-ARENA (audit G7): a serialized dict keeps its log fields too —
+        # the old getattr() on a dict silently evaluated log lines linearly.
+        _g = (line.get if isinstance(line, dict) else (lambda k, d=None: getattr(line, k, d)))
+        y_last = line_y({"log_fit": bool(_g("log_fit", False)),
+                         "log_slope": float(_g("log_slope", 0.0) or 0.0),
+                         "log_intercept": float(_g("log_intercept", 0.0) or 0.0),
                          "slope": slope, "intercept": inter}, n)
         close = float(df["close"].iloc[-1])
         atr = 0.0
@@ -280,7 +283,10 @@ def _line_contradicts(line, side: str, direction: str, df: pd.DataFrame,
                     and not _brok9):
                 return True
         else:
-            if side == "LOW" and slope < 0 and (close - y_last) < -0.5 * atr:
+            # R62-ARENA (audit G3): the exact mirror of the SHORT rule — a
+            # FALLING support the price has rallied away from (line BELOW the
+            # close by > 0.5 ATR). The old sign tested the line ABOVE price.
+            if side == "LOW" and slope < 0 and (close - y_last) > 0.5 * atr:
                 return True
             if (side == "HIGH" and (y_last - close) > 2.0 * atr and slope < 0
                     and not _brok9):
@@ -477,6 +483,7 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                 slope=d["slope"], first_index=d["x0"], last_index=d["x1"],
                 price_at=lambda X, _d=d: line_y(_d, X))
 
+        _scissor62 = False
         if gu is not None and gl is not None:
             # r61 ROLE LAW (HYPE 09-30: the eye reads edges, not window OLS):
             # at the live bar the UPPER edge must sit ABOVE the lower one. A
@@ -490,15 +497,17 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                 if _gl_ok is not None:
                     gl = _gl_ok
                 else:
-                    gu, gl = None, None    # honest: no live two-edge pattern
-            if gu is not None and gl is not None:
+                    # R62-ARENA (audit G2): honest = TWO TRENDLINES, not an
+                    # empty chart (the old code blanked both edges here).
+                    _scissor62 = True
+            if gu is not None and gl is not None and not _scissor62:
                 shape = classify_shape(_ns(gu), _ns(gl), n, df=df)
             else:
                 shape = 'NONE'
             if shape in ("NONE", ""):
                 # converging pair = wedge (global coords! the old check mixed
                 # per-window local x and misfired on CRV)
-                _xs = max(gu["x0"], gl["x0"])
+                _xs = max(gu["x0"], gl["x0"]) if (gu is not None and gl is not None) else 0
                 _g0 = line_y(gu, _xs) - line_y(gl, _xs)
                 _g1 = line_y(gu, n) - line_y(gl, n)
                 same_dir = (gu["slope"] < 0) == (gl["slope"] < 0) and gu["slope"] != 0
@@ -552,7 +561,7 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                 _sl = float(_ln.get("slope") or 0.0)
                 _ic = float(_ln.get("intercept") or 0.0)
                 _side = str(_ln.get("side") or "")
-                if (_atr_l > 0 and abs(_sl * n + _ic - _live) > 4.0 * _atr_l
+                if (_atr_l > 0 and abs(float(line_y(_ln, n)) - _live) > 4.0 * _atr_l
                     and not _recently_broken(_ln, n)):
                     continue                     # dead line projected far away
                 _dup = False
@@ -570,8 +579,8 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
             _kind = str(_item.get("type") or "NONE").upper()
             _bd = ""
             if len(_good) == 2:
-                _u = float(_good[0]["slope"]) * n + float(_good[0]["intercept"])
-                _l = float(_good[1]["slope"]) * n + float(_good[1]["intercept"])
+                _u = float(line_y(_good[0], n))     # R62 (G7): log-aware
+                _l = float(line_y(_good[1], n))
                 _hi, _lo = max(_u, _l), min(_u, _l)
                 if _atr_l > 0 and _live >= _hi + 0.30 * _atr_l:
                     _bd = "UP"
@@ -609,6 +618,12 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
             for _p in out:
                 _lns = list(_p.get("lines") or [])
                 if not _lns:
+                    _filtered.append(_p)
+                    continue
+                # R62-ARENA (audit G3): a classified TWO-EDGE pattern keeps its
+                # geometry — a rising wedge's rising upper edge IS the pattern
+                # on its own SHORT; only loose trendlines face the filter.
+                if len(_lns) == 2 and str(_p.get("type") or "").upper() not in ("TRENDLINE", "NONE", ""):
                     _filtered.append(_p)
                     continue
                 _keep = [ln for ln in _lns
@@ -810,12 +825,17 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
                     # linear pair, the local tangent for a log-calibrated one
                     "slope_lo": float(line_tangent(_lo_ln, _x_last)),
                     "slope_hi": float(line_tangent(_hi_ln, _x_last)),
+                    # R62-ARENA (audit C2): the log intercept lives at x=0 of
+                    # the FIT WINDOW — the projection must add bars to x_last,
+                    # not evaluate the curve at x=bars (≈ the window start).
                     "log_lo": {"fit": bool(_lo_ln.get("log_fit")),
                                "slope": float(_lo_ln.get("log_slope") or 0.0),
-                               "intercept": float(_lo_ln.get("log_intercept") or 0.0)},
+                               "intercept": float(_lo_ln.get("log_intercept") or 0.0),
+                               "x_last": _x_last},
                     "log_hi": {"fit": bool(_hi_ln.get("log_fit")),
                                "slope": float(_hi_ln.get("log_slope") or 0.0),
-                               "intercept": float(_hi_ln.get("log_intercept") or 0.0)},
+                               "intercept": float(_hi_ln.get("log_intercept") or 0.0),
+                               "x_last": _x_last},
                 }
                 break
         if _band:
@@ -861,8 +881,8 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
             _ln = _p["lines"][0]
             _xe = float(_ln.get("x1", 0))
             _ye = line_y(_ln, _xe)
-            _atr = _atr(trigger_df)
-            _band = max(0.15 * _atr, 1e-9)
+            _atr_f = _atr(trigger_df)      # R62: was `_atr = _atr(...)` → UnboundLocalError on every FLAG
+            _band = max(0.15 * _atr_f, 1e-9)
             md["render_zones"] = [{
                 "kind": "FLAG-LIMIT",
                 "bottom": _ye - _band, "top": _ye + _band,

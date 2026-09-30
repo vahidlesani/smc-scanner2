@@ -66,7 +66,9 @@ CONFIRM_TF_BY_TRIGGER = {
     # below itself — 15m from 3m (Ourbit HAS 3m), 1h from 15m, 4h from 1h,
     # 1D from 4H. Finer-than-that closes are noise, not evidence.
     "15m": "5m",   # Viva 09-19/20: «تایم ۵ دقیقه رو نیاز داریم» — signs live on 5m
+    "30m": "15m",  # R62-ARENA: the r48 30m/2h lanes join the same one-step ladder
     "1h": "15m",
+    "2h": "30m",
     "4h": "1h",
     "1d": "4h",
 }
@@ -76,7 +78,9 @@ CONFIRM_LATE_BY_TRIGGER = {
     # Last resort ONLY: if the one-step-below candle never printed the valid
     # close, the pattern TF's OWN closed candle confirms (never stalls).
     "15m": "15m",
+    "30m": "30m",
     "1h": "1h",
+    "2h": "2h",
     "4h": "4h",
     "1d": "1d",
 }
@@ -95,6 +99,15 @@ CONFIRM_TF_BY_PATTERN = {"1d": "4h", "4h": "1h", "1h": "15m", "15m": "5m"}
 
 
 def confirm_timeframe_for_pattern(pattern_tf: str, style: str, trigger_tf: str) -> str:
+    # ── R62-ARENA (Viva 09-30): «هر تایم‌فریم باید از تایم پایین‌تر تأیید
+    # بگیره» — the ladder is keyed by the TRIGGER timeframe (the chart the
+    # member trades), never by the pattern/context TF. The old pattern-keyed
+    # lookup sent a 1h-trigger SWING chain to the 4h frame (DOT: 1h close
+    # above the trend at ~13:00, confirmation only at 17:00).
+    from analysis.confirm_r62 import confirm_tf_for_trigger
+    _ctf = confirm_tf_for_trigger(trigger_tf)
+    if _ctf:
+        return _ctf
     tf = str(pattern_tf or "").strip().lower()
     if tf in CONFIRM_TF_BY_PATTERN:
         return CONFIRM_TF_BY_PATTERN[tf]

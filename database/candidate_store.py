@@ -389,7 +389,7 @@ def absorb_update_into_chain(holder: SignalCandidate, fresh: SignalCandidate) ->
             "viva_upper_points", "viva_lower_points", "viva_break_line",
             "viva_breakout_line", "viva_retest_zone", "viva_touch_count",
             "viva_fit_error_atr", "viva_pattern", "tl_pattern", "tl_pattern_fa",
-            "tc_base", "tc_projection", "technoclassic",
+            "tc_base", "tc_projection", "technoclassic", "break_line_geo", "pattern_geo",
             "viva_major_break_line", "viva_major_break_line_tf",
             "viva_watch_line", "viva_watch_points",
         }

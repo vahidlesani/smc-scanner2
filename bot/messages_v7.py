@@ -1750,6 +1750,71 @@ def _clean_render_frame(df: pd.DataFrame, window: int = 150) -> pd.DataFrame:
     return frame
 
 
+def _r62_tool_fit_lookback(df: pd.DataFrame, candidate, lookback: int,
+                           confirmed: bool) -> int:
+    """R62-ARENA smart zoom, x side. Returns the bar count to render.
+
+    The long/short tool (stop → farthest target) must own at least a third
+    of the price panel (log space — the axis is always log, r57). When the
+    full dictated window spans so much price that the tool is crushed, the
+    OLDEST bars are dropped, down to 70% of the dictated count and never
+    past the earliest stored pattern/break-line anchor (the pattern must stay
+    whole on the canvas). Alert charts (no targets yet) keep the full count.
+    """
+    import math as _m
+    lb = int(lookback)
+    if df is None or len(df) < 40 or not confirmed:
+        return lb
+    md = getattr(candidate, "metadata", None) or {}
+    try:
+        levels = [float(candidate.sl or 0), float(candidate.entry_zone_bottom or 0),
+                  float(candidate.entry_zone_top or 0)]
+        levels += [float(v) for v in ((md.get("target_ladder") or {}).get("targets")
+                                      or [candidate.tp1, candidate.tp2]) if v]
+        levels = [v for v in levels if v and v > 0 and _m.isfinite(v)]
+        if len(levels) < 2:
+            return lb
+        t_lo, t_hi = min(levels), max(levels)
+        tool = _m.log(t_hi / t_lo)
+        if tool <= 0:
+            return lb
+    except Exception:
+        return lb
+    # earliest anchor that must stay visible
+    anchor_ts = []
+    for key in ("break_line_geo",):
+        g = md.get(key) or {}
+        if g.get("a_ts"):
+            anchor_ts.append(g["a_ts"])
+    for g in ((md.get("pattern_geo") or {}).values()):
+        if isinstance(g, dict) and g.get("a_ts"):
+            anchor_ts.append(g["a_ts"])
+    tail = df.tail(lb).reset_index(drop=("timestamp" in df.columns))
+    try:
+        ts = pd.to_datetime(tail["timestamp"] if "timestamp" in tail.columns else tail.index)
+        ts = pd.DatetimeIndex(ts).tz_localize(None) if getattr(ts, "tz", None) else pd.DatetimeIndex(ts)
+    except Exception:
+        ts = None
+    min_n = max(40, int(0.70 * lb))
+    if ts is not None and anchor_ts:
+        try:
+            a0 = min(pd.Timestamp(str(a)).tz_localize(None) if pd.Timestamp(str(a)).tzinfo is None
+                     else pd.Timestamp(str(a)).tz_convert("UTC").tz_localize(None) for a in anchor_ts)
+            pos = int((ts < a0).sum())                 # bars before the anchor
+            min_n = max(min_n, len(ts) - pos + 3)      # keep anchor + 3 bars of lead-in
+        except Exception:
+            pass
+    min_n = min(min_n, lb)
+    hi = tail["high"].astype(float).to_numpy()
+    lo = tail["low"].astype(float).to_numpy()
+    for n_try in range(len(tail), min_n - 1, -max(1, len(tail) // 30)):
+        h = max(float(hi[-n_try:].max()), t_hi)
+        l_ = min(float(lo[-n_try:].min()), t_lo)
+        if l_ > 0 and tool / max(_m.log(h / l_), 1e-12) >= 0.33:
+            return int(n_try)
+    return int(min_n)
+
+
 def _smart_y_window(c_lo: float, c_hi: float, atr: float,
                     ov_lo: Optional[float] = None,
                     ov_hi: Optional[float] = None,
@@ -1957,6 +2022,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # The identity is still read: the safety-net below reuses it, and
             # anchors older than the window now go through the r51 per-TF
             # re-fit instead of stretching the zoom over a month of candles.
+        except Exception:
+            pass
+        # R62-ARENA SMART ZOOM (Viva 09-30: «زوم هوشمند که الگو بهترین دیده
+        # بشه و ابزار لانگ/شورت در تأیید له نشه»): inside the dictated density
+        # band (≥70% of the r52 count) the window drops its oldest bars when
+        # an old swing would crush the trade tool — never past the pattern's
+        # own anchors, never below the band. Candles stay hard bounds (r40).
+        try:
+            _lookback = _r62_tool_fit_lookback(df, candidate, int(_lookback), bool(confirmed))
         except Exception:
             pass
         frame = _clean_render_frame(df, window=_lookback)
@@ -3566,6 +3640,20 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception:
                 _froz28 = None
         _live28 = float(frame["close"].iloc[-1])
+        # R62-ARENA: a frozen window is reused only while it still holds the
+        # WHOLE tool (stop, entry box, every target) — a freeze taken before
+        # the ladder was final used to slice the long/short tool.
+        if _froz28 and confirmed:
+            try:
+                _tool62 = [float(candidate.sl or 0), float(candidate.entry_zone_bottom or 0),
+                           float(candidate.entry_zone_top or 0)]
+                _tool62 += [float(v) for v in (((candidate.metadata or {}).get("target_ladder")
+                                               or {}).get("targets") or []) if v]
+                _tool62 = [v for v in _tool62 if v > 0]
+                if _tool62 and (min(_tool62) < _froz28[0] or max(_tool62) > _froz28[1]):
+                    _froz28 = None
+            except Exception:
+                pass
         if _froz28 and _froz28[0] < _live28 < _froz28[1]:
             ax.set_ylim(*_froz28)
         else:
@@ -5255,7 +5343,7 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
             try:
                 from database.bot_kv import set_json
                 set_json(_spot_alert_mid_key(sym, tf, str(item.get("pattern") or "")),
-                         {"mid": mid, "at": _time.time()})
+                         {"mid": mid, "at": time.time()})   # R62: `_time` was undefined → the spot alert mid was never stored
             except Exception:
                 pass
         return mid

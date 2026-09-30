@@ -283,7 +283,14 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                     if str(_lns[0].get("side") or "").upper() != "HIGH":
                         continue
                 upper = _upper_edge(pat, n)
-                if not bullish_pattern_ok(pat, close, upper):
+                # R62-ARENA (audit S1): the bias is the LIBRARY's bias of the
+                # named shape when the item carries none (pivot patterns) — a
+                # double top / H&S / rising wedge is never a spot LONG.
+                _kind62 = str(pat.get("type") or "NONE").upper()
+                _pat62 = pat if pat.get("bias") else {**pat, "bias": pattern_info(_kind62).get("bias")}
+                if _kind62 in ("DOUBLE_TOP", "HEAD_SHOULDERS", "WEDGE_RISING", "FLAG_BEAR"):
+                    continue
+                if not bullish_pattern_ok(_pat62, close, upper):
                     continue
                 eps = 0.02 * atr
                 if upper is None or close <= upper + eps:

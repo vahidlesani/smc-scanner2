@@ -303,9 +303,14 @@ def classify_shape(upper, lower, n, df=None) -> str:
     span = max(1, n - start)
     drift_u = abs(upper.slope) * span
     drift_l = abs(lower.slope) * span
-    flat_u = drift_u <= 0.12 * width_now
-    flat_l = drift_l <= 0.12 * width_now
     width_then = upper.price_at(start) - lower.price_at(start)
+    # R62-ARENA (audit P1): «flat» is judged against the pattern HEIGHT (its
+    # widest point, E&M), not the width at the apex. Near the apex a converging
+    # pattern is thin, so the old width_now yardstick called every flat top a
+    # slope → ascending triangles were published as RISING WEDGES (bearish!).
+    height = max(float(width_now), float(width_then or 0.0))
+    flat_u = drift_u <= 0.12 * height
+    flat_l = drift_l <= 0.12 * height
     # V3 §5/§29: contraction must be PROGRESSIVE, not an endpoint-noise
     # artifact — the mid-span width has to sit clearly below the start width
     # before any wedge/triangle claim. A true channel keeps width_mid ≈ width_then
@@ -321,7 +326,7 @@ def classify_shape(upper, lower, n, df=None) -> str:
     if abs(drift_u - drift_l) <= 0.15 * max(drift_u, drift_l, 1e-12):
         converging = False
     # slope deadband: a drift under 2% of height over the span IS horizontal
-    tol = 0.02 * width_now / span
+    tol = 0.02 * height / span
     if not converging:
         if width_then > 0 and width_now > 1.18 * width_then and upper.slope > tol and lower.slope < -tol:
             return "BROADENING"          # E&M megaphone: both edges fan outward
@@ -370,7 +375,9 @@ def classify_shape(upper, lower, n, df=None) -> str:
         tol_t = 0.025 * width_now / max(1, min(12, span))
         tu = _ts61(upper.price_at, n, start)
         tl = _ts61(lower.price_at, n, start)
-        es = _es61(df, start, float(upper.price_at(n)), float(lower.price_at(n))) \
+        # R62-ARENA (audit P2): the entry side is read against the band AT
+        # the pattern start (where price entered), not at the live bar.
+        es = _es61(df, start, float(upper.price_at(start)), float(lower.price_at(start))) \
             if df is not None else "ANY"
         if tu < -tol_t or es == "ABOVE":
             # the upper edge price actually tests LATE is FALLING (or price
@@ -700,7 +707,16 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
     if upper is None and lower is None:
         return events
     n = len(pattern_df) - 1
-    pattern = classify_shape(upper, lower, n)
+    pattern = classify_shape(upper, lower, n, df=pattern_df)   # R62 (P2): entry-side audit live
+    # R62-ARENA (audit P7): a scissored pair (the two independently fitted
+    # edges cross before the live bar) used to classify NONE → no rules →
+    # total silence on that TF. Two honest trendlines remain: each edge is
+    # judged on its own (break UP → LONG, break DOWN → SHORT; the one-break
+    # law picks the freshest when both fired).
+    _scissored62 = False
+    if pattern == "NONE" and upper is not None and lower is not None:
+        pattern = "TRENDLINE"
+        _scissored62 = True
     # Viva 2026-09-10 (doctrine): edge BOUNCE trades only inside PARALLEL
     # channels (dynamic or static). Wedges/triangles get warnings + breaks.
     is_parallel = str(pattern).upper().startswith("CHANNEL")
@@ -717,7 +733,7 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
     # sanity: measured width must be a real pattern (E&M "well-formed"), not a
     # sliver nor a chart-wide absurdity
     width_now = None
-    if upper is not None and lower is not None:
+    if upper is not None and lower is not None and not _scissored62:
         width_now = float(upper.price_at(n) - lower.price_at(n))
         if not (1.5 * atr_p <= width_now <= 45.0 * atr_p):
             return events
@@ -913,6 +929,12 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             "line_price": line_now, "live": live, "distance_atr": round(abs(dist), 3),
             "touches": int(line.touch_count), "fit_error_atr": round(float(line.fit_residual_atr), 3),
             "edge_points": [dict(p) for p in (line.points or ())],
+            # R62-ARENA: the broken edge's own geometry (value + slope in
+            # time) so every confirmation lane projects the SAME sloped line
+            # onto later candles instead of a frozen alert-time level.
+            "line_geo": _r62_line_geo(line, pattern_df, n, pattern_tf),
+            "pattern_geo": {"upper": (_r62_line_geo(upper, pattern_df, n, pattern_tf) if upper else {}),
+                            "lower": (_r62_line_geo(lower, pattern_df, n, pattern_tf) if lower else {})},
             "structure_score": structure_score(line, cfg), "reactions": react,
             "measured": {"from": line_now, "to": target, "pct": round(pct, 1),
                          "height": height, "last_close": live},
@@ -1064,6 +1086,14 @@ def choose_primary(events: List[Dict]) -> List[Dict]:
     return list(best.values())
 
 
+def _r62_line_geo(line, frame, n, tf):
+    try:
+        from analysis.confirm_r62 import line_geo_from
+        return line_geo_from(line, frame, n, str(tf or ""))
+    except Exception:
+        return {}
+
+
 def evaluate_prebreak(symbol: str, pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                       pattern_tf: str, live_price: Optional[float] = None) -> List[Dict]:
     out: List[Dict] = []
@@ -1191,8 +1221,18 @@ def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
                         _st60 = _cs60(_sid60)
                     except Exception:
                         _st60 = ""
-                if _st60 in ("CANCELLED", "EXPIRED", "CLOSED", "DEAD_GATE", "SUPERSEDED"):
+                # R62-ARENA (audit P10): the guard is stamped when the
+                # candidate is BUILT, before it is stored/posted. A candidate
+                # that never reached the store (budget-deferred, dedup, license
+                # gate) left status "" and silenced its pattern for 12h. An
+                # unknown id older than one discovery cycle (20 min) is a
+                # never-persisted mint → allowed again.
+                _age62 = __import__("time").time() - float(_seen.get("ts") or 0)
+                if _st60 in ("CANCELLED", "EXPIRED", "CLOSED", "DEAD_GATE", "SUPERSEDED",
+                             "UNPOSTED"):
                     pass                                   # resolved → allow re-mint
+                elif _st60 == "" and _sid60 and _age62 > 20 * 60:
+                    pass                                   # never persisted → allow
                 elif not _sid60 or _st60 in ("", "EDUCATIONAL", "APPROACHING",
                                              "CONFIRMED", "NEAR_CONFIRM"):
                     continue                               # live or unknown → silent
@@ -1581,6 +1621,8 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         "viva_touch_count": int(ev.get("touches") or 0),
         "viva_fit_error_atr": float(ev.get("fit_error_atr") or 0.0),
         "viva_break_line": line_now, "viva_breakout_line": line_now,
+        "break_line_geo": ev.get("line_geo") or {},
+        "pattern_geo": ev.get("pattern_geo") or {},
         "pattern_type": ev["pattern"],
         "pattern_bias": pattern_info(ev["pattern"]).get("bias", "NEUTRAL"),
         "break_edge": ev.get("break_edge"),

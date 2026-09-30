@@ -164,7 +164,7 @@ def test_once_per_candidate():
 
 def test_hook_sits_after_the_late_bound_retry():
     src = open(os.path.join(REPO, "main.py"), encoding="utf-8").read()
-    part = src.split("candidate, _lf[1], htf_closed_df=_pat_frame)")[1][:900]
+    part = src.split("candidate, _lf[1], htf_closed_df=_pat_frame,")[1][:900]
     assert "evaluate_tohom_confirmation" in part
     assert 'TOHOM_ENABLED' in open(os.path.join(REPO, "config.py"), encoding="utf-8").read()
 

@@ -508,6 +508,14 @@ def run_discovery_scan() -> Dict[str, int]:
                 # Delete Telegram posts only for a proven update of this same
                 # scenario lineage. Same-symbol / same-trigger setups can be
                 # independent and must remain visible.
+                # R62-ARENA (audit W1): the budget is checked BEFORE the prior
+                # lineage is superseded — a deferred replacement used to delete
+                # the live chain's posts and then never publish its successor.
+                _is_watch62 = str((candidate.metadata or {}).get("viva_state") or "").upper().startswith("S0_WATCH")
+                if _edu_budget["left"] <= 0 or (_is_watch62 and _watch_budget["left"] <= 0):
+                    stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
+                    _t(candidate)["budget_deferred"] = _t(candidate).get("budget_deferred", 0) + 1
+                    continue  # not persisted; next scan retries when budget frees
                 for prior in supersede_alert_lineage(candidate):
                     try:
                         release_symbol_lock(prior.symbol, prior.signal_id)
@@ -517,10 +525,6 @@ def run_discovery_scan() -> Dict[str, int]:
                     purge_pro_watch_post(prior)
                 # Live alerts replace themselves on meaningful new information;
                 # symbol locks would hide those updates, so discovery has no lock.
-                if _edu_budget["left"] <= 0:
-                    stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
-                    _t(candidate)["budget_deferred"] = _t(candidate).get("budget_deferred", 0) + 1
-                    continue  # not persisted; next scan retries when budget frees
                 if not add_candidate(candidate):
                     _t(candidate)["add_failed"] = _t(candidate).get("add_failed", 0) + 1
                     _t(candidate)["dup"] += 1
@@ -538,6 +542,14 @@ def run_discovery_scan() -> Dict[str, int]:
                 # lost, only smoothed).
                 if not _educate(candidate, _chart_frame(candidate, bundle)):
                     _t(candidate)["educate_failed"] = _t(candidate).get("educate_failed", 0) + 1
+                    # R62-ARENA (audit W2): a stored row whose alert never
+                    # posted is a GHOST chain (monitored, confirmable, with no
+                    # message to reply to). Retire it so the next scan re-mints.
+                    try:
+                        from database.candidate_store import set_status as _set_st62
+                        _set_st62(candidate.signal_id, "UNPOSTED")
+                    except Exception as _gh_exc:
+                        print(f"ghost-chain retire failed {candidate.signal_id}: {_gh_exc}")
                     continue
                 stats["new"] += 1
                 _t(candidate)["ready_new"] += 1
@@ -786,6 +798,7 @@ def run_spot_scan() -> Dict[str, int]:
                 _items58 = scan_spot_alerts(symbol, bundle)
                 ladder.extend(_items58)
                 # pin per SYMBOL|TF so the recheck scans one TF, not six
+                import time as _time      # R62: `_time` was undefined → spot pins never saved
                 _pin58 = {f"{symbol}|{str(i.get('tf') or '')}": {"ts": _time.time()}
                           for i in _items58
                           if str(i.get("stage")) in ("NEAR_BREAK", "TOUCH")}
@@ -1038,6 +1051,15 @@ def _watch_edge_at(candidate, ts) -> float:
     trend/channel line when the detector stored its two defining points, the
     static breakout edge otherwise, the zone edge as a last resort."""
     md = candidate.metadata or {}
+    # R62-ARENA (audit W7): the ⚡ live note reads the SAME sloped edge the
+    # close law and TOHOM use — one level everywhere.
+    try:
+        from analysis.confirm_r62 import confirm_edge_at as _r62_cea
+        _v62 = float(_r62_cea(candidate, ts) or 0.0)
+        if _v62 > 0 and str(md.get("confirm_edge_source") or "") != "MAJOR_TL":
+            return _v62
+    except Exception:
+        pass
     try:
         _la = pd.Timestamp(str(md["tl_a_ts"])).tz_localize(None)
         _lb = pd.Timestamp(str(md["tl_b_ts"])).tz_localize(None)
@@ -1140,6 +1162,14 @@ def _structural_break_edge(candidate) -> float:
     scenario-side zone edge (LONG breaks UP through the top, SHORT down
     through the bottom). 0.0 when the chain carries no edge at all."""
     md = candidate.metadata or {}
+    try:   # R62-ARENA: the edge NOW, on its own slope (shared core)
+        from analysis.confirm_r62 import confirm_edge_at as _r62_cea
+        if md.get("break_line_geo"):
+            _v62 = float(_r62_cea(candidate, pd.Timestamp.utcnow()) or 0.0)
+            if _v62 > 0:
+                return _v62
+    except Exception:
+        pass
     for _k51 in ("viva_breakout_line", "tl_line"):
         try:
             _v51 = float(md.get(_k51) or 0)
@@ -1277,6 +1307,98 @@ def _live_break_watch(candidate, live_frame) -> Tuple[str, str]:
              "با کلوزِ معتبر، قانونِ یک‌کلوز تأیید می‌کند؛ بازگشت تا پیش از کلوز نقض است."), _key)
 
 
+def _r62_reset_stale(candidate) -> None:
+    """R62-ARENA (audit C5): a stale confirmation is DISARMED, not retried.
+    The chain stays alive (his 09-21 law) but the old break bar can never
+    confirm again: only a later close after a First-Time-Back touch of the
+    edge (FTB law, 09-29 §6) or a fresh TOHOM read may confirm it."""
+    md = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+    bar = md.get("fast_break_bar") or md.get("tohom_confirm_bar")
+    if bar:
+        md["stale_after_bar"] = str(bar)[:19]
+    for k in ("technical_confirmation_complete", "tl_fast_break", "fast_break_bar",
+              "fast_break_close", "confirm_level_used", "tohom", "tohom_note_fa",
+              "confirm_candle_pattern"):
+        md.pop(k, None)
+    if str(md.get("viva_state") or "").upper() == "S6_CONFIRMED":
+        md["viva_state"] = "S2_BREAKOUT_CLOSED"
+    if str(getattr(candidate, "status", "") or "").upper() == "CONFIRMED":
+        candidate.status = "APPROACHING"
+    candidate.confirmed_at = ""
+    candidate.metadata = md
+
+
+def _r62_tohom_attempt(candidate, current_price, stats, confirmed=False, reason=""):
+    """R62-ARENA — the smart engine (TOHOM) as a continuous listener.
+
+    Audit TH1–TH3: TOHOM used to run once per chain (a stamp set before any
+    check), only inside the confirm TF's fetch window, on cached sub-frames.
+    Now, for every pre-confirm chain whose live price is at/through its break
+    edge, the sub-TF one step below the confirm TF (1h trigger → 5m) is
+    fetched FRESH at most once per new sub-candle and judged by the dictated
+    evidence (directional sub-closes, rising volume, confirming candle beyond
+    the shared sloped edge). Returns (confirmed, candidate, reason).
+    """
+    if confirmed:
+        return confirmed, candidate, reason
+    try:
+        md = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+        if md.get("technical_confirmation_complete"):
+            return confirmed, candidate, reason
+        from analysis.tohom import evaluate_tohom_confirmation, tohom_frame_tf
+        sub = tohom_frame_tf(candidate)
+        if not sub:
+            return confirmed, candidate, reason
+        px = float(current_price or 0.0)
+        if px > 0:
+            try:
+                from analysis.confirm_r62 import confirm_edge_at as _cea
+                _edge = float(_cea(candidate, pd.Timestamp.utcnow()) or 0.0)
+            except Exception:
+                _edge = 0.0
+            _atr = float(md.get("atr") or 0.0) or px * 0.01
+            if _edge > 0:
+                _near = (px >= _edge - 0.25 * _atr) if candidate.direction == "LONG" \
+                    else (px <= _edge + 0.25 * _atr)
+                if not _near:
+                    return confirmed, candidate, reason     # nothing to confirm; no fetch
+        # once per NEW sub-candle (Railway diet): the bar that is forming now
+        _mins = float(_TF_MINUTES_LIVE.get(sub, 5) or 5)
+        _bar = pd.Timestamp.utcnow().tz_localize(None).floor(pd.Timedelta(minutes=_mins))
+        _bar_key = str(_bar)[:16]
+        if md.get("tohom_fetch_bar") == _bar_key:
+            return confirmed, candidate, reason
+        md["tohom_fetch_bar"] = _bar_key
+        live = get_klines(candidate.symbol, sub, 80, closed_only=False, use_cache=False)
+        if live is None or len(live) < 26:
+            return confirmed, candidate, reason
+        closed_sub = live.iloc[:-1].reset_index(drop=True)   # forming row dropped (TH3)
+        ok, candidate, why = evaluate_tohom_confirmation(candidate, closed_sub, sub_tf=sub)
+        if ok:
+            # the entry is the sub-close that confirmed (tool anchored there),
+            # as long as it sits between the stop and TP1 of this scenario
+            try:
+                _c = float(candidate.metadata.get("tohom_confirm_close") or 0.0)
+                _sl, _t1 = float(candidate.sl or 0.0), float(candidate.tp1 or 0.0)
+                _okc = (_sl < _c < _t1) if candidate.direction == "LONG" else (_t1 < _c < _sl)
+                if _c > 0 and _sl > 0 and _t1 > 0 and _okc:
+                    candidate.planned_entry = _c
+                    candidate.metadata["entry_source"] = "TOHOM_SUB_CLOSE"
+                    candidate.metadata["fast_break_bar"] = candidate.metadata.get("tohom_confirm_bar")
+                    candidate.metadata["fast_break_tf_min"] = _mins
+            except Exception:
+                pass
+            stats["tohom_confirms"] = stats.get("tohom_confirms", 0) + 1
+            print(f"⚡ TOHOM {candidate.symbol} {candidate.setup_code}: early confirm on "
+                  f"{candidate.metadata.get('tohom_sub_tf')} x{candidate.metadata.get('tohom_subs')} "
+                  f"vol x{candidate.metadata.get('tohom_vol_ratio')}")
+            return True, candidate, why
+        return confirmed, candidate, (reason or why)
+    except Exception as exc:
+        print(f"TOHOM check skipped {getattr(candidate, 'signal_id', '?')}: {exc}")
+        return confirmed, candidate, reason
+
+
 def _tf_fetch_window(tf: str) -> bool:
     """Railway cost guard (Viva 09-17), WIDENED 09-21 (round 13).
 
@@ -1361,16 +1483,22 @@ def _confirmation_stale_minutes(candidate, closed_df) -> Optional[int]:
         md = getattr(candidate, "metadata", None) or {}
         tf = str(md.get("confirm_tf") or getattr(candidate, "trigger_timeframe", "") or "15m").lower()
         mins = float(_TF_MINUTES_LIVE.get(tf, 15) or 15)
+        # R62-ARENA (audit C5): the stamp is a real bar timestamp now (the old
+        # fast lane stored the frame's integer INDEX, so this guard parsed
+        # garbage) and age is measured from the bar's CLOSE on its own TF.
+        bar_mins = float(md.get("fast_break_tf_min") or 0.0) or mins
         stamp = md.get("fast_break_bar") or md.get("confirm_bar")
         if not stamp and closed_df is not None and len(closed_df):
             stamp = closed_df["timestamp"].iloc[-1]
+            bar_mins = mins
         if not stamp:
             return None
         ts = pd.Timestamp(stamp)
         if ts.tzinfo is None:
             ts = ts.tz_localize("UTC")
+        ts = ts + pd.Timedelta(minutes=bar_mins)
         age_min = (datetime.now(timezone.utc) - ts.to_pydatetime()).total_seconds() / 60.0
-        if age_min > 2 * mins:
+        if age_min > 2 * max(mins, bar_mins):
             return int(age_min)
         return None
     except Exception:
@@ -1385,6 +1513,13 @@ def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataF
     charts keep using the trigger TF (see `_chart_frame`)."""
     frames: Dict[Tuple[str, str], Tuple[pd.DataFrame, pd.DataFrame, float]] = {}
     for candidate in candidates:
+        # R62-ARENA (audit C7): every chain listens ONE step below its TRIGGER
+        # TF (1h←15m, 4h←1h …) — old chains re-pointed from pattern-keyed TFs.
+        try:
+            from analysis.confirm_r62 import normalize_confirm_tf as _r62_norm
+            _r62_norm(candidate)
+        except Exception:
+            pass
         confirm_tf = candidate.metadata.get("confirm_tf") or candidate.trigger_timeframe
         from analysis.setups_v7 import confirm_late_tf as _late_tf
         _late = _late_tf(candidate.trigger_timeframe)
@@ -1591,6 +1726,10 @@ def monitor_candidates() -> Dict[str, int]:
                 # reject (it used to stamp the chain's last_reject_code and hide
                 # the real reason from the log/UI)
                 confirmed, reason = False, "پنجرهٔ کندلِ تأیید باز نیست؛ بررسی در کلوزِ بعدی"
+                # R62-ARENA (audit TH2): the smart engine is NOT tied to the
+                # confirm TF's fetch window — it has its own (finer) clock.
+                confirmed, candidate, reason = _r62_tohom_attempt(
+                    candidate, current_price, stats, confirmed, reason)
             else:
                 _pat_frame = None
                 try:
@@ -1603,7 +1742,10 @@ def monitor_candidates() -> Dict[str, int]:
                         _pat_frame = (frames.get((candidate.symbol, _trg)) or (None, None, None))[1]
                 except Exception:
                     _pat_frame = None
-                confirmed, candidate, reason = evaluate_confirmation(candidate, closed, htf_closed_df=_pat_frame)
+                _key_tf = str(candidate.metadata.get("confirm_tf_fallback") or key[1] or "")
+                confirmed, candidate, reason = evaluate_confirmation(
+                    candidate, closed, htf_closed_df=_pat_frame,
+                    frame_tf_minutes=float(_TF_MINUTES_LIVE.get(_key_tf, 0) or 0))
                 if not confirmed:
                     # Viva 09-17 late bound: the scan/structure candle confirms
                     # when the finer monitor TF never printed the valid close
@@ -1612,29 +1754,18 @@ def monitor_candidates() -> Dict[str, int]:
                     _lf = frames.get((candidate.symbol, _lt)) if _lt else None
                     if _lf and _lt != key[1]:
                         confirmed, candidate, reason = evaluate_confirmation(
-                            candidate, _lf[1], htf_closed_df=_pat_frame)
+                            candidate, _lf[1], htf_closed_df=_pat_frame,
+                            frame_tf_minutes=float(_TF_MINUTES_LIVE.get(str(_lt), 0) or 0))
                 if not confirmed:
                     # ── r47 TOHOM (Viva 09-27, «انجین هوشمند ورود قبل از کلوز
-                    # تایم تریگر»): the forming trigger candle's first closed
-                    # sub-TF candles may confirm NOW — 3 directional sub-closes
-                    # with rising volume and a confirming pattern beyond the
-                    # same break edge. Fail-closed; TOHOM_ENABLED=0 kills it.
+                    # تایم تریگر»): sub-TF directional closes with rising volume
+                    # and a confirming pattern beyond the same break edge may
+                    # confirm NOW. R62: re-evaluated on every new sub-candle
+                    # (no one-shot), one step below the confirm TF, fresh data.
+                    # (evaluate_tohom_confirmation lives in _r62_tohom_attempt)
                     try:
-                        from analysis.tohom import evaluate_tohom_confirmation, TOHOM_LOWER_TF
-                        _tlt = TOHOM_LOWER_TF.get(str(candidate.trigger_timeframe or "").lower())
-                        _tlf = frames.get((candidate.symbol, _tlt)) if _tlt else None
-                        if _tlf is None and _tlt:
-                            try:
-                                from data.fetcher import get_klines
-                                _tlf = (None, get_klines(candidate.symbol, _tlt, 60,
-                                                         closed_only=True, use_cache=True), None)
-                            except Exception:
-                                _tlf = None
-                        if _tlf is not None and getattr(_tlf[1], "empty", True) is False:
-                            confirmed, candidate, reason = evaluate_tohom_confirmation(candidate, _tlf[1])
-                            if confirmed:
-                                stats["tohom_confirms"] = stats.get("tohom_confirms", 0) + 1
-                                print(f"⚡ TOHOM {candidate.symbol} {candidate.setup_code}: early confirm on {candidate.metadata.get('tohom_sub_tf')} x{candidate.metadata.get('tohom_subs')} vol x{candidate.metadata.get('tohom_vol_ratio')}")
+                        confirmed, candidate, reason = _r62_tohom_attempt(
+                            candidate, current_price, stats, confirmed, reason)
                     except Exception as exc:
                         print(f"TOHOM check skipped {candidate.signal_id}: {exc}")
 
@@ -1647,6 +1778,31 @@ def monitor_candidates() -> Dict[str, int]:
                     freeze_confirmed_snapshot(candidate)
                 except Exception as _snap_exc:
                     print(f"snapshot freeze skipped: {_snap_exc}")
+            if (not confirmed and have_frames
+                    and str(candidate.metadata.get("last_reject_code") or "") == "BREAK_RECLAIMED"
+                    and not candidate.metadata.get("technical_confirmation_complete")):
+                # ── R62-ARENA (audit C8 / r61.2 law «ری‌کلیم = مرگِ شکست»): a
+                # break the market took back is a FAILED break — the chain is
+                # closed with the standard cancel message instead of sitting
+                # on a non-terminal reject forever.
+                candidate.status = "CANCELLED"
+                candidate.metadata["cancel_reason"] = "BREAK_RECLAIMED"
+                update_candidate(candidate)
+                try:
+                    cancel_staged_confirmation(candidate.signal_id)
+                except Exception:
+                    pass
+                send_candidate_cancelled(
+                    candidate,
+                    "شکستِ مبنا پس از هشدار پس گرفته شد (کلوز به سمتِ پیش از شکست برگشت)؛ "
+                    "شکستِ نامعتبر تأیید نمی‌گیرد و سناریو باطل شد.")
+                try:
+                    from bot.messages_v7 import send_verdict_reply
+                    send_verdict_reply(candidate, False, "شکست پس گرفته شد؛ سناریو باطل شد.")
+                except Exception:
+                    pass
+                stats["cancelled"] = int(stats.get("cancelled", 0)) + 1
+                continue
             if not confirmed:
                 # ── premise-dead closure (his 09-21 VVV report). Checked before
                 # every heartbeat/update so a runaway market can never keep a
@@ -1723,6 +1879,13 @@ def monitor_candidates() -> Dict[str, int]:
                 # NOT tradeable any more. The family still speaks: an analysis note
                 # goes out, the ladder stays disarmed, the chain stays alive.
                 _stale_conf = _confirmation_stale_minutes(candidate, closed)
+                if _stale_conf is not None and candidate.metadata.get("stale_note_sent"):
+                    # R62-ARENA (audit C5): ONE analysis note per chain — the old
+                    # loop re-sent «⏳ …» every cycle because the retry lane kept
+                    # re-confirming the same stale bar.
+                    _r62_reset_stale(candidate)
+                    update_candidate(candidate)
+                    continue
                 if _stale_conf is not None:
                     try:
                         send_setup_update(
@@ -1735,6 +1898,8 @@ def monitor_candidates() -> Dict[str, int]:
                     except Exception as exc:
                         print(f"stale-confirmation note failed {candidate.signal_id}: {exc}")
                     candidate.metadata["stale_confirmation_minutes"] = int(_stale_conf)
+                    candidate.metadata["stale_note_sent"] = True
+                    _r62_reset_stale(candidate)
                     stats["stale_confirmation"] = stats.get("stale_confirmation", 0) + 1
                     update_candidate(candidate)
                     continue
