@@ -16,5 +16,11 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m pip install pyflakes
       - run: python -m compileall -q .
-      - run: python -m pytest tests/ -q
+      - name: pytest (failures surface as annotations)
+        run: |
+          set -o pipefail
+          python -m pytest tests/ -q -rfE 2>&1 | tee /tmp/pytest.log || {
+            grep -E "^(FAILED|ERROR)" /tmp/pytest.log | head -40 | while read -r l; do echo "::error::$l"; done
+            grep -E "^E  " /tmp/pytest.log | head -20 | while read -r l; do echo "::warning::$l"; done
+            exit 1; }
       - run: python -m pyflakes analysis/execution_integrity_r28.py

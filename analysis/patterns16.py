@@ -211,16 +211,18 @@ def classify16(upper, lower, n: int, df=None, tail: int = 12) -> Tuple[str, Dict
         if upper is None or lower is None:
             return "TRENDLINE", meta
         start = max(int(upper.first_index), int(lower.first_index))
-        u_n, l_n = float(upper.price_at(n)), float(upper.price_at(start))
+        # R62-ARENA (audit P3): l_n is the LOWER edge at the live bar (was
+        # upper.price_at(start) — every width below was garbage).
+        u_n, l_n = float(upper.price_at(n)), float(lower.price_at(n))
         # ① role sanity at the LIVE end
-        if u_n < float(lower.price_at(n)):
+        if u_n < l_n:
             upper, lower = lower, upper
-            u_n, l_n = float(upper.price_at(n)), float(upper.price_at(start))
+            u_n, l_n = float(upper.price_at(n)), float(lower.price_at(n))
         width_now = u_n - l_n
         if width_now <= 0:
             return "NONE", meta
         span = max(1, n - start)
-        width_then = float(upper.price_at(start)) - l_n
+        width_then = float(upper.price_at(start)) - float(lower.price_at(start))
         width_mid = (float(upper.price_at(start + span // 2))
                      - float(lower.price_at(start + span // 2)))
         converging = bool(width_then > 0 and width_now < 0.85 * width_then
@@ -291,9 +293,12 @@ def _swings(df, left: int = 3, right: int = 3, max_pts: int = 8) -> Tuple[List[D
         n = len(h)
         highs, lows = [], []
         for i in range(left, n - right):
-            if h[i] >= h[i - left:i].max() and h[i] >= h[i + 1:i + 1 + right].max():
+            # R63: STRICT on the right side — a flat top/bottom of equal
+            # highs (tick-size plateaus) is ONE pivot (its first bar), never
+            # two adjacent «tops» that hide the real double top.
+            if h[i] >= h[i - left:i].max() and h[i] > h[i + 1:i + 1 + right].max():
                 highs.append({"index": i, "price": float(h[i])})
-            if l[i] <= l[i - left:i].min() and l[i] <= l[i + 1:i + 1 + right].min():
+            if l[i] <= l[i - left:i].min() and l[i] < l[i + 1:i + 1 + right].min():
                 lows.append({"index": i, "price": float(l[i])})
         return highs[-max_pts:], lows[-max_pts:]
     except Exception:
@@ -336,7 +341,9 @@ def detect_pivot_patterns(df, atr: float) -> List[Dict]:
                     neck = min(mids, key=lambda p: p["price"])
                     height = float(a["price"]) - float(neck["price"])
                     if height > 0.8 * atr:
-                        neck_line = _line(int(neck["index"]), n, float(neck["price"]))
+                        # R62-ARENA (audit P5): a double TOP's neckline is the
+                        # SUPPORT under it (break DOWN confirms) → LOW side.
+                        neck_line = _line(int(neck["index"]), n, float(neck["price"]), "LOW")
                         neck_line["points"] = []
                         item = {"type": "DOUBLE_TOP", "shape": "single",
                                 "lines": [neck_line],

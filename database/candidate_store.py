@@ -389,10 +389,19 @@ def absorb_update_into_chain(holder: SignalCandidate, fresh: SignalCandidate) ->
             "viva_upper_points", "viva_lower_points", "viva_break_line",
             "viva_breakout_line", "viva_retest_zone", "viva_touch_count",
             "viva_fit_error_atr", "viva_pattern", "tl_pattern", "tl_pattern_fa",
-            "tc_base", "tc_projection", "technoclassic",
+            "tc_base", "tc_projection", "technoclassic", "break_line_geo", "pattern_geo",
             "viva_major_break_line", "viva_major_break_line_tf",
             "viva_watch_line", "viva_watch_points",
         }
+        # R63 SNAPSHOT-LOCK (Viva 10-01): the RENDER geometry (zones, pattern
+        # commands, bands) is part of the same per-code snapshot — a later
+        # scan may not paint new zones or a longer pattern under this code.
+        try:
+            from analysis.snapshot_lock import SNAPSHOT_KEYS as _snap63
+            keep |= set(_snap63) | {"render_geometry_source", "snapshot_locked",
+                                     "pivot_pattern"}
+        except Exception:
+            pass
     for key, value in (fresh.metadata or {}).items():
         if key in keep or str(key).startswith("education_"):
             continue

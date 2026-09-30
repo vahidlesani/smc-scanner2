@@ -42,6 +42,10 @@ def _direction(sign_meta) -> int:
 
 
 def _break_edge(candidate: SignalCandidate) -> float:
+    return _break_edge_src(candidate)[0]
+
+
+def _break_edge_src(candidate: SignalCandidate):
     """The SAME edge the one-close law waits for (priority order mirrored from
     quality_engine.evaluate_confirmation): pin extreme → viva lines → major
     line → the zone's entry edge."""
@@ -56,6 +60,7 @@ def _break_edge(candidate: SignalCandidate) -> float:
                 edge = lvl
     except Exception:
         pass
+    src = "PIN" if edge > 0 else ""
     if edge <= 0:
         for key in ("viva_breakout_line", "viva_break_line", "viva_watch_line"):
             try:
@@ -64,6 +69,7 @@ def _break_edge(candidate: SignalCandidate) -> float:
                 v = 0.0
             if v > 0:
                 edge = v
+                src = "LINE"
                 break
     if edge <= 0:
         try:
@@ -73,13 +79,15 @@ def _break_edge(candidate: SignalCandidate) -> float:
             sane = abs(maj - planned) <= max(0.04 * maj, 2.5 * atr) if maj > 0 else False
             if maj > 0 and sane:
                 edge = maj
+                src = "MAJOR"
         except Exception:
             pass
     if edge <= 0:
         zt = float(getattr(candidate, "entry_zone_top", 0) or 0)
         zb = float(getattr(candidate, "entry_zone_bottom", 0) or 0)
         edge = zt if direction == "LONG" else zb
-    return float(edge)
+        src = "ZONE"
+    return float(edge), src
 
 
 def _pin_like(row: pd.Series, direction: int) -> bool:
@@ -135,24 +143,53 @@ def _reverse_pin(row: pd.Series, direction: int) -> bool:
     return (body_bottom - float(row["low"])) >= 0.40 * rng and float(row["close"]) <= mid
 
 
+def tohom_frame_tf(candidate) -> Optional[str]:
+    """R62-ARENA: the sub-TF the smart engine reads for this chain — one step
+    below the chain's CONFIRM TF (1h trigger → 15m confirm → 5m TOHOM), so the
+    engine can confirm BEFORE the lower-TF confirm candle closes. Falls back
+    to the r47 half-ladder for TFs outside the ladder."""
+    tf = str(getattr(candidate, "trigger_timeframe", "") or "").lower()
+    try:
+        from analysis.confirm_r62 import tohom_sub_tf
+        sub = tohom_sub_tf(tf)
+        if sub:
+            return sub
+    except Exception:
+        pass
+    return TOHOM_LOWER_TF.get(tf)
+
+
 def evaluate_tohom_confirmation(
     candidate: SignalCandidate, lower_closed_df: Optional[pd.DataFrame],
     trigger_open: Optional[pd.Timestamp] = None,
     now: Optional[pd.Timestamp] = None,
+    sub_tf: Optional[str] = None,
 ) -> Tuple[bool, SignalCandidate, str]:
-    """TOHOM gate — returns (confirmed, candidate, reason_fa). Fail-closed."""
-    md = candidate.metadata or {}
-    if md.get("tohom_checked"):
-        return False, candidate, "توهم قبلاً بررسی شده است."
-    md["tohom_checked"] = True
+    """TOHOM gate — returns (confirmed, candidate, reason_fa). Fail-closed.
+
+    R62-ARENA (audit TH1–TH4): no longer ONE-SHOT. The old code stamped
+    ``tohom_checked`` BEFORE looking at anything, so the very first look
+    (usually «only one sub-candle closed yet») killed the engine for the
+    chain's whole life. Now the engine re-evaluates on every NEW closed
+    sub-candle (dedupe = last sub-bar timestamp), the break level is the
+    shared sloped edge (``confirm_r62.confirm_edge_at``) and the sub-candles
+    are those closed after the alert was minted.
+    """
+    md = candidate.metadata if isinstance(getattr(candidate, "metadata", None), dict) else {}
+    if getattr(candidate, "metadata", None) is None:
+        try:
+            candidate.metadata = md
+        except Exception:
+            pass
 
     def reject(code: str, msg: str):
         md["last_reject_code"] = code
+        md["tohom_last_reject"] = code
         return False, candidate, msg
 
     direction = _direction(getattr(candidate, "direction", ""))
     tf = str(getattr(candidate, "trigger_timeframe", "") or "").lower()
-    sub_tf = TOHOM_LOWER_TF.get(tf)
+    sub_tf = sub_tf or tohom_frame_tf(candidate)
     if not sub_tf:
         return reject("TOHOM_TF", "برای این تایم‌فریم پلهٔ پایین تعریف نشده است.")
     try:
@@ -168,18 +205,43 @@ def evaluate_tohom_confirmation(
         now = pd.Timestamp.now(tz="UTC").tz_localize(None)
     if getattr(lower_closed_df["timestamp"].dtype, "tz", None) is not None:
         now = now.tz_localize("UTC") if now.tzinfo is None else now.tz_convert("UTC")
+    _explicit_open = trigger_open is not None
     if trigger_open is None:
         trigger_open = now.floor(pd.Timedelta(minutes=TF_MIN.get(tf, 60.0)))
 
     frame = lower_closed_df.copy()
     ts = pd.to_datetime(frame["timestamp"])
     if getattr(ts.dtype, "tz", None) is not None:
-        ts = ts.dt.tz_localize(None)
+        ts = ts.dt.tz_convert("UTC").dt.tz_localize(None)
     frame["timestamp"] = ts
+    _now_n = pd.Timestamp(now)
+    if _now_n.tzinfo is not None:
+        _now_n = _now_n.tz_convert("UTC").tz_localize(None)
+    _open_n = pd.Timestamp(trigger_open)
+    if _open_n.tzinfo is not None:
+        _open_n = _open_n.tz_convert("UTC").tz_localize(None)
 
-    closed = frame[frame["timestamp"].shift(1) + pd.Timedelta(minutes=TF_MIN.get(sub_tf, 5.0)) <= now]
-    closed = closed[closed["timestamp"] >= pd.Timestamp(trigger_open)] if getattr(trigger_open, "tzinfo", None) is None \
-        else closed[closed["timestamp"] >= pd.Timestamp(trigger_open).tz_localize(None)]
+    # The caller hands CLOSED sub-candles (main drops the forming row of a
+    # fresh, uncached fetch — audit TH3); nothing stamped after `now` counts.
+    closed = frame[frame["timestamp"] <= _now_n]
+    # information boundary: sub-candles after the alert was minted; without
+    # a creation stamp (legacy callers) the forming trigger candle is the window.
+    _start = _open_n
+    try:
+        _ca = None if _explicit_open else getattr(candidate, "created_at", None)
+        if _ca:
+            _cat = pd.Timestamp(str(_ca))
+            if _cat.tzinfo is not None:
+                _cat = _cat.tz_convert("UTC").tz_localize(None)
+            _start = _cat
+    except Exception:
+        pass
+    closed = closed[closed["timestamp"] >= _start]
+    if len(closed):
+        _last_bar = str(closed["timestamp"].iloc[-1])[:19]
+        if md.get("tohom_last_sub_bar") == _last_bar:
+            return False, candidate, "توهم این کندلِ تایم پایین را قبلاً سنجیده است؛ منتظر کندلِ بعدی."
+        md["tohom_last_sub_bar"] = _last_bar
     subs = closed.tail(4)  # keep a little context
     n_subs = len(subs)
     need = 3
@@ -218,7 +280,17 @@ def evaluate_tohom_confirmation(
     if not direction_ok:
         return reject("TOHOM_DIR", "کندل‌های تایم پایین‌تر جهتِ یکنواخت ندارند.")
 
-    edge = _break_edge(candidate)
+    edge, _src = _break_edge_src(candidate)
+    if _src == "LINE":
+        # R62-ARENA (audit TH4): the SAME sloped edge the close law judges
+        try:
+            from analysis.confirm_r62 import confirm_edge_at
+            _when = pd.Timestamp(last["timestamp"]) + pd.Timedelta(minutes=TF_MIN.get(sub_tf, 5.0))
+            _proj = confirm_edge_at(candidate, _when)
+            if _proj > 0:
+                edge = float(_proj)
+        except Exception:
+            pass
     atr = float(md.get("atr", 0) or 0)
     if edge <= 0:
         return reject("TOHOM_EDGE", "لبهٔ شکست برای توهم پیدا نشد.")
@@ -268,4 +340,7 @@ def evaluate_tohom_confirmation(
               f"{'روی' if _ftb60 else 'بیش از'} لبهٔ شکست ثبت شد — به همین دلیل ورود پیش از "
               f"کلوزِ کندلِ {str(tf).upper()} تأیید شد.")
     md["tohom_note_fa"] = reason
+    md["tohom_edge"] = float(edge)
+    md["tohom_confirm_bar"] = str(last["timestamp"])[:19]
+    md["tohom_confirm_close"] = float(last["close"])
     return True, candidate, reason

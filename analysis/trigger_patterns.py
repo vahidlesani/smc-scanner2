@@ -111,7 +111,9 @@ def multi_candle_trigger(
     for k in range(2, max_k + 1):
         window = df.tail(k)
         o, h, l, c = _aggregate(window)
-        if not (min(l, zone_low) <= zone_high and max(h, zone_high) >= zone_low):
+        # R62-ARENA (audit K1): the old test was a tautology (always true);
+        # the base must actually OVERLAP the zone.
+        if not (l <= zone_high and h >= zone_low):
             continue  # base did not trade the zone at all
         extreme = l if is_long else h
         # pin across the base (the classic "چند‌کندلی بیس پین‌باری" read)
@@ -131,9 +133,13 @@ def multi_candle_trigger(
         # aggregate body engulfs the previous equal-sized stretch of candles
         if len(df) >= 2 * k:
             prev_o, prev_h, prev_l, prev_c = _aggregate(df.iloc[-2 * k:-k])
-            if is_long and o <= prev_c and c >= prev_o and (c - o) > (prev_o - prev_c):
+            # R62-ARENA (audit K2): an engulfing needs an OPPOSITE prior body
+            # (bearish stretch under a bullish engulf and vice versa).
+            if (is_long and prev_c < prev_o and o <= prev_c and c >= prev_o
+                    and (c - o) > (prev_o - prev_c)):
                 return AltTrigger("CLUSTER_ENGULF", k, extreme, fibo)
-            if not is_long and o >= prev_c and c <= prev_o and (o - c) > (prev_o - prev_c):
+            if (not is_long and prev_c > prev_o and o >= prev_c and c <= prev_o
+                    and (o - c) > (prev_c - prev_o)):
                 return AltTrigger("CLUSTER_ENGULF", k, extreme, fibo)
         # structure break of the base window itself (close beyond prior highs)
         prior = df.iloc[-(k + 1):-k] if len(df) > k else window.iloc[:-1]
@@ -170,10 +176,16 @@ def multi_candle_trigger(
                 minutes = int(step_min * mult)
                 if len(df) < 2 * mult:
                     continue
-                bars = (indexed
-                        .resample(f"{minutes}min")
-                        .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+                _rs = indexed.resample(f"{minutes}min")
+                bars = (_rs.agg({"open": "first", "high": "max", "low": "min", "close": "last"})
                         .dropna(subset=["open", "close"]))
+                # R62-ARENA (audit K3): a PARTIAL bucket is not a higher-TF
+                # candle — keep only buckets built from all `mult` bars.
+                try:
+                    _cnt = _rs["close"].count().reindex(bars.index).fillna(0)
+                    bars = bars[_cnt >= mult]
+                except Exception:
+                    pass
                 if len(bars) < 2:
                     continue
                 for pos in (-1, -2):

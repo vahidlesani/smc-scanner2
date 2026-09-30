@@ -955,7 +955,7 @@ def _pattern_anchors_in_frame(pattern: dict, t0, t1) -> bool:
 
 def _native_patterns_for_frame(frame, direction: str, chart_tf: str,
                                candidate_id: str, stored: list,
-                               log_axis: bool = True) -> list:
+                               log_axis: bool = True, locked: bool = False) -> list:
     """r51 MULTI-TF-TREND LAW (Viva 09-27, «باید توی هر تایمی که میره
     ترندلاین‌ها و الگوها رو دقیق نشون بده … در همه ستاپ‌ها باید اصلاح بشه»):
     stored render_patterns are native to the DETECTION tape. On another chart
@@ -967,6 +967,11 @@ def _native_patterns_for_frame(frame, direction: str, chart_tf: str,
     re-anchors (r33 identity law, now per TF). A TF with no valid pattern of
     its own draws none — an honest empty beats a foreign lie."""
     if not stored:
+        return stored
+    # R63 SNAPSHOT-LOCK: a locked code NEVER re-fits — its stored lines are
+    # projected by TIME onto this frame (see the draw loop), so a sliding
+    # window can no longer swap them for new pivots.
+    if locked:
         return stored
     try:
         _t0 = pd.Timestamp(frame.index[0])
@@ -1750,6 +1755,71 @@ def _clean_render_frame(df: pd.DataFrame, window: int = 150) -> pd.DataFrame:
     return frame
 
 
+def _r62_tool_fit_lookback(df: pd.DataFrame, candidate, lookback: int,
+                           confirmed: bool) -> int:
+    """R62-ARENA smart zoom, x side. Returns the bar count to render.
+
+    The long/short tool (stop → farthest target) must own at least a third
+    of the price panel (log space — the axis is always log, r57). When the
+    full dictated window spans so much price that the tool is crushed, the
+    OLDEST bars are dropped, down to 70% of the dictated count and never
+    past the earliest stored pattern/break-line anchor (the pattern must stay
+    whole on the canvas). Alert charts (no targets yet) keep the full count.
+    """
+    import math as _m
+    lb = int(lookback)
+    if df is None or len(df) < 40 or not confirmed:
+        return lb
+    md = getattr(candidate, "metadata", None) or {}
+    try:
+        levels = [float(candidate.sl or 0), float(candidate.entry_zone_bottom or 0),
+                  float(candidate.entry_zone_top or 0)]
+        levels += [float(v) for v in ((md.get("target_ladder") or {}).get("targets")
+                                      or [candidate.tp1, candidate.tp2]) if v]
+        levels = [v for v in levels if v and v > 0 and _m.isfinite(v)]
+        if len(levels) < 2:
+            return lb
+        t_lo, t_hi = min(levels), max(levels)
+        tool = _m.log(t_hi / t_lo)
+        if tool <= 0:
+            return lb
+    except Exception:
+        return lb
+    # earliest anchor that must stay visible
+    anchor_ts = []
+    for key in ("break_line_geo",):
+        g = md.get(key) or {}
+        if g.get("a_ts"):
+            anchor_ts.append(g["a_ts"])
+    for g in ((md.get("pattern_geo") or {}).values()):
+        if isinstance(g, dict) and g.get("a_ts"):
+            anchor_ts.append(g["a_ts"])
+    tail = df.tail(lb).reset_index(drop=("timestamp" in df.columns))
+    try:
+        ts = pd.to_datetime(tail["timestamp"] if "timestamp" in tail.columns else tail.index)
+        ts = pd.DatetimeIndex(ts).tz_localize(None) if getattr(ts, "tz", None) else pd.DatetimeIndex(ts)
+    except Exception:
+        ts = None
+    min_n = max(40, int(0.70 * lb))
+    if ts is not None and anchor_ts:
+        try:
+            a0 = min(pd.Timestamp(str(a)).tz_localize(None) if pd.Timestamp(str(a)).tzinfo is None
+                     else pd.Timestamp(str(a)).tz_convert("UTC").tz_localize(None) for a in anchor_ts)
+            pos = int((ts < a0).sum())                 # bars before the anchor
+            min_n = max(min_n, len(ts) - pos + 3)      # keep anchor + 3 bars of lead-in
+        except Exception:
+            pass
+    min_n = min(min_n, lb)
+    hi = tail["high"].astype(float).to_numpy()
+    lo = tail["low"].astype(float).to_numpy()
+    for n_try in range(len(tail), min_n - 1, -max(1, len(tail) // 30)):
+        h = max(float(hi[-n_try:].max()), t_hi)
+        l_ = min(float(lo[-n_try:].min()), t_lo)
+        if l_ > 0 and tool / max(_m.log(h / l_), 1e-12) >= 0.33:
+            return int(n_try)
+    return int(min_n)
+
+
 def _smart_y_window(c_lo: float, c_hi: float, atr: float,
                     ov_lo: Optional[float] = None,
                     ov_hi: Optional[float] = None,
@@ -1959,6 +2029,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # re-fit instead of stretching the zoom over a month of candles.
         except Exception:
             pass
+        # R62-ARENA SMART ZOOM (Viva 09-30: «زوم هوشمند که الگو بهترین دیده
+        # بشه و ابزار لانگ/شورت در تأیید له نشه»): inside the dictated density
+        # band (≥70% of the r52 count) the window drops its oldest bars when
+        # an old swing would crush the trade tool — never past the pattern's
+        # own anchors, never below the band. Candles stay hard bounds (r40).
+        try:
+            _lookback = _r62_tool_fit_lookback(df, candidate, int(_lookback), bool(confirmed))
+        except Exception:
+            pass
         frame = _clean_render_frame(df, window=_lookback)
         if getattr(_clean_render_frame, "dropped_dead_rows", False):
             # r58: the frozen zoom was computed over dead data — discard it so
@@ -1987,15 +2066,19 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 else:
                     from analysis.render_kit import enrich_render
                     enrich_render(candidate, frame.reset_index())
-                    try:
-                        from database.bot_kv import set_json as _sj33
-                        _sj33(f"render_identity:{candidate.signal_id}", {
-                            "render_patterns": candidate.metadata.get("render_patterns") or [],
-                            "render_zones": candidate.metadata.get("render_zones") or []})
-                    except Exception:
-                        pass
         except Exception:
             pass
+        # ── R63 SNAPSHOT-LOCK (Viva 10-01, verbatim): «اون کد یکتا باید اسنپ‌شات
+        # بگیره از الگو و ترندش و تا پایان اون پوزیشن دیگه نباید نواحی جدید رسم
+        # بشه یا ترندلاین روی پیوت‌های جدید امتداد پیدا کنه». The FIRST chart of
+        # a code stamps its drawn geometry; every later chart of the SAME code
+        # restores it (a later scan's re-fit can no longer extend a line or add
+        # a zone). G1: a chain with trade lines paints ONLY the traded edges.
+        try:
+            from analysis.snapshot_lock import lock_render_geometry as _lock63
+            _lock63(candidate)
+        except Exception as _l63:
+            print(f"R63 snapshot-lock warning: {_l63}")
         if _CANDLE_STYLE == "cryptocove":
             # r59 PREVIEW only — Viva judges before it becomes the default.
             market_colors = mpf.make_marketcolors(
@@ -2531,7 +2614,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             frame, getattr(candidate, "direction", ""), _chart_tf,
             candidate.signal_id,
             ((candidate.metadata or {}).get("render_patterns") or []),
-            log_axis=bool(use_log))
+            log_axis=bool(use_log),
+            locked=bool((candidate.metadata or {}).get("snapshot_locked")))
         # r59 FAR-MAJOR PRESERVE (Viva: «الگوی ماژورِ دورتر معتبرتر است» +
         # «الگوهای ماژور آبی کشیده بشن»): when the r51 window-refit replaced
         # the stored set, a classic shape FAR from the live price (>2.5×ATR,
@@ -2609,6 +2693,39 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                   "facecolor": CHART_THEME["panel"],
                                   "edgecolor": "none", "alpha": 0.78})
                 continue
+            # ── R63 P4: a TRADED pivot pattern (double top/bottom, H&S ±,
+            # cup & handle) is painted from the SAME pivots the trade was
+            # built on: the M/W/H&S polyline + its neckline, time-projected
+            # (identical on every chart of the code — snapshot lock).
+            if _pat.get("pivots_ts"):
+                try:
+                    _pv63 = [p for p in (_pat.get("pivots_ts") or []) if p.get("timestamp")]
+                    _xs63 = _viva_points_xs(_pv63, frame)
+                    _ys63 = [float(p["price"]) for p in _pv63]
+                    _bear63 = str(_pat.get("type") or "").upper() in ("DOUBLE_TOP", "HEAD_SHOULDERS")
+                    _c63 = CHART_THEME["supply"] if _bear63 else CHART_THEME["demand"]
+                    if len(_xs63) >= 3 and all(math.isfinite(v) for v in _xs63 + _ys63):
+                        ax.plot(_xs63, _ys63, color=_c63, linewidth=1.1, alpha=0.85, zorder=6)
+                        ax.scatter(_xs63, _ys63, s=22, facecolors="none", edgecolors=_c63,
+                                   linewidths=1.0, zorder=7)
+                        _nk63 = float(_pat.get("neckline") or 0.0)
+                        if _nk63 > 0:
+                            _xn0 = max(0.0, float(min(_xs63[1:-1] or _xs63)))
+                            ax.hlines(_nk63, _xn0, count - 0.5, colors=_c63,
+                                      linestyles="-", linewidth=1.2, alpha=0.9, zorder=6)
+                            ax.hlines(_nk63, count - 0.5, count + future - 0.5, colors=_c63,
+                                      linestyles="--", linewidth=0.9, alpha=0.7, zorder=6)
+                        _lab63 = str(_pat.get("type") or "").replace("_", " ")
+                        _hi63 = max(range(len(_ys63)), key=lambda k: _ys63[k]) if _bear63 \
+                            else min(range(len(_ys63)), key=lambda k: _ys63[k])
+                        ax.text(max(0.5, _xs63[_hi63]), _ys63[_hi63], _lab63, color=_c63,
+                                fontsize=7, fontweight="bold", ha="center",
+                                va="bottom" if _bear63 else "top", zorder=12,
+                                bbox={"boxstyle": "round,pad=0.22", "facecolor": CHART_THEME["panel"],
+                                      "edgecolor": "none", "alpha": 0.78})
+                except Exception as _e63:
+                    print(f"R63 pivot draw warning: {_e63}")
+                continue
             # Viva 09-18 placement law: lines are re-anchored by PIVOT
             # TIMESTAMP onto THIS frame (the fit window and the chart frame
             # are different slices — index coords misplaced every line) and
@@ -2623,8 +2740,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _sl8 = float(_ln0["slope"]) / _tfscale
                 _pt8 = _ln0.get("points") or []
                 if _pt8:
-                    _x0f = float(np.searchsorted(
-                        frame.index, pd.Timestamp(str(_pt8[0].get("ts")))))
+                    # R63: TIME projection (a pre-window pivot extrapolates to
+                    # a negative x instead of clamping to 0 — the clamp is what
+                    # bent stored lines and forced the r51 per-TF re-fit).
+                    try:
+                        _x0f = float(_viva_points_xs(
+                            [{"timestamp": _pt8[0].get("ts")}], frame)[0])
+                        if not math.isfinite(_x0f):
+                            raise ValueError("nan x")
+                    except Exception:
+                        _x0f = float(np.searchsorted(
+                            frame.index, pd.Timestamp(str(_pt8[0].get("ts")))))
                     _ic8 = float(_pt8[0].get("price")) - _sl8 * _x0f
                 else:
                     _x0f = max(0.0, (float(_ln0.get("x0", 0))
@@ -3566,6 +3692,20 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception:
                 _froz28 = None
         _live28 = float(frame["close"].iloc[-1])
+        # R62-ARENA: a frozen window is reused only while it still holds the
+        # WHOLE tool (stop, entry box, every target) — a freeze taken before
+        # the ladder was final used to slice the long/short tool.
+        if _froz28 and confirmed:
+            try:
+                _tool62 = [float(candidate.sl or 0), float(candidate.entry_zone_bottom or 0),
+                           float(candidate.entry_zone_top or 0)]
+                _tool62 += [float(v) for v in (((candidate.metadata or {}).get("target_ladder")
+                                               or {}).get("targets") or []) if v]
+                _tool62 = [v for v in _tool62 if v > 0]
+                if _tool62 and (min(_tool62) < _froz28[0] or max(_tool62) > _froz28[1]):
+                    _froz28 = None
+            except Exception:
+                pass
         if _froz28 and _froz28[0] < _live28 < _froz28[1]:
             ax.set_ylim(*_froz28)
         else:
@@ -5255,7 +5395,7 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
             try:
                 from database.bot_kv import set_json
                 set_json(_spot_alert_mid_key(sym, tf, str(item.get("pattern") or "")),
-                         {"mid": mid, "at": _time.time()})
+                         {"mid": mid, "at": time.time()})   # R62: `_time` was undefined → the spot alert mid was never stored
             except Exception:
                 pass
         return mid

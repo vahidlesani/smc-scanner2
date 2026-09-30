@@ -166,11 +166,12 @@ def test_a_confirmation_on_an_old_candle_is_not_tradeable():
     cand.metadata["confirm_tf"] = "4h"
     now = _dt.datetime.now(_dt.timezone.utc)
     fresh = pd.DataFrame({"timestamp": [pd.Timestamp(now - _dt.timedelta(minutes=5))]})
-    old = pd.DataFrame({"timestamp": [pd.Timestamp(now - _dt.timedelta(hours=9))]})
+    # R62-ARENA (C5): age is measured from the bar's CLOSE (open + 4h here)
+    old = pd.DataFrame({"timestamp": [pd.Timestamp(now - _dt.timedelta(hours=13))]})
     assert MAIN._confirmation_stale_minutes(cand, fresh) is None
     assert MAIN._confirmation_stale_minutes(cand, old) >= 500
     # the confirming bar named by the pattern lane wins over "newest closed bar"
-    cand.metadata["fast_break_bar"] = str(now - _dt.timedelta(hours=10))
+    cand.metadata["fast_break_bar"] = str(now - _dt.timedelta(hours=14))
     assert MAIN._confirmation_stale_minutes(cand, fresh) >= 590
 
 

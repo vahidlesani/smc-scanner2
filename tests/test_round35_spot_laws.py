@@ -2,7 +2,7 @@
 CryptoCave-clean spot charts + on-chain reference block on spot cards."""
 import os
 
-REPO = "/home/user/smc-scanner2"
+REPO = __import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.abspath(__file__)))  # R62: CI-portable (was a hard-coded sandbox path → 20 red tests on GitHub)
 
 
 # ── 1. the shared code path: spot charts ARE generate_chart ───────────────
@@ -38,7 +38,7 @@ def test_spot_budgets_raised():
 def test_spot_engine_only_publishes_bullish_breaks_and_warns_both_sides():
     src = open(f"{REPO}/analysis/spot_engine.py", encoding="utf-8").read()
     # signals: only a valid close ABOVE the upper side (LONG)
-    assert "bullish_pattern_ok(pat, close, upper)" in src
+    assert "bullish_pattern_ok(_pat62, close, upper)" in src   # R62 (S1): library bias
     assert "close <= upper + eps" in src
     assert "BREAK_DOWN" in src
     # ladder: both sides warn (the alert post names UPPER and LOWER edges)

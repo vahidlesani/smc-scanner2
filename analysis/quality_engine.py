@@ -329,6 +329,7 @@ CONFIRMED_SNAPSHOT_KEYS = (
     "pattern_band", "render_patterns", "render_zones", "tl_a_ts", "tl_a_price",
     "tl_b_ts", "tl_b_price", "tool_entry_ts", "tool_anchor_ts", "pattern_type",
     "pattern_bias", "break_edge", "break_direction", "pattern_state_label",
+    "break_line_geo", "pattern_geo",
 )
 
 
@@ -436,6 +437,14 @@ def _project_watch_level(watch: dict, when) -> float:
     """Value of a watched line at `when`. Log-calibrated lines are interpolated
     in log space between their own anchors (identical to the chord otherwise) —
     R16 phase 3, so the veto level is the line the chart actually paints."""
+    if (watch or {}).get("geo"):
+        # R62-ARENA (audit C3): the candidate's OWN fitted edge, projected
+        # on its own slope — never a line from the render fitter.
+        from analysis.confirm_r62 import project_line_geo
+        _v = project_line_geo(watch["geo"], when)
+        if _v <= 0:
+            raise ValueError("degenerate own-edge geometry")
+        return float(_v)
     p0 = (watch or {}).get("p0") or {}
     p1 = (watch or {}).get("p1") or {}
     t0 = pd.Timestamp(str(p0.get("ts")))
@@ -458,6 +467,7 @@ def _project_watch_level(watch: dict, when) -> float:
 def evaluate_confirmation(
     candidate: SignalCandidate, closed_df: pd.DataFrame,
     htf_closed_df: Optional[pd.DataFrame] = None,
+    frame_tf_minutes: Optional[float] = None,
 ) -> Tuple[bool, SignalCandidate, str]:
     """Require a zone touch plus a closed LTF trigger candle.
 
@@ -573,23 +583,27 @@ def evaluate_confirmation(
     # close counts as much as the confirm-timeframe one.
     if _atr > 0:
         _md = candidate.metadata or {}
-        _la = _lb = None
-        try:
-            _la = (pd.Timestamp(str(_md["tl_a_ts"])), float(_md["tl_a_price"]))
-            _lb = (pd.Timestamp(str(_md["tl_b_ts"])), float(_md["tl_b_price"]))
-        except Exception:
-            _la = _lb = None
+        # ── R62-ARENA: ONE shared edge for every lane (fast lane, TOHOM,
+        # reclaim gate, live-break note) — the broken edge projected on its
+        # own slope to each bar's close (C1/TH4/W7 of the 09-30 audit). The
+        # old helper clamped the chord at its last anchor (a frozen level)
+        # and was fed the frame's integer INDEX instead of the bar time.
+        from analysis.confirm_r62 import (confirm_edge_at as _r62_edge_at,
+                                          valid_break_candle as _r62_vbc,
+                                          frame_minutes as _r62_fmin,
+                                          tf_minutes as _r62_tfm)
+        _major_src = str(_md.get("confirm_edge_source") or "") == "MAJOR_TL"
+
         def _edge_at(ts, static_edge: float) -> float:
-            if _la is not None and _lb is not None and _lb[0] != _la[0]:
-                _dt = (_lb[0] - _la[0]).total_seconds()
-                if _dt:
-                    _frac = max(0.0, min(1.0, (
-                        (pd.Timestamp(ts) - _la[0]).total_seconds() / _dt
-                    )))
-                    return float(_la[1] + (_lb[1] - _la[1]) * _frac)
-            return static_edge
+            if _major_src or ts is None:
+                return static_edge
+            _v62 = _r62_edge_at(candidate, ts)
+            return float(_v62) if _v62 > 0 else static_edge
         _is_long = candidate.direction == "LONG"
         _buf = 0.10 * _atr
+        # R62: after a STALE verdict the old break bar may not confirm again —
+        # only a later close, after a First-Time-Back touch of the edge.
+        _stale_after = str(_md.get("stale_after_bar") or "")
         # ── r60.3 THE multi-TF law (Viva 09-30, twice-dictated): the ENTRY
         # break is the TRIGGER timeframe's own break — «شکست همون تایم تریگر
         # واسه ورود باید تایید بشه نه تایم بالاتر ... تایید اما از تایم
@@ -604,38 +618,72 @@ def evaluate_confirmation(
             if _scan is None or _scan.empty:
                 continue
             # Viva 2026-09-14: thresholds speak the language of the frame they
-            # judge. A 1D pattern's ATR applied to a 15m confirm candle is an
-            # almost-impossible bar nobody stated — «اولین کلوز معتبر» means
-            # valid FOR THAT CANDLE, so the buffer/body are scaled to the
-            # scanned frame's own average range (14 bars, high-low).
+            # judge (buffer scaled to the scanned frame's own ATR).
             _f_atr = _frame_atr(_frame, fallback=_atr)
-            # ── Viva 09-21 (round 15), his verbatim law, fourth time stated:
-            # «اولین کلوز بالای یا زیر هر نوع ناحیه‌های داخل ستاپ / کلوز بالا یا
-            # پایین هر تول ترند نزولی و صعودی / هر نوع الگو باید تایید بشه» and
-            # «چرا این ستاپ‌ها مثل احمق‌ها موقعیت رو می‌شناسن اما تایید نمی‌کنن؟»
-            # Root cause of that complaint: the fast lane added thresholds the
-            # message never mentioned — 0.10×ATR beyond the edge AND a body of
-            # 0.25×ATR. A banner 15m candle that closed cleanly above the named
-            # level could still fail both, so the channel kept sending updates
-            # while the level was demonstrably broken. The law now is what the
-            # message says: the FIRST closed candle of the confirm/pattern
-            # timeframe whose close lands beyond the level. The only remaining
-            # guard is a tick-scale epsilon (2% of the frame's own ATR) so a
-            # mathematically equal close is not treated as a break.
+            # Viva 09-21 (round 15): the FIRST closed candle whose close lands
+            # beyond the level; only a tick-scale epsilon (2% of frame ATR).
             _f_buf = max(0.02 * _f_atr, 0.0)
-            for _ts, _r in _scan.iterrows():
-                _edge_t = _edge_at(_ts, _edge if _edge > 0 else _zone_edge)
+            # R62-ARENA (Viva 09-30): «هر تایم‌فریم باید از تایم پایین‌تر
+            # تأیید بگیره با دیدن الگوهای کندلی که نشانهٔ شکست معتبر باشن» —
+            # when the scanned frame is FINER than the trigger TF, the
+            # confirming candle must read as a valid break (power candle /
+            # engulfing / hammer-pin / strong close); a shooting star or a
+            # counter-colour close at the line is a fake-out and the scan
+            # moves on to the next bar. The trigger TF's own close (late
+            # lane) stays the plain one-close law — nothing ever stalls.
+            _fm = float(frame_tf_minutes or 0.0) or _r62_fmin(_frame)
+            _trig_m = _r62_tfm(getattr(candidate, "trigger_timeframe", ""), 0.0)
+            _lower_tf = bool(_fm > 0 and _trig_m > 0 and _fm < _trig_m * 0.99)
+            _ftb_seen = not _stale_after
+            _prev_row = None
+            for _ix, _r in _scan.iterrows():
+                _bar_ts = _r["timestamp"] if "timestamp" in _scan.columns else _ix
+                _bar_close_ts = None
+                try:
+                    _bar_close_ts = pd.Timestamp(_bar_ts) + pd.Timedelta(minutes=_fm or 0.0)
+                except Exception:
+                    _bar_close_ts = None
+                _edge_t = _edge_at(_bar_close_ts, _edge if _edge > 0 else _zone_edge)
+                if _stale_after:
+                    try:
+                        from analysis.confirm_r62 import _naive as _r62_naive
+                        if _r62_naive(_bar_ts) <= _r62_naive(_stale_after):
+                            _prev_row = _r
+                            continue
+                    except Exception:
+                        pass
+                    if not _ftb_seen:
+                        _touch = (float(_r["low"]) <= _edge_t + 0.25 * _f_atr) if _is_long \
+                            else (float(_r["high"]) >= _edge_t - 0.25 * _f_atr)
+                        if _touch:
+                            _ftb_seen = True
+                        _prev_row = _r
+                        continue
                 _out = bool(float(_r["close"]) >= _edge_t + _f_buf) if _is_long \
                     else bool(float(_r["close"]) <= _edge_t - _f_buf)
                 if not _out:
+                    _prev_row = _r
                     continue
+                _cndl = ""
+                if _lower_tf:
+                    _ok62, _cndl = _r62_vbc(_r, _prev_row, candidate.direction, _edge_t, _f_atr)
+                    if not _ok62:
+                        candidate.metadata["last_fakeout_candle"] = f"{str(_bar_ts)[:16]} {_cndl}"
+                        _prev_row = _r
+                        continue
                 _body = abs(float(_r["close"]) - float(_r["open"])) / _f_atr
                 _dist = abs(float(_r["close"]) - _edge_t) / _f_atr
                 fast_lane = (f"اولین کلوزِ معتبر فراتر از خط/لبه ({_tag}، "
-                             f"{_dist:.2f} ATR پشت سطح، Body {_body:.2f} ATR) — پولبک شرط نیست")
-                candidate.metadata["fast_break_bar"] = str(_ts)[:16]
+                             f"{_dist:.2f} ATR پشت سطح، Body {_body:.2f} ATR"
+                             + (f"، {_cndl}" if _cndl else "") + ") — پولبک شرط نیست")
+                candidate.metadata["fast_break_bar"] = str(_bar_ts)[:19]
+                candidate.metadata["fast_break_close"] = float(_r["close"])
+                candidate.metadata["fast_break_tf_min"] = float(_fm or 0.0)
                 candidate.metadata["tl_fast_break"] = fast_lane
                 candidate.metadata["confirm_level_used"] = float(_edge_t)
+                if _cndl:
+                    candidate.metadata["confirm_candle_pattern"] = _cndl
+                candidate.metadata.setdefault("break_seen_at", str(_bar_ts)[:19])
                 break
             if fast_lane:
                 break
@@ -676,18 +724,36 @@ def evaluate_confirmation(
             # chart shows (bands without log geometry keep the old maths).
             _lo20 = _band20.get("log_lo") or {}
             _hi20 = _band20.get("log_hi") or {}
-            if _lo20.get("fit") and float(_lo20.get("intercept") or 0.0):
-                _x20 = float(_lo20["slope"]) * _bars20 + float(_lo20["intercept"])
-                _band_lo20 = float(10.0 ** _x20)
-            else:
-                _band_lo20 = float(_band20["lo"]) + float(_band20.get("slope_lo") or 0.0) * _bars20
-            if _hi20.get("fit") and float(_hi20.get("intercept") or 0.0):
-                _x21 = float(_hi20["slope"]) * _bars20 + float(_hi20["intercept"])
-                _band_hi20 = float(10.0 ** _x21)
-            else:
-                _band_hi20 = float(_band20["hi"]) + float(_band20.get("slope_hi") or 0.0) * _bars20
+            # R62-ARENA (audit C2): the curve is evaluated at x_last + bars
+            # (its intercept sits at the fit window's x=0). Bands stored
+            # before R62 carry no x_last → the log value at the alert bar is
+            # the stored lo/hi, so project multiplicatively from it.
+            import math as _m20
+
+            def _proj20(_lg, _base, _slope_lin):
+                if _lg.get("fit") and float(_lg.get("slope") or 0.0) != 0.0 and float(_base) > 0:
+                    if _lg.get("x_last") is not None and float(_lg.get("intercept") or 0.0):
+                        return float(10.0 ** (float(_lg["slope"]) * (float(_lg["x_last"]) + _bars20)
+                                              + float(_lg["intercept"])))
+                    return float(10.0 ** (_m20.log10(float(_base)) + float(_lg["slope"]) * _bars20))
+                return float(_base) + float(_slope_lin or 0.0) * _bars20
+            _band_lo20 = _proj20(_lo20, _band20["lo"], _band20.get("slope_lo"))
+            _band_hi20 = _proj20(_hi20, _band20["hi"], _band20.get("slope_hi"))
         except Exception:
             _band_lo20 = _band_hi20 = None
+    # ── R63 G1 (one geometry): when the detector stored BOTH of the traded
+    # pattern's edges, the containment band IS those edges projected onto
+    # this candle — never the render fitter's band.
+    try:
+        _pg63 = _md20.get("pattern_geo") or {}
+        if isinstance(_pg63, dict) and _pg63.get("upper") and _pg63.get("lower"):
+            from analysis.confirm_r62 import project_line_geo as _plg63
+            _u63 = _plg63(_pg63["upper"], _row20["timestamp"])
+            _l63 = _plg63(_pg63["lower"], _row20["timestamp"])
+            if _u63 > 0 and _l63 > 0:
+                _band_lo20, _band_hi20 = min(_u63, _l63), max(_u63, _l63)
+    except Exception:
+        pass
     # ── Viva 09-21 (round 12) — BREAK-SIDE LAW, enforced on every setup ───
     # His verbatim question: «چرا بعد از شکست ترند رو به بالا پوزیشن شورت
     # اعلان میشه توی برخی ستاپها؟» و «چرا بعد از شکست الگوها یا ترند به سمت
@@ -703,17 +769,26 @@ def evaluate_confirmation(
     # is the break/retest lane), and INTERNAL/fade lanes are exempt by design.
     if not _is_internal and candidate.direction in ("LONG", "SHORT"):
         _watch = (candidate.metadata or {}).get("render_line_watch") or []
+        # R62-ARENA (audit C3/G1): when the detector stored the pattern's OWN
+        # two edges, THOSE are the lines that may veto — the render fitter
+        # (different pivots/tolerances) used to veto confirmations with lines
+        # the trade was never built on.
+        _pg62 = (candidate.metadata or {}).get("pattern_geo") or {}
+        if isinstance(_pg62, dict) and (_pg62.get("upper") or _pg62.get("lower")):
+            _watch = [{"side": _sd, "geo": _g} for _sd, _g in
+                      (("HIGH", _pg62.get("upper")), ("LOW", _pg62.get("lower"))) if _g]
         _side_wrong = ""
         for _ln in _watch:
             try:
-                _p0 = _ln.get("p0") or {}
-                _p1 = _ln.get("p1") or {}
-                _t0 = pd.Timestamp(str(_p0.get("ts")))
-                _t1 = pd.Timestamp(str(_p1.get("ts")))
-                _y0, _y1 = float(_p0.get("price")), float(_p1.get("price"))
-                _dt = (_t1 - _t0).total_seconds()
-                if _dt <= 0 or not (_y0 > 0 and _y1 > 0):
-                    continue
+                if not _ln.get("geo"):
+                    _p0 = _ln.get("p0") or {}
+                    _p1 = _ln.get("p1") or {}
+                    _t0 = pd.Timestamp(str(_p0.get("ts")))
+                    _t1 = pd.Timestamp(str(_p1.get("ts")))
+                    _y0, _y1 = float(_p0.get("price")), float(_p1.get("price"))
+                    _dt = (_t1 - _t0).total_seconds()
+                    if _dt <= 0 or not (_y0 > 0 and _y1 > 0):
+                        continue
                 _tnow = pd.Timestamp(str(_row20["timestamp"]))
                 _lvl = _project_watch_level(_ln, _tnow)
                 # r40 CONFIRM-GATE (Viva 09-26, «لانگ روی ترندی که رو به پایین
@@ -955,15 +1030,31 @@ def evaluate_confirmation(
             if _band_lo20 is not None and _band_hi20 is not None:
                 _brk_up = bool(_close20 >= float(_band_hi20) + _buf_g)
                 _brk_dn = bool(_close20 <= float(_band_lo20) - _buf_g)
-            _mdg["pattern_type"] = _kind_g or "NONE"
-            _mdg["pattern_bias"] = _bias_g
+            # R62-ARENA (audit C4): the DETECTOR owns the contract
+            # (pattern_type/break_edge/break_direction). This gate used to
+            # overwrite it from the render band every cycle — one mis-projected
+            # bar flipped break_direction and the contract check vetoed the
+            # chain forever (permanent BREAK_SIDE_MISMATCH). Observations now
+            # live under observed_* keys; the contract is only filled when the
+            # detector left it empty (legacy setups without a contract).
+            _has_contract = str(_mdg.get("break_direction") or "").upper() in {"UP", "DOWN"}
+            if not _mdg.get("pattern_type") or str(_mdg.get("pattern_type")) == "NONE":
+                _mdg["pattern_type"] = _kind_g or "NONE"
+            _mdg["observed_band_kind"] = _kind_g or "NONE"
+            _mdg.setdefault("pattern_bias", _bias_g)
             _mdg["trade_direction"] = _dir_g
             if _brk_up and not _brk_dn:
-                _mdg["break_edge"] = "UPPER"
-                _mdg["break_direction"] = "UP"
+                _mdg["observed_break_edge"] = "UPPER"
+                _mdg["observed_break_direction"] = "UP"
+                if not _has_contract:
+                    _mdg["break_edge"] = "UPPER"
+                    _mdg["break_direction"] = "UP"
             elif _brk_dn and not _brk_up:
-                _mdg["break_edge"] = "LOWER"
-                _mdg["break_direction"] = "DOWN"
+                _mdg["observed_break_edge"] = "LOWER"
+                _mdg["observed_break_direction"] = "DOWN"
+                if not _has_contract:
+                    _mdg["break_edge"] = "LOWER"
+                    _mdg["break_direction"] = "DOWN"
             if _brk_up and not _brk_dn and _dir_g == "SHORT":
                 return reject("BREAK_SIDE_MISMATCH", (
                     f"جهت شکست با جهت سناریو ناهمسو است: کلوز {_close20:.8g} از ضلع "
@@ -1036,7 +1127,23 @@ def evaluate_confirmation(
     try:
         _bl61 = float((candidate.metadata or {}).get("viva_break_line")
                       or (candidate.metadata or {}).get("viva_breakout_line") or 0.0)
+        # R62-ARENA: the reclaim is judged against the SAME sloped edge the
+        # fast lane used (projected to this bar), and only once the break has
+        # actually printed — a pre-break alert has nothing to reclaim.
+        from analysis.confirm_r62 import (break_established as _r62_be,
+                                          confirm_edge_at as _r62_e61,
+                                          frame_minutes as _r62_fm61)
+        if _bl61 > 0 and not _r62_be(candidate.metadata or {}):
+            _bl61 = 0.0
         if _bl61 > 0:
+            try:
+                _t61 = pd.Timestamp(row["timestamp"]) + pd.Timedelta(
+                    minutes=float(frame_tf_minutes or 0.0) or _r62_fm61(closed_df))
+                _p61 = _r62_e61(candidate, _t61)
+                if _p61 > 0:
+                    _bl61 = float(_p61)
+            except Exception:
+                pass
             _atr61 = float((candidate.metadata or {}).get("atr") or 0.0) \
                 or float((closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
             _sd61 = str((candidate.metadata or {}).get("break_edge")
@@ -1183,6 +1290,17 @@ def evaluate_confirmation(
     # The executable entry is the confirmation close, not the historical POI
     # midpoint. Reject a late confirmation if its real risk/reward has degraded.
     executable_entry = close
+    # R62-ARENA (audit C6, evaluated): the executable entry stays the NEWEST
+    # closed price — that is what a member can actually fill; the confirming
+    # close is recorded next to it for the record (a break bar older than two
+    # candles is disarmed by the stale guard in main, so the two stay close).
+    try:
+        _fbc62 = float((candidate.metadata or {}).get("fast_break_close") or 0.0)
+        if fast_lane and _fbc62 > 0:
+            candidate.metadata["confirm_break_close"] = _fbc62
+            candidate.metadata["entry_source"] = "CONFIRM_TF_LAST_CLOSE"
+    except Exception:
+        pass
     risk = abs(executable_entry - candidate.sl)
     # ── his 09-21 ruling, verbatim: «استاپ اصلا ساختاری اگر فاصله داشت حذف نشه و
     # تا ۱.۲۵ قیمت نماد محاسبه بشه» — the confirmation uses a stop that is CUT at

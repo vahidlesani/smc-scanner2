@@ -66,7 +66,9 @@ CONFIRM_TF_BY_TRIGGER = {
     # below itself — 15m from 3m (Ourbit HAS 3m), 1h from 15m, 4h from 1h,
     # 1D from 4H. Finer-than-that closes are noise, not evidence.
     "15m": "5m",   # Viva 09-19/20: «تایم ۵ دقیقه رو نیاز داریم» — signs live on 5m
+    "30m": "15m",  # R62-ARENA: the r48 30m/2h lanes join the same one-step ladder
     "1h": "15m",
+    "2h": "30m",
     "4h": "1h",
     "1d": "4h",
 }
@@ -76,7 +78,9 @@ CONFIRM_LATE_BY_TRIGGER = {
     # Last resort ONLY: if the one-step-below candle never printed the valid
     # close, the pattern TF's OWN closed candle confirms (never stalls).
     "15m": "15m",
+    "30m": "30m",
     "1h": "1h",
+    "2h": "2h",
     "4h": "4h",
     "1d": "1d",
 }
@@ -95,6 +99,15 @@ CONFIRM_TF_BY_PATTERN = {"1d": "4h", "4h": "1h", "1h": "15m", "15m": "5m"}
 
 
 def confirm_timeframe_for_pattern(pattern_tf: str, style: str, trigger_tf: str) -> str:
+    # ── R62-ARENA (Viva 09-30): «هر تایم‌فریم باید از تایم پایین‌تر تأیید
+    # بگیره» — the ladder is keyed by the TRIGGER timeframe (the chart the
+    # member trades), never by the pattern/context TF. The old pattern-keyed
+    # lookup sent a 1h-trigger SWING chain to the 4h frame (DOT: 1h close
+    # above the trend at ~13:00, confirmation only at 17:00).
+    from analysis.confirm_r62 import confirm_tf_for_trigger
+    _ctf = confirm_tf_for_trigger(trigger_tf)
+    if _ctf:
+        return _ctf
     tf = str(pattern_tf or "").strip().lower()
     if tf in CONFIRM_TF_BY_PATTERN:
         return CONFIRM_TF_BY_PATTERN[tf]
@@ -133,7 +146,61 @@ TIMEFRAME_PROFILES = {
 }
 
 # SwingEngine sets this while scanning its second (4h) trigger stream.
-PROFILE_OVERRIDE: Dict[str, tuple] = {}
+# R63 (audit W4): the override is THREAD-LOCAL. The candidate-monitor,
+# realtime-execution and spot threads call timeframe_profile() while the
+# discovery thread has SWING overridden — a plain module dict leaked the
+# scan's 30m/2h/4h profile into those threads (wrong structure/trigger TF).
+import threading as _threading_w4
+
+
+class _ThreadLocalProfileOverride:
+    """dict-like, per-thread storage (same API the callers/tests use)."""
+
+    def __init__(self):
+        self._tl = _threading_w4.local()
+
+    def _d(self) -> Dict[str, tuple]:
+        d = getattr(self._tl, "d", None)
+        if d is None:
+            d = {}
+            self._tl.d = d
+        return d
+
+    def __contains__(self, k):
+        return k in self._d()
+
+    def __getitem__(self, k):
+        return self._d()[k]
+
+    def __setitem__(self, k, v):
+        self._d()[k] = v
+
+    def __delitem__(self, k):
+        del self._d()[k]
+
+    def get(self, k, default=None):
+        return self._d().get(k, default)
+
+    def pop(self, k, *default):
+        return self._d().pop(k, *default)
+
+    def clear(self):
+        self._d().clear()
+
+    def keys(self):
+        return self._d().keys()
+
+    def items(self):
+        return self._d().items()
+
+    def __len__(self):
+        return len(self._d())
+
+    def __bool__(self):
+        return bool(self._d())
+
+
+PROFILE_OVERRIDE = _ThreadLocalProfileOverride()
 
 
 # Viva 09-17 (his base-forming argument): a 1d/4h base can take 6-10 candles —
@@ -1062,6 +1129,16 @@ def detect_zone_trigger(df, direction: str, zone_bottom: float, zone_top: float,
     po, pc = float(prev["open"]), float(prev["close"])
     pbody = abs(pc - po)
     long_side = str(direction).upper() == "LONG"
+    # R62-ARENA (audit K5): «روی ناحیه» must be true — the last two candles
+    # have to trade the zone (±0.25 ATR), else there is no sign ON the zone.
+    try:
+        _zb, _zt = float(zone_bottom) - 0.25 * atr_value, float(zone_top) + 0.25 * atr_value
+        _lo2 = min(l, float(prev["low"]))
+        _hi2 = max(h, float(prev["high"]))
+        if not (_lo2 <= _zt and _hi2 >= _zb):
+            return None
+    except Exception:
+        pass
     if body >= 0.9 * max(pbody, 1e-12) and (
             (long_side and c > o and pc < po and c >= po and o <= pc)
             or (not long_side and c < o and pc > po and c <= po and o >= pc)):

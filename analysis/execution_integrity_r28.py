@@ -339,7 +339,12 @@ def confirm_closed_candle(row: Mapping[str, Any], direction: str, mode: str,
                                          else float(row["close"]) < float(edge))
     range_vs = rng / normal_range if normal_range > 0 else 1.0
     displacement = min(1.0, max(0.0, (body_ratio - 0.25) / 0.50))
-    rejection = wick_ratio >= 0.45 and body_ratio <= 0.55
+    # R62-ARENA (audit K6): a REJECTION is the wick on the trade's own side
+    # (LONG → lower wick swept below and was rejected; SHORT → upper wick).
+    # The old max(upper, lower) accepted a shooting star as a LONG rejection.
+    _o, _h, _l, _c = map(float, (row["open"], row["high"], row["low"], row["close"]))
+    _dir_wick = ((min(_o, _c) - _l) if d == "LONG" else (_h - max(_o, _c))) / max(rng, 1e-12)
+    rejection = _dir_wick >= 0.45 and body_ratio <= 0.55
     if mode == "REJECTION_CONFIRMATION":
         confirmed = side_ok and rejection
     elif mode == "DISPLACEMENT_CONFIRMATION":
