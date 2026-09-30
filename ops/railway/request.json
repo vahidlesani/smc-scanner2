@@ -1,6 +1,6 @@
 {
-  "action": "access",
+  "action": "usage",
   "service": "",
-  "nonce": 2,
+  "nonce": 3,
   "note": "Edit action (access | usage | backup | deploy) and bump nonce, then push → .github/workflows/railway-ops.yml runs on GitHub (secrets stay on GitHub)."
 }
