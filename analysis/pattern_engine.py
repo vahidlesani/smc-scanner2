@@ -1063,10 +1063,15 @@ def _mint_guard_key(bundle, ev) -> str:
            for p in (ev.get("edge_points") or ())]
     if not pts:
         pts = [str(getattr(bundle, "symbol", ""))]
+    # r60.6: DIRECTION is NOT in the key — «جهت شکست رو تایید بکنن»: once a
+    # break of this pattern owns a live chain, the OPPOSITE-direction break of
+    # the same pattern may not mint a rival scenario (his ONDO complaint: the
+    # engine kept hunting SHORTS after the downtrend had already broken UP).
+    # A new pivot still changes the key and frees the pattern.
     return "|".join(("TCMINT", str(getattr(bundle, "symbol", "")).upper(),
                      str(ev.get("pattern_tf") or ev.get("pattern") or ""),
                      str(ev.get("pattern") or ""), str(ev.get("side") or ""),
-                     str(ev.get("direction") or ""), pts[0], pts[-1]))
+                     pts[0], pts[-1]))
 
 
 def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
@@ -1215,6 +1220,25 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     upper = fit_validated_line(pat, "HIGH", cfg)
     lower = fit_validated_line(pat, "LOW", cfg)
     opp = lower if direction == "LONG" else upper
+    # ── r60.6 CHANGE OF CHARACTER (Viva 09-30, verbatim): «وقتی ترند نزولی
+    # میشکنه به بالا دیگه اسمش خلاف روند نیست ... احتمال چنج آف کارکتر هست
+    # که باید امتیاز بالاتری بده به پوزیشن نه اینکه خفه کنه». A VALIDATED
+    # falling line closed ABOVE = CHoCH UP (a broken rising line closed below
+    # = CHoCH DOWN): the trade takes the BREAK's side, the counter-doctrine
+    # label is lifted and the setup is REWARDED, never suppressed.
+    _choch60 = ""
+    try:
+        if is_break:
+            _broken60 = upper if str(ev.get("side") or "").lower() == "upper" else lower
+            _sl60 = float(getattr(_broken60, "slope", 0.0) or 0.0)
+            if direction == "LONG" and _sl60 < 0:
+                _choch60 = "UP"
+            elif direction == "SHORT" and _sl60 > 0:
+                _choch60 = "DOWN"
+    except Exception:
+        _choch60 = ""
+    if _choch60:
+        _counter54 = False          # a CHoCH break is never «خلاف ماهیت»
     # stop = NEAREST recent opposite validated touch (never the global min/max
     # that produced Viva's absurd 74%-away shorts).
     # Viva 09-20 round 11: «بدون atr … پشت آخرین سویینگ با بافر» → the buffer
@@ -1326,6 +1350,13 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
             candidate.metadata["approaching_message_id"] = int(link["mid"])
     except Exception:
         pass
+    if _choch60:
+        candidate.evidence.append(EvidenceItem(
+            "choch", "تغییر کاراکتر (CHoCH)",
+            (f"ترند {'نزولی' if _choch60 == 'UP' else 'صعودی'} اعتبارسنجی‌شده در جهت مخالف با کلوزِ معتبر "
+             f"شکسته شد — {'صعودی' if _choch60 == 'UP' else 'نزولی'} شدنِ ساختار؛ امتیاز +2 "
+             "(تغییر کاراکتر تقویت است، نه خلاف‌روند)."),
+            True, 1, level=line_now, timeframe=str(structure_tf)))
     candidate.sl = float(stop)
     # ── Viva 09-23 (his chart ruling, verbatim): «استاپ باید از کف بیس ۴
     # ساعته در بیاد … اگر استاپ و تی‌پی‌ها رو از نواحی تایم پایین‌تر از تایم
@@ -1461,7 +1492,8 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     squeeze = bool((ev.get("compression") or {}).get("squeeze_ok"))
     raw = float(ev.get("structure_score") or 0.0) + (2.0 if is_break else 1.0) \
         + (2.0 if squeeze else 0.0) + min(2.0, 2.0 * float(ev["reactions"]["reject_rate"])) \
-        + min(2.0, 0.5 * int(ev.get("touches") or 3))
+        + min(2.0, 0.5 * int(ev.get("touches") or 3)) \
+        + (2.0 if _choch60 else 0.0)   # r60.6: CHoCH is a REWARD, not a veto
     candidate.score = min(10, max(6, int(round(raw))))
     comp_bonus, _comp = (0.0, {})
     try:
@@ -1510,6 +1542,7 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         "pattern_id": ev.get("pattern_id"),
         "lifecycle": ev.get("lifecycle"),
         "counter_doctrine": _counter54,
+        "choch": _choch60 or None,
         "doctrine_direction": (_doc54 if _counter54 else None),
         "direction_why_fa": (_factors54 if _counter54 else []),
         "viva_structure_score": float(ev.get("structure_score") or 0.0),

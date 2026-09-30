@@ -512,3 +512,10 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
 - Engine-alive: end-to-end detection tests green; TC volume drops by design (fades banned + 12h mint guard per pattern).
 - version 2026.09.30-r60.4. Suite 742P/1skip. Tomorrow (his plan): refine the whole entry/stop/TP management engine; render polish (NEAR thick green line, short dashed tail on 1h charts).
 - r60.5: mint guard is lifecycle-aware now — candidate_status() added to candidate_store; pattern re-alerts allowed immediately once the previous alert for the SAME pattern resolves (CANCELLED/EXPIRED/CLOSED/DEAD_GATE/SUPERSEDED); 12h TTL = backstop only (unknown/purged id → stays silent). Suite 742→744P/1skip. version 2026.09.30-r60.5.
+
+## r60.6 — CHoCH + direction lock + dashed projection (2026-09-30)
+- CHoCH: falling-line-closed-above (rising-below) = choch UP/DOWN metadata, +2 raw score, counter_doctrine cleared, EvidenceItem("choch") bullet; block lives AFTER upper/lower fit (first placement was before their definition — NameError→silent, caught by test).
+- Mint guard key DIRECTION-AGNOSTIC (one live scenario per pattern regardless of direction; ONDO case); guard tests hermetic-clear their keys (test pollution via shared TCMINT keys).
+- Counter-trend veto exemption now CONTRACT-based (any break_direction) — TLBREAK carries break_direction too; test = TLBREAK+VIVA_TLBREAK variant+S6_CONFIRMED passes parent-opposed (fixture needed viva_state S6 for the machine gate at quality_engine:1091).
+- Dashed post-LIVE projection bolded (lw2.0 α.95 (5,3)).
+- Suite 747P/1skip. version 2026.09.30-r60.6. Note for his «پیام‌ها کوتاه‌تر شده؟»: removed htf-alignment gate line + counter-doctrine branding blocks shortened some messages (content-only, his own law changes); CHoCH bullet adds one back.

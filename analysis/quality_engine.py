@@ -1380,9 +1380,11 @@ def evaluate_confirmation(
             # («چرا این ستاپ‌ها موقعیت رو می‌شناسن اما تایید نمی‌کنن؟»).
             # The opposed parent becomes a visible warning only. Counter-trend
             # FADEs and every other setup keep the hard veto untouched.
+            # r60.6: contract-based, not setup-based — TECHCLASSIC, TLBREAK
+            # and ALBROX (pattern & zone) all confirm the BREAK's direction;
+            # «خلاف روند» is reserved for rejections (TLBREAK/ALBROX scalps).
             _tc_break60 = (
-                str(getattr(candidate, "setup_code", "") or "").upper() == "TECHCLASSIC"
-                and str((candidate.metadata or {}).get("break_direction") or "").upper() in ("UP", "DOWN")
+                str((candidate.metadata or {}).get("break_direction") or "").upper() in ("UP", "DOWN")
             )
             if not _brk and not _tc_break60:
                 return reject("COUNTER_TREND_TOUCH_ONLY", (

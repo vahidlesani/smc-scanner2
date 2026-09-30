@@ -620,3 +620,75 @@ def test_candidate_status_lookup():
     from database.candidate_store import candidate_status
     assert candidate_status("") == ""
     assert candidate_status("no-such-id-xyz") == ""
+
+
+# ── 10) r60.6: CHoCH reward + one-direction-per-pattern + contract exemption
+def test_choch_rewards_break_against_old_trend(monkeypatch):
+    """«وقتی ترند نزولی میشکنه به بالا دیگه اسمش خلاف روند نیست» — a falling
+    line closed ABOVE is CHoCH UP: +2 score, NO counter-doctrine label, and
+    the evidence explains the character change."""
+    import analysis.setups_experimental  # noqa: F401
+    import analysis.pattern_engine as pe
+    from analysis.setups_v7 import timeframe_profile
+    from test_pattern_engine import _wedge_frames, _Bundle
+    pattern, trigger = _wedge_frames()
+    stf, _ref, ttf = timeframe_profile("DAYTRADE")
+    p2 = pattern.tail(pe._FIT_WINDOW.get(stf, 140)).reset_index(drop=True)
+    events = [e for e in pe.scan_edges(p2, trigger, stf) if e["state"] == pe.STATE_BREAK]
+    ev = next((e for e in events if e.get("direction") == "LONG"), None)
+    if ev is None:
+        pytest.skip("fixture has no up-break")
+    cand = pe._build_candidate(_Bundle({"4h": pattern, "1h": pattern, "15m": trigger}),
+                               "DAYTRADE", ev, p2, trigger, stf, ttf, pe._fit_cfg())
+    if cand is None:
+        pytest.skip("no candidate built")
+    assert cand.metadata.get("choch") == "UP"          # falling line broken up
+    assert cand.metadata.get("counter_doctrine") is False   # never branded counter
+    assert any(item.key == "choch" for item in cand.evidence)
+
+
+def test_pattern_guard_is_direction_agnostic(monkeypatch):
+    """After the downtrend broke UP and owns a live chain, the OPPOSITE
+    (SHORT) break of the SAME pattern must not mint a rival scenario."""
+    pe = _tc_detect_env(monkeypatch)
+    import analysis.setups_v7 as _sv7
+    from database.bot_kv import set_json as _sj
+    import time as _t60
+    from test_pattern_engine import _wedge_frames, _Bundle
+    monkeypatch.setattr(_sv7, "_ensure_frames", lambda b, tfs: True)
+    pattern, trigger = _wedge_frames()
+    bundle = _Bundle({"4h": pattern, "1h": pattern, "15m": trigger})
+    ev_long = {"state": pe.STATE_BREAK, "pattern": "P", "side": "upper",
+               "direction": "LONG", "line_price": 100.0, "live": 101.0,
+               "touches": 3, "fit_error_atr": 0.3, "structure_score": 8,
+               "reactions": {"reject_rate": 0.5},
+               "edge_points": [{"timestamp": "2026-09-01 04:00", "price": 101.0},
+                               {"timestamp": "2026-09-10 08:00", "price": 99.0}],
+               "pattern_tf": "4h"}
+    ev_short = dict(ev_long, side="lower", direction="SHORT", live=98.0)
+    _sj(pe._mint_guard_key(bundle, ev_long), {})   # hermetic: clear the guard
+    monkeypatch.setattr(pe, "scan_edges",
+                        lambda *a, **k: [dict(ev_long)])
+    from types import SimpleNamespace as _NS
+    monkeypatch.setattr(pe, "_build_candidate",
+                        lambda *a, **k: _NS(signal_id="FAKE-L1"))
+    assert getattr(pe.detect_technoclassic(bundle, "DAYTRADE"),
+                   "signal_id", "") == "FAKE-L1"          # the UP break owns it
+    monkeypatch.setattr(pe, "scan_edges", lambda *a, **k: [dict(ev_short)])
+    assert pe.detect_technoclassic(bundle, "DAYTRADE") is None   # rival blocked
+
+
+def test_tlbreak_break_exempt_from_counter_trend_veto():
+    """«همه این ۳ ستاپها جهت شکست رو تایید بکنن»: a TLBREAK chain carrying the
+    break contract confirms even while the parent trend is still opposed."""
+    from analysis.quality_engine import evaluate_confirmation
+    from test_round60_tc_calibrate import _tc_frame_and_candidate
+    df, cand = _tc_frame_and_candidate("SHORT")
+    cand.setup_code = "TLBREAK"
+    cand.metadata.update({"break_direction": "DOWN",
+                          "strategy_variant": "VIVA_TLBREAK",
+                          # the one-close law already fired on the real chain
+                          "viva_state": "S6_CONFIRMED"})
+    cand.metadata["tl_context_conflict"] = True
+    ok, _c, reason = evaluate_confirmation(cand, df)
+    assert ok is True, reason

@@ -481,6 +481,10 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             pass
         candidate.metadata.update({
             "strategy_variant": "VIVA_TLBREAK",
+            # r60.6: TLBREAK breaks carry the same direction contract — the
+            # counter-trend touch-veto may never eat a validated break
+            # («همه این ۳ ستاپها جهت شکست رو تایید بکنن»).
+            "break_direction": "UP" if direction == "LONG" else "DOWN",
             "viva_state_machine": VivaTLState(stage="S2_BREAKOUT").payload(),
             # Confirm TF bars: give the retest→rejection→micro-BOS sequence room
             # to complete (previously 16/24 on a lower TF expired too quickly).

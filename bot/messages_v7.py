@@ -3364,9 +3364,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     ax.plot([x0, _xr], [_fy9(x0), _fy9(_xr)],
                             color=color, linewidth=2.3, alpha=.95, zorder=7, solid_capstyle="round")
                     if count < x_edge - 0.6:
+                        # r60.6 (his ONDO note): the projection past LIVE is
+                        # the actionable half of a broken line — draw it BOLD
+                        # so the break + projection read at a glance.
                         ax.plot([count, x_edge], [_fy9(count), _fy9(x_edge)],
-                                color=color, linewidth=1.5, alpha=.72, zorder=6,
-                                linestyle=(0, (6, 4)), solid_capstyle="butt")
+                                color=color, linewidth=2.0, alpha=.95, zorder=6,
+                                linestyle=(0, (5, 3)), solid_capstyle="butt")
                     ax.scatter(xs, ys, s=42, color=CHART_THEME["panel"], edgecolors=color, linewidths=1.7, zorder=9)
                     notes.append((f"{label} · {len(xs)} PIVOTS", color))
                 line = md.get("viva_breakout_line") or md.get("viva_break_line")
