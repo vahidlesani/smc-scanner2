@@ -306,8 +306,12 @@ def test_break_reclaimed_is_terminal():
 
 
 # ── the DOT case end-to-end: 1h chain confirmed by the first valid 15m close ─
-def test_dot_case_1h_chain_confirms_on_first_valid_15m_close():
+def test_dot_case_1h_chain_confirms_on_first_valid_15m_close(monkeypatch):
     from analysis.quality_engine import evaluate_confirmation
+    # hermetic: CI runners reach the live venue — a real DOT parent-TF tape
+    # made this synthetic case depend on the market of the day.
+    import data.fetcher as _f
+    monkeypatch.setattr(_f, "get_klines", lambda *a, **k: None)
     t0 = datetime(2026, 9, 30, 6, 0)
     rows = []
     for i in range(36):                          # 15m bars 06:00 → 14:45
