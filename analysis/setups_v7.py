@@ -146,7 +146,61 @@ TIMEFRAME_PROFILES = {
 }
 
 # SwingEngine sets this while scanning its second (4h) trigger stream.
-PROFILE_OVERRIDE: Dict[str, tuple] = {}
+# R63 (audit W4): the override is THREAD-LOCAL. The candidate-monitor,
+# realtime-execution and spot threads call timeframe_profile() while the
+# discovery thread has SWING overridden — a plain module dict leaked the
+# scan's 30m/2h/4h profile into those threads (wrong structure/trigger TF).
+import threading as _threading_w4
+
+
+class _ThreadLocalProfileOverride:
+    """dict-like, per-thread storage (same API the callers/tests use)."""
+
+    def __init__(self):
+        self._tl = _threading_w4.local()
+
+    def _d(self) -> Dict[str, tuple]:
+        d = getattr(self._tl, "d", None)
+        if d is None:
+            d = {}
+            self._tl.d = d
+        return d
+
+    def __contains__(self, k):
+        return k in self._d()
+
+    def __getitem__(self, k):
+        return self._d()[k]
+
+    def __setitem__(self, k, v):
+        self._d()[k] = v
+
+    def __delitem__(self, k):
+        del self._d()[k]
+
+    def get(self, k, default=None):
+        return self._d().get(k, default)
+
+    def pop(self, k, *default):
+        return self._d().pop(k, *default)
+
+    def clear(self):
+        self._d().clear()
+
+    def keys(self):
+        return self._d().keys()
+
+    def items(self):
+        return self._d().items()
+
+    def __len__(self):
+        return len(self._d())
+
+    def __bool__(self):
+        return bool(self._d())
+
+
+PROFILE_OVERRIDE = _ThreadLocalProfileOverride()
 
 
 # Viva 09-17 (his base-forming argument): a 1d/4h base can take 6-10 candles —

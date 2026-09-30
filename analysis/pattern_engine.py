@@ -208,7 +208,9 @@ PATTERN_FA = {
 }
 
 # fit windows per timeframe — pattern must be RECENT history, not the whole archive
-_FIT_WINDOW = {"1h": 200, "4h": 140, "1d": 110}
+# R63 (audit W8): 30m/2h are structure TFs of the SWING 30m/2h lanes — they
+# had no entry and silently fell back to 140.
+_FIT_WINDOW = {"15m": 200, "30m": 200, "1h": 200, "2h": 120, "4h": 140, "1d": 110}
 
 _LOCK = threading.Lock()
 _LINE_CACHE: Dict[str, dict] = {}

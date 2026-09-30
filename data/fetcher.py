@@ -92,8 +92,16 @@ def _aggregate_daily(frame: pd.DataFrame, k: int) -> Optional[pd.DataFrame]:
         # to the fetch window: a window-aligned bucket would shift its open/
         # close every time the lookback changed, which is exactly how a 3d bar
         # can disagree with the daily tape it came from.
-        _day_index = (d["timestamp"].astype("int64") // 86_400_000_000_000)
-        d["_g"] = (_day_index // k).astype("int64")
+        _ts = d["timestamp"]
+        if getattr(_ts.dt, "tz", None) is not None:
+            _ts = _ts.dt.tz_convert("UTC").dt.tz_localize(None)
+        _day_index = (_ts.astype("int64") // 86_400_000_000_000)
+        # R63: 1970-01-01 was a THURSDAY — a plain epoch bucket made every
+        # «1w» candle run Thu→Wed, while the venue/TradingView week runs
+        # Mon→Sun (a different open/close than the chart he reads). Weekly
+        # buckets are shifted to Monday; 3d stays epoch-aligned.
+        _shift = 3 if int(k) == 7 else 0
+        d["_g"] = ((_day_index + _shift) // k).astype("int64")
         if d.empty or len(d) < k * 2:
             return None
         rows = []
@@ -492,7 +500,9 @@ def get_market_bundle(
     # Fetch only the base tapes that the caller actually needs. In particular,
     # a spot-only 4h/8h/12h/1d/3d/1w scan must not pull unused 5m/15m data.
     need_5m = "5m" in requested
-    need_15m = any(tf in requested for tf in ("15m", "30m", "1h"))
+    # R63 (audit W8): 2h is resampled from the 15m base too — requesting it
+    # alone used to return None (base never fetched).
+    need_15m = any(tf in requested for tf in ("15m", "30m", "1h", "2h"))
     need_4h = any(tf in requested for tf in ("4h", "8h", "12h"))
     need_1d = any(tf in requested for tf in ("1d", "3d", "1w"))
 
@@ -506,9 +516,12 @@ def get_market_bundle(
         int(limits.get("15m", 200)),
         int(limits.get("30m", 200)) * 2 if "30m" in requested else 0,
         int(limits.get("1h", 200)) * 4 if "1h" in requested else 0,
+        # R63 W8: the 2h structure lane needs ≥60 bars after the resample;
+        # 120×8 = 960 15m bars stays inside ONE venue call (≤1000).
+        int(limits.get("2h", 120)) * 8 if "2h" in requested else 0,
     )
     base_15m = get_klines(
-        symbol, "15m", max(200, need_15m_bars), closed_only=True
+        symbol, "15m", min(1000, max(200, need_15m_bars)), closed_only=True
     ) if need_15m else None
 
     # Derived 8h/12h views must retain enough source 4h candles to preserve

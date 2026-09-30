@@ -252,17 +252,40 @@ def run_discovery_scan() -> Dict[str, int]:
     # Viva 09-17 seesaw fix: WATCH/previews live on a SEPARATE small budget —
     # a flood of two-pivot watches can never starve pins/other families again.
     _watch_budget = {"left": 4}
+    # R63 (audit W3): the 8-alert cycle budget was FIRST-COME across all
+    # setups — the symbol loop order let one noisy family (zones/pins on the
+    # first symbols) eat the whole budget and defer time-critical pattern
+    # BREAKS to the next cycle (a late break alert = a chased entry). Each
+    # setup now has its own share of the cycle, and the break lanes keep a
+    # small reserve on top of the shared pool.
+    _per_setup_cap = max(2, int(getattr(SETTINGS, "education_max_per_setup_per_scan", 4) or 4))
+    _setup_used: Dict[str, int] = {}
+    _break_reserve = {"left": 2}
+    _BREAK_LANES63 = {"TECHCLASSIC", "ALBROX", "TLBREAK"}
+
+    def _budget_ok(cand) -> bool:
+        _sc = str(getattr(cand, "setup_code", "") or "").upper()
+        if _setup_used.get(_sc, 0) >= _per_setup_cap:
+            return False
+        if _edu_budget["left"] > 0:
+            return True
+        return _sc in _BREAK_LANES63 and _break_reserve["left"] > 0
 
     def _educate(cand, frame):
-        if _edu_budget["left"] <= 0:
-            stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
-            return False
         _md9 = getattr(cand, "metadata", None) or {}
         _is_watch = str(_md9.get("viva_state") or "").upper().startswith("S0_WATCH")
-        _b9 = _watch_budget if _is_watch else _edu_budget
-        if _b9["left"] <= 0:
+        _sc9 = str(getattr(cand, "setup_code", "") or "").upper()
+        if not _is_watch and not _budget_ok(cand):
             stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
             return False
+        _b9 = _watch_budget if _is_watch else _edu_budget
+        if _is_watch and _b9["left"] <= 0:
+            stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
+            return False
+        if not _is_watch:
+            _setup_used[_sc9] = _setup_used.get(_sc9, 0) + 1
+            if _edu_budget["left"] <= 0:
+                _b9 = _break_reserve
         _b9["left"] -= 1
         # ── r60.2 send-idempotency (his duplicate-post reports: INJ×2, OKB×2,
         # LINK 1d×2, ALGO PINVAL K795612×2 within one minute): two lanes can
@@ -512,7 +535,7 @@ def run_discovery_scan() -> Dict[str, int]:
                 # lineage is superseded — a deferred replacement used to delete
                 # the live chain's posts and then never publish its successor.
                 _is_watch62 = str((candidate.metadata or {}).get("viva_state") or "").upper().startswith("S0_WATCH")
-                if _edu_budget["left"] <= 0 or (_is_watch62 and _watch_budget["left"] <= 0):
+                if (not _is_watch62 and not _budget_ok(candidate)) or (_is_watch62 and _watch_budget["left"] <= 0):
                     stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
                     _t(candidate)["budget_deferred"] = _t(candidate).get("budget_deferred", 0) + 1
                     continue  # not persisted; next scan retries when budget frees
@@ -1429,6 +1452,14 @@ def _tf_fetch_window(tf: str) -> bool:
         return m < 20 and now.hour % 4 == 0
     if tf == "1d":
         return now.hour == 0 and m < 45
+    # R63 (audit W5): the spot/HTF frames used to fall through to «always» —
+    # a fetch on EVERY monitor cycle for a candle that closes every 8h–1w.
+    if tf == "8h":
+        return m < 25 and now.hour % 8 == 0
+    if tf == "12h":
+        return m < 30 and now.hour % 12 == 0
+    if tf in ("3d", "1w"):
+        return now.hour == 0 and m < 45
     return True
 
 
@@ -1529,6 +1560,14 @@ def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataF
             key = (candidate.symbol, tf)
             if key in frames:
                 continue
+            # R63 RAILWAY DIET (audit W5 + «مصرف Railway خیلی بالا رفته»): the
+            # window spans several monitor cycles; once THIS chain has already
+            # been evaluated on the newest CLOSED bar of this TF, re-fetching
+            # the same closed candles is pure cost. A fetch that has not yet
+            # seen the rolled-over bar (venue latency) is retried as before.
+            _exp63 = _expected_closed_bar(tf)
+            if _exp63 and _SEEN_CLOSED.get((str(candidate.signal_id), str(tf))) == _exp63:
+                continue
             live = get_klines(
                 candidate.symbol,
                 tf,
@@ -1542,7 +1581,42 @@ def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataF
             closed = live.iloc[:-1].reset_index(drop=True)
             current_price = float(live["close"].iloc[-1])
             frames[key] = (live, closed, current_price)
+            try:
+                _last63 = _bar_key63(closed["timestamp"].iloc[-1])
+                for _c63 in candidates:
+                    if str(getattr(_c63, "symbol", "")) == str(candidate.symbol):
+                        _SEEN_CLOSED[(str(_c63.signal_id), str(tf))] = _last63
+                if len(_SEEN_CLOSED) > 4000:
+                    _SEEN_CLOSED.clear()
+            except Exception:
+                pass
     return frames
+
+
+# R63 (W5): (signal_id, tf) → newest CLOSED bar already evaluated.
+_SEEN_CLOSED: Dict[Tuple[str, str], str] = {}
+
+
+def _bar_key63(ts) -> str:
+    t = pd.Timestamp(ts)
+    if t.tzinfo is not None:
+        t = t.tz_convert("UTC").tz_localize(None)
+    return str(t)[:16]
+
+
+def _expected_closed_bar(tf: str) -> str:
+    """Start time (UTC, naive, 'YYYY-MM-DD HH:MM') of the newest CLOSED bar
+    of ``tf`` right now; '' for TFs we cannot floor exactly."""
+    try:
+        mins = int(_TF_MINUTES_LIVE.get(str(tf).lower()) or 0)
+        if mins <= 0:
+            return ""
+        now = pd.Timestamp.utcnow().tz_localize(None) if pd.Timestamp.utcnow().tzinfo is None \
+            else pd.Timestamp.utcnow().tz_convert("UTC").tz_localize(None)
+        cur = now.floor(pd.Timedelta(minutes=mins))
+        return str(cur - pd.Timedelta(minutes=mins))[:16]
+    except Exception:
+        return ""
 
 
 def monitor_candidates() -> Dict[str, int]:
