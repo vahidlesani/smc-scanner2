@@ -478,7 +478,23 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                 price_at=lambda X, _d=d: line_y(_d, X))
 
         if gu is not None and gl is not None:
-            shape = classify_shape(_ns(gu), _ns(gl), n)
+            # r61 ROLE LAW (HYPE 09-30: the eye reads edges, not window OLS):
+            # at the live bar the UPPER edge must sit ABOVE the lower one. A
+            # scissored pair (the stale rally support now ABOVE the falling
+            # recent-highs edge) is not a pattern — fall back to its sub-line
+            # or to two honest trendlines.
+            if line_y(gu, n) < line_y(gl, n):
+                _gl_ok = None
+                if sub_l is not None and line_y(gu, n) >= line_y(sub_l, n):
+                    _gl_ok = sub_l
+                if _gl_ok is not None:
+                    gl = _gl_ok
+                else:
+                    gu, gl = None, None    # honest: no live two-edge pattern
+            if gu is not None and gl is not None:
+                shape = classify_shape(_ns(gu), _ns(gl), n, df=df)
+            else:
+                shape = 'NONE'
             if shape in ("NONE", ""):
                 # converging pair = wedge (global coords! the old check mixed
                 # per-window local x and misfired on CRV)
@@ -691,7 +707,31 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                 out = _trimmed
     except Exception:
         pass
-    return out[:3]
+    # r61 THE 16-PATTERN LAW (Viva 09-30: poster rules from the international
+    # source, coded): the pivot-sequence family the two-line fitter can never
+    # see — double top/bottom, H&S (+inverse), cup & handle. At most ONE,
+    # alive near price, its neckline not a duplicate of a drawn line.
+    try:
+        _atr_p = _atr(df)
+        if _atr_p > 0 and len(df) >= 40:
+            from analysis.patterns16 import detect_pivot_patterns as _dpp16
+            _have_sides = [(float(ln["slope"]) * (len(df) - 1) + float(ln["intercept"]),
+                            str(ln.get("side") or ""))
+                           for it in out for ln in (it.get("lines") or [])
+                           if "slope" in ln and "intercept" in ln]
+            for _pp in _dpp16(df.reset_index(drop=True), _atr_p):
+                _neck_v = float(_pp.get("neckline") or 0.0)
+                if abs(_neck_v - float(df["close"].iloc[-1])) > 6.0 * _atr_p:
+                    continue                       # a fossil, not a live pattern
+                _my_side = str((_pp.get("lines") or [{}])[0].get("side") or "")
+                if any(abs(_neck_v - _v) <= 0.35 * _atr_p and _s == _my_side
+                       for _v, _s in _have_sides):
+                    continue                       # same line already drawn
+                out.append(_pp)
+                break                              # one pivot pattern per chart
+    except Exception:
+        pass
+    return out[:4]
 
 
 def enrich_render(candidate, trigger_df: pd.DataFrame,

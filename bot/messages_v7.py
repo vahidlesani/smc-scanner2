@@ -1884,6 +1884,11 @@ def _chart_tf_token(candidate, frame) -> str:
 
 
 def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool = False) -> Optional[bytes]:
+    # r61 CHART-DIET LAW (Viva 09-30: «چارت رو از اپلیکیشن فعلا حذف بکن ببینم
+    # مصرف ریلوی پایینتر میاد»): one gate for every render in the product.
+    # Off = every lane posts text-only; nothing upstream changes.
+    if not bool(getattr(SETTINGS, "chart_enabled", True)):
+        return None
     """Render a branded TradingView-inspired 1440×900 chart."""
     if df is None or df.empty:
         return None

@@ -33,7 +33,7 @@ def _bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    version: str = "2026.09.30-r60.6"
+    version: str = "2026.09.30-r61.0"
     strategy_version: str = "smc-core-7.0"
     channel_name: str = "VivaSignals Pro"
 
@@ -268,11 +268,17 @@ class Settings:
     bybit_cache_seconds: int = 45
     run_scan_on_start: bool = True
     startup_message_enabled: bool = False
+    # r61 (Viva 09-30: «چارت رو از اپلیکیشن فعلا حذف بکن ببینم مصرف ریلوی
+    # پایینتر میاد») — matplotlib renders are the heaviest Railway work; the
+    # chart generation is OFF until he measures the diet and re-enables it
+    # (CHART_ENABLED=1). Alerts post as text-only, nothing else changes.
+    chart_enabled: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
             version=os.getenv("APP_VERSION", cls.version),
+            chart_enabled=_bool("CHART_ENABLED", cls.chart_enabled),
             strategy_version=os.getenv("STRATEGY_VERSION", cls.strategy_version),
             channel_name=os.getenv("CHANNEL_NAME", cls.channel_name),
             full_scan_minutes=_int("FULL_SCAN_MINUTES", cls.full_scan_minutes),

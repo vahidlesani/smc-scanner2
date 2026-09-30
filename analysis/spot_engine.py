@@ -536,6 +536,23 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
     out: List[dict] = []
     if not frames:
         return out
+    # r61 NESTING LAW (Viva 09-30: a spot parent may be a weekly/3-day channel
+    # — the engine draws the trend on the smaller TFs and finds the smaller
+    # patterns INSIDE the parent). Parent box = biggest TF frame present; every
+    # alert carries it and whether the child lives inside.
+    _parent16 = None
+    _parent_tf = ""
+    try:
+        from analysis.patterns16 import parent_range as _pr16
+        for _ptf in ("1w", "3d", "1d"):
+            _pdf = frames.get(_ptf)
+            if _pdf is not None and len(_pdf) >= 40:
+                _pd = _sane_ohlcv(_pdf.reset_index(drop=True))
+                _parent16 = _pr16(_pd, _atr(_pd))
+                _parent_tf = _ptf
+                break
+    except Exception:
+        _parent16 = None
     for tf in SPOT_TRIGGERS:
         df = frames.get(tf)
         if df is None or len(df) < 45:
@@ -583,6 +600,11 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                     "box_top": float(box_top) if box_top else 0.0,
                     "pattern_commands": [pat], "sig": sig,
                     "bar_ts": str(d["timestamp"].iloc[-1]),
+                    "parent_range": (
+                        {"tf": _parent_tf, "top": round(float(_parent16["top"]), 8),
+                         "bottom": round(float(_parent16["bottom"]), 8)}
+                        if _parent16 else None),
+                    "in_parent": bool(_parent16 and _parent16["bottom"] <= close <= _parent16["top"]),
                     "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 })
         except Exception as exc:

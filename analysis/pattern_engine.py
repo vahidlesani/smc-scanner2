@@ -281,9 +281,17 @@ def base_side_bonus(df: pd.DataFrame, price: float, direction: str) -> float:
 
 
 # ── geometry validity (the "reality" gate; fixes the screenshot bugs) ──────
-def classify_shape(upper, lower, n) -> str:
+def classify_shape(upper, lower, n, df=None) -> str:
     """Wedge-vs-triangle honest classifier: 'flat' only when TOTAL drift is
-    small vs pattern height (per-bar slope comparisons mislabel wedges)."""
+    small vs pattern height (per-bar slope comparisons mislabel wedges).
+
+    r61 HYPE law (Viva 09-30: «این الان کجاش رایزینگ وج هست؟؟ … اگر ضلع بالا
+    رسم بشه فالینگ وج هست»): a WEDGE_RISING claim must survive the TAIL test —
+    the upper edge's LAST segment (the one the eye reads) may not contradict
+    the window-OLS slope — and, when the frame is given, the ENTRY-SIDE test:
+    a converging both-slopes-up structure that price entered from ABOVE after
+    a vertical rally is a top being carved, never a rising wedge."""
+    from analysis.patterns16 import tail_slope as _ts61, entry_side as _es61
     if upper is None and lower is None:
         return "NONE"
     if upper is None or lower is None:
@@ -357,6 +365,21 @@ def classify_shape(upper, lower, n) -> str:
     if upper.slope <= 0 and lower.slope <= 0:
         return "WEDGE_FALLING"
     if upper.slope >= 0 and lower.slope >= 0:
+        # r61 honest-tail + entry-side audit (docstring)
+        start = max(int(upper.first_index), int(lower.first_index))
+        tol_t = 0.025 * width_now / max(1, min(12, span))
+        tu = _ts61(upper.price_at, n, start)
+        tl = _ts61(lower.price_at, n, start)
+        es = _es61(df, start, float(upper.price_at(n)), float(lower.price_at(n))) \
+            if df is not None else "ANY"
+        if tu < -tol_t or es == "ABOVE":
+            # the upper edge price actually tests LATE is FALLING (or price
+            # came in from above) — «فالینگ وج» by the eye's honest edges
+            if tl < -tol_t:
+                return "WEDGE_FALLING"
+            if tl > tol_t:
+                return "TRIANGLE_SYMMETRICAL"
+            return "TRIANGLE_DESCENDING"
         return "WEDGE_RISING"
     return "TRIANGLE"
 
