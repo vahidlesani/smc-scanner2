@@ -80,7 +80,10 @@ def test_render_identity_and_zoom_freeze_persist():
     src = open(f"{REPO}/bot/messages_v7.py", encoding="utf-8").read()
     assert 'f"render_identity:{candidate.signal_id}"' in src
     assert 'f"zoom_freeze:{candidate.signal_id}"' in src
-    assert src.count("render_identity:") >= 2  # read AND write
+    # R63: the WRITE moved into analysis/snapshot_lock.py (per-code lock)
+    lock = open(f"{REPO}/analysis/snapshot_lock.py", encoding="utf-8").read()
+    assert src.count("render_identity:") + lock.count("render_identity:") >= 2  # read AND write
+    assert "lock_render_geometry" in src and "kv_set(snapshot_key(sid)" in lock
     assert src.count("zoom_freeze:") >= 2
 
 

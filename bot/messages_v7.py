@@ -955,7 +955,7 @@ def _pattern_anchors_in_frame(pattern: dict, t0, t1) -> bool:
 
 def _native_patterns_for_frame(frame, direction: str, chart_tf: str,
                                candidate_id: str, stored: list,
-                               log_axis: bool = True) -> list:
+                               log_axis: bool = True, locked: bool = False) -> list:
     """r51 MULTI-TF-TREND LAW (Viva 09-27, «باید توی هر تایمی که میره
     ترندلاین‌ها و الگوها رو دقیق نشون بده … در همه ستاپ‌ها باید اصلاح بشه»):
     stored render_patterns are native to the DETECTION tape. On another chart
@@ -967,6 +967,11 @@ def _native_patterns_for_frame(frame, direction: str, chart_tf: str,
     re-anchors (r33 identity law, now per TF). A TF with no valid pattern of
     its own draws none — an honest empty beats a foreign lie."""
     if not stored:
+        return stored
+    # R63 SNAPSHOT-LOCK: a locked code NEVER re-fits — its stored lines are
+    # projected by TIME onto this frame (see the draw loop), so a sliding
+    # window can no longer swap them for new pivots.
+    if locked:
         return stored
     try:
         _t0 = pd.Timestamp(frame.index[0])
@@ -2061,15 +2066,19 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 else:
                     from analysis.render_kit import enrich_render
                     enrich_render(candidate, frame.reset_index())
-                    try:
-                        from database.bot_kv import set_json as _sj33
-                        _sj33(f"render_identity:{candidate.signal_id}", {
-                            "render_patterns": candidate.metadata.get("render_patterns") or [],
-                            "render_zones": candidate.metadata.get("render_zones") or []})
-                    except Exception:
-                        pass
         except Exception:
             pass
+        # ── R63 SNAPSHOT-LOCK (Viva 10-01, verbatim): «اون کد یکتا باید اسنپ‌شات
+        # بگیره از الگو و ترندش و تا پایان اون پوزیشن دیگه نباید نواحی جدید رسم
+        # بشه یا ترندلاین روی پیوت‌های جدید امتداد پیدا کنه». The FIRST chart of
+        # a code stamps its drawn geometry; every later chart of the SAME code
+        # restores it (a later scan's re-fit can no longer extend a line or add
+        # a zone). G1: a chain with trade lines paints ONLY the traded edges.
+        try:
+            from analysis.snapshot_lock import lock_render_geometry as _lock63
+            _lock63(candidate)
+        except Exception as _l63:
+            print(f"R63 snapshot-lock warning: {_l63}")
         if _CANDLE_STYLE == "cryptocove":
             # r59 PREVIEW only — Viva judges before it becomes the default.
             market_colors = mpf.make_marketcolors(
@@ -2605,7 +2614,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             frame, getattr(candidate, "direction", ""), _chart_tf,
             candidate.signal_id,
             ((candidate.metadata or {}).get("render_patterns") or []),
-            log_axis=bool(use_log))
+            log_axis=bool(use_log),
+            locked=bool((candidate.metadata or {}).get("snapshot_locked")))
         # r59 FAR-MAJOR PRESERVE (Viva: «الگوی ماژورِ دورتر معتبرتر است» +
         # «الگوهای ماژور آبی کشیده بشن»): when the r51 window-refit replaced
         # the stored set, a classic shape FAR from the live price (>2.5×ATR,
@@ -2697,8 +2707,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _sl8 = float(_ln0["slope"]) / _tfscale
                 _pt8 = _ln0.get("points") or []
                 if _pt8:
-                    _x0f = float(np.searchsorted(
-                        frame.index, pd.Timestamp(str(_pt8[0].get("ts")))))
+                    # R63: TIME projection (a pre-window pivot extrapolates to
+                    # a negative x instead of clamping to 0 — the clamp is what
+                    # bent stored lines and forced the r51 per-TF re-fit).
+                    try:
+                        _x0f = float(_viva_points_xs(
+                            [{"timestamp": _pt8[0].get("ts")}], frame)[0])
+                        if not math.isfinite(_x0f):
+                            raise ValueError("nan x")
+                    except Exception:
+                        _x0f = float(np.searchsorted(
+                            frame.index, pd.Timestamp(str(_pt8[0].get("ts")))))
                     _ic8 = float(_pt8[0].get("price")) - _sl8 * _x0f
                 else:
                     _x0f = max(0.0, (float(_ln0.get("x0", 0))
