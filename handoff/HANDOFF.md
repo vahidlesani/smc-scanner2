@@ -519,3 +519,12 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
 - Counter-trend veto exemption now CONTRACT-based (any break_direction) — TLBREAK carries break_direction too; test = TLBREAK+VIVA_TLBREAK variant+S6_CONFIRMED passes parent-opposed (fixture needed viva_state S6 for the machine gate at quality_engine:1091).
 - Dashed post-LIVE projection bolded (lw2.0 α.95 (5,3)).
 - Suite 747P/1skip. version 2026.09.30-r60.6. Note for his «پیام‌ها کوتاه‌تر شده؟»: removed htf-alignment gate line + counter-doctrine branding blocks shortened some messages (content-only, his own law changes); CHoCH bullet adds one back.
+
+## r61 — THE 16-PATTERN LAW + HYPE honest edges + chart diet (2026-09-30)
+- His verdicts: HYPEUSDT 4h SPOTBREAK labeled «گوه صعودی (رایزینگ‌وج)» on a chart whose UPPER edge FALLS («این الان کجاش رایزینگ وج هست؟؟ … اگر ضلع بالا رسم بشه فالینگ وج هست»); 16-pattern poster (uploads/images (6).jpeg) = the law source; app chart removal order; migration-kit order.
+- analysis/patterns16.py NEW: PATTERN16_LIBRARY (16+ slugs w/ entry side), tail_slope, entry_side, classify16, _swings (SLICE BUG fixed: h[i+1:i+1+right]), detect_pivot_patterns (DTOP/DBOT/HS/IHS/CUP w/ neckline+measured+shape "single"+staging side), parent_range/inside_parent.
+- classify_shape(upper,lower,n,df=None): WEDGE_RISING branch audited by tail slopes + entry side → relabels WF/TS/TD (HYPE law). render_kit.detect_patterns: scissored pair → sub-line fallback else two trendlines; classify gets df; ONE pivot pattern appended (alive ≤6 ATR, dedup neck, out[:4]). patterns.pattern_info → patterns16-first.
+- spot_engine.scan_spot_alerts: parent_range annotation (1w/3d/1d) + in_parent per item.
+- Chart diet: config.chart_enabled=False default (CHART_ENABLED=1 to restore); generate_chart early-return None; tests/conftest.py autouse swaps module SETTINGS to charts-ON (frozen dataclass → module-attr replace).
+- GOTCHAS: Settings frozen+get_settings() returns FRESH instance (patch module SETTINGS, never mutate); .git/config vanishes per turn (re-add origin from tokens.env); mplfinance needed by messages_v7 imports in tests.
+- Suite 759P/1skip. Version 2026.09.30-r61.0. Next: his validation of pattern names → then perp TC nested scoring + PINVAL round + entry/stop/TP engine (his "tomorrow").
