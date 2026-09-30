@@ -71,9 +71,11 @@ def test_3d_and_1w_are_epoch_aligned_aggregates():
     for ts in a3["timestamp"]:
         day = pd.Timestamp(ts).value // 86_400_000_000_000
         assert day % 3 == 0
+    # R63: weekly buckets are MONDAY-aligned (venue/TradingView week);
+    # epoch day 0 was a Thursday → Monday ⇔ (day + 3) % 7 == 0
     for ts in a7["timestamp"]:
         day = pd.Timestamp(ts).value // 86_400_000_000_000
-        assert day % 7 == 0
+        assert (day + 3) % 7 == 0
     # OHLC honesty: every bucket's high/low bracket its own daily members and
     # its close is the LAST close inside the bucket
     for _, bucket in a3.iterrows():
