@@ -117,6 +117,22 @@ def lock_render_geometry(candidate, kv_get=None, kv_set=None) -> str:
         for k in SNAPSHOT_KEYS:
             if k in stored:
                 md[k] = stored[k]
+        # R63.1 (Viva 10-01: «یه چیزایی قدیمی»): chains opened BEFORE the R63
+        # deploy carry a legacy r33 snapshot (render-fitter lines, no marker)
+        # — restoring it verbatim kept painting the OLD second geometry. The
+        # one-geometry filter runs on every restore (it only REMOVES
+        # non-traded lines, never adds new ones, so the lock law holds) and
+        # a legacy snapshot is migrated once to the marked format.
+        _changed = unify_trade_geometry(md)
+        if _changed or "render_geometry_source" not in stored:
+            try:
+                snap = {k: md.get(k) for k in SNAPSHOT_KEYS if k in md}
+                snap.setdefault("render_patterns", md.get("render_patterns") or [])
+                snap.setdefault("render_zones", md.get("render_zones") or [])
+                snap["render_geometry_source"] = md.get("render_geometry_source") or "RENDER"
+                kv_set(snapshot_key(sid), snap)
+            except Exception:
+                pass
         md["snapshot_locked"] = True
         return "RESTORED"
     if not (md.get("render_patterns") or md.get("render_zones")):
@@ -125,6 +141,7 @@ def lock_render_geometry(candidate, kv_get=None, kv_set=None) -> str:
     snap = {k: md.get(k) for k in SNAPSHOT_KEYS if k in md}
     snap.setdefault("render_patterns", md.get("render_patterns") or [])
     snap.setdefault("render_zones", md.get("render_zones") or [])
+    snap["render_geometry_source"] = md.get("render_geometry_source") or "RENDER"
     try:
         kv_set(snapshot_key(sid), snap)
     except Exception:

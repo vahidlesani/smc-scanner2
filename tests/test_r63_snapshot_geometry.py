@@ -72,3 +72,18 @@ def test_locked_patterns_never_refit_per_tf():
                                                   "points": [{"ts": "2026-09-20 00:00", "price": 1.0}]}]}]
     out = _native_patterns_for_frame(frame, "LONG", "15m", "LOCKED1", stored, locked=True)
     assert out is stored
+
+
+def test_legacy_pre_r63_snapshot_is_cleaned_on_restore():
+    """R63.1: a chain opened before the deploy restores its r33 snapshot, but
+    the render-fitter's second geometry is dropped (no new lines added)."""
+    store, g, s = _kv()
+    store[snapshot_key("OLD1")] = {"render_patterns": [{"type": "WEDGE_RISING", "lines": [{}]},
+                                                       {"type": "RANGE", "lo": 1, "hi": 2}],
+                                   "render_zones": [{"kind": "OB"}]}
+    c = _cand("OLD1", [], [], strategy_variant="VIVA_TLBREAK",
+              viva_lower_points=[{"timestamp": "t1", "price": 1}, {"timestamp": "t2", "price": 1.1}])
+    assert lock_render_geometry(c, g, s) == "RESTORED"
+    assert [p["type"] for p in c.metadata["render_patterns"]] == ["RANGE"]
+    assert c.metadata["render_zones"] == [{"kind": "OB"}]
+    assert store[snapshot_key("OLD1")]["render_geometry_source"] == "TRADE"
