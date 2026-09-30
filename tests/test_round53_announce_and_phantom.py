@@ -77,9 +77,10 @@ def test_lifecycle_and_update_fetches_use_the_map():
     assert "_chart_fetch_size(base)" in seg1 and "_chart_fetch_size(view)" in seg1
     m2 = src.index("def send_setup_update")
     seg2 = src[m2:m2 + 5000]
-    assert "_chart_fetch_size(_tf)" in seg2
-    # no blind 180 fetch remains on the live-chart paths
-    assert "get_klines(candidate.symbol, base, 180" not in src
+    # r61.1: updates are TEXT-ONLY («هشدار نهایی است بدون چارت») — no chart
+    # generation and no own-frame fetch inside the update path at all
+    assert "generate_chart" not in seg2
+    assert "get_klines" not in seg2
 
 
 # ── 3. phantom guards ──────────────────────────────────────────────────────

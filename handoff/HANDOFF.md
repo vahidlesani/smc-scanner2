@@ -528,3 +528,15 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
 - Chart diet: config.chart_enabled=False default (CHART_ENABLED=1 to restore); generate_chart early-return None; tests/conftest.py autouse swaps module SETTINGS to charts-ON (frozen dataclass → module-attr replace).
 - GOTCHAS: Settings frozen+get_settings() returns FRESH instance (patch module SETTINGS, never mutate); .git/config vanishes per turn (re-add origin from tokens.env); mplfinance needed by messages_v7 imports in tests.
 - Suite 759P/1skip. Version 2026.09.30-r61.0. Next: his validation of pattern names → then perp TC nested scoring + PINVAL round + entry/stop/TP engine (his "tomorrow").
+
+## r61.1 — THE UPDATE FLOW LAW + ONE-CHART-ONE-TF + SANE ZONES (2026-09-30, night)
+- His verdicts: SUI K264244 cancel-update WITH live chart + zone/cancel <1 cent («احمقانه ترین ابطالی»); ATOM K285903 «تأیید شد» update 28s AFTER the confirm; ARB «1H (TRIG 15M)» + ATOM «15M (TRIG 1H)» charts; SEI K978460 4.7%-wide supply box («این چه ناحیه ای است»); «والد و بچه … کلا حذف کن — مولتی تایم فقط در توضیحات»; charts (his own 09-14 law) restored.
+- send_setup_update: TEXT-ONLY (chart block + own-frame fetch deleted; param chart_df kept-but-ignored), post-confirm BLOCK (confirmed_at/status/confirmation_message_sent → False), cap upd_n>1 for non-critical (critical ❌⚪⛔✅⚡ single events still close the slot). Caption: «📄 بدون چارت» line when has_chart=False (format follows his law).
+- send_verdict_reply: ok=True + confirmed → False (the ✅ verdict IS the confirm message).
+- send_technoclassic_preview: cap 1 (was 3) + text-only send_message.
+- send_confirmed: frame audited by _infer_chart_tf; non-trigger frame (r60.3 LTF leak) re-fetched on TRIGGER TF.
+- trade_management.sane_zone_geometry_ok(zone_lo,zone_hi,entry,stop,dir,atr,style): zone height ≤ max(2.5×ATR,1.5%); RISK floor by style (SCALP .8A/.25%, DAYTRADE 1A/.4%, SWING/GRAND 1.5A/.8%) → wired into pattern_engine._build_candidate, albrox zone lane, PINVAL builder (skip, never alert). SUI/SEI fixtures as tests.
+- Reverted r61 parent/child nesting (spot annotations + patterns16.parent_range helpers deleted; tests pruned).
+- config.chart_enabled default True (diet stays via CHART_ENABLED=0).
+- Superseded-test updates: r46 cap-one, r53 chartless greps, signal_guards (doctrine/identical/preview lifecycle).
+- Suite 768P/1skip. Version 2026.09.30-r61.1. NOTE: his confirm-chart cosmetics («کندل‌ها جمع‌تر، فاصلهٔ TPها») = pill allocator already exists (_slot_alloc/_relayout_pills); deeper render-diet left for his next verdict.

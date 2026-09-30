@@ -33,7 +33,7 @@ def _bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    version: str = "2026.09.30-r61.0"
+    version: str = "2026.09.30-r61.1"
     strategy_version: str = "smc-core-7.0"
     channel_name: str = "VivaSignals Pro"
 
@@ -268,11 +268,11 @@ class Settings:
     bybit_cache_seconds: int = 45
     run_scan_on_start: bool = True
     startup_message_enabled: bool = False
-    # r61 (Viva 09-30: «چارت رو از اپلیکیشن فعلا حذف بکن ببینم مصرف ریلوی
-    # پایینتر میاد») — matplotlib renders are the heaviest Railway work; the
-    # chart generation is OFF until he measures the diet and re-enables it
-    # (CHART_ENABLED=1). Alerts post as text-only, nothing else changes.
-    chart_enabled: bool = False
+    # r61 chart-diet experiment (Viva 09-30 «چارت رو از اپلیکیشن فعلا حذف
+    # بکن») measured — r61.1 restores the default ON: the TELEGRAM charts are
+    # the product itself (his same-night dictation is all about chart LAWS).
+    # The diet stays available for cost experiments: CHART_ENABLED=0.
+    chart_enabled: bool = True
 
     @classmethod
     def from_env(cls) -> "Settings":

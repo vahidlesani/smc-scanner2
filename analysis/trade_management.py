@@ -944,3 +944,33 @@ def advance_ladder(state: Dict, high: float, low: float) -> Dict:
         out["closed"] = True
         events.append({"event": "LADDER_COMPLETE", "realized_r": out["realized_r"]})
     return {"state": out, "events": events}
+
+
+def sane_zone_geometry_ok(zone_lo: float, zone_hi: float, entry: float,
+                          stop: float, direction: str, atr_trig: float,
+                          style: str = "") -> bool:
+    """r61.1 SANE-ZONE LAW (Viva 09-30, verbatim): «این چه ناحیه ای است که
+    دنبال سیگناله؟؟» (a 4.7%-wide supply box hunting signals) + «احمقانه
+    ترین ابطالی که دیدم — فاصلهٔ ناحیه و ابطال کمتر از ۱ سنت» (SUI pin:
+    zone 1.147-1.149, cancel 1.142). Two honest floors:
+      ① a watch ZONE must be a zone — height ≤ max(2.5×ATR_trig, 1.5%);
+      ② the RISK (entry→stop) must clear the style's floor —
+         SCALP max(0.8×ATR, 0.25%) · DAYTRADE max(1.0×ATR, 0.4%) ·
+         SWING/GRAND max(1.5×ATR, 0.8%).
+    A setup whose whole structure is smaller than noise is a trap, not a
+    trade — skipped, never alerted. Fail-open on degenerate input."""
+    try:
+        zlo, zhi = sorted((float(zone_lo), float(zone_hi)))
+        en = float(entry)
+        sl = float(stop)
+        a = float(atr_trig or 0.0)
+        if en <= 0 or sl <= 0 or zhi <= zlo:
+            return True
+        if (zhi - zlo) > max(2.5 * a, 0.015 * en):
+            return False
+        _st = str(style or "").upper()
+        mult, pct = {"SCALP": (0.8, 0.0025), "DAYTRADE": (1.0, 0.004),
+                     "SWING": (1.5, 0.008), "GRAND": (1.5, 0.008)}.get(_st, (1.0, 0.004))
+        return abs(en - sl) >= max(mult * a, pct * en)
+    except Exception:
+        return True

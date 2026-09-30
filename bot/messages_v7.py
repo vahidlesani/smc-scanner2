@@ -688,6 +688,11 @@ def send_verdict_reply(candidate: SignalCandidate, ok: Optional[bool], note_fa: 
     within a few candles of every alert (Viva's confirmation-feedback rule)."""
     if candidate.status in {"CANCELLED", "EXPIRED", "SUPERSEDED", "VERDICT_NO", "VERDICT_TIMEOUT"}:
         return False
+    # r61.1 (his «دیگه آپدیت احمقانه بعدیش چیه»): the ✅ verdict IS the
+    # confirm message — posting a «تأیید شد» update 28s later is a duplicate.
+    if ok is True and (getattr(candidate, "confirmed_at", "")
+                       or (candidate.metadata or {}).get("confirmation_message_sent")):
+        return False
     md = candidate.metadata or {}
     mid = md.get("education_message_id") or md.get("approaching_message_id")
     target = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
@@ -4664,7 +4669,7 @@ def _fa_num(value) -> str:
 
 def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
                           state_fa: str = "🔄 <b>به‌روزرسانی رصد</b>",
-                          upd_n: int = 0) -> str:
+                          upd_n: int = 0, has_chart: bool = True) -> str:
     """One-line-family live status of a chain. Viva 2026-09-12 (latest-update
     law): every state change is a NEW numbered post — header «🔄 آخرین آپدیت • آپدیت N»
     — so the newest message in the channel is always the newest update; the
@@ -4693,8 +4698,9 @@ def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
         f"🏷 <b>{_e(badge)}</b>",
         VIVA_SEP,
         state_fa,
-        (f"📊 چارت پیوست: <b>لایو</b> — تا کندلِ جاری {_e(_now_clock)} به وقتِ ایران"
-         if _now_clock else "📊 چارت پیوست: <b>لایو</b>"),
+        ((f"📊 چارت پیوست: <b>لایو</b> — تا کندلِ جاری {_e(_now_clock)} به وقتِ ایران"
+          if _now_clock else "📊 چارت پیوست: <b>لایو</b>") if has_chart
+         else "📄 بدون چارت — هشدارِ نهاییِ آماده‌سازی (لینکِ هشدار اولیه پایین)"),
         "⛔ تأیید ورود نیست",
         VIVA_SEP,
         f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}  •  {_e(str(candidate.trigger_timeframe or '').upper())}",
@@ -4729,40 +4735,20 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     edu_chat = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
     chain = _setup_chain_get(candidate)
     detail_mid = int(chain.get("edu") or candidate.metadata.get("education_message_id") or 0)
+    # ── r61.1 THE UPDATE FLOW LAW (Viva 09-30, verbatim): «وقتی یک سیگنالی
+    # تایید میشه دیگه آپدیت احمقانه بعدیش چیه .. مگه نگفتی بستی؟؟» + «آپدیت
+    # فقط یکبار بین هشدار ابتدایی و پیام کانفرمد بیشتر نباید بیاد اونهم فقط
+    # یک موضوع و اون هم هشدار نهایی است بدون چارت» + «اگر یک پوزیشن ابطال
+    # میشه نیاز به چارت لایو نداره». Updates are TEXT-ONLY (reply-linked to
+    # the initial alert) and AFTER confirmation the chain never updates again
+    # — the confirm message and the lifecycle receipts ARE the announcements.
+    _st61 = str(getattr(candidate, "status", "") or "").upper()
+    _md61 = candidate.metadata or {}
+    if (getattr(candidate, "confirmed_at", "")
+            or _st61 in ("CONFIRMED", "EXECUTED", "CLOSED")
+            or _md61.get("confirmation_message_sent")):
+        return False
     chart = None
-    # Viva 09-20 time-axis law: updates carry a LIVE chart. While price is
-    # still inside the long/short tool (and in every pre-confirmation update)
-    # the tape is the trigger TF; once candles have left the tool, the same
-    # anchored tool is shown on one higher TF. An update must NEVER fall back
-    # to an empty chart just because the higher frame is unavailable.
-    # confirmed charts are the first that carry the drawn tool; before a fill
-    # the tool is anchored at the confirmation candle (tool_entry_ts fallback)
-    _chart_is_live = bool(getattr(candidate, "confirmed_at", ""))
-    if chart_df is not None and _chart_is_live:
-        try:
-            _live_frame = _lifecycle_chart_frame(candidate, [])
-            if _live_frame is not None:
-                chart_df = _live_frame
-        except Exception:
-            pass
-    if chart_df is not None:
-        try:
-            chart = generate_chart(chart_df, candidate, confirmed=False)
-        except Exception:
-            chart = None
-    if chart is None and chart_df is None:
-        # «همه پیامها با چارت» — the update fetches its own live frame when the
-        # caller had none (verdict/expiry paths), never posting chartless.
-        try:
-            from data.fetcher import get_klines
-            _tf = str((candidate.metadata or {}).get("confirm_tf")
-                      or candidate.trigger_timeframe)
-            frame = get_klines(candidate.symbol, _tf, _chart_fetch_size(_tf),
-                               closed_only=False, use_cache=True)
-            if frame is not None and len(frame) >= 30:
-                chart = generate_chart(frame, candidate, confirmed=False)
-        except Exception:
-            chart = None
     import time as _time
     import hashlib as _hash
     # Viva 2026-09-14 «هر روز یه روز بدتر — سی تا پیام مختصر همون دقیقه!»:
@@ -4792,15 +4778,14 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     # 09-14 UPDATE-SPAM(3) law): a chain posts at most THREE numbered updates;
     # past that it goes quiet — the chain still lives and can confirm, but the
     # channel is no longer flooded with «آپدیت ۳۰».
-    if upd_n > 3:
+    # r61.1: AT MOST ONE non-critical update between the initial alert and
+    # the confirm («آپدیت فقط یکبار …»); critical single events (verdict ❌⚪,
+    # cancellation ⛔) still close the chain's slot.
+    if upd_n > 1 and not _critical:
         return False
-    # the ordered one/two-line explanation rides along whenever this update's
-    # chart was stepped up to a higher TF (09-20 time-axis law)
-    _view_note = str((candidate.metadata or {}).get("chart_view_note") or "")
-    if _view_note:
-        note_fa = f"{note_fa}\n\n{_view_note}" if str(note_fa or "").strip() else _view_note
     caption = _setup_update_caption(
-        candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>", upd_n)
+        candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>", upd_n,
+        has_chart=False)
     link = _telegram_message_link(edu_chat, detail_mid) if detail_mid and edu_chat else ""
     markup = ({"inline_keyboard": [[{"text": "📚 توضیحات کامل هشدار", "url": link}]]}
               if link else None)
@@ -5532,6 +5517,24 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
         ltf_cap_pct=float(TP1_CAP_BY_TF.get(str(candidate.trigger_timeframe or "15m"), 2.0))
         if _ltf_df_conf is not None else 0.0,
     )
+    # ── r61.1 ONE-CHART-ONE-TF (Viva 09-30, verbatim): «پیام سوم هر موقعیت
+    # پیام تایید آن پوزیشن است در همان تایم تریگر و با همان ترند یا الگوهای
+    # رسم شده … هر شناسه پوزیشن فقط چارت تایم همون تریگر». A caller that
+    # passed the LTF confirm frame (r60.3 early-confirm) must not leak it:
+    # the frame is audited and re-fetched on the TRIGGER TF, never another.
+    try:
+        _base61 = str(candidate.trigger_timeframe or "").lower()
+        if chart_df is not None and _base61:
+            _seen61 = str(_infer_chart_tf(chart_df, candidate) or "").lower()
+            if _seen61 and _seen61 != _base61:
+                from data.fetcher import get_klines as _gk61
+                _trig61 = _gk61(str(candidate.symbol), _base61,
+                                _chart_fetch_size(_base61),
+                                closed_only=False, use_cache=True)
+                if _trig61 is not None and not getattr(_trig61, "empty", True):
+                    chart_df = _trig61
+    except Exception:
+        pass
     if chart_df is not None and not chart_df.empty and "close" in chart_df.columns:
         candidate.metadata["live_price"] = float(chart_df["close"].iloc[-1])
         # ── Viva 09-22 round 16: «زمان تایید ابتدای ابزار لانگ و شورت دقیقا از
@@ -6887,7 +6890,10 @@ def send_technoclassic_preview(ev: dict) -> bool:
     # 09-14 UPDATE-SPAM(3) law): a chain posts at most THREE numbered updates;
     # past that it goes quiet — the chain still lives and can confirm, but the
     # channel is no longer flooded with «آپدیت ۳۰».
-    if upd_n > 3:
+    # r61.1 THE UPDATE FLOW LAW: ONE update between alert and confirm, and it
+    # is the final warning WITHOUT a chart («اونهم فقط یک موضوع و اون هم
+    # هشدار نهایی است بدون چارت»).
+    if upd_n > 1:
         return False
     state_fa = {"REJECTION_FADE": "↩️ کندلِ دفع در کانال — پلنِ بازگشت روی تابلو (تأییدِ تایم‌پایین لازم)",
                 "BREAK_READY": "⏱ آماده‌باشِ شکست — خط تست شد؛ تأییدِ کلوز لازم است",
@@ -6919,10 +6925,9 @@ def send_technoclassic_preview(ev: dict) -> bool:
     _under_detail = bool(edu_mid) and bool(_alerts_chat)
     upd_chat = _alerts_chat if _under_detail else str(target)
     reply_to = (int(edu_mid) if _under_detail else (anchor_mid or None)) or None
-    _ph, new_mid = _post_chart_then_text(
-        chart, caption, upd_chat, reply_to=reply_to, reply_markup=markup,
-        label=_chart_label(symbol=str(getattr(cand, "symbol", "") or ""),
-                           code=code, title_fa="به‌روزرسانی رصد"))
+    new_mid = int(send_message(caption, upd_chat,
+                               reply_to_message_id=reply_to or None,
+                               reply_markup=markup) or 0)
     done = bool(new_mid)
     if done:
         if upd and upd != anchor_mid:
@@ -6937,7 +6942,7 @@ def send_technoclassic_preview(ev: dict) -> bool:
         _sk(ck, {"anchor": anchor_mid, "update": upd, "edu": edu_mid, "ts": now,
                  "upd_n": upd_n, "upd_chat": upd_chat, "code": code,
                  "upd_bar": _bar, "last_upd_ts": now,
-                 "update_photo": int(_ph or 0),
+                 "update_photo": 0,
                  "pattern": str(ev.get("pattern")),
                  "state": state, "fade": bool(is_fade)})
         try:  # keep the anchor→confirmation link state fresh without moving it

@@ -1605,6 +1605,19 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
             candidate.sl = round(_zt30 + buffer, 8)
     except Exception:
         pass
+    # ── r61.1 SANE-ZONE LAW (Viva 09-30: «ناحیه های بررسی و ابطال عقلانی و
+    # اصولی باشه»): a watch zone must be a zone and its invalidation must sit
+    # a real distance beyond it — a setup glued to its door is skipped.
+    try:
+        from analysis.trade_management import sane_zone_geometry_ok as _szg61
+        if not _szg61(float(candidate.entry_zone_bottom),
+                      float(candidate.entry_zone_top),
+                      float(candidate.planned_entry or (candidate.entry_zone_bottom + candidate.entry_zone_top) / 2.0),
+                      float(candidate.sl or 0), direction, float(atr_t or 0.0),
+                      str(getattr(candidate, "style", "") or "")):
+            return None
+    except Exception:
+        pass
     # ── Viva 09-23 (round 20 ENTRY LAW): remember the MAJOR-pivot trendline
     # opposing this break (highest-TF validated 1d/4h/1h line on the break's
     # side) — confirmation must be a CLOSE beyond it, not just the tool line.

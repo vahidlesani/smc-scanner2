@@ -176,38 +176,13 @@ def test_detect_patterns_exposes_pivot_family():
                      "TRIANGLE_ASCENDING") for k in kinds), kinds
 
 
-# ── parent-range nesting ───────────────────────────────────────────────────
-def test_parent_range_and_inside():
-    from analysis.patterns16 import parent_range, inside_parent
-    # 60 bars bouncing 90..110 (box) → parent range
-    path = [100 + (6 if (i // 5) % 2 == 0 else -6) for i in range(60)]
-    df = _frame(path)
-    atr = 3.0
-    pr = parent_range(df, atr)
-    assert pr is not None
-    assert pr["top"] >= 105 and pr["bottom"] <= 95
-    assert inside_parent(100.0, pr) and not inside_parent(130.0, pr)
-
-
-def test_spot_alerts_carry_parent_annotation():
-    """spot scan annotations: in_parent/parent_range present per item."""
-    import analysis.spot_engine as se
-    df = _frame([100 + (i % 10) - 5 for i in range(120)])
-    frames = {"4h": df, "1d": df}
-    out = se.scan_spot_alerts("TESTUSDT", frames)
-    # no assertions on emptiness — the geometry may or may not stage; the
-    # contract is: every returned item carries the nesting keys
-    for item in out:
-        assert "parent_range" in item and "in_parent" in item
-
-
 # ── the chart diet ─────────────────────────────────────────────────────────
-def test_chart_gate_off_by_default_and_gated(monkeypatch):
-    """«چارت رو از اپلیکیشن فعلا حذف بکن» — flag default OFF; generate_chart
-    returns None without rendering; env CHART_ENABLED=1 restores it."""
+def test_chart_gate_flag_exists_and_gates(monkeypatch):
+    """r61 diet experiment → r61.1: default ON again (Telegram charts ARE the
+    product); the gate still kills every render when the env flag is 0."""
     import dataclasses
     from config import Settings
-    assert Settings.from_env().chart_enabled is False
+    assert Settings.from_env().chart_enabled is True
     import bot.messages_v7 as mv
     monkeypatch.setattr(mv, "SETTINGS",
                         dataclasses.replace(mv.SETTINGS, chart_enabled=False))

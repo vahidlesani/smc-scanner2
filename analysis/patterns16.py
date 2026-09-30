@@ -425,39 +425,3 @@ def detect_pivot_patterns(df, atr: float) -> List[Dict]:
     except Exception:
         return out
     return out
-
-
-# ───────────────────── parent-range nesting (his r61 law) ────────────────
-def parent_range(df, atr: float) -> Optional[Dict]:
-    """The PARENT structure on the big TF: a daily/3-day/weekly trading range
-    = two tested horizontals holding the whole window. Returns
-    {top, bottom, x0, x1, tests_top, tests_bottom} or None.
-    Viva 09-30: «انجین باید در یک تریدینگ‌رنج روزانه بتونه و درون همون رنج در
-    تایم ۱ و ۲ ساعته الگوهای کوچکتر پیدا بکنه» — children live inside THIS box.
-    """
-    try:
-        if df is None or len(df) < 40 or atr <= 0:
-            return None
-        h = df["high"].astype(float).to_numpy()
-        l = df["low"].astype(float).to_numpy()
-        n = len(h)
-        top = float(h[-min(len(h), 40):].max())
-        bottom = float(l[-min(len(l), 40):].min())
-        tol = 1.2 * atr
-        tests_top = int(sum(1 for i in range(n) if abs(h[i] - top) <= tol))
-        tests_bot = int(sum(1 for i in range(n) if abs(l[i] - bottom) <= tol))
-        if tests_top >= 2 and tests_bot >= 2 and (top - bottom) > 1.5 * atr:
-            return {"top": top, "bottom": bottom, "x0": 0, "x1": n,
-                    "tests_top": tests_top, "tests_bottom": tests_bot}
-        return None
-    except Exception:
-        return None
-
-
-def inside_parent(price: float, parent: Optional[Dict]) -> bool:
-    try:
-        if not parent:
-            return False
-        return bool(parent["bottom"] <= float(price) <= parent["top"])
-    except Exception:
-        return False

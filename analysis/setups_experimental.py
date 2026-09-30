@@ -1100,6 +1100,17 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                 continue
         except Exception:
             pass
+        # r61.1 SANE-ZONE LAW (SUI K264244: the dumbest invalidation — zone
+        # and cancel less than a cent apart): a pin whose stop sits at the
+        # door of its own body-zone is not a setup, it is a trap.
+        try:
+            from analysis.trade_management import sane_zone_geometry_ok as _szg61
+            _a61 = float((df["high"] - df["low"]).tail(14).mean() or 0.0)
+            if not _szg61(min(o, c), max(o, c), float(entry), float(sl),
+                          direction, _a61, str(style)):
+                continue
+        except Exception:
+            pass
         style_name = str(style).upper()
         candidate = SignalCandidate(
             signal_id=f"viva-pinv-{bundle.symbol}-{tf}-{str(last_ts)[:16]}",
@@ -1459,6 +1470,11 @@ def _albrox_zone_lane(bundle, style):
         buffer = structural_buffer(entry)
         sl = (zlo - buffer) if direction == "LONG" else (zhi + buffer)
         if (direction == "LONG" and sl >= entry) or (direction == "SHORT" and sl <= entry):
+            continue
+        # r61.1 SANE-ZONE LAW: no 4.7%-wide «zones», no stop glued to the box
+        # («این چه ناحیه ای است که دنبال سیگناله؟؟» / «کمتر از ۱ سنت»).
+        from analysis.trade_management import sane_zone_geometry_ok as _szg61
+        if not _szg61(zlo, zhi, entry, sl, direction, atr_t, str(style)):
             continue
         risk = abs(entry - sl)
         if risk <= 0 or risk > 0.06 * entry:

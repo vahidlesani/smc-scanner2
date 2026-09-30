@@ -171,13 +171,15 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         assert M.send_technoclassic_preview(dict(ev)) is False
         assert len(photos) == 1
 
-        # state advances → a NEW numbered update post, replying to the anchor;
-        # the superseded message is deleted (Viva 2026-09-12 latest-update law)
+        # state advances → r61.1 THE UPDATE FLOW LAW: the ONE update between
+        # alert and confirm is the final warning WITHOUT a chart — a plain
+        # text message replying to the anchor («اونهم فقط یک موضوع و اون هم
+        # هشدار نهایی است بدون چارت»).
         deletes = []
         monkeypatch.setattr(M, "delete_message", lambda chat, mid: deletes.append(int(mid)) or True)
         ev2 = dict(ev, state="REJECTION_FADE", fade=fade)
         assert M.send_technoclassic_preview(ev2) is True
-        assert len(edits) == 0 and len(photos) == 2 and len(texts) == 3  # appended pair
+        assert len(edits) == 0 and len(photos) == 1 and len(texts) == 3  # text-only update
         upd1 = texts[2]
         assert upd1[3] == "-100TEST" and upd1[2] == pro_mid         # updates stay in the MAIN channel under the preview anchor
         assert "\U0001f501" in upd1[1] and "\u0622\u067e\u062f\u06cc\u062a \u06f1" in upd1[1]   # «آخرین آپدیت • آپدیت ۱»
@@ -190,22 +192,19 @@ def test_tc_preview_anchor_update_lifecycle(monkeypatch):
         # …and now NOTHING at all is posted into the alerts channel
         assert not [t for t in texts if len(t[1]) > 2500]
 
-        # further advance → update ۲ lands as the newest message, update ۱ is DELETED
+        # r61.1: the single update slot is spent — further preview states stay
+        # silent (no «آپدیت ۲», no chart, nothing).
         ev3 = dict(ev, state="BREAK_READY", ref_ts="2026-01-24T21:00:00")  # new pattern bar
-        assert M.send_technoclassic_preview(ev3) is True
-        assert len(photos) == 3 and len(edits) == 0 and len(texts) == 4
-        upd2 = texts[3]
-        assert upd2[2] == pro_mid and upd2[3] == "-100TEST" and "آپدیت ۲" in upd2[1]
-        # the superseded update's text AND its chart bubble go; anchor stays
-        assert deletes == [upd1[0], photos[1][0]]
-        assert not upd2[4]
+        assert M.send_technoclassic_preview(ev3) is False
+        assert len(photos) == 1 and len(edits) == 0 and len(texts) == 3
         chain = KV.get_json("tc_chain|GTTSTUSDT|4h", {})
-        assert chain.get("anchor") == pro_mid and chain.get("update") == upd2[0]
-        assert chain.get("edu") == edu_mid and chain.get("upd_n") == 2
+        assert chain.get("anchor") == pro_mid and chain.get("update") == upd1[0]
+        assert chain.get("edu") == edu_mid and chain.get("upd_n") == 1
         # the confirmation link still points at the PRO anchor, never at an update
+        # (its state is the last SPOKEN state — the capped update never spoke)
         link = KV.get_json("tc_link|GTTSTUSDT|4h", {})
         assert link.get("mid") == pro_mid
-        assert link.get("state") == "BREAK_READY"
+        assert link.get("state") == "REJECTION_FADE"
     os.environ.pop("CANDIDATE_DB_BACKEND", None)
     os.environ.pop("CANDIDATE_DB_PATH", None)
     KV._TABLE_READY["done"] = False
@@ -302,18 +301,16 @@ def test_setup_chain_final_doctrine(monkeypatch):
         assert not deletes_u                              # the compact is NEVER deleted anymore
         assert "🔁 <b>آخرین آپدیت • آپدیت ۱</b>" in up1[1]
 
-        _aged()
-        assert M.send_setup_update(cand, None, note_fa="ادامه") is True
-        up2 = [x for x in posts if "به‌روزرسانی رصد" in x[1]][-1]
-        assert "آپدیت ۲" in up2[1] and up2[3] == compact_mid
-        assert deletes_u == [up1[0]]                      # only the superseded UPDATE dies
-        # same-minute twins are now structurally impossible:
+        # r61.1 (Viva 09-30: «آپدیت فقط یکبار بین هشدار ابتدایی و پیام
+        # کانفرمد بیشتر نباید بیاد»): the ONE chatter slot is spent — further
+        # non-critical updates are dead. Same-minute twins stay impossible.
+        assert M.send_setup_update(cand, None, note_fa="ادامه") is False
         assert M.send_setup_update(cand, None, note_fa="توهمی") is False
 
         # final alert: a NEW message replying to the LAST update (any number)
         assert M.send_approaching(cand, 99.7, 0.31) is True
         fin = [x for x in posts if "⚡<b>هشدار نهایی" in x[1]][0]
-        assert fin[3] == up2[0]                           # «ریپلای به آخرین آپدیت با هر شماره‌ای»
+        assert fin[3] == up1[0]                           # «ریپلای به آخرین آپدیت با هر شماره‌ای»
         assert not edits_t and not edits_c                # nothing was overwritten
         chain = KV.get_json("setup_chain|VIVA-TLBREAK-K000001", {})
         assert chain.get("approach") == fin[0]
@@ -766,20 +763,14 @@ def test_identical_updates_are_swallowed():
             n1 = sent["n"]
             assert M.send_setup_update(c, None, note_fa="تازه") is False   # identical → swallowed
             assert sent["n"] == n1                                          # nothing new posted
-            # Viva 2026-09-14 single-writer law: even DIFFERENT content waits
-            # the chain update gap — the «۶ پیام در ۲۶ ثانیه» era is over.
+            # r61.1 (Viva 09-30): the chain has ONE chatter slot — a distinct
+            # note no longer opens a second one, gap or no gap.
             assert M.send_setup_update(c, None, note_fa="ناحیه جابه‌جا شد") is False
             assert sent["n"] == n1
-            # after the gap it speaks again…
-            ch = KV.get_json("setup_chain|VIVA-TLBREAK-K333333", {}) or {}
-            ch["upd_ts"] = __import__("time").time() - 400
-            KV.set_json("setup_chain|VIVA-TLBREAK-K333333", ch)
-            assert M.send_setup_update(c, None, note_fa="ناحیه جابه‌جا شد") is True
-            assert sent["n"] == n1 + 1
             # …and a verdict (⛔/❌/⚡) never waits — invalidation is instant.
             assert M.send_setup_update(c, None, note_fa="باطل شد",
                                        state_fa="⛔ <b>ستاپ بسته شد</b>") is True
-            assert sent["n"] == n1 + 2
+            assert sent["n"] == n1 + 1
         finally:
             F.get_klines = old_kl
     finally:
