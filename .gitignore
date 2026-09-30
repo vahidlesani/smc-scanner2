@@ -35,3 +35,9 @@ Thumbs.db
 # Analysis sandbox
 experiments/data_cache/
 experiments/results/
+
+# Railway ops (R62-ARENA): never commit tokens or backups
+.railway_token
+tokens.env
+backup-out/
+*.tgz.gpg

@@ -1,0 +1,57 @@
+name: railway-ops
+# R62-ARENA — Railway access/usage/backup/deploy from GitHub runners.
+# The Arena sandbox has no network route to Railway; secrets live ONLY in
+# GitHub → Settings → Secrets and variables → Actions:
+#   RAILWAY_TOKEN      (project token, required)
+#   RAILWAY_API_TOKEN  (account token, optional — account-wide usage)
+#   BACKUP_PASSPHRASE  (required for action=backup; AES-256 archive key)
+on:
+  push:
+    paths: ["ops/railway/request.json"]
+  workflow_dispatch:
+    inputs:
+      action: {description: "access | usage | backup | deploy", default: access}
+      service: {description: "service name (deploy)", default: ""}
+permissions:
+  contents: read
+concurrency: {group: railway-ops, cancel-in-progress: false}
+jobs:
+  ops:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '20'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: resolve request
+        id: req
+        run: |
+          A="${{ github.event.inputs.action }}"; S="${{ github.event.inputs.service }}"
+          if [ -z "$A" ]; then
+            A=$(python3 -c "import json;print(json.load(open('ops/railway/request.json')).get('action','access'))")
+            S=$(python3 -c "import json;print(json.load(open('ops/railway/request.json')).get('service',''))")
+          fi
+          case "$A" in access|usage|backup|deploy) ;; *) echo "bad action $A"; exit 2;; esac
+          echo "action=$A" >> "$GITHUB_OUTPUT"; echo "service=$S" >> "$GITHUB_OUTPUT"
+          [ -n "$RAILWAY_TOKEN$RAILWAY_API_TOKEN" ] || { echo "::error::RAILWAY_TOKEN secret is missing"; exit 1; }
+      - name: tests before deploy
+        if: steps.req.outputs.action == 'deploy'
+        run: pip install -q -r requirements.txt pytest && python -m pytest tests/ -q
+      - name: install railway cli
+        run: npm i -g @railway/cli >/dev/null && railway --version
+      - name: run
+        run: bash ops/railway/ops.sh "${{ steps.req.outputs.action }}" "${{ steps.req.outputs.service }}"
+      - name: upload encrypted backup
+        if: steps.req.outputs.action == 'backup'
+        uses: actions/upload-artifact@v4
+        with:
+          name: viva-railway-backup-encrypted
+          path: backup-out/
+          retention-days: 7
+          if-no-files-found: error
