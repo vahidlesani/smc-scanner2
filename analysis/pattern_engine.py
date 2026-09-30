@@ -200,6 +200,11 @@ PATTERN_FA = {
     "TRIPLE_BOTTOM": "کف سه‌برخوردی",
     "FLAG_BULL": "پرچم/کنج صعودی",
     "FLAG_BEAR": "پرچم/کنج نزولی",
+    # R63 P4: the pivot family is now TRADED (not chart-only)
+    "DOUBLE_TOP": "سقف دوقلو",
+    "DOUBLE_BOTTOM": "کف دوقلو",
+    "INV_HEAD_SHOULDERS": "سر و شانه معکوس",
+    "CUP_HANDLE": "فنجان و دسته",
 }
 
 # fit windows per timeframe — pattern must be RECENT history, not the whole archive
@@ -1114,6 +1119,166 @@ def _fit_cfg():
     return load_config()
 
 
+# ── R63 P4 — TRADEABLE PIVOT PATTERNS (Viva 10-01, verbatim: «همه الگوهایی
+# که فقط در چارت رسم میشن باید قابل ترید باشن — سقف و کف دوقلو، سر و شانه،
+# فنجان و دسته … شناسایی، رسم و در صورت تایید پوزیشن صادر بشه، طبق قوانین
+# اساتید بزرگ»). Doctrine: Edwards & Magee (prior trend + decisive neckline
+# close), Bulkowski (tops within tolerance, pattern invalid if price exceeds
+# the tops before the break, target = height from the neckline), Al Brooks
+# (strong breakout bar, follow-through, no climactic chase, a reversal needs a
+# trend to reverse). The event carries the SAME fields as a scan_edges break,
+# so the one TC builder/confirm ladder/snapshot lock serve it unchanged.
+def pivot_pattern_events(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
+                         pattern_tf: str, live_price: Optional[float] = None) -> List[Dict]:
+    from analysis.brooks_pa import (PIVOT_DOCTRINE, atr as _atr_b, breakout_bar_quality,
+                                    entry_side, first_cross_index, follow_through)
+    from analysis.patterns16 import detect_pivot_patterns
+    out: List[Dict] = []
+    try:
+        if pattern_df is None or trigger_df is None or len(pattern_df) < 40 or len(trigger_df) < 12:
+            return out
+        pdf = pattern_df.reset_index(drop=True)
+        tdf = trigger_df.reset_index(drop=True)
+        atr_p = _atr_b(pdf)
+        atr_t = _atr_b(tdf) or atr_p
+        if atr_p <= 0 or atr_t <= 0 or "timestamp" not in pdf.columns:
+            return out
+        n = len(pdf) - 1
+        last_close = float(tdf["close"].iloc[-1])
+        live = float(live_price) if (live_price and float(live_price) > 0) else last_close
+
+        def _pt(i, price):
+            return {"timestamp": str(pdf["timestamp"].iloc[int(i)]), "price": float(price)}
+
+        for item in detect_pivot_patterns(pdf, atr_p):
+            kind = str(item.get("type") or "")
+            if kind not in PIVOT_DOCTRINE:
+                continue
+            direction, role, want_from = PIVOT_DOCTRINE[kind]
+            piv = list(item.get("pivots") or [])
+            neck = float(item.get("neckline") or 0.0)
+            height = float(item.get("measured") or 0.0)
+            if len(piv) < 3 or neck <= 0 or height <= 0:
+                continue
+            first_i, last_i = int(piv[0]["index"]), int(piv[-1]["index"])
+            # freshness: the last pivot is recent history, and confirmed (≥2 bars old)
+            if n - last_i > 60 or n - last_i < 2:
+                continue
+            short = direction == "SHORT"
+            if kind == "CUP_HANDLE":
+                extremes = [float(piv[0]["price"]), float(piv[-1]["price"])]
+            else:
+                extremes = [float(p["price"]) for p in piv[0::2]]   # tops (or bottoms)
+            # Bulkowski: price beyond the tops (bottoms) before the break = void
+            after = pdf.iloc[last_i + 1:]
+            if len(after):
+                if short and float(after["high"].max()) > max(extremes) + 0.25 * atr_p:
+                    continue
+                if not short and kind != "CUP_HANDLE" and \
+                        float(after["low"].min()) < min(extremes) - 0.25 * atr_p:
+                    continue
+            # Edwards & Magee / Brooks: entry side — a reversal needs a trend
+            # to reverse; a continuation must be entered WITH its trend.
+            es = entry_side(pdf, first_i, neck, height)
+            if es.get("from") != want_from or float(es.get("prior_move") or 0) < 0.8:
+                continue
+            # decisive trigger-TF close through the neckline (penetration filter)
+            pen = 0.10 * atr_t
+            lvl = neck - pen if short else neck + pen
+            if (short and last_close >= lvl) or (not short and last_close <= lvl):
+                continue
+            bi = first_cross_index(tdf, neck, direction, lookback=4)
+            if bi is None:
+                continue                                   # stale break — no chase
+            bq = breakout_bar_quality(tdf, bi, direction, neck)
+            if not bq.get("ok"):
+                continue                                   # WEAK / CLIMAX (Brooks)
+            ft = follow_through(tdf, bi, direction, neck, tol=0.05 * atr_t)
+            if not ft.get("ok"):
+                continue                                   # failed breakout
+            # don't chase: price already ran ≥60% of the measured move
+            if abs(live - neck) > 0.60 * height:
+                continue
+            target = neck - height if short else neck + height
+            buf = 0.15 * atr_p
+            if kind == "CUP_HANDLE":
+                hl = float(pdf["low"].iloc[last_i:].min())
+                stop_hint = hl - buf
+            elif kind in ("HEAD_SHOULDERS", "INV_HEAD_SHOULDERS"):
+                rs = float(piv[-1]["price"])                # right shoulder
+                stop_hint = rs + buf if short else rs - buf
+            else:
+                stop_hint = (max(extremes) + buf) if short else (min(extremes) - buf)
+            if kind == "CUP_HANDLE":
+                # the rim IS the neckline (left lip → right lip)
+                neck_pts = [_pt(first_i, neck), _pt(last_i, neck)]
+            else:
+                neck_pts = [_pt(p["index"], neck) for p in piv[1:-1:2]] or [_pt(piv[1]["index"], neck)]
+                if len(neck_pts) < 2:
+                    neck_pts = [neck_pts[0], _pt(last_i, neck)]
+            if kind == "CUP_HANDLE":
+                ext_pts = []
+            elif kind in ("HEAD_SHOULDERS", "INV_HEAD_SHOULDERS"):
+                ext_pts = [_pt(piv[0]["index"], piv[0]["price"]), _pt(piv[-1]["index"], piv[-1]["price"])]
+            else:
+                ext_pts = [_pt(p["index"], p["price"]) for p in piv[0::2]]
+            geo = {"ts": str(pdf["timestamp"].iloc[n]), "price": neck, "price_back": neck,
+                   "back_bars": 20, "tf_min": tf_minutes_safe(pattern_tf), "log": False,
+                   "a_ts": neck_pts[0]["timestamp"]}
+            side = "lower" if short else "upper"
+            score = 6 + (1 if bq.get("grade") == "STRONG" else 0) \
+                + (1 if ft.get("status") == "CONFIRMED" else 0) \
+                + (1 if float(es.get("prior_move") or 0) >= 1.5 else 0) \
+                + (1 if kind in ("HEAD_SHOULDERS", "INV_HEAD_SHOULDERS") else 0)
+            pct = (target - live) / live * 100.0 if live else 0.0
+            ev = {
+                "pattern": kind, "pattern_fa": PATTERN_FA.get(kind, kind),
+                "side": side, "direction": direction, "state": STATE_BREAK,
+                "break_edge": "LOWER" if short else "UPPER",
+                "break_direction": "DOWN" if short else "UP",
+                "direction_reason": f"{kind}: شکست خط گردن ({'پایین' if short else 'بالا'})",
+                "line_price": neck, "live": live,
+                "distance_atr": round(abs(live - neck) / atr_p, 3),
+                "touches": len(piv), "fit_error_atr": 0.0,
+                "edge_points": neck_pts,
+                "line_geo": geo,
+                "pattern_geo": {"upper": ({} if short else geo), "lower": (geo if short else {})},
+                "structure_score": min(10, score),
+                "reactions": {"reject_rate": 0.0, "touches": len(piv)},
+                "measured": {"from": neck, "to": target, "pct": round(pct, 1),
+                             "height": height, "last_close": live},
+                "compression": {}, "pattern_tf": pattern_tf,
+                "approach_direction": es.get("from"),
+                "pattern_role": role, "role_confidence": 80,
+                "counter_doctrine": False, "doctrine_direction": None,
+                "legality": "LEGAL", "fresh_break_recognition": True,
+                "bars_since_break": int(len(tdf) - 1 - bi),
+                "event_id": f"{side}|{kind}|{STATE_BREAK}|{neck_pts[0]['timestamp']}",
+                "upper_points": (ext_pts if short else neck_pts),
+                "lower_points": (neck_pts if short else ext_pts),
+                "ref_ts": str(tdf["timestamp"].iloc[-1]) if "timestamp" in tdf.columns else "",
+                "base_box": [float(tdf["low"].tail(8).min()), float(tdf["high"].tail(8).max())],
+                "stop_hint": float(stop_hint),
+                "pivot_pattern": {
+                    "type": kind, "role": role, "neckline": neck, "height": height,
+                    "pivots_ts": [_pt(p["index"], p["price"]) for p in piv],
+                    "entry_side": es, "breakout_bar": bq, "follow_through": ft,
+                },
+            }
+            out.append(ev)
+    except Exception as exc:
+        print(f"R63 pivot-pattern scan skipped: {exc}")
+    return out
+
+
+def tf_minutes_safe(tf: str) -> float:
+    try:
+        from analysis.confirm_r62 import tf_minutes
+        return float(tf_minutes(str(tf or ""), 60.0))
+    except Exception:
+        return 60.0
+
+
 _MINT_GUARD_TTL_S = 12 * 3600  # r60.2: one live alert per visual pattern across lanes
 
 
@@ -1136,6 +1301,30 @@ def _mint_guard_key(bundle, ev) -> str:
                      str(ev.get("pattern_tf") or ev.get("pattern") or ""),
                      str(ev.get("pattern") or ""), str(ev.get("side") or ""),
                      pts[0], pts[-1]))
+
+
+def _brooks_edge_ok(trig: pd.DataFrame, ev: Dict) -> bool:
+    """R63: grade the trigger-TF bar that crossed a TC edge (Al Brooks).
+    Only a FRESH cross (last 4 bars) is graded; an older recognised break is
+    left to the existing stale/reclaim laws. WEAK/CLIMAX bars and failed
+    follow-through reject the event; the grade is stored on the event."""
+    from analysis.brooks_pa import breakout_bar_quality, first_cross_index, follow_through
+    if ev.get("pivot_pattern"):
+        return True
+    d = str(ev.get("direction") or "").upper()
+    lvl = float(ev.get("line_price") or 0.0)
+    if d not in ("LONG", "SHORT") or lvl <= 0 or trig is None or len(trig) < 12:
+        return True
+    t = trig.reset_index(drop=True)
+    bi = first_cross_index(t, lvl, d, lookback=4)
+    if bi is None:
+        return True
+    bq = breakout_bar_quality(t, bi, d, lvl)
+    ft = follow_through(t, bi, d, lvl)
+    ev["brooks"] = {"breakout_bar": bq, "follow_through": ft}
+    if bq.get("grade") == "STRONG":
+        ev["structure_score"] = min(10, int(ev.get("structure_score") or 0) + 1)
+    return bool(bq.get("ok")) and bool(ft.get("ok"))
 
 
 def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
@@ -1176,6 +1365,20 @@ def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
     events = [e for e in scan_edges(pat, trig, structure_tf,
                                     live_price=(live if live > 0 else None))
               if e["state"] == STATE_BREAK]
+    # ── R63 Brooks breakout law on the EDGE lane too: a weak (doji / tail
+    # against) or climactic breakout bar, or a breakout that already failed
+    # (close back inside), never mints — «بریک‌اوت فالوترو میخواد».
+    try:
+        events = [e for e in events if _brooks_edge_ok(trig, e)]
+    except Exception:
+        pass
+    # ── R63 P4: the pivot family (double top/bottom, H&S ±, cup & handle)
+    if getattr(settings, "technoclassic_pivot_patterns_enabled", True):
+        try:
+            events += pivot_pattern_events(pat, trig, structure_tf,
+                                           live_price=(live if live > 0 else None))
+        except Exception as _p63:
+            print(f"R63 pivot lane skipped {getattr(bundle, 'symbol', '?')}: {_p63}")
     if not events:
         return None
     events.sort(key=lambda e: e["structure_score"], reverse=True)
@@ -1328,6 +1531,8 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
                 _choch60 = "DOWN"
     except Exception:
         _choch60 = ""
+    if ev.get("pivot_pattern"):
+        _choch60 = ""               # R63: the pivot family has its own doctrine
     if _choch60:
         _counter54 = False          # a CHoCH break is never «خلاف ماهیت»
     # stop = NEAREST recent opposite validated touch (never the global min/max
@@ -1363,6 +1568,15 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         # ── his 09-21 ruling: a far structural swing never deletes the scenario;
         # the stop is CUT at 1.25% of price (the VVV 1h case carried a 19%-away
         # swing for two days because the old code refused to publish it at all).
+        # R63 P4: the pivot family's stop is its structural doctrine stop
+        # (right shoulder / the tops / the handle low) — Bulkowski, E&M.
+        try:
+            _sh63 = float(ev.get("stop_hint") or 0.0)
+            if _sh63 > 0 and ((direction == "LONG" and _sh63 < entry)
+                              or (direction == "SHORT" and _sh63 > entry)):
+                stop = _sh63
+        except Exception:
+            pass
         if stop is None:
             stop = (line_now - buffer) if direction == "LONG" else (line_now + buffer)
     else:
@@ -1701,7 +1915,52 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
             candidate.metadata["viva_major_break_line_tf"] = str(_maj_cands[0]["tf"])
     except Exception:
         pass
+    _attach_r63_geometry(candidate, ev, structure_tf)
     return candidate
+
+
+def _attach_r63_geometry(candidate, ev: Dict, structure_tf: str) -> None:
+    """R63: the trade lane hands the chart its OWN geometry (G1) — a pivot
+    pattern's M/W/H&S polyline + neckline is drawn from the very pivots the
+    trade was built on, and the Brooks reading is stated as evidence."""
+    try:
+        from analysis.models import EvidenceItem
+        md = candidate.metadata
+        pp = ev.get("pivot_pattern")
+        if pp:
+            md["pivot_pattern"] = pp
+            md["render_patterns_trade"] = [{
+                "type": pp.get("type"), "trade_geometry": True, "lines": [],
+                "pivots_ts": list(pp.get("pivots_ts") or []),
+                "neckline": float(pp.get("neckline") or 0.0),
+                "role": pp.get("role"), "tf": str(structure_tf),
+            }]
+            es = pp.get("entry_side") or {}
+            bq = pp.get("breakout_bar") or {}
+            ft = pp.get("follow_through") or {}
+            candidate.evidence.append(EvidenceItem(
+                "pivot_pattern", "الگوی پیوتی کلاسیک (ادواردز/مجی · بالکوفسکی)",
+                (f"{ev.get('pattern_fa') or pp.get('type')} روی {structure_tf}: "
+                 f"{'برگشتی' if pp.get('role') == 'REVERSAL' else 'ادامه‌دهنده'} — "
+                 f"قیمت از {'پایین' if es.get('from') == 'BELOW' else 'بالا'} وارد الگو شد "
+                 f"(حرکت قبلی {es.get('prior_move')}× ارتفاع)؛ کلوز قاطع زیرِ/بالای خط گردن "
+                 f"{float(pp.get('neckline') or 0):.6g}؛ هدف = ارتفاع الگو از خط گردن."),
+                True, 2, level=float(pp.get("neckline") or 0.0), timeframe=str(structure_tf)))
+        else:
+            b = ev.get("brooks") or {}
+            bq = b.get("breakout_bar") or {}
+            ft = b.get("follow_through") or {}
+        if bq:
+            md["brooks_breakout"] = {"grade": bq.get("grade"), "follow_through": ft.get("status")}
+            _g = {"STRONG": "قوی", "OK": "قابل‌قبول"}.get(str(bq.get("grade")), str(bq.get("grade")))
+            _f = {"CONFIRMED": "تأیید شد", "HOLDING": "بیرون الگو پایدار", "PENDING": "در انتظار کندل بعد"}.get(
+                str(ft.get("status")), str(ft.get("status")))
+            candidate.evidence.append(EvidenceItem(
+                "brooks_breakout", "پرایس‌اکشن ال بروکس | کندل شکست",
+                f"کندل شکست {_g} (بدنه {bq.get('body_ratio')} از رنج، کلوز در {bq.get('close_pos')} رنج)؛ فالوترو: {_f}.",
+                True, 1, level=float(ev.get("line_price") or 0.0), timeframe=str(structure_tf)))
+    except Exception as exc:
+        print(f"R63 geometry attach warning: {exc}")
 
 
 # ── HTF edge intelligence for ALL setups (score-only layer) ────────────────

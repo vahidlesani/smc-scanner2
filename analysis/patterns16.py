@@ -293,9 +293,12 @@ def _swings(df, left: int = 3, right: int = 3, max_pts: int = 8) -> Tuple[List[D
         n = len(h)
         highs, lows = [], []
         for i in range(left, n - right):
-            if h[i] >= h[i - left:i].max() and h[i] >= h[i + 1:i + 1 + right].max():
+            # R63: STRICT on the right side — a flat top/bottom of equal
+            # highs (tick-size plateaus) is ONE pivot (its first bar), never
+            # two adjacent «tops» that hide the real double top.
+            if h[i] >= h[i - left:i].max() and h[i] > h[i + 1:i + 1 + right].max():
                 highs.append({"index": i, "price": float(h[i])})
-            if l[i] <= l[i - left:i].min() and l[i] <= l[i + 1:i + 1 + right].min():
+            if l[i] <= l[i - left:i].min() and l[i] < l[i + 1:i + 1 + right].min():
                 lows.append({"index": i, "price": float(l[i])})
         return highs[-max_pts:], lows[-max_pts:]
     except Exception:

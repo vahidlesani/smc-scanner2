@@ -2693,6 +2693,39 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                   "facecolor": CHART_THEME["panel"],
                                   "edgecolor": "none", "alpha": 0.78})
                 continue
+            # ── R63 P4: a TRADED pivot pattern (double top/bottom, H&S ±,
+            # cup & handle) is painted from the SAME pivots the trade was
+            # built on: the M/W/H&S polyline + its neckline, time-projected
+            # (identical on every chart of the code — snapshot lock).
+            if _pat.get("pivots_ts"):
+                try:
+                    _pv63 = [p for p in (_pat.get("pivots_ts") or []) if p.get("timestamp")]
+                    _xs63 = _viva_points_xs(_pv63, frame)
+                    _ys63 = [float(p["price"]) for p in _pv63]
+                    _bear63 = str(_pat.get("type") or "").upper() in ("DOUBLE_TOP", "HEAD_SHOULDERS")
+                    _c63 = CHART_THEME["supply"] if _bear63 else CHART_THEME["demand"]
+                    if len(_xs63) >= 3 and all(math.isfinite(v) for v in _xs63 + _ys63):
+                        ax.plot(_xs63, _ys63, color=_c63, linewidth=1.1, alpha=0.85, zorder=6)
+                        ax.scatter(_xs63, _ys63, s=22, facecolors="none", edgecolors=_c63,
+                                   linewidths=1.0, zorder=7)
+                        _nk63 = float(_pat.get("neckline") or 0.0)
+                        if _nk63 > 0:
+                            _xn0 = max(0.0, float(min(_xs63[1:-1] or _xs63)))
+                            ax.hlines(_nk63, _xn0, count - 0.5, colors=_c63,
+                                      linestyles="-", linewidth=1.2, alpha=0.9, zorder=6)
+                            ax.hlines(_nk63, count - 0.5, count + future - 0.5, colors=_c63,
+                                      linestyles="--", linewidth=0.9, alpha=0.7, zorder=6)
+                        _lab63 = str(_pat.get("type") or "").replace("_", " ")
+                        _hi63 = max(range(len(_ys63)), key=lambda k: _ys63[k]) if _bear63 \
+                            else min(range(len(_ys63)), key=lambda k: _ys63[k])
+                        ax.text(max(0.5, _xs63[_hi63]), _ys63[_hi63], _lab63, color=_c63,
+                                fontsize=7, fontweight="bold", ha="center",
+                                va="bottom" if _bear63 else "top", zorder=12,
+                                bbox={"boxstyle": "round,pad=0.22", "facecolor": CHART_THEME["panel"],
+                                      "edgecolor": "none", "alpha": 0.78})
+                except Exception as _e63:
+                    print(f"R63 pivot draw warning: {_e63}")
+                continue
             # Viva 09-18 placement law: lines are re-anchored by PIVOT
             # TIMESTAMP onto THIS frame (the fit window and the chart frame
             # are different slices — index coords misplaced every line) and

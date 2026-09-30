@@ -36,7 +36,7 @@ from typing import Any, Dict
 SNAPSHOT_KEYS = (
     "render_patterns", "render_zones", "render_htf_pattern", "pattern_band",
     "base_watch", "base_gate", "render_line_watch", "tool_anchor_ts",
-    "htf_zones",
+    "htf_zones", "render_patterns_trade",
 )
 
 _PREFIX = "render_identity:"
@@ -63,6 +63,13 @@ def unify_trade_geometry(md: Dict[str, Any]) -> bool:
     pats = list(md.get("render_patterns") or [])
     kept = []
     removed = False
+    # the trade lane's own pattern commands (P4 pivot family) join the set
+    for tp in (md.get("render_patterns_trade") or []):
+        if isinstance(tp, dict) and not any(
+                isinstance(p, dict) and p.get("trade_geometry")
+                and p.get("type") == tp.get("type") for p in pats):
+            pats.append(dict(tp, trade_geometry=True))
+            removed = True
     for p in pats:
         if not isinstance(p, dict):
             continue
