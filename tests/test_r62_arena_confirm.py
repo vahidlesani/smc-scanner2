@@ -282,7 +282,7 @@ def test_budget_checked_before_supersede_and_ghost_retired():
     import inspect
     import main
     src = inspect.getsource(main)
-    i_budget = src.index('if _edu_budget["left"] <= 0 or (_is_watch62')
+    i_budget = src.index('if (not _is_watch62 and not _budget_ok(candidate))')  # R63 W3
     i_super = src.index("for prior in supersede_alert_lineage(candidate):")
     assert i_budget < i_super
     assert '_set_st62(candidate.signal_id, "UNPOSTED")' in src
