@@ -125,7 +125,9 @@ def _fresh(d: pd.DataFrame, tf: str) -> bool:
                      "1w": 168}.get(tf, 24)
         _bucket_end = _last + pd.Timedelta(hours=_tf_hours)
         _age_h = (_now - _bucket_end).total_seconds() / 3600.0
-        _limit_h = 24.0 if tf in ("4h", "8h", "12h", "1d") else 30.0
+        # R62-ARENA (audit S3): «just-closed» = until the NEXT close of the
+        # same TF (4h → 4h, 8h → 8h, 12h → 12h, 1d → 24h); 3d/1w keep 30h.
+        _limit_h = float(_tf_hours) if tf in ("4h", "8h", "12h", "1d") else 30.0
         return _age_h <= _limit_h
     except Exception:
         return True

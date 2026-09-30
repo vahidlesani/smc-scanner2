@@ -1075,6 +1075,16 @@ def detect_zone_trigger(df, direction: str, zone_bottom: float, zone_top: float,
     po, pc = float(prev["open"]), float(prev["close"])
     pbody = abs(pc - po)
     long_side = str(direction).upper() == "LONG"
+    # R62-ARENA (audit K5): «روی ناحیه» must be true — the last two candles
+    # have to trade the zone (±0.25 ATR), else there is no sign ON the zone.
+    try:
+        _zb, _zt = float(zone_bottom) - 0.25 * atr_value, float(zone_top) + 0.25 * atr_value
+        _lo2 = min(l, float(prev["low"]))
+        _hi2 = max(h, float(prev["high"]))
+        if not (_lo2 <= _zt and _hi2 >= _zb):
+            return None
+    except Exception:
+        pass
     if body >= 0.9 * max(pbody, 1e-12) and (
             (long_side and c > o and pc < po and c >= po and o <= pc)
             or (not long_side and c < o and pc > po and c <= po and o >= pc)):

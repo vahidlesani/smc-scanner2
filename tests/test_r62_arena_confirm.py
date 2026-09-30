@@ -339,3 +339,38 @@ def test_dot_case_1h_chain_confirms_on_first_valid_15m_close():
     # the fake-out star at 12:15 is skipped; the 12:30 strong close confirms
     assert str(md.get("fast_break_bar"))[:16] == "2026-09-30 12:30"
     assert md.get("last_fakeout_candle")
+
+
+# ── K4 / K5 / K6 / S3 ───────────────────────────────────────────────────────
+def test_r28_rejection_wick_is_directional():
+    from analysis.execution_integrity_r28 import confirm_closed_candle
+    star = {"open": 100.0, "high": 104.0, "low": 99.8, "close": 100.6}   # upper wick
+    hammer = {"open": 100.0, "high": 100.8, "low": 96.0, "close": 100.6}  # lower wick
+    assert not confirm_closed_candle(star, "LONG", "REJECTION_CONFIRMATION").confirmed
+    assert confirm_closed_candle(hammer, "LONG", "REJECTION_CONFIRMATION").confirmed
+
+
+def test_zone_trigger_needs_the_zone():
+    from analysis.setups_v7 import detect_zone_trigger
+    rows = [{"open": 110 + i * 0.01, "high": 110.3, "low": 109.7, "close": 110.1} for i in range(8)]
+    rows[-2] = {"open": 110.4, "high": 110.5, "low": 109.8, "close": 109.9}
+    rows[-1] = {"open": 109.85, "high": 110.9, "low": 109.8, "close": 110.8}
+    df = pd.DataFrame(rows)
+    assert detect_zone_trigger(df, "LONG", 100.0, 101.0, 1.0) is None       # far from zone
+    assert detect_zone_trigger(df, "LONG", 109.0, 109.9, 1.0) is not None   # on the zone
+
+
+def test_mtf_candle_text_respects_direction():
+    from analysis.mtf_candles import _describe
+    c = {"body_frac": 0.2, "upper_wick": 3.0, "lower_wick": 0.1, "range": 4.0, "body": 0.8,
+         "bull": False, "bear": True, "close": 100.0, "open": 100.8, "high": 103.8, "low": 99.9}
+    out = _describe("1h", c, None, "LONG", True, False)
+    assert out and "قابل تفسیر" not in out["text"]
+    out2 = _describe("1h", c, None, "SHORT", False, True)
+    assert out2 and "قابل تفسیر" in out2["text"]
+
+
+def test_spot_freshness_is_one_candle():
+    import inspect
+    from analysis import spot_engine
+    assert "_limit_h = float(_tf_hours) if tf in" in inspect.getsource(spot_engine._fresh)

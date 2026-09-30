@@ -60,7 +60,13 @@ def _describe(tf: str, c: dict, prev: Optional[dict], direction: str, near_suppo
     dir_fa = "لانگ" if direction == "LONG" else "شورت"
     label = " / ".join(dict.fromkeys(names))
     text = f"{tf.upper()}: {label}"
-    if near_support or near_resistance:
+    # R62-ARENA (audit K4): a bearish pin/engulf is never «قابل تفسیر» for a
+    # LONG (and vice-versa) — misaligned candles fall back to the neutral line.
+    _bull_n = any(x.startswith("Bullish") or x == "Lower-Wick Rejection" for x in names)
+    _bear_n = any(x.startswith("Bearish") or x == "Upper-Wick Rejection" for x in names)
+    _aligned = not ((direction == "LONG" and _bear_n and not _bull_n)
+                    or (direction == "SHORT" and _bull_n and not _bear_n))
+    if (near_support or near_resistance) and _aligned:
         text += f" روی/نزدیک {focus}؛ برای سناریوی {dir_fa} قابل تفسیر است."
     else:
         text += "؛ این الگو در تایم خودش دیده شده و به‌تنهایی تأیید نهایی نیست."
