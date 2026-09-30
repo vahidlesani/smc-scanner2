@@ -1,3 +1,16 @@
+> ## 🟦 R62-ARENA — شروع تغییرات آرنا از اینجا (2026-09-30)
+> **هر چیزی بالاتر از این خط = تغییرات آرنا؛ پایین‌تر = وضعیت قبل از آرنا.** جزئیات کامل: `docs/R62_ARENA_CHANGES.md`.
+> - شاخه `arena/01a0d606-smc-scanner2` (PR #5) بر پایهٔ `origin/main` 6a21512. کد با برچسب `R62-ARENA` علامت خورده است.
+> - **نردبان تأیید بر اساس TF تریگر** (`analysis/confirm_r62.py`): 15m←5m · 30m←15m · 1h←15m · 2h←30m · 4h←1h · 1d←4h. زنجیره‌های قدیمی در مانیتور خودکار re-point می‌شوند (`confirm_tf_legacy`). مورد DOT (کلوز ۱۳:۰۰ / تأیید ۱۷:۰۰) با تست end-to-end بسته شد.
+> - **یک خط برای همه:** `confirm_edge_at` خط شکسته را روی شیب خودش تصویر می‌کند (`break_line_geo`)؛ fast lane، توهم، ⚡ لحظه‌ای، گیت ری‌کلیم همه همین را می‌خوانند.
+> - **کلوز معتبر روی تایم پایین:** `valid_break_candle` (ماروبوزو/انگلف/پین/کلوز قوی…)؛ ستارهٔ دنباله‌دار روی شکست = فیک‌اوت.
+> - **توهم پیوسته:** مهر یک‌بارمصرف حذف؛ هر ساب‌کندل جدید، هر چرخه (نه فقط پنجرهٔ واکشی)، دادهٔ تازه، ورود = کلوز ساب‌کندل.
+> - **تأیید کهنه یک‌بار اعلام و خلع سلاح می‌شود**؛ **BREAK_RECLAIMED پایانی است** (پیام لغو موجود).
+> - الگو: مثلث صعودی دیگر رایزینگ‌وج نمی‌شود (P1)، جفت ضربدری = دو ترندلاین (P7/G2)، نک‌لاین دابل‌تاپ LOW، گارد مینت ۱۲ساعته رفع (P10)، بودجه قبل از supersede (W1)، زنجیرهٔ شبح UNPOSTED (W2)، کندل‌ها K1–K3، اسپات S1، زوم هوشمند ابزار.
+> - باگ‌های پنهان: `_time` تعریف‌نشده در main و messages_v7 (پین/mid اسپات)، `_atr` UnboundLocalError روی FLAG.
+> - **دست‌نخورده:** متن/قالب پیام‌ها، زنجیرهٔ لینک، شناسه‌ها؛ قوانین r31/r33 (`require_alive`, `fresh_break_bars=50`).
+> - تست‌ها: `tests/test_r62_arena_confirm.py` (۲۹ تست) + کل مجموعه: **800 passed / 1 skipped** (baseline قبل از آرنا: 771). دیپلوی: نیازمند merge PR #5 + Railway (توکن در سندباکس نیست).
+
 > **R30 — 2026-09-24 (current working branch):** مرجع تصویری سبک CryptoCove دقیق شد: منظور فقط منطق هندسی/تشخیص و ترسیم الگوهاست، نه رنگ‌بندی. نمونه‌ها شامل کانال نزولی/ترندلاین و Bullish Rectangle هستند. موتور تشخیص مستقل از رندر است.
 > - **Spot horizons restored to six:** 4H/8H = کوتاه‌مدت، 12H/1D = میان‌مدت، 3D/1W = بلندمدت. Spot remains LONG-only for confirmation; opposite-side touches/breaks remain warnings.
 > - **MTF base architecture:** 5M and 15M are fetched directly; 1H/30M are resampled from 15M; 8H/12H are resampled from the 4H structural tape; 3D/1W are resampled from the 1D macro tape. 5M is never reconstructed from 15M. 4H/1D stay direct because reconstructing enough long history from 5M/15M would cost more API calls, not fewer.
