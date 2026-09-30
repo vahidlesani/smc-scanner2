@@ -1121,7 +1121,27 @@ def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
             from database.bot_kv import get_json as _gj
             _seen = _gj(_guard, {}) or {}
             if float(_seen.get("ts") or 0) > __import__("time").time() - _MINT_GUARD_TTL_S:
-                continue
+                # ── r60.5 (his «یعنی چی هر الگو در هر ۱۲ ساعت یکبار؟؟»): the
+                # 12h window is only a BACKSTOP. The real rule is one LIVE
+                # chain per pattern: while the previous alert for this exact
+                # pattern still lives (alert/trade running), stay silent; the
+                # moment it RESOLVES (cancelled / expired / closed), a fresh
+                # break of the same pattern may alert again immediately.
+                _sid60 = str(_seen.get("signal_id") or "")
+                _st60 = ""
+                if _sid60:
+                    try:
+                        from database.candidate_store import candidate_status as _cs60
+                        _st60 = _cs60(_sid60)
+                    except Exception:
+                        _st60 = ""
+                if _st60 in ("CANCELLED", "EXPIRED", "CLOSED", "DEAD_GATE", "SUPERSEDED"):
+                    pass                                   # resolved → allow re-mint
+                elif not _sid60 or _st60 in ("", "EDUCATIONAL", "APPROACHING",
+                                             "CONFIRMED", "NEAR_CONFIRM"):
+                    continue                               # live or unknown → silent
+                else:
+                    pass                                   # any other terminal state → allow
         except Exception:
             _seen = {}
         candidate = _build_candidate(bundle, style, ev, pat, trig, structure_tf, trigger_tf, cfg,

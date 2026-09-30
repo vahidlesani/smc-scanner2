@@ -570,3 +570,53 @@ def test_anchor_prefers_trigger_tf_zones(monkeypatch):
         pytest.skip("no candidate built")
     assert cand.metadata.get("tp2_zone") == "FVG"      # the TRIGGER-TF box won
     assert abs(cand.tp2 - z_trig["bottom"]) < 1e-6
+
+
+# ── 9) r60.5: the 12h window is a backstop — resolved pattern re-alerts ────
+def test_mint_guard_reopens_when_previous_resolves(monkeypatch):
+    """«یعنی چی هر الگو در هر ۱۲ ساعت یکبار؟؟» — never a wall-clock throttle:
+    while the previous alert LIVES the pattern is silent; the moment it
+    resolves (cancelled/expired/…) a fresh break may alert again immediately,
+    even inside the 12h backstop window."""
+    pe = _tc_detect_env(monkeypatch)
+    import analysis.setups_v7 as _sv7
+    from database.bot_kv import set_json as _sj
+    import time as _t60
+    from database.candidate_store import candidate_status
+    from test_pattern_engine import _wedge_frames, _Bundle
+    monkeypatch.setattr(_sv7, "_ensure_frames", lambda b, tfs: True)
+    pattern, trigger = _wedge_frames()
+    bundle = _Bundle({"4h": pattern, "1h": pattern, "15m": trigger})
+    ev = {"state": pe.STATE_BREAK, "pattern": "P", "side": "lower",
+          "direction": "SHORT", "line_price": 100.0, "live": 98.0, "touches": 3,
+          "fit_error_atr": 0.3, "structure_score": 8,
+          "reactions": {"reject_rate": 0.5},
+          "edge_points": [{"timestamp": "2026-09-01 04:00", "price": 101.0},
+                          {"timestamp": "2026-09-10 08:00", "price": 99.0}],
+          "pattern_tf": "4h"}
+    monkeypatch.setattr(pe, "scan_edges", lambda *a, **k: [dict(ev)])
+    from types import SimpleNamespace as _NS
+    mints = {"n": 0}
+
+    def fake_build(*a, **k):
+        mints["n"] += 1
+        return _NS(signal_id=f"FAKE-G{mints['n']}")
+
+    monkeypatch.setattr(pe, "_build_candidate", fake_build)
+    _sj(pe._mint_guard_key(bundle, ev),
+        {"ts": _t60.time(), "signal_id": "GHOST-LIVE-1"})   # fresh mint record
+    # the recorded signal is LIVE (unresolved → unknown id counts as live)
+    assert pe.detect_technoclassic(bundle, "DAYTRADE") is None
+    assert mints["n"] == 0
+    # …now it RESOLVED: candidate_status returns a terminal state → allowed
+    monkeypatch.setattr("database.candidate_store.candidate_status",
+                        lambda sid: "CANCELLED")
+    assert getattr(pe.detect_technoclassic(bundle, "DAYTRADE"),
+                   "signal_id", "") == "FAKE-G1"
+    assert mints["n"] == 1
+
+
+def test_candidate_status_lookup():
+    from database.candidate_store import candidate_status
+    assert candidate_status("") == ""
+    assert candidate_status("no-such-id-xyz") == ""
