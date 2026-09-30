@@ -1,6 +1,6 @@
 {
-  "action": "usage",
+  "action": "access",
   "service": "",
-  "nonce": 3,
-  "note": "Edit action (access | usage | backup | deploy) and bump nonce, then push → .github/workflows/railway-ops.yml runs on GitHub (secrets stay on GitHub)."
+  "nonce": 4,
+  "note": "R63-ACCESS / arena/01a0f47e-smc-scanner2: read-only access probe only; no deploy, backup, variables or launch commands."
 }

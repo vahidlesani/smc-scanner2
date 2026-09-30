@@ -19,14 +19,9 @@ services() { python3 "$HERE/rw_api.py" access | sed -n 's/^- \([^ ]*\)  id=.*/\1
 
 case "$ACTION" in
   access)
+    # R63-ACCESS: authenticate and read metadata only. Do not fetch variable
+    # values just to print their names; no credentials or launch commands.
     python3 "$HERE/rw_api.py" access
-    echo; echo "== variable NAMES per service (values never printed)"
-    for s in $(services); do
-      echo "- $s:"
-      railway variables --service "$s" --json 2>/dev/null \
-        | python3 -c 'import json,sys; d=json.load(sys.stdin); print("   ", " · ".join(sorted(d)))' \
-        || echo "    (cannot read variables of $s)"
-    done
     ;;
   usage)
     python3 "$HERE/rw_api.py" usage

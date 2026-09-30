@@ -10,16 +10,55 @@ Usage:
   python ops/railway/rw_api.py access     # project, env, services, deploys, volumes
   python ops/railway/rw_api.py usage      # CPU / RAM / network per service, 7 days
   python ops/railway/rw_api.py ids        # prints PROJECT_ID ENV_ID (for scripts)
-Every GraphQL error is printed (message only) and never aborts the report,
-so a schema drift shows up in the log instead of hiding the rest.
+Access is fail-closed: missing IDs, metadata, or GraphQL errors fail the probe.
+Access never requests start commands or variable values. Safe GitHub annotations
+make the result available even when log archive downloads are unavailable.
+The usage report retains its existing best-effort behavior.
 """
 import datetime as _dt
 import json
 import os
+import re
 import sys
+import uuid
 import urllib.request
 
 API = "https://backboard.railway.com/graphql/v2"
+
+
+# R63-ACCESS / Arena 01a0f47e: access-only logging, not trading logic.
+def _redact_secrets(value):
+    text = str(value)
+    secrets = set()
+    for name in ("RAILWAY_TOKEN", "RAILWAY_API_TOKEN", "BACKUP_PASSPHRASE"):
+        raw = os.getenv(name, "")
+        if raw:
+            secrets.add(raw)
+        if raw.strip():
+            secrets.add(raw.strip())
+    if secrets:
+        pattern = "|".join(re.escape(s) for s in sorted(secrets, key=len, reverse=True))
+        text = re.sub(pattern, "[REDACTED]", text)
+    return text
+
+
+def _workflow_annotation(level, message):
+    if level not in ("notice", "error"):
+        raise ValueError("unsupported annotation level")
+    if os.getenv("GITHUB_ACTIONS", "").lower() != "true":
+        return
+    safe = _redact_secrets(message)
+    # GitHub workflow-command escaping; provider text cannot inject commands.
+    safe = safe.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::{level} title=Railway access::{safe}")
+
+
+def _public_id(value):
+    # Only canonical UUID metadata is published, not arbitrary environment text.
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError, AttributeError):
+        return "unavailable"
 
 
 def _headers():
@@ -60,7 +99,9 @@ def ids():
     d, e = gql("query { projectToken { projectId environmentId } }")
     if d and d.get("projectToken"):
         return d["projectToken"]["projectId"], d["projectToken"]["environmentId"]
-    print("projectToken lookup failed:", e)
+    message = "projectToken lookup failed: " + _redact_secrets(e)
+    print(message)
+    _workflow_annotation("error", message)
     return None, None
 
 
@@ -70,40 +111,66 @@ def _edges(x):
 
 def access():
     pid, eid = ids()
-    print(f"project_id={pid}\nenvironment_id={eid}")
-    if not pid:
+    print(_redact_secrets(f"project_id={pid}\nenvironment_id={eid}"))
+    if not pid or not eid:
+        _workflow_annotation("error", "Access failed: project and environment IDs are required.")
         return 1
     q = """query($id:String!){ project(id:$id){ name createdAt
           environments{ edges{ node{ id name } } }
           services{ edges{ node{ id name
-              serviceInstances{ edges{ node{ environmentId startCommand numReplicas region
+              serviceInstances{ edges{ node{ environmentId numReplicas region
                   sleepApplication cronSchedule
                   latestDeployment{ id status createdAt } } } } } } }
           volumes{ edges{ node{ name
               volumeInstances{ edges{ node{ mountPath currentSizeMB sizeMB environmentId
                   serviceInstance{ serviceName } } } } } } } } }"""
-    d, e = gql(q, {"id": pid})
-    for m in e:
-        print("  gql:", m)
-    p = (d or {}).get("project") or {}
-    print(f"\n== project: {p.get('name')}  (created {p.get('createdAt')})")
-    envs = {n["id"]: n["name"] for n in _edges(p.get("environments"))}
-    print("environments:", ", ".join(f"{v}" + (" *" if k == eid else "") for k, v in envs.items()))
+    d, errors = gql(q, {"id": pid})
+    for message in errors:
+        print("  gql:", _redact_secrets(message))
+    project = (d or {}).get("project") or {}
+    if errors or not project:
+        reason = "; ".join(errors) if errors else "project metadata was not returned"
+        _workflow_annotation("error", "Access failed: " + reason)
+        return 1
+    envs = {n["id"]: n["name"] for n in _edges(project.get("environments"))}
+    if eid not in envs:
+        _workflow_annotation("error", "Access failed: selected environment was not returned by the project.")
+        return 1
+    print(_redact_secrets(f"\n== project: {project.get('name')}  (created {project.get('createdAt')})"))
+    print(_redact_secrets("environments: " + ", ".join(
+        f"{name}" + (" *" if ident == eid else "") for ident, name in envs.items())))
     print("\n== services")
-    for s in _edges(p.get("services")):
-        for si in _edges(s.get("serviceInstances")):
-            if eid and si.get("environmentId") != eid:
+    visible_services = set()
+    for service in _edges(project.get("services")):
+        for instance in _edges(service.get("serviceInstances")):
+            if instance.get("environmentId") != eid:
                 continue
-            ld = si.get("latestDeployment") or {}
-            print(f"- {s['name']}  id={s['id']}  replicas={si.get('numReplicas')} "
-                  f"region={si.get('region')} sleep={si.get('sleepApplication')} "
-                  f"cron={si.get('cronSchedule')}\n    start={si.get('startCommand')!r}\n"
-                  f"    last deploy: {ld.get('status')} @ {ld.get('createdAt')}")
+            visible_services.add(service["id"])
+            deployment = instance.get("latestDeployment") or {}
+            print(_redact_secrets(
+                f"- {service['name']}  id={service['id']}  replicas={instance.get('numReplicas')} "
+                f"region={instance.get('region')} sleep={instance.get('sleepApplication')} "
+                f"cron={instance.get('cronSchedule')}\n"
+                f"    last deploy: {deployment.get('status')} @ {deployment.get('createdAt')}"))
     print("\n== volumes")
-    for v in _edges(p.get("volumes")):
-        for vi in _edges(v.get("volumeInstances")):
-            print(f"- {v['name']}: {vi.get('mountPath')}  {vi.get('currentSizeMB')}/{vi.get('sizeMB')} MB "
-                  f"svc={((vi.get('serviceInstance') or {}).get('serviceName'))}")
+    visible_volumes = 0
+    for volume in _edges(project.get("volumes")):
+        for instance in _edges(volume.get("volumeInstances")):
+            if instance.get("environmentId") != eid:
+                continue
+            visible_volumes += 1
+            print(_redact_secrets(
+                f"- {volume['name']}: {instance.get('mountPath')}  "
+                f"{instance.get('currentSizeMB')}/{instance.get('sizeMB')} MB "
+                f"svc={(instance.get('serviceInstance') or {}).get('serviceName')}"))
+    result = json.dumps({
+        "status": "verified",
+        "project_id": _public_id(pid),
+        "environment_id": _public_id(eid),
+        "services": len(visible_services),
+        "volumes": visible_volumes,
+    }, sort_keys=True)
+    _workflow_annotation("notice", result)
     return 0
 
 
