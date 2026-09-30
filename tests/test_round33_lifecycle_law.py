@@ -3,7 +3,7 @@ EDGE (inside-zone never cancels), zone-stop heal for pre-r30 chains, the
 50-bar line lifecycle law, and render-identity/zoom-freeze persistence."""
 from types import SimpleNamespace
 
-REPO = "/home/user/smc-scanner2"
+REPO = __import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.abspath(__file__)))  # R62: CI-portable (was a hard-coded sandbox path → 20 red tests on GitHub)
 
 
 def _cand(zb, zt, sl, direction="LONG", atr=0.01057, confirmed=False):

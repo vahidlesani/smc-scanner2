@@ -2,7 +2,7 @@
 CryptoCave-clean spot charts + on-chain reference block on spot cards."""
 import os
 
-REPO = "/home/user/smc-scanner2"
+REPO = __import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.abspath(__file__)))  # R62: CI-portable (was a hard-coded sandbox path → 20 red tests on GitHub)
 
 
 # ── 1. the shared code path: spot charts ARE generate_chart ───────────────

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-REPO = "/home/user/smc-scanner2"
+REPO = __import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.abspath(__file__)))  # R62: CI-portable (was a hard-coded sandbox path → 20 red tests on GitHub)
 
 
 # ── 1. info box never shows a wrong 0/10 ──────────────────────────────────
