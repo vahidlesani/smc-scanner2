@@ -81,6 +81,15 @@ def unify_trade_geometry(md: Dict[str, Any]) -> bool:
     if removed or md.get("render_geometry_source") != "TRADE":
         md["render_patterns"] = kept
         md["render_geometry_source"] = "TRADE"
+        # the render fitter's band/line-watch describe lines that are no
+        # longer drawn — the confirmation reads the traded edges
+        # (pattern_geo / break_line_geo) instead. A RANGE band survives.
+        _band = md.get("pattern_band") or {}
+        if isinstance(_band, dict) and str(_band.get("kind") or "").upper() != "RECTANGLE":
+            md["pattern_band"] = {}
+        _pg = md.get("pattern_geo") or {}
+        if isinstance(_pg, dict) and (_pg.get("upper") or _pg.get("lower")):
+            md["render_line_watch"] = []
     return removed
 
 

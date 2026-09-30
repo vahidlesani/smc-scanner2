@@ -741,6 +741,19 @@ def evaluate_confirmation(
             _band_hi20 = _proj20(_hi20, _band20["hi"], _band20.get("slope_hi"))
         except Exception:
             _band_lo20 = _band_hi20 = None
+    # ── R63 G1 (one geometry): when the detector stored BOTH of the traded
+    # pattern's edges, the containment band IS those edges projected onto
+    # this candle — never the render fitter's band.
+    try:
+        _pg63 = _md20.get("pattern_geo") or {}
+        if isinstance(_pg63, dict) and _pg63.get("upper") and _pg63.get("lower"):
+            from analysis.confirm_r62 import project_line_geo as _plg63
+            _u63 = _plg63(_pg63["upper"], _row20["timestamp"])
+            _l63 = _plg63(_pg63["lower"], _row20["timestamp"])
+            if _u63 > 0 and _l63 > 0:
+                _band_lo20, _band_hi20 = min(_u63, _l63), max(_u63, _l63)
+    except Exception:
+        pass
     # ── Viva 09-21 (round 12) — BREAK-SIDE LAW, enforced on every setup ───
     # His verbatim question: «چرا بعد از شکست ترند رو به بالا پوزیشن شورت
     # اعلان میشه توی برخی ستاپها؟» و «چرا بعد از شکست الگوها یا ترند به سمت
