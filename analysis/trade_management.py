@@ -458,7 +458,8 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
                  final_target: Optional[float] = None, structural_tp1: Optional[float] = None,
                  fee_pct: float = 0.0, trigger_tf: str = "",
                  wall_level: Optional[float] = None,
-                 ltf_df=None, ltf_cap_pct: float = 0.0) -> Dict:
+                 ltf_df=None, ltf_cap_pct: float = 0.0,
+                 trail_mode: str = "INIT_DIST_V2") -> Dict:
     """Three-pill exit ladder — r40 (Viva 09-26, verbatim: «TP4 و TP5 رو حذف
     کن»): the path entry→final is split into THREE equal segments, exits
     40/30/30 land on TP1..TP3 and the ladder stops there. TP1 distance keeps
@@ -474,6 +475,12 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
     risk = abs(entry - sl)
     if entry <= 0 or risk <= 0:
         raise ValueError("entry/sl must define positive risk")
+    # r63 (his 10-01 law ⑥, verbatim: «تریل با همان فاصلهٔ استاپ اولیه پشت
+    # قیمت») — the trailing distance IS the initial stop distance, and the
+    # v2 chandelier is the DEFAULT trail from this round on (trail_mode
+    # "BAND" keeps the legacy interpolation for replay comparisons).
+    initial_stop_dist = risk
+    trail_mode = str(trail_mode or "INIT_DIST_V2").upper()
     sign = 1.0 if str(direction).upper() == "LONG" else -1.0
     tick_gap = 5.0 * venue_tick(entry, market)
     # NET breakeven: BE must clear round-trip cost so a BE exit is truly
@@ -594,6 +601,9 @@ def build_ladder(entry: float, sl: float, direction: str, market: Optional[Dict]
         "original_sl": sl,
         "current_sl": sl,
         "risk": risk,
+        # r63 · his 10-01 law ⑥: trail distance = initial stop distance
+        "initial_stop_dist": initial_stop_dist,
+        "trail_mode": trail_mode,
         "final_target": final_price,
         "tick_gap": tick_gap,
         "be_gap": be_gap,
@@ -686,38 +696,58 @@ def band_trailing(state: Dict, candles: List[Dict], atr_n: Optional[float] = Non
         ts = [float(x) for x in (out.get("trail_stops") or [])] or [entry]
         base = ts[min(max(hit - 1, 0), len(ts) - 1)]
         floor = floors[hit - 1]
-        if int(out.get("band_hit_index") or 0) != hit:
-            out["band_hit_index"] = hit
-            out["band_extreme"] = targets[hit - 1]
-        extreme = float(out.get("band_extreme") if out.get("band_extreme") is not None else targets[hit - 1])
         last = candles[-1]
-        extreme = max(extreme, float(last["high"])) if sign > 0 else min(extreme, float(last["low"]))
-        out["band_extreme"] = extreme
-        span = targets[hit] - targets[hit - 1]
-        if abs(span) <= 1e-12:
-            return {"state": out, "events": events}
-        p = min(1.0, max(0.0, (extreme - targets[hit - 1]) / span))
-        interp = base + p * (floor - base)
-        atr = _window_atr(candles)
-        n = float(atr_n if atr_n is not None else state.get("vol_atr_n") or VOL_STOP_ATR_N)
         current = float(out.get("current_sl") or base)
         min_gap = max(tick_gap, abs(float(last["close"])) * 0.0010)
-        if sign > 0:
-            swing = min(float(c["low"]) for c in candles[-SWING_BARS:])
-            candidate = max(interp, swing - n * atr)
-            # Never move a LONG stop onto/through the closed candle price.
-            candidate = min(candidate, float(last["close"]) - min_gap)
-            new_sl = max(current, candidate)
-            improved = new_sl - current > max(tick_gap, 1e-12)
+        _v2_dist = float(out.get("initial_stop_dist") or 0.0)
+        if str(out.get("trail_mode") or "").upper() == "INIT_DIST_V2" and _v2_dist > 0:
+            # ── r63 · his 10-01 law ⑥: the trail sits at the INITIAL stop
+            # distance behind the (closed-candle) price — a pure ratcheting
+            # chandelier; no interpolation, no volatility swing tightening.
+            if sign > 0:
+                candidate = float(last["close"]) - _v2_dist
+                candidate = min(candidate, float(last["close"]) - min_gap)
+                new_sl = max(current, candidate)
+                improved = new_sl - current > max(tick_gap, 1e-12)
+            else:
+                candidate = float(last["close"]) + _v2_dist
+                candidate = max(candidate, float(last["close"]) + min_gap)
+                new_sl = min(current, candidate)
+                improved = current - new_sl > max(tick_gap, 1e-12)
+            if improved:
+                out["current_sl"] = new_sl
+                events.append({"event": "TRAIL_V2", "new_sl": new_sl,
+                               "dist": _v2_dist, "hit_index": hit})
         else:
-            swing = max(float(c["high"]) for c in candles[-SWING_BARS:])
-            candidate = min(interp, swing + n * atr)
-            # Never move a SHORT stop onto/through the closed candle price.
-            candidate = max(candidate, float(last["close"]) + min_gap)
-            new_sl = min(current, candidate)
-            improved = current - new_sl > max(tick_gap, 1e-12)
-        if improved:
-            out["current_sl"] = new_sl
+            if int(out.get("band_hit_index") or 0) != hit:
+                out["band_hit_index"] = hit
+                out["band_extreme"] = targets[hit - 1]
+            extreme = float(out.get("band_extreme") if out.get("band_extreme") is not None else targets[hit - 1])
+            extreme = max(extreme, float(last["high"])) if sign > 0 else min(extreme, float(last["low"]))
+            out["band_extreme"] = extreme
+            span = targets[hit] - targets[hit - 1]
+            if abs(span) <= 1e-12:
+                return {"state": out, "events": events}
+            p = min(1.0, max(0.0, (extreme - targets[hit - 1]) / span))
+            interp = base + p * (floor - base)
+            atr = _window_atr(candles)
+            n = float(atr_n if atr_n is not None else state.get("vol_atr_n") or VOL_STOP_ATR_N)
+            if sign > 0:
+                swing = min(float(c["low"]) for c in candles[-SWING_BARS:])
+                candidate = max(interp, swing - n * atr)
+                # Never move a LONG stop onto/through the closed candle price.
+                candidate = min(candidate, float(last["close"]) - min_gap)
+                new_sl = max(current, candidate)
+                improved = new_sl - current > max(tick_gap, 1e-12)
+            else:
+                swing = max(float(c["high"]) for c in candles[-SWING_BARS:])
+                candidate = min(interp, swing + n * atr)
+                # Never move a SHORT stop onto/through the closed candle price.
+                candidate = max(candidate, float(last["close"]) + min_gap)
+                new_sl = min(current, candidate)
+                improved = current - new_sl > max(tick_gap, 1e-12)
+            if improved:
+                out["current_sl"] = new_sl
         final_sl = float(out.get("current_sl") or base)
         reached = (final_sl >= floor - max(tick_gap, 1e-12)) if sign > 0 \
             else (final_sl <= floor + max(tick_gap, 1e-12))
@@ -728,6 +758,31 @@ def band_trailing(state: Dict, candles: List[Dict], atr_n: Optional[float] = Non
     except Exception:
         pass
     return {"state": out, "events": events}
+
+
+def _last_confirmed_swing(candles: List[Dict], left: int = 2, right: int = 2) -> tuple:
+    """(last confirmed swing LOW, last confirmed swing HIGH) as fractal 2/2
+    pivots over CLOSED candles only (the forming candle never qualifies)."""
+    lows = [float(x["low"] or 0) for x in candles]
+    highs = [float(x["high"] or 0) for x in candles]
+    n = len(lows)
+    sw_l = sw_h = 0.0
+    # r63 semantics: the LIVE (last) candle never participates — neither as a
+    # pivot nor as a pivot's witness. The breaking candle may pierce below the
+    # old swing (that IS the break); it must not disqualify the reference.
+    for i in range(n - 2 - right, left - 1, -1):
+        if i - left < 0:
+            continue
+        if lows[i] < min(lows[i - left:i]) and lows[i] <= min(lows[i + 1:i + 1 + right]):
+            sw_l = lows[i]
+            break
+    for i in range(n - 2 - right, left - 1, -1):
+        if i - left < 0:
+            continue
+        if highs[i] > max(highs[i - left:i]) and highs[i] >= max(highs[i + 1:i + 1 + right]):
+            sw_h = highs[i]
+            break
+    return sw_l, sw_h
 
 
 def smart_exit_scan(direction: str, candles: List[Dict], state: Optional[Dict] = None) -> Dict:
@@ -808,7 +863,24 @@ def smart_exit_scan(direction: str, candles: List[Dict], state: Optional[Dict] =
         # Viva 09-20 (round 9): «اولین پین‌بارِ بسته‌شدهٔ معکوس ... = خروج
         # فوری باقی‌مانده» — the flag lets the monitor treat ONE closed
         # reverse pin as a red exit on its own, not merely an orange sign.
-        out["reverse_pin"] = any("پین‌بار" in str(_r) for _r in reasons)
+        # ── r63 · his 10-01 law ⑥ (verbatim ruling on my proposal): the
+        # immediate-exit flag is a reverse PIN **or ENGULFING** whose close
+        # sits BEYOND the last swing of this (5m/3m) frame — a lone wick
+        # pattern mid-range no longer fires the exit by itself.
+        _pin63 = any("پین‌بار" in str(_r) for _r in reasons)
+        _eng63 = any("انگالف" in str(_r) for _r in reasons)
+        _swing_ok63 = False
+        try:
+            _piv_low63, _piv_high63 = _last_confirmed_swing(c)
+            if str(direction).upper() == "LONG":
+                _swing_ok63 = _piv_low63 > 0 and cl1 < _piv_low63
+            else:
+                _swing_ok63 = _piv_high63 > 0 and cl1 > _piv_high63
+        except Exception:
+            _swing_ok63 = False
+        out["reverse_kinds"] = ([_k for _k, _on in (("pin", _pin63), ("engulf", _eng63)) if _on])
+        out["reverse_swing_break"] = bool(_swing_ok63)
+        out["reverse_pin"] = (_pin63 or _eng63) and _swing_ok63
         out["level"] = "RED" if score >= SMART_EXIT_RED else ("ORANGE" if score >= SMART_EXIT_ORANGE else "")
     except Exception:
         pass

@@ -1912,6 +1912,48 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
             return None
     except Exception:
         pass
+    # ── r63 RISK-LADDER STOP (his 10-01 amendment, law ①, verbatim: «استاپ
+    # اولیه پشتِ آخرین سوینگِ یک تایم‌فریم بالاتر از تایم‌فریم تریگر؛ نبود →
+    # دو TF بالاتر؛ نبود → ۳٫۵ تا ۵٪، سقف ۵٪») — replaces the structural stop
+    # for the break/structure lanes (newest law wins over the 09-23 LTF-base
+    # stop; the LTF law keeps hosting TP1). Pin/reject lanes are exempt
+    # (law ④ keeps them exactly behind the same-TF extreme + last swing).
+    # The r30 sane-zone guard is re-applied after the ladder so the stop
+    # never lands inside the entry zone. Fail-open everywhere.
+    try:
+        from config import SETTINGS as _S63
+        if bool(getattr(_S63, "risk_ladder_enabled", True)) \
+                and not bool((candidate.metadata or {}).get("rejection_scalp")):
+            from analysis.risk_ladder import ladder_stop as _ls63
+            from data.fetcher import get_klines as _gk63
+            _entry63 = float(candidate.planned_entry or (candidate.entry_zone_bottom
+                                                         + candidate.entry_zone_top) / 2.0)
+            _sl063 = float(candidate.sl or 0.0)
+            _struct_pct63 = (abs(_entry63 - _sl063) / _entry63 * 100.0) \
+                if (_entry63 > 0 and _sl063 > 0) else 0.0
+            _lad63 = _ls63(str(bundle.symbol), direction, _entry63,
+                           str(trigger_tf or ""), _struct_pct63, _gk63)
+            if _lad63 and _lad63.get("stop") and _sl063 > 0:
+                _new63 = float(_lad63["stop"])
+                # r30 sane-zone guard: invalidation stays BEYOND the zone
+                _zb63 = float(candidate.entry_zone_bottom)
+                _zt63 = float(candidate.entry_zone_top)
+                if direction == "LONG" and _new63 >= _zb63:
+                    _new63 = round(_zb63 - float(buffer), 8)
+                elif direction == "SHORT" and 0 < _new63 <= _zt63:
+                    _new63 = round(_zt63 + float(buffer), 8)
+                if ((direction == "LONG" and _new63 < _sl063)
+                        or (direction == "SHORT" and _new63 > _sl063)
+                        or _lad63.get("basis") == "PCT"):
+                    # take the ladder when it is materially behind the old
+                    # stop, or when it IS the approved pct fallback
+                    if abs(_entry63 - _new63) / max(_entry63, 1e-12) > 0.001:
+                        candidate.sl = _new63
+                candidate.metadata["stop_ladder"] = {
+                    "tf": _lad63.get("tf"), "hop": _lad63.get("hop"),
+                    "basis": _lad63.get("basis")}
+    except Exception as _lad63_exc:
+        print(f"risk-ladder stop skipped {getattr(bundle, 'symbol', '?')}: {_lad63_exc}")
     # ── Viva 09-23 (round 20 ENTRY LAW): remember the MAJOR-pivot trendline
     # opposing this break (highest-TF validated 1d/4h/1h line on the break's
     # side) — confirmation must be a CLOSE beyond it, not just the tool line.

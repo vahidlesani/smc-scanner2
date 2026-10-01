@@ -190,11 +190,17 @@ def test_protection_phase_reverse_pin_arms_the_reentry():
     armed = __import__("analysis.trade_management", fromlist=["x"]).advance_ladder(
         lad, 103.5, 100.1)["state"]
     win = _flat_window()
-    win[-1] = {"open": 100.0, "high": 101.2, "low": 99.9, "close": 99.95, "volume": 100.0}
+    # r63 · his 10-01 law ⑥: the immediate-exit flag is a reverse pin WHOSE
+    # CLOSE SITS BEYOND THE LAST SWING of this frame — plant a confirmed 2/2
+    # swing low at 99.4 (bar 21, fully closed witnesses) and let the pin close below it.
+    for _j, _lo in ((19, 99.9), (20, 99.9), (21, 99.4), (22, 99.9), (23, 99.9)):
+        win[_j] = dict(win[_j])
+        win[_j]["low"] = _lo
+    win[-1] = {"open": 99.5, "high": 101.2, "low": 99.0, "close": 99.3, "volume": 100.0}
     scan = smart_exit_scan("LONG", win, armed)
-    # one closed reverse pin = a RED close for the monitor (its own rule),
-    # the bare score stays ORANGE (single sign) — the ladder closes anyway
-    assert scan["reverse_pin"] is True and scan["level"] == "ORANGE"
+    # the flag fires (pin + swing-break); that same close also scores the
+    # structural-break sign, so the bare score is RED (two signs)
+    assert scan["reverse_pin"] is True and scan["level"] == "RED"
     import io as _io
     src = _io.open("database/repository_v7.py", encoding="utf-8").read()
     assert "if _fscan.get(\"reverse_pin\"):" in src          # fast frame (5m) pin

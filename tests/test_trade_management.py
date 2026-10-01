@@ -90,7 +90,10 @@ def test_net_breakeven_includes_roundtrip_cost():
 
 
 def test_band_trailing_ratchets_to_profit_floor_long():
-    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
+    # r63: band interpolation is the LEGACY trail — pinned explicitly here;
+    # the default since his 10-01 law ⑥ is INIT_DIST_V2 (see test_r63_risk_round).
+    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d",
+                     trail_mode="BAND")
     st = advance_ladder(p, float(p["targets"][0]) + 0.1, 100.1)["state"]
     assert st["hit_index"] == 1
     assert abs(st["band_floors"][0] - (100.0 + 0.35 * 10.0 / 3.0)) < 1e-9   # 1-step band → k=0.35
@@ -189,7 +192,9 @@ def test_ladder_events_end_at_tp3():
 
 
 def test_vol_stop_scales_with_atr_n_argument():
-    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d")
+    # legacy band trail pinned explicitly (r63 default = INIT_DIST_V2)
+    p = build_ladder(100, 98, "LONG", {"tick_size": 0.01}, 110, trigger_tf="1d",
+                     trail_mode="BAND")
     st = advance_ladder(p, 103.5, 100.1)["state"]
     candles = [{"open": 104.0, "high": 104.2, "low": 103.6,
                 "close": 104.0, "volume": 10.0} for _ in range(25)]

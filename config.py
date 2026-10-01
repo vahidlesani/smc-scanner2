@@ -97,6 +97,8 @@ class Settings:
     pinv_polarity_gate_enabled: bool = True
     # r61.3-R62: confirm-stage ceiling gate for pin/rejection chains (10-01)
     confirm_ceiling_gate: bool = True
+    # r63: initial-stop ladder (his 10-01 law ①) for break/structure lanes
+    risk_ladder_enabled: bool = True
     pinv_polarity_near_atr: float = 1.2    # probe within this ATR = "at the zone"
     pinv_polarity_block_atr: float = 1.8   # opposing wall within this ATR blocks
     pinv_polarity_breakout_body_atr: float = 0.5  # moderate valid-breakout body
@@ -309,6 +311,7 @@ class Settings:
             pinv_allowed_zone_kinds=os.getenv("PINVAL_ALLOWED_ZONE_KINDS", cls.pinv_allowed_zone_kinds),
             pinv_polarity_gate_enabled=_bool("PINVAL_POLARITY_GATE_ENABLED", cls.pinv_polarity_gate_enabled),
             confirm_ceiling_gate=_bool("CONFIRM_CEILING_GATE", cls.confirm_ceiling_gate),
+            risk_ladder_enabled=_bool("RISK_LADDER_ENABLED", cls.risk_ladder_enabled),
             pinv_polarity_near_atr=_float("PINVAL_POLARITY_NEAR_ATR", cls.pinv_polarity_near_atr),
             pinv_polarity_block_atr=_float("PINVAL_POLARITY_BLOCK_ATR", cls.pinv_polarity_block_atr),
             pinv_polarity_breakout_body_atr=_float("PINVAL_POLARITY_BREAKOUT_BODY_ATR", cls.pinv_polarity_breakout_body_atr),

@@ -19,6 +19,16 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+@pytest.fixture(autouse=True)
+def _offline_feed(monkeypatch):
+    """r63: the sandbox gained live exchange access — the counter-trend gate
+    in evaluate_confirmation fetches the parent TF when it can. Pin the feed
+    offline so these unit tests stay deterministic (this file tests the wall/
+    ladder gates on SYNTHETIC frames only)."""
+    import data.fetcher as _f
+    monkeypatch.setattr(_f, "get_klines", lambda *a, **k: None)
+
+
 # ── 1. source-kill removed (contract) ───────────────────────────────────────
 
 def test_reclaim_source_kill_removed():
