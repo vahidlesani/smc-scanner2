@@ -868,11 +868,18 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         # 0.10·ATR wick tolerance) is a FAILED break — dead at the source.
         # FTB stays safe: a wick-touch of the line is a pullback, only the
         # close back on the pre-break side kills the event.
-        if state == STATE_BREAK:
-            _still61 = (last_close > line_now - 0.10 * atr_p) if side == "upper" \
-                else (last_close < line_now + 0.10 * atr_p)
-            if not _still61:
-                continue
+        # ── r61.3-R62 RECLAIM REBALANCE (his 10-01 law: «نفوذ به پشتِ بریک
+        # ایون در صورتی که کلوز دوباره خارج از آن باشد اشکالی ندارد» + the
+        # retest-re-entry doctrine): a break whose newest close has pulled
+        # back through the line is NO LONGER killed at the source. The r61.2
+        # source-kill silently starved TECHCLASSIC/TLBREAK (last TC alert
+        # 09-30 12:04, then ZERO — the first retest of a freshly broken edge
+        # is normal lifecycle, not failure). Direction stays governed by the
+        # ONE-BREAK law; the reclaim itself is vetoed at CONFIRM time
+        # (BREAK_RECLAIMED gate + break_established + fresh-close law).
+        _still61 = (last_close > line_now - 0.10 * atr_p) if side == "upper" \
+            else (last_close < line_now + 0.10 * atr_p)
+        _reclaim61 = bool(state == STATE_BREAK and not _still61)
         # E&M Minimum Price Objective: pattern width projected from the edge
         if width_now is not None:
             height = width_now
@@ -952,6 +959,7 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             "doctrine_direction": (_DOCTRINE_DIRECTION.get(str(pattern).upper())
                                    if _counter54 else None),
             "legality": "LEGAL",
+            "reclaimed_seen": _reclaim61,
             "fresh_break_recognition": bool(_fresh_bk31),
             "bars_since_break": (n - int(_bk31)) if _bk31 is not None else None,
             "event_id": f"{side}|{pattern}|{state}|{ev_ref9}",

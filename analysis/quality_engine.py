@@ -1157,6 +1157,37 @@ def evaluate_confirmation(
                     "شکستِ نامعتبر تأیید نمی‌گیرد و سناریو باطل است."))
     except Exception:
         pass
+    # ── r61.3-R62 PRE-BREAK CEILING LAW (his 10-01 correction on the four
+    # PINWALL LONGs — ATOM K703651 / VVV K345418 / LIT K837132 / JUP K541811:
+    # «قبل از شکست سیگنال در جهتِ شکستی که هنوز رخ نداده تأیید نشه؛ دنبال
+    # ریجکت‌ها باش»): a pin/rejection chain may NOT CONFIRM toward a facing,
+    # untouched wall (supply ahead of a LONG / demand ahead of a SHORT). The
+    # confirming close itself is re-probed through the polarity engine; the
+    # chain STAYS ALIVE — a later valid close beyond the wall confirms (the
+    # break law). Break-lane setups (TC/TLBREAK/ALBROX) are exempt: their
+    # validated break IS the confirmation event.
+    try:
+        _pinfam61 = (str(getattr(candidate, "setup_code", "") or "").upper() == "PINVAL"
+                     or bool((candidate.metadata or {}).get("rejection_scalp")))
+        if _pinfam61 and bool(getattr(SETTINGS, "confirm_ceiling_gate", True)):
+            from analysis.zone_polarity import evaluate_polarity as _ep61
+            _atr_c61 = float((candidate.metadata or {}).get("atr") or 0.0) \
+                or float((closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
+            if _atr_c61 > 0:
+                _pol61 = _ep61(
+                    closed_df, None, candidate.direction, float(row["close"]),
+                    _atr_c61,
+                    near_atr=float(getattr(SETTINGS, "pinv_polarity_near_atr", 1.2)),
+                    block_atr=float(getattr(SETTINGS, "pinv_polarity_block_atr", 1.8)),
+                    breakout_body_atr=float(getattr(SETTINGS, "pinv_polarity_breakout_body_atr", 0.5)),
+                    include_fvg=True)
+                if not _pol61.allowed and str(getattr(_pol61, "reason", "") or "") in                         {"UNDER_SUPPLY", "ABOVE_DEMAND"}:
+                    return reject("CEILING_AHEAD", (
+                        "پین جهت‌درست است اما دیوارِ دست‌نخوردهٔ عرضه/تقاضا مستقیم جلوی مسیر است؛ "
+                        "قبل از شکستِ معتبرِ دیوار تأیید صادر نمی‌شود (قانون ۱۰-۰۱). "
+                        "زنجیره زیر نظر می‌ماند — اولین کلوزِ معتبر فراتر از دیوار تأیید می‌دهد."))
+    except Exception:
+        pass
     # --- alternative multi-candle / higher-TF trigger evaluation ----------
     # The pin bar is one sign among several; a base of 2..N closed trigger
     # candles that aggregates into a pin / doji-break / engulf / reclaim at

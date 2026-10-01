@@ -335,6 +335,55 @@ def fit_validated_line(
                     points=tuple(touching),
                     break_index=break_at,
                 )
+    # ── r61.3-R62 EARLIER-PIVOT LAW (his VVV 10-01: «اگر ترندلاین یا ترندهای
+    # الگو به پیوت‌های قبل‌تر هم برخورد می‌کنند باید رسم بشن»): the winning
+    # pair may anchor late while an EARLIER same-side pivot already sits on
+    # the same line. Absorb the earliest run of collinear pivots (no
+    # violating pivot between) — more touches, truer anchor, the chart then
+    # starts the line where the market actually built it.
+    if best is not None:
+        _tol_x = max(cfg.touch_tolerance_atr, 0.12) * atr
+
+        def _lv_at(_x):
+            if getattr(best, "log_fit", False):
+                return 10.0 ** (float(best.log_slope) * _x + float(best.log_intercept))
+            return float(best.slope) * _x + float(best.intercept)
+
+        _ext = sorted(list(best.points or ()), key=lambda q: float(q["index"]))
+        _head = []
+        while True:
+            if not _ext:
+                break
+            _cur_min = min(float(q["index"]) for q in _ext)
+            _prev = [q for q in pool if float(q["index"]) < _cur_min - 0.5]
+            if not _prev:
+                break
+            _q = max(_prev, key=lambda q: float(q["index"]))
+            if abs(float(_q["price"]) - _lv_at(float(_q["index"]))) > _tol_x:
+                break
+            _bad = [pp for pp in pool
+                    if _cur_min - 0.5 > float(pp["index"]) > float(_q["index"])
+                    and ((side == "HIGH" and float(pp["price"]) > _lv_at(float(pp["index"])) + _tol_x)
+                         or (side == "LOW" and float(pp["price"]) < _lv_at(float(pp["index"])) - _tol_x))]
+            if _bad:
+                break
+            _head.insert(0, _q)
+            _ext.insert(0, _q)
+            if len(_head) >= 12:
+                break
+        if _head:
+            best = ValidatedLine(
+                side=best.side, slope=best.slope, intercept=best.intercept,
+                touch_count=best.touch_count + len(_head),
+                fit_residual_atr=best.fit_residual_atr,
+                first_index=int(min(float(q["index"]) for q in _ext)),
+                last_index=best.last_index,
+                points=tuple(sorted(_ext, key=lambda q: float(q["index"]))),
+                break_index=best.break_index,
+                log_fit=bool(getattr(best, "log_fit", False)),
+                log_slope=float(getattr(best, "log_slope", 0.0) or 0.0),
+                log_intercept=float(getattr(best, "log_intercept", 0.0) or 0.0),
+            )
     return best
 
 
