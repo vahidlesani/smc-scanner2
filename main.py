@@ -1251,7 +1251,17 @@ def _scenario_out_of_reach(candidate, price) -> bool:
             # scenario direction is a breakout in progress — monitor, alert,
             # confirm; never cancel success.
             _md30 = candidate.metadata or {}
-            if bool(_md30.get("touched")) or bool(_md30.get("live_break_bar")) \
+            # r61.3-R62 (his LTC T739534 fury: the trend broke UP and the
+            # chain was cancelled «6.56 ATR away» moments later): an
+            # ESTABLISHED break (detector event or a closed close beyond the
+            # edge) is a breakout in progress — R62's confirm ladder owns it
+            # now; the 09-21 distance close-out never fires on success.
+            try:
+                from analysis.confirm_r62 import break_established as _be61
+                _est61 = bool(_be61(_md30))
+            except Exception:
+                _est61 = False
+            if _est61 or bool(_md30.get("touched")) or bool(_md30.get("live_break_bar")) \
                     or str(_md30.get("tl_stage") or "") == "JUST_BROKE":
                 if candidate.direction == "LONG" and px > _zt:
                     return False

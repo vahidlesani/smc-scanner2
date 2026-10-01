@@ -1958,6 +1958,83 @@ def _chart_tf_token(candidate, frame) -> str:
     return f"{drawn} (TRIG {trig})"
 
 
+def _last_resort_edges(frame, use_log: bool,
+                       need_upper: bool = True, need_lower: bool = True) -> list:
+    """r61.3-R62 BOTH-EDGES GUARANTEE (Viva 09-30/10-01: «یک ترند می‌کشد
+    بالایی را نمی‌کشد» · «خط زیر الگو را نمی‌کشد یا نصفه می‌کشد»): when a
+    chain offers fewer than two drawn edges, each MISSING side is fitted
+    HERE on the rendered frame itself — the trigger-TF chart — with a
+    render-tolerant config whose require_alive is OFF: a line price has
+    already broken is exactly the line the chart must still show. Returns
+    render commands shaped like detect_patterns output (index coords)."""
+    out: list = []
+    try:
+        import dataclasses as _dc61
+        from analysis.viva_tlbreak import fit_validated_line as _fvl61
+        from analysis.viva_tlbreak import load_config as _lc61
+        cfg = _dc61.replace(_lc61(), pivot_left=3, pivot_right=3,
+                          min_touches=2, touch_tolerance_atr=0.30,
+                          max_fit_residual_atr=0.60, require_alive=False,
+                          recency_bars=10_000, edge_atr=10_000.0,
+                          wick_policy="hybrid")
+        if not use_log:
+            cfg = _dc61.replace(cfg, log_fit_min_span=99.0)
+        n = int(len(frame) - 1)
+        if n < 44:
+            return out
+        f = frame.reset_index(drop=True)
+        if "timestamp" not in f.columns and len(f.columns):
+            f = f.rename(columns={f.columns[0]: "timestamp"})
+
+        def _g(ln, side):
+            # touch points re-anchor ON THE FRAME'S OWN INDEX (tz-safe);
+            # a numeric/projected pseudo-timestamp falls back to its bar.
+            _pts = []
+            for pp in (ln.points or ()):
+                try:
+                    _price = float(pp.get("price"))
+                except Exception:
+                    continue
+                _tsv = None
+                try:
+                    _pos = int(float(pp.get("index")))
+                    if 0 <= _pos < len(frame):
+                        _tsv = str(pd.Timestamp(frame.index[_pos]))
+                except Exception:
+                    _tsv = None
+                if _tsv is None:
+                    try:
+                        _tsv = str(pd.Timestamp(pp.get("timestamp")))
+                    except Exception:
+                        continue
+                _pts.append({"ts": _tsv, "price": _price})
+            return {"side": side, "slope": float(ln.slope),
+                    "intercept": float(ln.intercept),
+                    "log_fit": bool(getattr(ln, "log_fit", False)),
+                    "log_slope": float(getattr(ln, "log_slope", 0.0) or 0.0),
+                    "log_intercept": float(getattr(ln, "log_intercept", 0.0) or 0.0),
+                    "break_x": (int(ln.break_index)
+                                if getattr(ln, "break_index", None) is not None
+                                else None),
+                    "x0": int(getattr(ln, "first_index", 0)), "x1": n,
+                    "points": _pts,
+                    }
+
+        if need_upper:
+            up = _fvl61(f, "HIGH", cfg)
+            if up is not None:
+                out.append({"type": "TRENDLINE", "lines": [_g(up, "HIGH")],
+                            "fallback61": True})
+        if need_lower:
+            lo = _fvl61(f, "LOW", cfg)
+            if lo is not None:
+                out.append({"type": "TRENDLINE", "lines": [_g(lo, "LOW")],
+                            "fallback61": True})
+    except Exception as exc:
+        print(f"r61.3-R62 both-edges fallback warning: {exc}")
+    return out
+
+
 def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool = False) -> Optional[bytes]:
     # r61 CHART-DIET LAW (Viva 09-30: «چارت رو از اپلیکیشن فعلا حذف بکن ببینم
     # مصرف ریلوی پایینتر میاد»): one gate for every render in the product.
@@ -2643,6 +2720,21 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _nFar59 += 1
         except Exception:
             pass
+        # ── r61.3-R62 BOTH-EDGES GUARANTEE (zone lane / no stored points):
+        # a chart may carry no stored edge points (ALBROX zone lane) AND the
+        # refit may return nothing → zones with zero structure lines. Any
+        # missing side is fitted on THIS frame (the trigger-TF chart). The
+        # VIVA_TLBREAK shell guarantees its own two edges downstream.
+        if str((candidate.metadata or {}).get("strategy_variant") or "") != "VIVA_TLBREAK":
+            _has_up61 = any(_ln.get("side") == "HIGH"
+                            for _p61 in _draw_pats for _ln in (_p61.get("lines") or []))
+            _has_lo61 = any(_ln.get("side") == "LOW"
+                            for _p61 in _draw_pats for _ln in (_p61.get("lines") or []))
+            if not (_has_up61 and _has_lo61):
+                for _fb61 in _last_resort_edges(
+                        frame, bool(use_log),
+                        need_upper=not _has_up61, need_lower=not _has_lo61):
+                    _draw_pats.append(_fb61)
         for _pat in _draw_pats:
             if _pat.get("type") == "RANGE":
                 # anchored to its oldest tested pivot when it carries a time
@@ -2877,21 +2969,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             zorder=6, linestyle=(0, (6, 4)),
                             solid_capstyle="butt")
                 elif _bx8 is not None and _bx8 < _xe - 0.6:
-                    # r59.2 EXTENSION LAW (Viva 09-29: «اکستند شدن باید
-                    # هوشمند باشه — اگر پوزیشن تایید شده اجازه داره اکستند
-                    # بشه تا واکنش جدید رو تایید یا ابطال کنیم»): the
-                    # broken edge extends into the margin only for a
-                    # CONFIRMED trade (reaction validator); otherwise a
-                    # 3-bar stub keeps the break visible without chasing.
-                    _ext59 = str(getattr(candidate, "status", "") or "").upper() == "CONFIRMED"
-                    _xe2 = _xe if _ext59 else min(_xe, _xend8 + 3.0)
-                    if _xe2 > _xend8 + 0.6:
-                        _xsC, _ysC = _line_xy(_ln, _xend8, _xe2)
-                        ax.plot(_xsC, _ysC,
-                                color=_col8, linewidth=1.1 if _ext59 else 0.9,
-                                alpha=0.55 if _ext59 else 0.30, zorder=5,
-                                linestyle=(0, (6, 4)) if _ext59 else (0, (2, 3)),
-                                solid_capstyle="butt")
+                    # r61.3-R62 BOTH-EDGES LAW (Viva 09-30/10-01: «از هر جای
+                    # چارت که پیوت‌های مهم‌تر است رسم بشه اما باید تا قیمت
+                    # لایو بره و بعدش خطچین بشه» — TRX teal 08-14، LTC/LTC
+                    # 3-bar stub): a broken leg paints solid to ITS break bar
+                    # and then ONE dashed segment through LIVE to the canvas
+                    # edge — the confirmed-only gate is retired; the break
+                    # stays readable and the line never stops mid-air.
+                    _xsC, _ysC = _line_xy(_ln, _xend8, _xe)
+                    ax.plot(_xsC, _ysC,
+                            color=_col8, linewidth=1.3, alpha=0.85,
+                            zorder=6, linestyle=(0, (5, 3)),
+                            solid_capstyle="butt")
                 _px8, _xs8 = [], []
                 for q in (_ln.get("points") or []):
                     _qx = float(np.searchsorted(
@@ -3497,17 +3586,73 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         x0 = 0.0
                     x1 = min(max(xs) + 0.15 * max(1.0, max(xs) - min(xs)), x_edge, count)
                     _xr = max(x1, min(x_edge, count))
+                    # r61.3-R62 FAR-FLOAT LAW (Viva 09-30, STX 15M/30M: the
+                    # «trendline» floated FAR BELOW the whole window — a bold
+                    # red main line nobody touched in days): a stored edge
+                    # whose value at LIVE is >2.5×ATR away from the close AND
+                    # whose newest pivot is ≥40 bars old is CONTEXT, not the
+                    # trade line — it paints thin/faint (far-major style).
+                    _far9 = False
+                    try:
+                        _atr9v = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
+                        _cl9v = float(frame["close"].iloc[-1])
+                        _y9v = _fy9(min(_xr, count))
+                        _far9 = bool(_atr9v > 0 and max(xs) < count - 40
+                                     and abs(_y9v - _cl9v) > 2.5 * _atr9v)
+                    except Exception:
+                        _far9 = False
+                    _col9 = CHART_THEME.get("muted", color) if _far9 else color
+                    _lw9, _al9 = (1.1, 0.55) if _far9 else (2.3, 0.95)
                     ax.plot([x0, _xr], [_fy9(x0), _fy9(_xr)],
-                            color=color, linewidth=2.3, alpha=.95, zorder=7, solid_capstyle="round")
+                            color=_col9, linewidth=_lw9, alpha=_al9, zorder=7, solid_capstyle="round")
                     if count < x_edge - 0.6:
                         # r60.6 (his ONDO note): the projection past LIVE is
                         # the actionable half of a broken line — draw it BOLD
                         # so the break + projection read at a glance.
                         ax.plot([count, x_edge], [_fy9(count), _fy9(x_edge)],
-                                color=color, linewidth=2.0, alpha=.95, zorder=6,
+                                color=_col9, linewidth=2.0 if not _far9 else 1.0,
+                                alpha=.95 if not _far9 else 0.5, zorder=6,
                                 linestyle=(0, (5, 3)), solid_capstyle="butt")
-                    ax.scatter(xs, ys, s=42, color=CHART_THEME["panel"], edgecolors=color, linewidths=1.7, zorder=9)
-                    notes.append((f"{label} · {len(xs)} PIVOTS", color))
+                    if _apex9 is not None and count > _apex9 + 0.6:
+                        # r61.3-R62 APEX law completion (SUI 30M / DOT 30M:
+                        # converging pairs STOPPED at their apex mid-chart —
+                        # r54's scissors guard) — the structure now still
+                        # REACHES LIVE, dashed past the meeting point.
+                        ax.plot([_apex9, count], [_fy9(_apex9), _fy9(count)],
+                                color=color, linewidth=1.3, alpha=0.8,
+                                zorder=6, linestyle=(0, (5, 3)),
+                                solid_capstyle="butt")
+                    ax.scatter(xs, ys, s=42, color=CHART_THEME["panel"], edgecolors=_col9, linewidths=1.7, zorder=9)
+                    notes.append((f"{label} · {len(xs)} PIVOTS" + (" · FAR" if _far9 else ""), _col9))
+                # ── r61.3-R62 SHELL GUARANTEE: a stored set may still paint
+                # fewer than TWO edges (a one-sided range break, a side lost
+                # to a degenerate fit — DOT 15M / ETHFI 1H / STX 1H). The
+                # missing side is fitted on THIS frame and drawn here.
+                if len(_fits9) < 2:
+                    _up_drawn = "viva_upper_points" in _fits9
+                    _lo_drawn = "viva_lower_points" in _fits9
+                    for _fb61 in _last_resort_edges(
+                            frame, bool(use_log),
+                            need_upper=not _up_drawn, need_lower=not _lo_drawn):
+                        _fln61 = _fb61["lines"][0]
+
+                        def _fy61(_x, _l=_fln61):
+                            if _l.get("log_fit"):
+                                return 10 ** (float(_l["log_slope"]) * _x
+                                              + float(_l["log_intercept"]))
+                            return float(_l["slope"]) * _x + float(_l["intercept"])
+
+                        _xa61 = max(0.0, float(_fln61.get("x0", 0)))
+                        ax.plot([_xa61, count], [_fy61(_xa61), _fy61(count)],
+                                color=CHART_THEME["muted"], linewidth=1.4,
+                                alpha=0.8, zorder=6, solid_capstyle="round")
+                        ax.plot([count, count + future - .5],
+                                [_fy61(count), _fy61(count + future - .5)],
+                                color=CHART_THEME["muted"], linewidth=1.1,
+                                alpha=0.7, zorder=5, linestyle=(0, (5, 3)),
+                                solid_capstyle="butt")
+                        notes.append(("VALID " + ("UPPER" if _fln61.get("side") == "HIGH" else "LOWER")
+                                      + " LINE · REFIT", CHART_THEME["muted"]))
                 line = md.get("viva_breakout_line") or md.get("viva_break_line")
                 if line:
                     ax.hlines(float(line), max(0, count-45), count+future-.5, color=CHART_THEME["structure"], linewidth=1.15, linestyles=(0,(5,3)), zorder=6)
@@ -5166,8 +5311,13 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
     stand alone and carry its own latest-result link."""
     md = candidate.metadata or {}
     ladder = md.get("target_ladder") or {}
-    targets = list(ladder.get("targets") or [candidate.tp1, candidate.tp2])
-    weights = list(ladder.get("weights") or [40, 30, 30])
+    # r61.3-R62 (Viva 10-01: «اهداف ۴ و ۵ رو از همه پیامها حذف بکن چون تا
+    # تی پی ۳ داریم»): the doctrine ladder is THREE targets — anything past
+    # TP3 (stale extra levels, ℹ️ rows, wrong exit shares) never prints.
+    targets = list(ladder.get("targets") or [candidate.tp1, candidate.tp2])[:3]
+    weights = list(ladder.get("weights") or [40, 30, 30])[:3]
+    if len(weights) < len(targets):
+        weights = (weights + [40.0, 30.0, 30.0])[:len(targets)]
     direction = str(candidate.direction or "").upper()
     arrow = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
     stops = md.get("stop_clamped") or md.get("stop_reanchored")
@@ -6444,7 +6594,7 @@ def _iran_now() -> str:
 
 
 def _event_chart_candidate(event: dict) -> SignalCandidate:
-    targets = list(event.get("targets") or [])
+    targets = list(event.get("targets") or [])[:3]   # r61.3-R62: TP1..TP3 only
     entry = float(event.get("entry") or 0)
     sl = float(event.get("original_sl") or event.get("sl") or 0)
     tp1 = float(targets[0]) if targets else entry
