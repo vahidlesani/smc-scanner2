@@ -137,3 +137,32 @@ https://docs.railway.com/integrations/api#project-token
 - فایل workflow تغییر نکرد؛ تنها تغییر request با action=access آن را فعال می‌کند. هیچ درخواست deploy/backup یا mutation در probe ساخته نشد.
 
 وضعیت این لحظه: مسیر امن آماده و تست آفلاین موفق است؛ نتیجهٔ واقعی runner و دسترسی Railway هنوز باید ثبت شود. کد و پیام‌های ربات تغییر نکردند.
+
+
+## R63-ACCESS — نتیجهٔ اجرای واقعی شمارهٔ 1
+
+- commit اتصال: `9c1e03f9639a135cdfcb05266e2d1699d5775e09`؛ فقط روی `arena/01a0f47e-smc-scanner2` push شد.
+- run جدید همین شاخه: `36791073604`، job `110143850823`.
+- لینک: https://github.com/vahidlesani/smc-scanner2/actions/runs/36791073604
+- setupها موفق؛ step `resolve request` شکست خورد؛ annotation دقیق: `RAILWAY_TOKEN secret is missing`.
+- طبق شرط workflow، در این job نه `RAILWAY_TOKEN` و نه `RAILWAY_API_TOKEN` مقدار قابل استفاده داشتند. این مشکل اعتبارسنجی Token در Railway نیست؛ هنوز Token به مرحلهٔ اجرا نرسیده است.
+- نصب CLI و خود probe اجرا نشدند؛ tests-before-deploy و upload-backup نیز اجرا نشدند. هیچ عملیات Railway انجام نشد.
+- اعلام کاربر مبنی بر ذخیرهٔ Secret با مقدار دریافت‌شده توسط این job تطبیق نداشت؛ محل/دامنهٔ ذخیره باید بدون دریافت مقدار Secret روشن شود. علل احتمالی: Repository دیگری، Environment Secret بدون job environment، یا استفاده از Variables به‌جای Secrets.
+
+وضعیت جدید: مسیر انتقال درخواست به runner با موفقیت راه‌اندازی شد، اما دسترسی واقعی Railway همچنان در انتظار Secret قابل استفاده در job است. هیچ ادعای احراز هویت موفق یا بک‌آپ وجود ندارد.
+
+
+## R63-ACCESS — اصلاح دامنهٔ Secret بر اساس اسکرین‌شات‌های کاربر
+
+- کاربر مشخص کرد Secret در Environment ذخیره شده است. اسکرین‌شات، نام Environment گیت‌هاب را `RAILWAY_TOKEN` نشان داد و Secret نیز در بخش Environment secrets بود.
+- علت مرحلهٔ resolve request: job بدون انتخاب Environment اجرا می‌شد، بنابراین Environment Secret وارد context آن نبود.
+- متادیتای خواندنی Environment تأیید شد: نام `RAILWAY_TOKEN`؛ بدون protection rule و deployment branch restriction. هیچ تنظیم حفاظتی، Secret یا Variable تغییر/خوانده/حذف نشد.
+- job عملیاتی به `environment: RAILWAY_TOKEN` متصل شد. این انتخاب Scope گیت‌هاب است؛ نه تغییر Environment ریلی و نه deploy سرویس.
+- request همچنان `access` است؛ service خالی و nonce جدید صرفاً برای اجرای مجدد probe.
+- یک تست رگرسیون برای انتخاب Environment و استفاده از Secret به‌جای Variable اضافه شد.
+- تصاویر همچنین یک Environment Variable با value قابل نمایش دارند. نوع value بررسی یا بازنشر نشد؛ اگر credential باشد، صاحب حساب باید آن را از Variables خارج کرده و فقط در Secret نگهداری کند؛ در صورت افشای کامل، Token را rotate کند.
+- تصویر Railway اتصال production به `main` را نشان می‌دهد. هیچ تغییری روی main انجام نمی‌دهیم؛ شاخهٔ ثابت جلسه مستقل است. تصویر failure در workflow عمومی tests با probe اتصال متفاوت است و هنوز در این مرحله بررسی موتور انجام نشده است.
+
+وضعیت: اصلاح Scope آماده؛ نتیجهٔ اجرای مجدد هنوز باید از runner تأیید شود.
+
+اعتبارسنجی این اصلاح: 18 تست آفلاین اتصال همگی پاس شدند؛ YAML، Bash، JSON و whitespace validation نیز موفق بودند. هنوز نتیجهٔ زندهٔ احراز هویت ادعا نشده است.

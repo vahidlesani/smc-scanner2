@@ -18,6 +18,9 @@ concurrency: {group: railway-ops, cancel-in-progress: false}
 jobs:
   ops:
     runs-on: ubuntu-latest
+    # R63-ACCESS: the user stores Railway credentials in this GitHub Environment.
+    # This only selects the Secret scope; it does not deploy a Railway service.
+    environment: RAILWAY_TOKEN
     timeout-minutes: 25
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

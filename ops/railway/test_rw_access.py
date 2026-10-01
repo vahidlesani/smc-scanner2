@@ -207,6 +207,12 @@ class AccessProbeTests(unittest.TestCase):
         self.assertEqual(request["service"], "")
         self.assertEqual(set(request), {"action", "service", "nonce", "note"})
 
+    def test_workflow_selects_confirmed_secret_environment(self):
+        workflow = (HERE.parent.parent / ".github" / "workflows" / "railway-ops.yml").read_text()
+        self.assertRegex(workflow, r"(?m)^    environment: RAILWAY_TOKEN$")
+        self.assertIn("RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}", workflow)
+        self.assertNotIn("${{ vars.RAILWAY_TOKEN }}", workflow)
+
     def test_shell_access_does_not_fetch_variable_values(self):
         with tempfile.TemporaryDirectory() as directory:
             bin_path = Path(directory)

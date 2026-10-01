@@ -1,6 +1,6 @@
 {
   "action": "access",
   "service": "",
-  "nonce": 4,
-  "note": "R63-ACCESS / arena/01a0f47e-smc-scanner2: read-only access probe only; no deploy, backup, variables or launch commands."
+  "nonce": 5,
+  "note": "R63-ACCESS: read-only probe using the confirmed GitHub Environment RAILWAY_TOKEN; no deploy, backup or variable-value reads."
 }
