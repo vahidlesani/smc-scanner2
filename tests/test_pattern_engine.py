@@ -346,9 +346,21 @@ def test_head_shoulders_label_and_note():
         (0, 84.3), (45, 99.4), (52, 80.0), (70, 108.0), (88, 78.0),
         (105, 99.4), (118, 92.0), (132, 99.4), (139, 84.0)])
     events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
-    assert events and events[0]["pattern"] == "HEAD_SHOULDERS"
-    assert "گردن" in events[0].get("struct_note", "")
-    assert events[0]["touches"] >= 3
+    # R64 (label bug, SOL 09-14 «SHORT INVERSE_HEAD_SHOULDERS»): the edge
+    # still validates through the pierce (1-outlier fit, 3 touches) — but its
+    # own break is a LONG, and H&S is a bearish doctrine: a head above a
+    # broken shoulder line is a failed head, never an H&S label.
+    assert events and events[0]["touches"] >= 3
+    assert events[0]["direction"] == "LONG"
+    assert events[0]["pattern"] != "HEAD_SHOULDERS"
+    assert "گردن" not in (events[0].get("struct_note") or "")
+    from analysis.pattern_engine import _structural_refine
+    class _L:
+        slope = 0.0
+        points = tuple({"index": i} for i in (45, 105, 132))
+    lab, note = _structural_refine(pat, _L(), "upper", len(pat) - 1, 20.0,
+                                   "HORIZONTAL_SR", direction="SHORT")
+    assert lab == "HEAD_SHOULDERS" and "گردن" in note
 
 
 def test_triple_top_label():

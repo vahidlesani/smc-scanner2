@@ -84,15 +84,19 @@ def test_trend_fit_sites_opt_in():
 def test_cryptocove_lookbacks():
     # r52 — HIS dictation (09-28): 4h/8h→140-200, 12h/1d→170-250, 3d→250-350,
     # 1w→170-250 (mid-points shipped); r50 measured numbers are superseded.
-    src = open(os.path.join(REPO, "bot", "messages_v7.py"), encoding="utf-8").read()
-    assert '"4h": 170' in src and '"8h": 170' in src and '"12h": 210' in src
-    assert '"3d": 300' in src and '"1w": 210' in src and '"1d": 210' in src
+    # R64 — HIS 10-02 dictation supersedes r52: 250..350 candles per TF, spot
+    # AND perpetual, daily included — one map in analysis.candle_counts.
+    from analysis.candle_counts import CANDLE_COUNTS as C
+    assert (C["4h"], C["8h"], C["12h"], C["1d"], C["3d"], C["1w"]) == (300, 280, 260, 300, 300, 250)
 
 
 def test_spot_bundle_fetches_the_depths():
     src = open(os.path.join(REPO, "main.py"), encoding="utf-8").read()
-    part = src.split("r52 CryptoCove counts")[1].split("limits={")[1][:220]
-    assert '"3d": 300' in part and '"1w": 210' in part and '"4h": 200' in part
+    # R64: the spot bundle reads the ONE candle-count map (+40 warm-up)
+    assert src.count('fromlist=["fetch_limits"]).fetch_limits()') == 2
+    from analysis.candle_counts import fetch_limits
+    lim = fetch_limits()
+    assert lim["3d"] == 340 and lim["1w"] == 290 and lim["4h"] == 340
     src2 = open(os.path.join(REPO, "data", "fetcher.py"), encoding="utf-8").read()
     assert 'limits.get("4h", 200)' in src2
     assert 'limits.get("1w", 210)) * 7 + 7' in src2

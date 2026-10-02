@@ -47,12 +47,23 @@ def _list_to_frame(rows: list) -> pd.DataFrame:
     return frame[["timestamp", "open", "high", "low", "close", "volume"]]
 
 
+# R64 (Railway cost bug): a coin YOUNGER than the requested depth (listed
+# < ~4 years ago) can never reach ``need`` bars — the old store treated it as
+# «not deep yet» and re-ran the full PAGINATED download on EVERY scan (the
+# memory cache also demanded len ≥ need). A deep fetch that returned fewer
+# bars than asked has reached the listing date: the tape is COMPLETE and is
+# only tail-refreshed from then on.
+_COMPLETE: Dict[str, bool] = {}
+
+
 def _load(symbol: str) -> Optional[pd.DataFrame]:
     try:
         from database.bot_kv import get_json
         payload = get_json(_KV_PREFIX + symbol.upper())
         if not payload or not payload.get("rows"):
             return None
+        if payload.get("complete"):
+            _COMPLETE[symbol.upper()] = True
         return _list_to_frame(payload["rows"])
     except Exception:
         return None
@@ -65,9 +76,15 @@ def _save(symbol: str, frame: pd.DataFrame) -> None:
         set_json(_KV_PREFIX + symbol.upper(), {
             "saved_at": pd.Timestamp.utcnow().tz_localize(None).isoformat(),
             "rows": _row_to_list(frame),
+            "complete": bool(_COMPLETE.get(symbol.upper(), False)),
         })
     except Exception:
         pass
+
+
+def _deep_enough(symbol: str, frame: Optional[pd.DataFrame], need: int) -> bool:
+    return frame is not None and len(frame) > 0 and (
+        len(frame) >= need or bool(_COMPLETE.get(symbol.upper(), False)))
 
 
 def get_deep_daily(symbol: str, need: int) -> Optional[pd.DataFrame]:
@@ -78,19 +95,22 @@ def get_deep_daily(symbol: str, need: int) -> Optional[pd.DataFrame]:
     need = max(200, int(need or 200))
     import time as _t
     hit = _MEMORY.get(symbol)
-    if hit and _t.monotonic() - hit[0] < _MEMORY_TTL and len(hit[1]) >= need:
+    if hit and _t.monotonic() - hit[0] < _MEMORY_TTL and _deep_enough(symbol, hit[1], need):
         return hit[1].tail(need).reset_index(drop=True)
 
     frame = _load(symbol)
     fetched_full = False
-    if frame is None or len(frame) < need:
+    if not _deep_enough(symbol, frame, need):
         # ONE-TIME deep scan (paginated), plus headroom for future 1w growth.
         try:
             from data.fetcher import get_klines_paginated
-            frame = get_klines_paginated(symbol, "1d",
-                                         max(need + 220, 1500),
-                                         closed_only=True)
-            fetched_full = frame is not None and len(frame) > 0
+            _ask = max(need + 220, 1500)
+            _deep = get_klines_paginated(symbol, "1d", _ask, closed_only=True)
+            if _deep is not None and len(_deep) > 0:
+                frame = _deep
+                fetched_full = True
+                if len(_deep) < need:
+                    _COMPLETE[symbol] = True     # listing date reached
         except Exception:
             frame = frame  # keep whatever the kv had
     else:

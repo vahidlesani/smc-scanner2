@@ -27,9 +27,14 @@ sys.path.insert(0, ROOT)
 # ── 1. the dictated counts + hard cap ──────────────────────────────────────
 def test_dictated_candle_counts_are_law():
     src = open(os.path.join(ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()
-    for token in ('"4h": 170', '"8h": 170', '"12h": 210', '"1d": 210',
-                  '"3d": 300', '"1w": 210'):
-        assert token in src, token
+    # R64 (his 10-02 dictation «۲۵۰ تا ۳۵۰ کندل بسته به تایم‌فریم … هم اسپات
+    # هم پرپچوال، حتی روزانه») supersedes the r52 counts — the map lives in
+    # analysis.candle_counts and every TF sits inside 250..350.
+    from analysis.candle_counts import CANDLE_COUNTS
+    from bot.messages_v7 import _CHART_CANDLE_COUNTS
+    assert _CHART_CANDLE_COUNTS == CANDLE_COUNTS
+    for tf in ("4h", "8h", "12h", "1d", "3d", "1w", "1h", "2h", "30m", "15m"):
+        assert 250 <= CANDLE_COUNTS[tf] <= 350, tf
     # the r37 widen must be gone: no 2.2x window stretch may remain
     assert "int(_lookback * 2.2)" not in src
     assert "_need37" not in src
@@ -39,7 +44,7 @@ def test_window_is_a_hard_cap_in_render():
     src = open(os.path.join(ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()
     # r53: the map is the module-level single source of truth; the render
     # window is cut straight from it — no widen may sit in between.
-    assert '_CHART_CANDLE_COUNTS = {"1d": 210' in src
+    assert "_CHART_CANDLE_COUNTS = dict(_R64_CANDLE_COUNTS)" in src
     seg = src.split("_lookback = _CHART_CANDLE_COUNTS.get")[1].split("frame = _clean_render_frame")[0]
     assert "_need37" not in seg and "2.2" not in seg
     assert "frame = _clean_render_frame(df, window=_lookback)" in src

@@ -70,5 +70,7 @@ def test_chain_updates_capped_at_one():
 
 def test_daily_lookback_widened():
     src = _msg()
-    assert '"1d": 210' in src   # r52 dictation: 12h/1d → 170-250 (mid 210)
+    # R64 dictation (10-02): 250..350 per TF — the map is analysis.candle_counts
+    from analysis.candle_counts import CANDLE_COUNTS
+    assert CANDLE_COUNTS["1d"] == 300 and "_R64_CANDLE_COUNTS" in src
     assert '"1d": 96' not in src

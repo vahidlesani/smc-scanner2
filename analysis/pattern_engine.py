@@ -210,7 +210,10 @@ PATTERN_FA = {
 # fit windows per timeframe — pattern must be RECENT history, not the whole archive
 # R63 (audit W8): 30m/2h are structure TFs of the SWING 30m/2h lanes — they
 # had no entry and silently fell back to 140.
-_FIT_WINDOW = {"15m": 200, "30m": 200, "1h": 200, "2h": 120, "4h": 140, "1d": 110}
+# R64 CANDLE-COUNT LAW (his 10-02 «۲۵۰ تا ۳۵۰ کندل بسته به تایم‌فریم»): the
+# fit window IS the chart window — one map (analysis.candle_counts) for both.
+from analysis.candle_counts import CANDLE_COUNTS as _R64_COUNTS
+_FIT_WINDOW = {tf: int(_R64_COUNTS[tf]) for tf in ("15m", "30m", "1h", "2h", "4h", "1d")}
 
 _LOCK = threading.Lock()
 _LINE_CACHE: Dict[str, dict] = {}
@@ -516,7 +519,7 @@ def fit_edge_line(df: pd.DataFrame, side: str, cfg, n: int):
 
 
 def _structural_refine(df: pd.DataFrame, line, side: str, n: int,
-                       height: float, pattern: str):
+                       height: float, pattern: str, direction: str = ""):
     """Edwards & Magee special formations layered on a validated FLAT line:
     a swing that protrudes beyond the line between its first two touches is a
     HEAD (H&S); a flat 3+ touch edge with no head is a multiple top/bottom.
@@ -540,6 +543,16 @@ def _structural_refine(df: pd.DataFrame, line, side: str, n: int,
             ext = float(seg.min()) if len(seg) else shoulder
             protrude = shoulder - ext
         if len(seg) >= 3 and protrude >= 0.25 * height:
+            # R64 (label bug, SOL 09-14 «SHORT INVERSE_HEAD_SHOULDERS»): the
+            # head label is bearish for H&S and bullish for its inverse — it
+            # may only ride an event whose direction IS that doctrine. The
+            # edge's own break goes the other way (an upper-edge break is a
+            # LONG, a lower-edge break a SHORT): that is a failed head /
+            # spring, never an H&S — the geometric name stands.
+            _d64 = str(direction or "").upper()
+            if _d64 and ((side == "upper" and _d64 != "SHORT")
+                         or (side != "upper" and _d64 != "LONG")):
+                return pattern, ""
             if side == "upper":
                 return ("HEAD_SHOULDERS",
                         "سر و شانه: سر ≥۲۵٪ِ ارتفاع بالاتر از خطِ شانه‌ها — "
@@ -889,7 +902,8 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
             height = max(float(pattern_df["high"].iloc[max(0, n - 40):n + 1].max()) - line_now, 1.5 * atr_p)
         height = min(height, 45.0 * atr_p)
         # ── E&M special formations & flag-pennant overlay (labels only) ─────
-        pattern, struct_note = _structural_refine(pattern_df, line, side, n, height, pattern)
+        pattern, struct_note = _structural_refine(pattern_df, line, side, n, height, pattern,
+                                                  direction=str(direction or ""))
         _fp = _flagpole_strength(pattern_df, line, side, n, atr_p, height)
         if _fp is not None:
             pattern = "FLAG_BULL" if _fp > 0 else "FLAG_BEAR"
@@ -1908,7 +1922,10 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
                       float(candidate.entry_zone_top),
                       float(candidate.planned_entry or (candidate.entry_zone_bottom + candidate.entry_zone_top) / 2.0),
                       float(candidate.sl or 0), direction, float(atr_t or 0.0),
-                      str(getattr(candidate, "style", "") or "")):
+                      str(getattr(candidate, "style", "") or ""),
+                      # R64: a break lane — the zone is the line→live
+                      # corridor; floors capped by the trigger-TF ceiling
+                      line_price=float(line_now), trigger_tf=str(trigger_tf or "")):
             return None
     except Exception:
         pass
@@ -1921,7 +1938,11 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     # The r30 sane-zone guard is re-applied after the ladder so the stop
     # never lands inside the entry zone. Fail-open everywhere.
     try:
-        from config import SETTINGS as _S63
+        # R64 (found by the TC probe): ``config`` exposes get_settings(), not
+        # SETTINGS — the old import raised on EVERY build and the fail-open
+        # silently skipped his law-① risk ladder for every TC/ALBROX trade.
+        from config import get_settings as _gs63
+        _S63 = _gs63()
         if bool(getattr(_S63, "risk_ladder_enabled", True)) \
                 and not bool((candidate.metadata or {}).get("rejection_scalp")):
             from analysis.risk_ladder import ladder_stop as _ls63

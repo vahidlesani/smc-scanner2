@@ -1455,10 +1455,16 @@ def _active_detectors() -> List:
             detectors.extend(exp.PINWALL_QUALITY_DETECTORS)
         if getattr(SETTINGS, "pinv_enabled", True):
             detectors.extend(exp.PINVAL_DETECTORS)
-        if getattr(SETTINGS, "albrox_enabled", False):
-            detectors.extend(exp.ALBROX_DETECTORS)
+        # R64 (TC root cause #1, probe7 09-04..09-24: TC 0 vs 19/7/6/10 when
+        # run alone): ALBROX lane A rides the IDENTICAL TechnoClassic engine
+        # and stamps the shared TCMINT guard first — TECHCLASSIC then skipped
+        # silently on every pattern. TC registers BEFORE ALBROX now: the
+        # pattern break is published under its own setup, and ALBROX (lane A
+        # guard-silenced) falls through to its zone lane — no duplicates.
         if getattr(SETTINGS, "technoclassic_enabled", False):
             detectors.extend(exp.TECHCLASSIC_DETECTORS)
+        if getattr(SETTINGS, "albrox_enabled", False):
+            detectors.extend(exp.ALBROX_DETECTORS)
     except Exception as exc:  # pragma: no cover - defensive
         print(f"Experimental detectors unavailable: {exc}")
     return detectors

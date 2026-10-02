@@ -202,6 +202,15 @@ def _structural_weight(pat: dict) -> float:
         return 0.0
 
 
+def _spot_count(tf: str) -> int:
+    """R64: the dictated candle count of a spot TF (analysis.candle_counts)."""
+    try:
+        from analysis.candle_counts import candle_count
+        return candle_count(tf, 300)
+    except Exception:
+        return 300
+
+
 def _sane_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     """r57 (the WLD 3d blank chart): corrupt near-zero placeholder candles
     (OHLC ≈ 1e-9 with real volume) pass every >0 filter, draw invisible
@@ -256,6 +265,9 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
             continue
         try:
             d = _sane_ohlcv(df.reset_index(drop=True))
+            # R64 CANDLE-COUNT LAW: detect on EXACTLY the candles the chart
+            # shows (1d used to scan ~1,480 bars under a 210-bar picture).
+            d = d.tail(_spot_count(tf)).reset_index(drop=True)
             atr = _atr(d)
             if atr <= 0:
                 continue
@@ -554,6 +566,7 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
             continue
         try:
             d = _sane_ohlcv(df.reset_index(drop=True))
+            d = d.tail(_spot_count(tf)).reset_index(drop=True)   # R64: chart ≡ scan window
             atr = _atr(d)
             if atr <= 0 or not _fresh(d, tf):
                 continue

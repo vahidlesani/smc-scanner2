@@ -23,18 +23,38 @@ def test_profile_override_is_thread_local_W4():
 
 
 def test_2h_alone_fetches_the_15m_base_W8(monkeypatch):
+    # R64: 2h rides the DIRECT 1h tape now (250 two-hour candles cannot come
+    # from ≤1000 15m bars); the W8 guarantee — 2h alone is never None — stays.
     import data.fetcher as f
     calls = []
 
     def fake(symbol, interval, limit, closed_only=True, **kw):
         calls.append((interval, limit))
+        freq = {"15m": "15min", "1h": "1h"}.get(interval, "15min")
+        ts = pd.date_range("2026-09-01", periods=limit, freq=freq)
+        return pd.DataFrame({"timestamp": ts, "open": 1.0, "high": 1.0, "low": 1.0,
+                             "close": 1.0, "volume": 1.0})
+    monkeypatch.setattr(f, "get_klines", fake)
+    b = f.get_market_bundle("XUSDT", ("2h",))
+    assert b.get("2h") is not None and len(b.get("2h")) >= 250
+    assert calls and calls[0][0] == "1h" and calls[0][1] <= 1000
+
+
+def test_2h_falls_back_to_15m_when_no_1h_route_R64(monkeypatch):
+    import data.fetcher as f
+    calls = []
+
+    def fake(symbol, interval, limit, closed_only=True, **kw):
+        calls.append((interval, limit))
+        if interval == "1h":
+            return None
         ts = pd.date_range("2026-09-01", periods=limit, freq="15min")
         return pd.DataFrame({"timestamp": ts, "open": 1.0, "high": 1.0, "low": 1.0,
                              "close": 1.0, "volume": 1.0})
     monkeypatch.setattr(f, "get_klines", fake)
     b = f.get_market_bundle("XUSDT", ("2h",))
     assert b.get("2h") is not None and len(b.get("2h")) >= 100
-    assert calls and calls[0][0] == "15m" and calls[0][1] <= 1000
+    assert [c[0] for c in calls] == ["1h", "15m"]
 
 
 def test_fit_window_has_2h_30m_W8():

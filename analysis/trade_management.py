@@ -1020,7 +1020,8 @@ def advance_ladder(state: Dict, high: float, low: float) -> Dict:
 
 def sane_zone_geometry_ok(zone_lo: float, zone_hi: float, entry: float,
                           stop: float, direction: str, atr_trig: float,
-                          style: str = "") -> bool:
+                          style: str = "", line_price: Optional[float] = None,
+                          trigger_tf: str = "") -> bool:
     """r61.1 SANE-ZONE LAW (Viva 09-30, verbatim): «این چه ناحیه ای است که
     دنبال سیگناله؟؟» (a 4.7%-wide supply box hunting signals) + «احمقانه
     ترین ابطالی که دیدم — فاصلهٔ ناحیه و ابطال کمتر از ۱ سنت» (SUI pin:
@@ -1030,7 +1031,18 @@ def sane_zone_geometry_ok(zone_lo: float, zone_hi: float, entry: float,
          SCALP max(0.8×ATR, 0.25%) · DAYTRADE max(1.0×ATR, 0.4%) ·
          SWING/GRAND max(1.5×ATR, 0.8%).
     A setup whose whole structure is smaller than noise is a trap, not a
-    trade — skipped, never alerted. Fail-open on degenerate input."""
+    trade — skipped, never alerted. Fail-open on degenerate input.
+
+    R64 (TC root cause #3 — HTF break lanes died here: 3/23 1d structures
+    built vs 16/23 without the law):
+      * a BREAK lane passes ``line_price``: its zone is the corridor
+        broken-line→live, NOT a watch box hunting signals — law ① measures
+        the line's own band there (the corridor height is the chase distance
+        and is already bounded by the stop ceiling / risk ladder);
+      * law ②'s floor is capped at 0.9× the trigger TF's stop CEILING
+        (``MAX_STOP_PCT_BY_TF``) — 1.5×ATR1d > 8% made every GRAND setup on a
+        volatile coin (SUI ATR1d 7.3%) impossible by construction.
+    """
     try:
         zlo, zhi = sorted((float(zone_lo), float(zone_hi)))
         en = float(entry)
@@ -1038,11 +1050,24 @@ def sane_zone_geometry_ok(zone_lo: float, zone_hi: float, entry: float,
         a = float(atr_trig or 0.0)
         if en <= 0 or sl <= 0 or zhi <= zlo:
             return True
-        if (zhi - zlo) > max(2.5 * a, 0.015 * en):
+        _lp = None
+        try:
+            _lp = float(line_price) if line_price is not None else None
+        except Exception:
+            _lp = None
+        if _lp is not None and _lp > 0:
+            _h = min(zhi - zlo, 0.30 * a) if zlo - 0.5 * a <= _lp <= zhi + 0.5 * a else (zhi - zlo)
+        else:
+            _h = zhi - zlo
+        if _h > max(2.5 * a, 0.015 * en):
             return False
         _st = str(style or "").upper()
         mult, pct = {"SCALP": (0.8, 0.0025), "DAYTRADE": (1.0, 0.004),
                      "SWING": (1.5, 0.008), "GRAND": (1.5, 0.008)}.get(_st, (1.0, 0.004))
-        return abs(en - sl) >= max(mult * a, pct * en)
+        floor = max(mult * a, pct * en)
+        _cap = MAX_STOP_PCT_BY_TF.get(str(trigger_tf or "").lower())
+        if _cap:
+            floor = min(floor, 0.9 * float(_cap) / 100.0 * en)
+        return abs(en - sl) >= floor
     except Exception:
         return True

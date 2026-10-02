@@ -1107,7 +1107,8 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             from analysis.trade_management import sane_zone_geometry_ok as _szg61
             _a61 = float((df["high"] - df["low"]).tail(14).mean() or 0.0)
             if not _szg61(min(o, c), max(o, c), float(entry), float(sl),
-                          direction, _a61, str(style)):
+                          direction, _a61, str(style),
+                          trigger_tf=str(tf)):  # R64: floor ≤ 0.9× TF ceiling
                 continue
         except Exception:
             pass
@@ -1474,7 +1475,8 @@ def _albrox_zone_lane(bundle, style):
         # r61.1 SANE-ZONE LAW: no 4.7%-wide «zones», no stop glued to the box
         # («این چه ناحیه ای است که دنبال سیگناله؟؟» / «کمتر از ۱ سنت»).
         from analysis.trade_management import sane_zone_geometry_ok as _szg61
-        if not _szg61(zlo, zhi, entry, sl, direction, atr_t, str(style)):
+        if not _szg61(zlo, zhi, entry, sl, direction, atr_t, str(style),
+                      trigger_tf=str(trigger_tf)):  # R64: floor ≤ 0.9× TF ceiling
             continue
         risk = abs(entry - sl)
         if risk <= 0 or risk > 0.06 * entry:

@@ -808,9 +808,8 @@ def run_spot_scan() -> Dict[str, int]:
                 # r52 CryptoCove counts (his dictation 09-28): 4h/8h→170,
                 # 12h/1d→210, 3d→300, 1w→210 candles — the deep dailies come
                 # from the one-time history store, not per-scan downloads.
-                limits={"4h": 200, "8h": 200, "12h": 210,
-                        "1d": 210, "3d": 300, "1w": 210,
-                        "5m": 300, "15m": 200})
+                # R64 (his 10-02 «۲۵۰ تا ۳۵۰ کندل … هم اسپات»): the ONE map.
+                limits=__import__("analysis.candle_counts", fromlist=["fetch_limits"]).fetch_limits())
             bundles[symbol.upper()] = bundle
             for cand in spot_signals_for(symbol, bundle):
                 stats["found"] += 1
@@ -2201,9 +2200,7 @@ def _spot_urgent_recheck() -> int:
             try:
                 bundle = get_market_bundle(
                     symbol, _tfs58,
-                    limits={"4h": 200, "8h": 200, "12h": 210,
-                            "1d": 210, "3d": 300, "1w": 210,
-                            "5m": 300, "15m": 200})
+                    limits=__import__("analysis.candle_counts", fromlist=["fetch_limits"]).fetch_limits())
                 for cand in spot_signals_for(symbol, bundle):
                     key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"
                            f"{(cand.metadata or {}).get('pattern_type')}")

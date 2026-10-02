@@ -183,7 +183,8 @@ def test_setup_routing_map():
 def test_spot_chart_is_log_and_tohom_line_exists():
     src = open(os.path.join(REPO, "bot", "messages_v7.py"), encoding="utf-8").read()
     assert 'ax.set_yscale("log")' in src
-    assert '"3d": 300' in src and '"8h": 170' in src
+    from analysis.candle_counts import CANDLE_COUNTS      # R64 counts
+    assert CANDLE_COUNTS["3d"] == 300 and CANDLE_COUNTS["8h"] == 280
     assert "_tohom_line" in src
 
 

@@ -388,7 +388,7 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
             """Best-fitting validated line across lookback windows —
             returns (line, x-offset) WITHOUT mutating the frozen dataclass."""
             cands = []
-            for w in (90, 130, len(df)):
+            for w in (90, 130, 200, len(df)):
                 if w < 45:
                     continue
                 off = max(0, len(df) - w)
@@ -422,7 +422,11 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
             (different anchor OR clearly different slope) so both the old
             leg trend AND the fresh small pattern paint together."""
             found = []
-            for w in (len(df), 130, 90, 60):
+            # R64 smart zoom: the 300-candle chart is fitted at five «zoom
+            # levels» — the score (touches²·fit·√span·proximity) keeps the
+            # most valid line near price; a spike that only fits a small
+            # window cannot outrank a major that holds across the big one.
+            for w in (len(df), 200, 130, 90, 60):
                 if w < 45:
                     continue
                 off = max(0, len(df) - w)
@@ -771,14 +775,21 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
         float(getattr(candidate, "entry_zone_bottom", 0) or 0),
         float(getattr(candidate, "entry_zone_top", 0) or 0))
     _log_axis = _chart_will_be_log(candidate, trigger_df)
-    pats = detect_patterns(trigger_df.tail(170),
+    # R64 CANDLE-COUNT LAW: the render patterns are fitted on EXACTLY the
+    # candles the chart shows (analysis.candle_counts) — chart ≡ trade window.
+    try:
+        from analysis.candle_counts import candle_count as _cc64
+        _rw64 = _cc64(str(getattr(candidate, "trigger_timeframe", "") or ""), 300)
+    except Exception:
+        _rw64 = 300
+    pats = detect_patterns(trigger_df.tail(_rw64),
                            getattr(candidate, "direction", ""),
                            log_axis=_log_axis)
     md["render_patterns"] = pats
     # broken legs need a TIME for their break bar too: on a higher display TF
     # a bare bar index would land the break marker on the wrong candle.
     try:
-        _slice = trigger_df.tail(170).reset_index(drop=True)
+        _slice = trigger_df.tail(_rw64).reset_index(drop=True)
         _sts = [str(x) for x in _slice["timestamp"].tolist()] \
             if "timestamp" in _slice.columns else []
         if _sts:
@@ -805,7 +816,7 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
         # inside a BROADENING shape, which the first version of this list
         # missed). RANGE keeps its own horizontal band.
         _band = None
-        _win_len = len(trigger_df.tail(170))
+        _win_len = len(trigger_df.tail(_rw64))
         for _p in pats:
             _lns = _p.get("lines") or []
             if _p.get("type") == "RANGE" and _p.get("hi") and _p.get("lo"):
@@ -868,7 +879,7 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
     # Viva 09-18 (his CRV note): the higher-TF pattern must be ANNOUNCED on
     # the trigger chart — «وج باید در ۴ ساعته یا روزانه پیدا بشه و اعلام بشه».
     try:
-        _hp = detect_patterns(htf_df.tail(240),
+        _hp = detect_patterns(htf_df.tail(300),
                               getattr(candidate, "direction", ""),
                               log_axis=_chart_will_be_log(candidate, htf_df)) \
             if htf_df is not None and len(htf_df) >= 60 else []

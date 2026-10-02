@@ -56,6 +56,8 @@ def test_market_bundle_derives_multiples_and_keeps_5m_direct(monkeypatch):
             return _frame(300, "5min")
         if interval == "15m":
             return _frame(200, "15min")
+        if interval == "1h":            # R64: 1h/2h ride a direct 1h tape
+            return _frame(340, "1h")
         if interval == "4h":
             return _frame(170, "4h")
         if interval == "1d":
@@ -69,7 +71,7 @@ def test_market_bundle_derives_multiples_and_keeps_5m_direct(monkeypatch):
         limits={"4h": 170, "1d": 420, "3d": 120, "1w": 60, "5m": 300, "15m": 200},
     )
 
-    assert [tf for tf, _ in calls] == ["5m", "15m", "4h", "1d"]
+    assert [tf for tf, _ in calls] == ["5m", "15m", "1h", "4h", "1d"]
     assert len(bundle.get("5m")) == 300
     assert len(bundle.get("15m")) == 200
     assert len(bundle.get("4h")) == 170

@@ -437,6 +437,7 @@ def _derive_from_base(
     daily: Optional[pd.DataFrame],
     requested: tuple,
     limits: Dict[str, int],
+    base_1h: Optional[pd.DataFrame] = None,
 ) -> Dict[str, Optional[pd.DataFrame]]:
     """Derive exact multiples locally where this saves a venue request.
 
@@ -457,13 +458,23 @@ def _derive_from_base(
         elif tf == "1d":
             out[tf] = daily
         elif tf == "1h":
-            out[tf] = _resample_ohlcv(base_15m, "1h", 4)
+            # R64: the direct 1h tape (300+ bars) wins when fetched — a 15m
+            # base can only ever give 250 hourly candles in one venue call.
+            out[tf] = base_1h.tail(int(limits.get("1h", 340))).reset_index(drop=True) \
+                if base_1h is not None and len(base_1h) else \
+                _resample_ohlcv(base_15m, "1h", 4)
         elif tf == "30m":
             out[tf] = _resample_ohlcv(base_15m, "30min", 2)
         elif tf == "2h":
             # r48: the 2h trigger lane rides the SAME 15m base (8×15m) — no
             # extra venue request, honest OHLCV aggregation.
-            out[tf] = _resample_ohlcv(base_15m, "2h", 8)
+            # R64: with the direct 1h tape present, 2h = 2×1h (500 candles
+            # from one call instead of 125 from the 15m base).
+            _h2 = _resample_ohlcv(base_1h, "2h", 2) \
+                if base_1h is not None and len(base_1h) else None
+            out[tf] = _h2.tail(int(limits.get("2h", 290))).reset_index(drop=True) \
+                if _h2 is not None and len(_h2) else \
+                _resample_ohlcv(base_15m, "2h", 8)
         elif tf == "8h":
             out[tf] = _resample_ohlcv(base_4h, "8h", 2)
         elif tf == "12h":
@@ -496,13 +507,25 @@ def get_market_bundle(
     lineage links and unique IDs are untouched.
     """
     requested = tuple(dict.fromkeys(str(tf).lower() for tf in (timeframes or ())))
-    limits = limits or {}
+    limits = dict(limits or {})
+    # R64 CANDLE-COUNT LAW: unspecified depths default to the dictated map
+    # (+40 warm-up bars) — detection and chart both read analysis.candle_counts.
+    try:
+        from analysis.candle_counts import CANDLE_COUNTS as _CC64
+        for _tf64 in requested:
+            if _tf64 not in limits and _tf64 in _CC64:
+                limits[_tf64] = int(_CC64[_tf64]) + 40
+    except Exception:
+        pass
     # Fetch only the base tapes that the caller actually needs. In particular,
     # a spot-only 4h/8h/12h/1d/3d/1w scan must not pull unused 5m/15m data.
     need_5m = "5m" in requested
     # R63 (audit W8): 2h is resampled from the 15m base too — requesting it
     # alone used to return None (base never fetched).
-    need_15m = any(tf in requested for tf in ("15m", "30m", "1h", "2h"))
+    # R64: 1h/2h ride a DIRECT 1h tape (one call, cached until the next 1h
+    # close) — 300 hourly / 250 two-hour candles cannot come from ≤1000 15m.
+    need_1h = any(tf in requested for tf in ("1h", "2h"))
+    need_15m = any(tf in requested for tf in ("15m", "30m"))
     need_4h = any(tf in requested for tf in ("4h", "8h", "12h"))
     need_1d = any(tf in requested for tf in ("1d", "3d", "1w"))
 
@@ -515,14 +538,20 @@ def get_market_bundle(
     need_15m_bars = max(
         int(limits.get("15m", 200)),
         int(limits.get("30m", 200)) * 2 if "30m" in requested else 0,
-        int(limits.get("1h", 200)) * 4 if "1h" in requested else 0,
-        # R63 W8: the 2h structure lane needs ≥60 bars after the resample;
-        # 120×8 = 960 15m bars stays inside ONE venue call (≤1000).
-        int(limits.get("2h", 120)) * 8 if "2h" in requested else 0,
     )
     base_15m = get_klines(
         symbol, "15m", min(1000, max(200, need_15m_bars)), closed_only=True
     ) if need_15m else None
+    need_1h_bars = max(
+        int(limits.get("1h", 340)) if "1h" in requested else 0,
+        int(limits.get("2h", 290)) * 2 + 2 if "2h" in requested else 0,
+    )
+    base_1h = get_klines(
+        symbol, "1h", min(1000, max(200, need_1h_bars)), closed_only=True
+    ) if need_1h else None
+    if need_1h and (base_1h is None or not len(base_1h)) and base_15m is None:
+        # venue without a 1h route: fall back to the legacy 15m-derived path
+        base_15m = get_klines(symbol, "15m", 1000, closed_only=True)
 
     # Derived 8h/12h views must retain enough source 4h candles to preserve
     # the same structural lookback that a direct feed would have provided.
@@ -558,7 +587,8 @@ def get_market_bundle(
 
     # Direct fallbacks for unusual requested frames not covered by the local
     # resampler. They preserve backward compatibility without changing callers.
-    frames = _derive_from_base(base_15m, base_4h, daily, requested, limits)
+    frames = _derive_from_base(base_15m, base_4h, daily, requested, limits,
+                               base_1h=base_1h)
     for tf in requested:
         if frames.get(tf) is None and tf not in ("5m", "15m", "4h", "1d", "1h", "30m", "8h", "12h", "3d", "1w"):
             frames[tf] = get_klines(symbol, tf, int(limits.get(tf, 200)), closed_only=True)

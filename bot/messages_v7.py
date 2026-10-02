@@ -902,16 +902,19 @@ _TF_PATTERN_CACHE: Dict[Tuple[str, str, str], list] = {}
 # r52/r53 — HIS dictated CryptoCove candle counts, the single source of
 # truth for the render window AND every monitor/update chart fetch:
 # 4h/8h→140-200 (170), 12h/1d→170-250 (210), 3d→250-350 (300), 1w→170-250 (210).
-_CHART_CANDLE_COUNTS = {"1d": 210, "4h": 170, "2h": 132, "1h": 150, "8h": 170,
-                        "12h": 210, "30m": 160, "15m": 164, "5m": 164,
-                        "3d": 300, "1w": 210}
+# R64 (his 10-02 dictation «۲۵۰ تا ۳۵۰ کندل بسته به تایم‌فریم … هم اسپات هم
+# پرپچوال، حتی روزانه»): the map now lives in analysis.candle_counts — the
+# SAME numbers the engine fits on, so the chart shows exactly the candles the
+# trade geometry was built from.
+from analysis.candle_counts import CANDLE_COUNTS as _R64_CANDLE_COUNTS
+_CHART_CANDLE_COUNTS = dict(_R64_CANDLE_COUNTS)
 
 
 def _chart_fetch_size(tf: str) -> int:
     """Bars to FETCH so a chart of `tf` can actually render its dictated
     count (monitor/update paths used a blind 180 — 1w/3d spot chains then
     rendered a decade of needle candles instead of the CryptoCove density)."""
-    return int(_CHART_CANDLE_COUNTS.get(str(tf or "").lower(), 200))
+    return int(_CHART_CANDLE_COUNTS.get(str(tf or "").lower(), 300))
 
 
 def _log_axis_decorate(ax) -> None:
@@ -1075,7 +1078,7 @@ def _refit_viva_points(frame, side: str) -> list:
             _reset = _reset.rename(columns={_reset.columns[0]: "timestamp"})
         _cols = [c for c in ("timestamp", "open", "high", "low", "close",
                              "volume", "turnover") if c in _reset.columns]
-        _ln51 = _fvl(_reset[_cols].tail(170).reset_index(drop=True), side, _cfg51)
+        _ln51 = _fvl(_reset[_cols].tail(350).reset_index(drop=True), side, _cfg51)
         if _ln51 is None:
             return []
         # The draw path searchsorts point timestamps against frame.index —
@@ -1824,7 +1827,8 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
                     ov_lo: Optional[float] = None,
                     ov_hi: Optional[float] = None,
                     recent_lo: Optional[float] = None,
-                    recent_hi: Optional[float] = None) -> Optional[tuple]:
+                    recent_hi: Optional[float] = None,
+                    log_space: bool = False) -> Optional[tuple]:
     """r37 SMART price zoom — «کندلها تا حد امکان در مرکز صفحه چارت قرار
     بگیرند … ابزار نصفه نیمه رسم میشه».
 
@@ -1869,7 +1873,9 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
     r_hi = max(r_hi, r_lo)
     r_mid = 0.5 * (r_lo + r_hi)
     r_span = max(r_hi - r_lo, 1e-12)
-    base = max(r_span / 0.60, 4.0 * _a, 0.025 * mid, 0.35 * span)
+    # R64: in log10 space the 2.5%-of-price floor is the constant log10(1.025)
+    _pct_floor = math.log10(1.025) if log_space else 0.025 * mid
+    base = max(r_span / 0.60, 4.0 * _a, _pct_floor, 0.35 * span)
     ylo, yhi = r_mid - 0.5 * base, r_mid + 0.5 * base
     # r37: overlays included IN FULL — the half-drawn tool is a bug, not style
     if ov_hi is not None and math.isfinite(float(ov_hi)) and float(ov_hi) > yhi:
@@ -2089,7 +2095,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # RETIRED — deep stored anchors older than the window are handled by
         # the r51 per-TF re-fit, and «نقطهٔ شروع زوم» must always show the
         # CryptoCove density, never a month of needle candles.
-        _lookback = _CHART_CANDLE_COUNTS.get(_chart_tf, 164)
+        _lookback = _CHART_CANDLE_COUNTS.get(_chart_tf, 300)
         # r37 (Viva 09-26, «ترندهای ماژور و مینور مهم اصلا دیده نمیشن و رسم
         # نمیشن»): the r33 identity pins a chain's geometry forever, but the
         # render window is re-cut per render — when the fetch returns fewer
@@ -3883,11 +3889,36 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     pass
             _ovs28 = [v for v in _ovs28 if v is not None and math.isfinite(v) and v > 0]
             _atr28 = float((frame["high"] - frame["low"]).tail(14).mean())
-            _win28 = _smart_y_window(
-                float(frame["low"].min()), float(frame["high"].max()), _atr28,
-                min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None,
-                recent_lo=float(frame["low"].tail(40).min()),
-                recent_hi=float(frame["high"].tail(40).max()))
+            _win28 = None
+            # ── R64 SMART LOG ZOOM (his 10-02: «چارت‌ها تا حد امکان لگاریتمی …
+            # اسپایک → محور جمع شه، کندل‌های فلت → محور باز شه»): on a LOG axis
+            # the window is solved in log10 space — centering/padding become
+            # PERCENT-honest (a 2× tape no longer crams its low half), and the
+            # candle unit is the window's MEDIAN log-height, so one liquidation
+            # spike cannot shrink every candle and a flat tape is opened up
+            # instead of drawn as a flat line. Candles are never cut (r40).
+            try:
+                if str(ax.get_yscale()) == "log":
+                    _lh64 = np.log10(frame["high"].astype(float).clip(lower=1e-12).to_numpy())
+                    _ll64 = np.log10(frame["low"].astype(float).clip(lower=1e-12).to_numpy())
+                    _u64 = float(np.median(_lh64 - _ll64)) * 1.35
+                    _ovl64 = [math.log10(v) for v in _ovs28]
+                    _w64 = _smart_y_window(
+                        float(_ll64.min()), float(_lh64.max()), _u64,
+                        min(_ovl64) if _ovl64 else None, max(_ovl64) if _ovl64 else None,
+                        recent_lo=float(_ll64[-40:].min()),
+                        recent_hi=float(_lh64[-40:].max()),
+                        log_space=True)
+                    if _w64:
+                        _win28 = (10.0 ** _w64[0], 10.0 ** _w64[1])
+            except Exception:
+                _win28 = None
+            if _win28 is None:
+                _win28 = _smart_y_window(
+                    float(frame["low"].min()), float(frame["high"].max()), _atr28,
+                    min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None,
+                    recent_lo=float(frame["low"].tail(40).min()),
+                    recent_hi=float(frame["high"].tail(40).max()))
             if _win28:
                 ax.set_ylim(*_win28)
                 if confirmed:
