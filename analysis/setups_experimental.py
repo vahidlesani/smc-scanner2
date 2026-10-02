@@ -831,7 +831,7 @@ SETUP_NAMES_FA["PINVAL"] = "پین‌بار معتبر در ناحیه مهم"
 # r48 (Viva 09-27): the SWING pin lane scans the same four trigger TFs the
 # other futures setups use (30m/1h/2h/4h) — one engine, four lanes.
 PINVAL_TF_BY_STYLE = {"SWING": ("30m", "1h", "2h", "4h"),
-                      "DAYTRADE": ("30m",), "SCALP": ("5m",)}
+                      "DAYTRADE": ("15m", "30m"), "SCALP": ("5m",)}
 
 
 def _unmitigated_fvg_edge(df, direction: str, atr_v: float, lookback: int = 60):
@@ -974,9 +974,20 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             continue
         upper = h - max(o, c)
         lower = min(o, c) - l
-        is_bull = lower >= getattr(settings, "pinv_min_wick_body", 2.0) * body and body <= getattr(settings, "pinv_max_body_frac", 0.35) * rng and c >= l + rng * 0.5
-        is_bear = upper >= getattr(settings, "pinv_min_wick_body", 2.0) * body and body <= getattr(settings, "pinv_max_body_frac", 0.35) * rng and c <= h - rng * 0.5
-        if not (is_bull or is_bear):
+        # R66 ASYMMETRY LAW (Viva 10-03: «پینوال خیلی وقتها برعکس تایید پوزیشن
+        # میکنه … یه جا باید لانگ بده برعکس شورت میده»): a true pinbar is
+        # fundamentally asymmetric — the rejecting wick MUST substantially dominate
+        # the nose wick (at least 1.6x). A candle with two long wicks is an
+        # indecision doji/spinning-top, not a directional pinbar.
+        is_bull = (lower >= getattr(settings, "pinv_min_wick_body", 2.0) * body
+                   and lower >= 1.6 * max(upper, 1e-9)
+                   and body <= getattr(settings, "pinv_max_body_frac", 0.35) * rng
+                   and c >= l + rng * 0.45)
+        is_bear = (upper >= getattr(settings, "pinv_min_wick_body", 2.0) * body
+                   and upper >= 1.6 * max(lower, 1e-9)
+                   and body <= getattr(settings, "pinv_max_body_frac", 0.35) * rng
+                   and c <= h - rng * 0.45)
+        if not (is_bull or is_bear) or (is_bull and is_bear):
             continue
         direction = "LONG" if is_bull else "SHORT"
         probe = l if is_bull else h

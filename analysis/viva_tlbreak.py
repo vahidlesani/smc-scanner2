@@ -245,11 +245,14 @@ def fit_validated_line(
     # SCREEN-straight (matplotlib transforms path vertices only), and this
     # log-fit line's endpoints are exactly those vertices — so the drawn
     # trendline is straight on the CryptoCove log chart with no extra work.
+    # R16 phase 3: is this window drawn on a log axis?
+    # R66: log_fit_min_span defaults to 0.0 (or env) for universal log fitting,
+    # while preserving cfg.log_fit_min_span=99.0 kill switch/opt-out.
     use_log = False
     try:
         _lo = float(df["low"].min())
         _hi = float(df["high"].max())
-        if _lo > 0 and (_hi - _lo) / _lo > float(cfg.log_fit_min_span or 0.0):
+        if _lo > 0 and (_hi - _lo) / _lo >= float(cfg.log_fit_min_span or 0.0):
             use_log = True
     except Exception:
         use_log = False

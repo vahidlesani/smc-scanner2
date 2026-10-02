@@ -4237,15 +4237,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # r47/r48 (Viva 09-27, «حتما که لگاریتمی» + «لگاریتمی از جایی فعال
         # میشه که نیاز باشه — در تایم کوتاه که فرق نداره»): SPOT tapes always
         # render LOG; FUTURES switch to LOG only when the rendered window's
-        # price span exceeds 30% — the point where a linear axis starts
-        # crushing the early candles (the squashed-ladder effect he flagged).
+        # R66 (Viva 10-03, verbatim: «حتما باید مشکلات ترندلاینها و الگوها در
+        # همه چارتها تایم فریم ها با سیستم لگاریتمی حل بشه»): ALWAYS logarithmic
+        # across ALL charts, setups, and timeframes.
         try:
             _lo48 = float(frame["low"].min())
             _hi48 = float(frame["high"].max())
-            _span48 = (_hi48 / _lo48) if _lo48 > 0 else 0.0
         except Exception:
-            _span48 = 0.0
-        if _is_spot or _span48 >= 1.30:
+            _lo48, _hi48 = 0.0, 0.0
+        if _lo48 > 0 and _hi48 > _lo48:
             try:
                 ax.set_yscale("log")
                 # r51 PRICE-AXIS LAW + r52 locator: full plain kit in one shot.
@@ -6954,14 +6954,31 @@ def send_ladder_event(event: dict) -> bool:
             f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>"
         )
     _view_note = ""
+    chart = None
     try:
-        candidate = _event_chart_candidate(event)
-        ladder = (candidate.metadata or {}).get("target_ladder") or {}
-        frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, *(ladder.get("targets") or []), (candidate.metadata or {}).get("current_trailing_sl", 0)])
-        chart = generate_chart(frame, candidate, confirmed=True) if frame is not None else None
-        # Viva 09-20 (verbatim): TP charts may show the move on a higher TF
-        # and explain it in one or two lines. Tool never slides.
-        _view_note = str((candidate.metadata or {}).get("chart_view_note") or "")
+        # R66 RAILWAY DIET (Viva 10-03, verbatim: «خیلی از پیامها رو گفتیم در
+        # یک پیام بیاد … مثلا گفتیم آخرین هیت شدن تی پی فرقی نمیکنه تی پی یک باشه
+        # یا ۳ .. با نتیجه نهایی در یک پیام و یک چارت بیاد … گفتیم استاپ و نتیجه
+        # نهایی هم در یک پیام بیاد»):
+        # Intermediate TPs (e.g. TP1 when TP2/TP3 remain) send clean text updates
+        # without burning Railway CPU on heavy matplotlib renders; the final TP /
+        # exit event carries the full chart.
+        _targets = (event.get("targets") or [])
+        _hit_idx = int(event.get("hit_index") or 0)
+        _is_final = bool(
+            not kind.startswith("TP")
+            or (_targets and _hit_idx >= len(_targets))
+            or kind in {"TP3", "TP4", "TP5"}
+            or os.getenv("R66_INTERMEDIATE_TP_CHARTS", "0") == "1"
+        )
+        if _is_final:
+            candidate = _event_chart_candidate(event)
+            ladder = (candidate.metadata or {}).get("target_ladder") or {}
+            frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, *(ladder.get("targets") or []), (candidate.metadata or {}).get("current_trailing_sl", 0)])
+            chart = generate_chart(frame, candidate, confirmed=True) if frame is not None else None
+            # Viva 09-20 (verbatim): TP charts may show the move on a higher TF
+            # and explain it in one or two lines. Tool never slides.
+            _view_note = str((candidate.metadata or {}).get("chart_view_note") or "")
     except Exception as exc:
         print(f"Live target chart warning {event.get('signal_id')}: {exc}")
         chart = None

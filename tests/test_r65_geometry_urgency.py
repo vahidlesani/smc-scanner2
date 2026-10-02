@@ -122,9 +122,10 @@ def test_tc_gate_blocks_a_chase_and_keeps_a_fresh_break():
 
 # ── 3. spot urgency ─────────────────────────────────────────────────────────
 def test_spot_confirm_ladder_is_one_step_below():
-    from analysis.spot_engine import spot_confirm_tf
+    from analysis.spot_engine import spot_confirm_tf, spot_tohom_tf
     assert spot_confirm_tf("4h") == "1h"
-    assert spot_confirm_tf("8h") == "1h"
+    assert spot_confirm_tf("8h") == "4h"  # R66 (Viva ruling): 8h confirms on 4h
+    assert spot_tohom_tf("8h") == "1h"    # and TOHOM reads 1h (one step below 4h)
     assert spot_confirm_tf("12h") == "4h"
     assert spot_confirm_tf("1d") == "4h"
     assert spot_confirm_tf("3d") == "1d"
@@ -620,3 +621,47 @@ def test_spot_chart_never_refits_its_snapshot():
     src = io.open(os.path.join(ROOT, "bot", "messages_v7.py"),
                   encoding="utf-8").read()
     assert 'os.getenv("R65_SPOT_CHART_REFIT", "0")' in src
+
+
+# ── 13. R66 standardized ladders & TOHOM ────────────────────────────────────
+def test_r66_ladders_standardized():
+    """Viva 10-03: Every timeframe confirms on the TF one step below, and
+    TOHOM reads one step below that.
+    Spot 8h -> confirm 4h -> TOHOM 1h.
+    Futures 2h -> confirm 30m -> TOHOM 15m.
+    DAYTRADE PINVAL includes 15m trigger."""
+    from analysis.spot_engine import spot_confirm_tf, spot_tohom_tf
+    from analysis.confirm_r62 import tohom_sub_tf
+    from analysis.setups_experimental import PINVAL_TF_BY_STYLE
+    assert spot_confirm_tf("8h") == "4h"
+    assert spot_tohom_tf("8h") == "1h"
+    assert tohom_sub_tf("2h") == "15m"
+    assert "15m" in PINVAL_TF_BY_STYLE["DAYTRADE"]
+
+
+# ── 14. R66 PINVAL strict asymmetry law (no reverse confirmation) ───────────
+def test_r66_pinval_strict_asymmetry():
+    """Viva 10-03: «پینوال خیلی وقتها برعکس تایید پوزیشن میکنه … یه جا باید
+    لانگ بده برعکس شورت میده». A shooting star (upper wick > lower wick) must
+    NEVER be classified as LONG."""
+    from data.fetcher import MarketBundle
+    from analysis.setups_experimental import detect_pinbar_zone
+    import pandas as pd
+    import numpy as np
+
+    n = 60
+    ts = pd.date_range("2026-10-01", periods=n, freq="15min")
+    px = np.linspace(100.0, 105.0, n)
+    d = pd.DataFrame({"timestamp": ts, "open": px, "high": px + 0.5,
+                      "low": px - 0.5, "close": px, "volume": np.full(n, 100.0)})
+    # Shooting star at the top: open 105.0, close 105.1, high 108.0 (huge upper wick),
+    # low 104.9 (tiny lower wick)
+    d.iloc[-1, d.columns.get_loc("open")] = 105.0
+    d.iloc[-1, d.columns.get_loc("close")] = 105.1
+    d.iloc[-1, d.columns.get_loc("high")] = 108.0
+    d.iloc[-1, d.columns.get_loc("low")] = 104.9
+    bundle = MarketBundle(symbol="TESTUSDT", frames={"15m": d, "1h": d, "4h": d})
+    cand = detect_pinbar_zone(bundle, "DAYTRADE")
+    if cand is not None:
+        assert cand.direction != "LONG", "shooting star must never be classified as LONG"
+

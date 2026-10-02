@@ -104,6 +104,11 @@ def _upper_edge(pattern: dict, n: int) -> Optional[float]:
 def bullish_pattern_ok(pattern: dict, close: float, upper: Optional[float]) -> bool:
     """LONG-only filter: the shape must lean bullish, or be neutral and already
     broken to the upside (his «شکست صعودی = تأیید»)."""
+    kind = str(pattern.get("type") or "NONE").upper()
+    # CryptoCove Law (Viva 10-03): Breaking ABOVE a descending channel or
+    # falling wedge is the classic bullish reversal breakout.
+    if kind in ("CHANNEL_DESCENDING", "WEDGE_FALLING", "FALLING_WEDGE") and upper is not None:
+        return close > float(upper)
     bias = str(pattern.get("bias") or "NEUTRAL").upper()
     if bias == "BULL":
         return True
@@ -416,7 +421,7 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
 # ONE step below every spot timeframe — the frame whose close is allowed to
 # confirm the break without waiting for the pattern TF's own close:
 #   4h←1h · 8h←1h · 12h←4h · 1d←4h · 3d←1d · 1w←1d
-SPOT_CONFIRM_TF = {"4h": "1h", "8h": "1h", "12h": "4h", "1d": "4h",
+SPOT_CONFIRM_TF = {"4h": "1h", "8h": "4h", "12h": "4h", "1d": "4h",
                    "3d": "1d", "1w": "1d"}
 
 
