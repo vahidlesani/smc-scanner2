@@ -1,0 +1,1547 @@
+From 00e4c3879b401d206eb608ba4bb276459156d1bf Mon Sep 17 00:00:00 2001
+From: Arena Agent <agent@arena.ai>
+Date: Fri, 2 Oct 2026 02:28:14 +0000
+Subject: [PATCH] R64: TC-before-ALBROX, sane-zone break corridor + TF-capped
+ floor, H&S label direction, smart log/robust trendline geometry, one 250-350
+ candle map (engine=chart=spot), log-space chart zoom, risk-ladder settings
+ import fix, deep-history young-coin cost fix
+
+Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
+---
+ WORKLOG.md                                  |  53 +++++
+ analysis/candle_counts.py                   |  35 +++
+ analysis/pattern_engine.py                  |  31 ++-
+ analysis/render_kit.py                      |  23 +-
+ analysis/setups_experimental.py             |   6 +-
+ analysis/setups_v7.py                       |  10 +-
+ analysis/spot_engine.py                     |  13 ++
+ analysis/trade_management.py                |  33 ++-
+ analysis/viva_tlbreak.py                    | 185 ++++++++++++++--
+ bot/messages_v7.py                          |  57 +++--
+ data/fetcher.py                             |  48 ++++-
+ data/history_store.py                       |  32 ++-
+ handoff/HANDOFF.md                          |  52 +++++
+ handoff/VIVA_LAWS.md                        |  52 +++++
+ main.py                                     |   9 +-
+ tests/test_pattern_engine.py                |  18 +-
+ tests/test_r63_wiring.py                    |  22 +-
+ tests/test_r64_smart_geometry.py            | 226 ++++++++++++++++++++
+ tests/test_round30_mtf_spot_architecture.py |   4 +-
+ tests/test_round46_stability.py             |   4 +-
+ tests/test_round47_tohom.py                 |   3 +-
+ tests/test_round50_wick_and_cove.py         |  14 +-
+ tests/test_round52_dictation.py             |  13 +-
+ tests/test_round53_announce_and_phantom.py  |   9 +-
+ 24 files changed, 863 insertions(+), 89 deletions(-)
+ create mode 100644 analysis/candle_counts.py
+ create mode 100644 tests/test_r64_smart_geometry.py
+
+diff --git a/WORKLOG.md b/WORKLOG.md
+index 23c9005..dc88958 100644
+--- a/WORKLOG.md
+@@ -5,6 +5,59 @@
+ 
+ ---
+ 
++## 🟩 R64-ARENA — شروع تغییرات راند چهارم از اینجا (2026-10-02)
++کد با برچسب `R64` علامت خورده است. پایه: `origin/main` = `0384a51`. سشن Arena بسته است، پس تحویل به‌صورت پچ است: `patches/R64-smart-geometry.patch`.
++
++1. **ریشهٔ ۱ خاموشیِ TC: ALBROX جلوی TECHCLASSIC را می‌گرفت** (`analysis/setups_v7.py:_active_detectors`).
++   - لِین A در ALBROX همان موتور TC را اجرا می‌کند، زودتر اجرا می‌شد و گاردِ مشترکِ `TCMINT` را مهر می‌زد. در نتیجه TECHCLASSIC بی‌صدا رد می‌شد.
++   - حالا TC قبل از ALBROX ثبت می‌شود. ALBROX که لِین A آن با گارد ساکت شده، به لِین زون می‌رود و سیگنال تکراری ساخته نمی‌شود.
++   - پروب ۰۹-۰۴ تا ۰۹-۲۴ (DB تازه، گام ۲ ساعته): TC در کنار ALBROX برای ETH/SUI/BTC/SOL به‌ترتیب ۱۰/۴/۶/۸ است، دقیقاً برابر اجرای TC به‌تنهایی. ALBROX_pattern = ۰ (قبل از R64، TC = ۰ بود).
++2. **قانون ناحیهٔ عاقلانه برای لِین‌های شکست** (`trade_management.sane_zone_geometry_ok`):
++   - لِین شکست حالا `line_price` را پاس می‌دهد. زونِ آن کریدورِ «خط شکسته ← قیمت لایو» است، نه باکسی که دنبال سیگنال می‌گردد. برای همین قانون ① روی باندِ خودِ خط سنجیده می‌شود.
++   - کفِ ریسک در قانون ② حداکثر ۰٫۹ برابرِ سقفِ استاپِ همان TF است (`MAX_STOP_PCT_BY_TF`). قبلاً ۱٫۵×ATR1d > ۸٪ هر GRAND روی کوین پرنوسان را غیرممکن می‌کرد.
++   - لِین‌های پین و زون قانون ① را عیناً نگه می‌دارند. فقط کفِ آن‌ها هم به سقف TF محدود شده است.
++3. **باگ برچسب H&S** (`pattern_engine._structural_refine`):
++   - برچسب سر و شانه (نزولی) و سر و شانهٔ معکوس (صعودی) فقط روی رویدادی می‌نشیند که جهتش با همان دکترین یکی باشد.
++   - شکستِ لبهٔ خودِ خط (لبهٔ بالا = LONG، لبهٔ پایین = SHORT) «سرِ شکست‌خورده» است. نام هندسی‌اش می‌ماند.
++4. **هندسهٔ هوشمند (زوم موتور)** (`viva_tlbreak.fit_validated_line`):
++   - خط‌کشِ لمس و residual دیگر میانگینِ رِنجِ ۱۴ کندل آخر به قیمت خطی نیست. حالا میانهٔ ارتفاع کندل‌های کل پنجره (×۲٫۰) است، و وقتی فیت لگاریتمی است، در فضای log10 سنجیده می‌شود.
++   - اثر: اسپایک خط‌کش را باد نمی‌کند، کندل‌های فلت دقتِ کاذب نمی‌سازند، و دو سرِ یک نوار ۲ برابری با یک معیار سنجیده می‌شوند.
++   - وزن‌ها فقط امتیاز می‌دهند و گیت نیستند:
++     - اندازهٔ سوینگِ پیوت‌های لمس‌شده (ماژورها برنده‌اند).
++     - پاداشِ «اکستریمِ لگ» از نیمهٔ اخیرِ پنجره می‌آید، نه از ۱۰ پیوت آخر (یک سقف محلی دیگر این پاداش را نمی‌گیرد).
++     - طول جفتِ تعریف‌کننده حداقل ۱۰٪ پنجره است.
++   - رندر روی ۵ سطح زوم فیت می‌شود (کل پنجره، ۲۰۰، ۱۳۰، ۹۰، ۶۰).
++   - کلید برگشت: `TLBREAK_R64_GEOMETRY=0`.
++   - کالیبراسیون (ضریب ۲٫۰) روی دو آزمون انجام شد:
++
++     **ریپلی TC** (۰۹-۰۴ تا ۰۹-۲۴، ۴ نماد، اولین ظهور هر الگو، TP1 در برابر استاپ ظرف ۷۲ ساعت):
++
++     | پیکربندی | تعداد ستاپ | TP1 | استاپ |
++     |---|---|---|---|
++     | قدیم (خط‌کش قدیم + پنجره‌های ۱۱۰ تا ۲۰۰) | ۳۳ | ۱۹ | ۱۱ |
++     | R64 (ضریب ۲٫۰ + ۳۰۰ کندل) | ۲۸ | ۱۹ | ۴ |
++
++     **مطالعهٔ شکست خط زنده در 15m** (برد = +۳ATR قبل از −۱٫۵ATR):
++
++     | پیکربندی | تعداد رویداد | نرخ برد |
++     |---|---|---|
++     | قدیم، پنجرهٔ ۲۰۰ | ۳۰۷ | ۰٫۳۷ |
++     | R64، پنجرهٔ ۳۰۰ | ۲۸۹ | ۰٫۴۰ |
++
++     در داده‌های 5m (آزمون با ضریب اولیهٔ ۱٫۳۵) نتیجه خنثی بود.
++5. **قانون تعداد کندل** (`analysis/candle_counts.py`، یک منبع واحد):
++   - تعدادها: 15m/30m/1h/4h/1d/3d = ۳۰۰، 2h = ۲۵۰، 8h = ۲۸۰، 12h = ۲۶۰، 1w = ۲۵۰.
++   - هر جا از همین نقشه می‌خواند: موتور TC (`_FIT_WINDOW`)، پنجرهٔ چارت (`_CHART_CANDLE_COUNTS`)، `enrich_render`، اسکن اسپات (قبلاً اسپات روی کل نوار، مثلاً ۱٬۴۸۰ کندل روزانه، اسکن می‌کرد) و عمق پیش‌فرضِ باندل.
++   - 1h و 2h حالا از نوارِ مستقیمِ 1h می‌آیند (یک کال با کش تا کلوزِ بعدی). از 15m نمی‌شد بیش از ۲۵۰ کندل 1h و ۱۲۵ کندل 2h ساخت. اگر روت 1h نباشد، به مسیر قدیمیِ 15m برمی‌گردد.
++6. **زوم لگاریتمی چارت** (`messages_v7._smart_y_window(log_space=True)`):
++   - روی محور log، پنجره در فضای log10 حل می‌شود و واحد کندل میانهٔ ارتفاعِ log است. اسپایک کندل‌ها را کوچک نمی‌کند و نوار فلت باز می‌شود.
++   - کندل‌ها هرگز بریده نمی‌شوند (قانون r40).
++7. **دو باگ که در حین کار پیدا شد:**
++   - **نردبان ریسک r63 هرگز اجرا نمی‌شد:** `from config import SETTINGS` (این نماد در config وجود ندارد) در هر بیلدِ TC/ALBROX خطا می‌داد و چون fail-open بود، بی‌صدا رد می‌شد. حالا از `get_settings()` استفاده می‌شود.
++   - **هزینهٔ Railway:** کوینی که از عمقِ درخواستی جوان‌تر است، در هر اسکن دوباره دانلودِ صفحه‌بندی‌شدهٔ کامل می‌شد. حالا وقتی دانلود عمیق کمتر از مقدار خواسته‌شده برگرداند، تاریخچه «کامل» علامت می‌خورد و از آن به بعد فقط tail-refresh می‌شود.
++8. **پیام‌ها، قالب‌ها، زنجیرهٔ لینک‌ها و کدهای یکتا: بدون هیچ تغییری.**
++
++
+ ## 🟩 R63-ARENA — شروع تغییرات راند سوم از اینجا (2026-10-01)
+ کد با برچسب `R63` علامت خورده است. شاخه `arena/01a0d606-smc-scanner2` (PR #5).
+ 
+diff --git a/analysis/candle_counts.py b/analysis/candle_counts.py
+new file mode 100644
+index 0000000..b3430cf
+--- /dev/null
+@@ -0,0 +1,35 @@
++"""R64 CANDLE-COUNT LAW — the ONE map of how many candles every timeframe
++carries, for detection AND for the chart (chart ≡ trade geometry).
++
++Viva 10-02 (verbatim): «فکر کنم ۲۵۰ تا ۳۵۰ کندل بسته به تایم‌فریم‌ها مناسب
++باشه برای پیوت‌های بیشتر در تایم‌های بالاتر — مثل نمونه‌های کریپتوکاو؛ هم برای
++اسپات هم پرپچوال، حتی روزانه».
++
++Before R64 the engine fitted on 110-200 bars (1d 110, 4h 140, 2h 120) while
++the chart showed 132-300, and spot scanned the WHOLE fetched tape (1d ≈ 1,480
++bars) under a 210-bar picture — three different windows for one geometry.
++Every consumer now reads this map:
++  * analysis.pattern_engine._FIT_WINDOW   (TechnoClassic / ALBROX lane A)
++  * bot.messages_v7._CHART_CANDLE_COUNTS  (render window + monitor fetches)
++  * analysis.render_kit.enrich_render     (render patterns of the trigger TF)
++  * analysis.spot_engine                  (spot detection window)
++  * data.fetcher.get_market_bundle         (default fetch depth)
++"""
++from __future__ import annotations
++
++CANDLE_COUNTS = {
++    "5m": 300, "15m": 300, "30m": 300, "1h": 300, "2h": 250,
++    "4h": 300, "8h": 280, "12h": 260, "1d": 300, "3d": 300, "1w": 250,
++}
++
++
++def candle_count(tf: str, default: int = 300) -> int:
++    """Dictated candle count for ``tf`` (case-insensitive)."""
++    return int(CANDLE_COUNTS.get(str(tf or "").strip().lower(), default))
++
++
++def fetch_limits(timeframes=None, pad: int = 40) -> dict:
++    """Fetch depth per TF = dictated count + warm-up pad (bundle ``limits``)."""
++    tfs = list(timeframes) if timeframes else list(CANDLE_COUNTS)
++    return {str(tf).lower(): candle_count(tf) + int(pad) for tf in tfs
++            if str(tf).lower() in CANDLE_COUNTS}
+diff --git a/analysis/pattern_engine.py b/analysis/pattern_engine.py
+index 26ef9e2..27ac1a8 100644
+--- a/analysis/pattern_engine.py
+@@ -210,7 +210,10 @@ PATTERN_FA = {
+ # fit windows per timeframe — pattern must be RECENT history, not the whole archive
+ # R63 (audit W8): 30m/2h are structure TFs of the SWING 30m/2h lanes — they
+ # had no entry and silently fell back to 140.
+-_FIT_WINDOW = {"15m": 200, "30m": 200, "1h": 200, "2h": 120, "4h": 140, "1d": 110}
++# R64 CANDLE-COUNT LAW (his 10-02 «۲۵۰ تا ۳۵۰ کندل بسته به تایم‌فریم»): the
++# fit window IS the chart window — one map (analysis.candle_counts) for both.
++from analysis.candle_counts import CANDLE_COUNTS as _R64_COUNTS
++_FIT_WINDOW = {tf: int(_R64_COUNTS[tf]) for tf in ("15m", "30m", "1h", "2h", "4h", "1d")}
+ 
+ _LOCK = threading.Lock()
+ _LINE_CACHE: Dict[str, dict] = {}
+@@ -516,7 +519,7 @@ def fit_edge_line(df: pd.DataFrame, side: str, cfg, n: int):
+ 
+ 
+ def _structural_refine(df: pd.DataFrame, line, side: str, n: int,
+-                       height: float, pattern: str):
++                       height: float, pattern: str, direction: str = ""):
+     """Edwards & Magee special formations layered on a validated FLAT line:
+     a swing that protrudes beyond the line between its first two touches is a
+     HEAD (H&S); a flat 3+ touch edge with no head is a multiple top/bottom.
+@@ -540,6 +543,16 @@ def _structural_refine(df: pd.DataFrame, line, side: str, n: int,
+             ext = float(seg.min()) if len(seg) else shoulder
+             protrude = shoulder - ext
+         if len(seg) >= 3 and protrude >= 0.25 * height:
++            # R64 (label bug, SOL 09-14 «SHORT INVERSE_HEAD_SHOULDERS»): the
++            # head label is bearish for H&S and bullish for its inverse — it
++            # may only ride an event whose direction IS that doctrine. The
++            # edge's own break goes the other way (an upper-edge break is a
++            # LONG, a lower-edge break a SHORT): that is a failed head /
++            # spring, never an H&S — the geometric name stands.
++            _d64 = str(direction or "").upper()
++            if _d64 and ((side == "upper" and _d64 != "SHORT")
++                         or (side != "upper" and _d64 != "LONG")):
++                return pattern, ""
+             if side == "upper":
+                 return ("HEAD_SHOULDERS",
+                         "سر و شانه: سر ≥۲۵٪ِ ارتفاع بالاتر از خطِ شانه‌ها — "
+@@ -889,7 +902,8 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
+             height = max(float(pattern_df["high"].iloc[max(0, n - 40):n + 1].max()) - line_now, 1.5 * atr_p)
+         height = min(height, 45.0 * atr_p)
+         # ── E&M special formations & flag-pennant overlay (labels only) ─────
+-        pattern, struct_note = _structural_refine(pattern_df, line, side, n, height, pattern)
++        pattern, struct_note = _structural_refine(pattern_df, line, side, n, height, pattern,
++                                                  direction=str(direction or ""))
+         _fp = _flagpole_strength(pattern_df, line, side, n, atr_p, height)
+         if _fp is not None:
+             pattern = "FLAG_BULL" if _fp > 0 else "FLAG_BEAR"
+@@ -1908,7 +1922,10 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
+                       float(candidate.entry_zone_top),
+                       float(candidate.planned_entry or (candidate.entry_zone_bottom + candidate.entry_zone_top) / 2.0),
+                       float(candidate.sl or 0), direction, float(atr_t or 0.0),
+-                      str(getattr(candidate, "style", "") or "")):
++                      str(getattr(candidate, "style", "") or ""),
++                      # R64: a break lane — the zone is the line→live
++                      # corridor; floors capped by the trigger-TF ceiling
++                      line_price=float(line_now), trigger_tf=str(trigger_tf or "")):
+             return None
+     except Exception:
+         pass
+@@ -1921,7 +1938,11 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
+     # The r30 sane-zone guard is re-applied after the ladder so the stop
+     # never lands inside the entry zone. Fail-open everywhere.
+     try:
+-        from config import SETTINGS as _S63
++        # R64 (found by the TC probe): ``config`` exposes get_settings(), not
++        # SETTINGS — the old import raised on EVERY build and the fail-open
++        # silently skipped his law-① risk ladder for every TC/ALBROX trade.
++        from config import get_settings as _gs63
++        _S63 = _gs63()
+         if bool(getattr(_S63, "risk_ladder_enabled", True)) \
+                 and not bool((candidate.metadata or {}).get("rejection_scalp")):
+             from analysis.risk_ladder import ladder_stop as _ls63
+diff --git a/analysis/render_kit.py b/analysis/render_kit.py
+index f2117b0..b2d7e89 100644
+--- a/analysis/render_kit.py
+@@ -388,7 +388,7 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
+             """Best-fitting validated line across lookback windows —
+             returns (line, x-offset) WITHOUT mutating the frozen dataclass."""
+             cands = []
+-            for w in (90, 130, len(df)):
++            for w in (90, 130, 200, len(df)):
+                 if w < 45:
+                     continue
+                 off = max(0, len(df) - w)
+@@ -422,7 +422,11 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
+             (different anchor OR clearly different slope) so both the old
+             leg trend AND the fresh small pattern paint together."""
+             found = []
+-            for w in (len(df), 130, 90, 60):
++            # R64 smart zoom: the 300-candle chart is fitted at five «zoom
++            # levels» — the score (touches²·fit·√span·proximity) keeps the
++            # most valid line near price; a spike that only fits a small
++            # window cannot outrank a major that holds across the big one.
++            for w in (len(df), 200, 130, 90, 60):
+                 if w < 45:
+                     continue
+                 off = max(0, len(df) - w)
+@@ -771,14 +775,21 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
+         float(getattr(candidate, "entry_zone_bottom", 0) or 0),
+         float(getattr(candidate, "entry_zone_top", 0) or 0))
+     _log_axis = _chart_will_be_log(candidate, trigger_df)
+-    pats = detect_patterns(trigger_df.tail(170),
++    # R64 CANDLE-COUNT LAW: the render patterns are fitted on EXACTLY the
++    # candles the chart shows (analysis.candle_counts) — chart ≡ trade window.
++    try:
++        from analysis.candle_counts import candle_count as _cc64
++        _rw64 = _cc64(str(getattr(candidate, "trigger_timeframe", "") or ""), 300)
++    except Exception:
++        _rw64 = 300
++    pats = detect_patterns(trigger_df.tail(_rw64),
+                            getattr(candidate, "direction", ""),
+                            log_axis=_log_axis)
+     md["render_patterns"] = pats
+     # broken legs need a TIME for their break bar too: on a higher display TF
+     # a bare bar index would land the break marker on the wrong candle.
+     try:
+-        _slice = trigger_df.tail(170).reset_index(drop=True)
++        _slice = trigger_df.tail(_rw64).reset_index(drop=True)
+         _sts = [str(x) for x in _slice["timestamp"].tolist()] \
+             if "timestamp" in _slice.columns else []
+         if _sts:
+@@ -805,7 +816,7 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
+         # inside a BROADENING shape, which the first version of this list
+         # missed). RANGE keeps its own horizontal band.
+         _band = None
+-        _win_len = len(trigger_df.tail(170))
++        _win_len = len(trigger_df.tail(_rw64))
+         for _p in pats:
+             _lns = _p.get("lines") or []
+             if _p.get("type") == "RANGE" and _p.get("hi") and _p.get("lo"):
+@@ -868,7 +879,7 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
+     # Viva 09-18 (his CRV note): the higher-TF pattern must be ANNOUNCED on
+     # the trigger chart — «وج باید در ۴ ساعته یا روزانه پیدا بشه و اعلام بشه».
+     try:
+-        _hp = detect_patterns(htf_df.tail(240),
++        _hp = detect_patterns(htf_df.tail(300),
+                               getattr(candidate, "direction", ""),
+                               log_axis=_chart_will_be_log(candidate, htf_df)) \
+             if htf_df is not None and len(htf_df) >= 60 else []
+diff --git a/analysis/setups_experimental.py b/analysis/setups_experimental.py
+index 848c89b..89b6973 100644
+--- a/analysis/setups_experimental.py
+@@ -1107,7 +1107,8 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
+             from analysis.trade_management import sane_zone_geometry_ok as _szg61
+             _a61 = float((df["high"] - df["low"]).tail(14).mean() or 0.0)
+             if not _szg61(min(o, c), max(o, c), float(entry), float(sl),
+-                          direction, _a61, str(style)):
++                          direction, _a61, str(style),
++                          trigger_tf=str(tf)):  # R64: floor ≤ 0.9× TF ceiling
+                 continue
+         except Exception:
+             pass
+@@ -1474,7 +1475,8 @@ def _albrox_zone_lane(bundle, style):
+         # r61.1 SANE-ZONE LAW: no 4.7%-wide «zones», no stop glued to the box
+         # («این چه ناحیه ای است که دنبال سیگناله؟؟» / «کمتر از ۱ سنت»).
+         from analysis.trade_management import sane_zone_geometry_ok as _szg61
+-        if not _szg61(zlo, zhi, entry, sl, direction, atr_t, str(style)):
++        if not _szg61(zlo, zhi, entry, sl, direction, atr_t, str(style),
++                      trigger_tf=str(trigger_tf)):  # R64: floor ≤ 0.9× TF ceiling
+             continue
+         risk = abs(entry - sl)
+         if risk <= 0 or risk > 0.06 * entry:
+diff --git a/analysis/setups_v7.py b/analysis/setups_v7.py
+index ac36424..4945d3d 100644
+--- a/analysis/setups_v7.py
+@@ -1455,10 +1455,16 @@ def _active_detectors() -> List:
+             detectors.extend(exp.PINWALL_QUALITY_DETECTORS)
+         if getattr(SETTINGS, "pinv_enabled", True):
+             detectors.extend(exp.PINVAL_DETECTORS)
+-        if getattr(SETTINGS, "albrox_enabled", False):
+-            detectors.extend(exp.ALBROX_DETECTORS)
++        # R64 (TC root cause #1, probe7 09-04..09-24: TC 0 vs 19/7/6/10 when
++        # run alone): ALBROX lane A rides the IDENTICAL TechnoClassic engine
++        # and stamps the shared TCMINT guard first — TECHCLASSIC then skipped
++        # silently on every pattern. TC registers BEFORE ALBROX now: the
++        # pattern break is published under its own setup, and ALBROX (lane A
++        # guard-silenced) falls through to its zone lane — no duplicates.
+         if getattr(SETTINGS, "technoclassic_enabled", False):
+             detectors.extend(exp.TECHCLASSIC_DETECTORS)
++        if getattr(SETTINGS, "albrox_enabled", False):
++            detectors.extend(exp.ALBROX_DETECTORS)
+     except Exception as exc:  # pragma: no cover - defensive
+         print(f"Experimental detectors unavailable: {exc}")
+     return detectors
+diff --git a/analysis/spot_engine.py b/analysis/spot_engine.py
+index 154d333..9c7cc0a 100644
+--- a/analysis/spot_engine.py
+@@ -202,6 +202,15 @@ def _structural_weight(pat: dict) -> float:
+         return 0.0
+ 
+ 
++def _spot_count(tf: str) -> int:
++    """R64: the dictated candle count of a spot TF (analysis.candle_counts)."""
++    try:
++        from analysis.candle_counts import candle_count
++        return candle_count(tf, 300)
++    except Exception:
++        return 300
++
++
+ def _sane_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+     """r57 (the WLD 3d blank chart): corrupt near-zero placeholder candles
+     (OHLC ≈ 1e-9 with real volume) pass every >0 filter, draw invisible
+@@ -256,6 +265,9 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
+             continue
+         try:
+             d = _sane_ohlcv(df.reset_index(drop=True))
++            # R64 CANDLE-COUNT LAW: detect on EXACTLY the candles the chart
++            # shows (1d used to scan ~1,480 bars under a 210-bar picture).
++            d = d.tail(_spot_count(tf)).reset_index(drop=True)
+             atr = _atr(d)
+             if atr <= 0:
+                 continue
+@@ -554,6 +566,7 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
+             continue
+         try:
+             d = _sane_ohlcv(df.reset_index(drop=True))
++            d = d.tail(_spot_count(tf)).reset_index(drop=True)   # R64: chart ≡ scan window
+             atr = _atr(d)
+             if atr <= 0 or not _fresh(d, tf):
+                 continue
+diff --git a/analysis/trade_management.py b/analysis/trade_management.py
+index 1406938..11b64fb 100644
+--- a/analysis/trade_management.py
+@@ -1020,7 +1020,8 @@ def advance_ladder(state: Dict, high: float, low: float) -> Dict:
+ 
+ def sane_zone_geometry_ok(zone_lo: float, zone_hi: float, entry: float,
+                           stop: float, direction: str, atr_trig: float,
+-                          style: str = "") -> bool:
++                          style: str = "", line_price: Optional[float] = None,
++                          trigger_tf: str = "") -> bool:
+     """r61.1 SANE-ZONE LAW (Viva 09-30, verbatim): «این چه ناحیه ای است که
+     دنبال سیگناله؟؟» (a 4.7%-wide supply box hunting signals) + «احمقانه
+     ترین ابطالی که دیدم — فاصلهٔ ناحیه و ابطال کمتر از ۱ سنت» (SUI pin:
+@@ -1030,7 +1031,18 @@ def sane_zone_geometry_ok(zone_lo: float, zone_hi: float, entry: float,
+          SCALP max(0.8×ATR, 0.25%) · DAYTRADE max(1.0×ATR, 0.4%) ·
+          SWING/GRAND max(1.5×ATR, 0.8%).
+     A setup whose whole structure is smaller than noise is a trap, not a
+-    trade — skipped, never alerted. Fail-open on degenerate input."""
++    trade — skipped, never alerted. Fail-open on degenerate input.
++
++    R64 (TC root cause #3 — HTF break lanes died here: 3/23 1d structures
++    built vs 16/23 without the law):
++      * a BREAK lane passes ``line_price``: its zone is the corridor
++        broken-line→live, NOT a watch box hunting signals — law ① measures
++        the line's own band there (the corridor height is the chase distance
++        and is already bounded by the stop ceiling / risk ladder);
++      * law ②'s floor is capped at 0.9× the trigger TF's stop CEILING
++        (``MAX_STOP_PCT_BY_TF``) — 1.5×ATR1d > 8% made every GRAND setup on a
++        volatile coin (SUI ATR1d 7.3%) impossible by construction.
++    """
+     try:
+         zlo, zhi = sorted((float(zone_lo), float(zone_hi)))
+         en = float(entry)
+@@ -1038,11 +1050,24 @@ def sane_zone_geometry_ok(zone_lo: float, zone_hi: float, entry: float,
+         a = float(atr_trig or 0.0)
+         if en <= 0 or sl <= 0 or zhi <= zlo:
+             return True
+-        if (zhi - zlo) > max(2.5 * a, 0.015 * en):
++        _lp = None
++        try:
++            _lp = float(line_price) if line_price is not None else None
++        except Exception:
++            _lp = None
++        if _lp is not None and _lp > 0:
++            _h = min(zhi - zlo, 0.30 * a) if zlo - 0.5 * a <= _lp <= zhi + 0.5 * a else (zhi - zlo)
++        else:
++            _h = zhi - zlo
++        if _h > max(2.5 * a, 0.015 * en):
+             return False
+         _st = str(style or "").upper()
+         mult, pct = {"SCALP": (0.8, 0.0025), "DAYTRADE": (1.0, 0.004),
+                      "SWING": (1.5, 0.008), "GRAND": (1.5, 0.008)}.get(_st, (1.0, 0.004))
+-        return abs(en - sl) >= max(mult * a, pct * en)
++        floor = max(mult * a, pct * en)
++        _cap = MAX_STOP_PCT_BY_TF.get(str(trigger_tf or "").lower())
++        if _cap:
++            floor = min(floor, 0.9 * float(_cap) / 100.0 * en)
++        return abs(en - sl) >= floor
+     except Exception:
+         return True
+diff --git a/analysis/viva_tlbreak.py b/analysis/viva_tlbreak.py
+index 0305c6a..df46163 100644
+--- a/analysis/viva_tlbreak.py
+@@ -126,6 +126,93 @@ def _atr(df: pd.DataFrame) -> float:
+     return value if np.isfinite(value) and value > 0 else 0.0
+ 
+ 
++# ── R64 SMART-GEOMETRY (Viva 10-02: «زوم هوشمند … اسپایک‌ها وج و مثلث رو خراب
++# میکنن … پیوت ۲۰ کندل قبل رو به یک سقف محلی وصل میکنه و اسمش رو ترند میذاره»).
++# The fitter judged every pivot with ONE ruler: the mean range of the LAST 14
++# bars, in LINEAR price — one liquidation spike inflated it (sloppy lines
++# accepted), a flat stretch shrank it (real majors rejected), and on a 2×
++# window the same ruler meant half the tolerance at the top of the tape.
++# R64 measures touches and residuals with a ROBUST, SCALE-HONEST unit: the
++# median candle height of the whole fit window (×2.0 — calibrated on the TC
++# replay 09-04..09-24 and the 15m line-break event study, see HANDOFF R64),
++# in log10 space whenever the fit itself is in log space — the engine «zooms»
++# the way his eye zooms a log chart: spikes shrink to noise, flat candles are
++# not magnified into fake precision. Score-only weights (never a gate):
++# lines resting on MAJOR pivots (prominence) and anchored on the window's
++# real leg extreme beat a short local pair. ``TLBREAK_R64_GEOMETRY=0`` restores
++# the legacy ruler/score for a one-switch rollback.
++_R64_UNIT_FACTOR = 2.0
++_R64_WEIGHTS = True      # prominence / leg-extreme / min-span selection weights
++_R64_MIN_SPAN_FRAC = 0.10   # defining pair spans ≥ this share of the window
++_R64_LEG_HALF = True        # leg-extreme bonus measured on the window's recent half
++
++
++def _r64_enabled() -> bool:
++    return str(os.getenv("TLBREAK_R64_GEOMETRY", "1") or "1").strip().lower() \
++        not in ("0", "false", "no", "off")
++
++
++def _robust_unit(df: pd.DataFrame, use_log: bool) -> float:
++    """Median candle height of the window (×_R64_UNIT_FACTOR), log10 units when use_log.
++    0.0 when undefined (the caller falls back to the legacy ATR)."""
++    try:
++        h = df["high"].astype(float).to_numpy()
++        l = df["low"].astype(float).to_numpy()
++        if use_log:
++            ok = (h > 0) & (l > 0) & (h >= l)
++            r = np.log10(h[ok] / l[ok])
++        else:
++            r = h - l
++        r = r[np.isfinite(r) & (r > 0)]
++        if len(r) < 5:
++            return 0.0
++        u = float(np.median(r)) * _R64_UNIT_FACTOR
++        return u if np.isfinite(u) and u > 0 else 0.0
++    except Exception:
++        return 0.0
++
++
++def _pivot_prominence(df: pd.DataFrame, pts: list, side: str, use_log: bool = False,
++                      unit: float = 0.0, window: int = 15) -> dict:
++    """SWING SIZE of each pivot in ruler units: min(excursion into the pivot,
++    reaction out of it) over ``window`` bars each side — the classic «major
++    vs minor swing». A trendline touch in a trend still scores (pullback in,
++    bounce out); a 2-candle wiggle on a flat tape scores ~1-2. SCORE weight
++    only, never a gate."""
++    out: dict = {}
++    try:
++        if unit <= 0:
++            return {}
++        hi = df["high"].astype(float).to_numpy()
++        lo = df["low"].astype(float).to_numpy()
++        n = len(hi)
++        for q in pts:
++            i = int(q["index"])
++            if i < 0 or i >= n:
++                continue
++            y = float(q["price"])
++            a0, a1 = max(0, i - window), min(n, i + window + 1)
++            if side == "HIGH":
++                pre = lo[a0:i].min() if i > a0 else y
++                post = lo[i + 1:a1].min() if a1 > i + 1 else y
++                far = (y, max(pre, 1e-12)), (y, max(post, 1e-12))
++            else:
++                pre = hi[a0:i].max() if i > a0 else y
++                post = hi[i + 1:a1].max() if a1 > i + 1 else y
++                far = (max(pre, 1e-12), y), (max(post, 1e-12), y)
++            amps = []
++            for top, bot in far:
++                if use_log and top > 0 and bot > 0:
++                    amps.append(max(0.0, math.log10(top / bot)) / unit)
++                else:
++                    amps.append(max(0.0, top - bot) / unit)
++            # the right edge is not evidence against a fresh pivot
++            out[i] = float(amps[0] if a1 <= i + 1 else min(amps))
++    except Exception:
++        return {}
++    return out
++
++
+ def fit_validated_line(
+     df: pd.DataFrame,
+     side: Literal["HIGH", "LOW"],
+@@ -169,13 +256,42 @@ def fit_validated_line(
+     # hid the chart's BEST majors; the whole pivot history competes now, the
+     # touches×fit×span score still picks the most valid line).
+     pool = pts[-200:]
++    # ── R64 smart geometry: robust, scale-honest ruler + major-pivot weights
++    r64 = _r64_enabled()
++    unit = _robust_unit(df, use_log) if r64 else 0.0
++    if unit <= 0:
++        r64 = False
++    tol_frac = max(cfg.touch_tolerance_atr, 0.12)
++    tol_u = tol_frac * unit if r64 else tol          # tolerance in RULER units
++    _w64 = bool(r64 and _R64_WEIGHTS)
++    _prom = _pivot_prominence(df, pool, side, use_log, unit,
++                              window=max(10, 3 * int(cfg.pivot_left))) if _w64 else {}
++    _min_pair = max(20.0, float(cfg.pivot_left) * 4)
++    if _w64:
++        # a «trend» must span a real share of the zoomed window — the 20-bar
++        # local pair on a 300-bar chart is what his eye refuses to call a line
++        _min_pair = max(_min_pair, float(_R64_MIN_SPAN_FRAC) * float(n))
++    if _w64 and _R64_LEG_HALF:
++        _half = [q for q in pool if float(q["index"]) >= 0.5 * float(n)]
++        _leg_pool = _half if len(_half) >= 10 else pool[-10:]
++    else:
++        _leg_pool = pool[-10:]
++
++    def _res_u(price: float, line_val: float) -> float:
++        """Signed residual (price − line) in ruler units."""
++        if r64:
++            if use_log and price > 0 and line_val > 0:
++                return (math.log10(price) - math.log10(line_val)) / unit
++            return (price - line_val) / unit
++        return (price - line_val) / tol * tol_frac if tol > 0 else 0.0
++
+     best: Optional[ValidatedLine] = None
+     best_score = -1.0
+     for i in range(len(pool)):
+         for j in range(i + 1, len(pool)):
+             x0, y0 = float(pool[i]["index"]), float(pool[i]["price"])
+             x1, y1 = float(pool[j]["index"]), float(pool[j]["price"])
+-            if x1 - x0 < max(20.0, float(cfg.pivot_left) * 4):
++            if x1 - x0 < _min_pair:
+                 continue
+             if use_log and y0 > 0 and y1 > 0:
+                 # fit the line where the eye will see it: straight in log10
+@@ -192,22 +308,33 @@ def fit_validated_line(
+                     return float(10.0 ** (_ls * float(p["index"]) + _li))
+                 return slope * float(p["index"]) + intercept
+ 
+-            def _over(p):
+-                yk = float(p["price"])
+-                return (side == "HIGH" and yk > _val(p) + tol) or \
+-                       (side == "LOW" and yk < _val(p) - tol)
++            if r64:
++                def _over(p):
++                    ru = _res_u(float(p["price"]), _val(p))
++                    return (side == "HIGH" and ru > tol_frac) or \
++                           (side == "LOW" and ru < -tol_frac)
++
++                def _near(p):
++                    return abs(_res_u(float(p["price"]), _val(p))) <= tol_frac
++            else:
++                def _over(p):
++                    yk = float(p["price"])
++                    return (side == "HIGH" and yk > _val(p) + tol) or \
++                           (side == "LOW" and yk < _val(p) - tol)
++
++                def _near(p):
++                    return abs(float(p["price"]) - _val(p)) <= tol
+ 
+             # touches: every pool pivot the line actually passes through
+-            raw_touch = [q for q in pool
+-                         if abs(float(q["price"]) - _val(q)) <= tol]
++            raw_touch = [q for q in pool if _near(q)]
+             # spec §6.1: nearby touches are ONE cluster-touch (a single swing
+             # must not count as three touches because of twin pivots)
+             touching = []
+             for q in sorted(raw_touch, key=lambda z: float(z["index"])):
+                 if touching and float(q["index"]) - \
+                         float(touching[-1]["index"]) <= max(2.0, float(cfg.pivot_right)):
+-                    if abs(float(q["price"]) - _val(q)) < \
+-                            abs(float(touching[-1]["price"]) - _val(touching[-1])):
++                    if abs(_res_u(float(q["price"]), _val(q))) < \
++                            abs(_res_u(float(touching[-1]["price"]), _val(touching[-1]))):
+                         touching[-1] = q
+                 else:
+                     touching.append(q)
+@@ -246,7 +373,8 @@ def fit_validated_line(
+                     # and H&S shoulders are FLAT by definition. On a sloped
+                     # line even a single pierce means the line cuts candles.
+                     pierces += 1
+-                    if pierces > 1 or abs(y1 - y0) >= 0.5 * atr:
++                    _flat_far = (abs(_res_u(y1, y0)) >= 0.5) if r64 else (abs(y1 - y0) >= 0.5 * atr)
++                    if pierces > 1 or _flat_far:
+                         hard = True
+                         break
+             if hard:
+@@ -282,11 +410,20 @@ def fit_validated_line(
+             need = max(cfg.min_touches, 3) if pierces else cfg.min_touches
+             if len(touching) < need:
+                 continue
+-            dev = max(abs(float(q["price"]) - _val(q)) for q in touching) / atr
++            if r64:
++                dev = max(abs(_res_u(float(q["price"]), _val(q))) for q in touching)
++            else:
++                dev = max(abs(float(q["price"]) - _val(q)) for q in touching) / atr
+             if dev > cfg.max_fit_residual_atr:
+                 continue
+             span = x1 - x0
+             score = len(touching) * (span ** 0.5) + 0.25 * (x1 / max(1.0, float(n)))
++            if _w64 and _prom:
++                # majors win: mean prominence of the touches vs the pivot
++                # strength itself (a 3-bar fractal ≈ 1.0, a leg top ≈ 2.0)
++                _pm = [min(20.0, float(_prom.get(int(q["index"]), 4.0)))
++                       for q in touching]
++                score *= min(1.6, max(0.75, (sum(_pm) / max(1, len(_pm)) / 4.0) ** 0.5))
+             # a CLEAN classic line (nothing pierces it) always outranks a
+             # pierced one — the head exception exists for real H&S only.
+             if pierces:
+@@ -305,10 +442,12 @@ def fit_validated_line(
+                 score *= 1.15
+             # Viva 09-17 schematics: the trendline of a leg STARTS AT THE LEG
+             # EXTREME (peak for highs, trough for lows) — reward such lines.
+-            _leg = pool[-10:]
++            # R64: the leg is the zoomed window's recent half, not the last
++            # 10 fractals — a local high must not earn the leg-extreme bonus.
++            _leg = _leg_pool
+             _ext = max((float(q["price"]) for q in _leg), default=y0) if side == "HIGH" \
+                 else min((float(q["price"]) for q in _leg), default=y0)
+-            if abs(y0 - _ext) <= tol:
++            if (abs(_res_u(y0, _ext)) <= tol_frac) if r64 else (abs(y0 - _ext) <= tol):
+                 score *= 2.0
+             if score > best_score:
+                 best_score = score
+@@ -349,6 +488,21 @@ def fit_validated_line(
+                 return 10.0 ** (float(best.log_slope) * _x + float(best.log_intercept))
+             return float(best.slope) * _x + float(best.intercept)
+ 
++        if r64:
++            # same ruler as the fit: |residual| ≤ tol in robust (log) units
++            def _absorb_far(_p, _lv):
++                return abs(_res_u(_p, _lv)) > tol_frac
++
++            def _absorb_over(_p, _lv):
++                ru = _res_u(_p, _lv)
++                return (side == "HIGH" and ru > tol_frac) or (side == "LOW" and ru < -tol_frac)
++        else:
++            def _absorb_far(_p, _lv):
++                return abs(_p - _lv) > _tol_x
++
++            def _absorb_over(_p, _lv):
++                return (side == "HIGH" and _p > _lv + _tol_x) or (side == "LOW" and _p < _lv - _tol_x)
++
+         _ext = sorted(list(best.points or ()), key=lambda q: float(q["index"]))
+         _head = []
+         while True:
+@@ -359,12 +513,11 @@ def fit_validated_line(
+             if not _prev:
+                 break
+             _q = max(_prev, key=lambda q: float(q["index"]))
+-            if abs(float(_q["price"]) - _lv_at(float(_q["index"]))) > _tol_x:
++            if _absorb_far(float(_q["price"]), _lv_at(float(_q["index"]))):
+                 break
+             _bad = [pp for pp in pool
+                     if _cur_min - 0.5 > float(pp["index"]) > float(_q["index"])
+-                    and ((side == "HIGH" and float(pp["price"]) > _lv_at(float(pp["index"])) + _tol_x)
+-                         or (side == "LOW" and float(pp["price"]) < _lv_at(float(pp["index"])) - _tol_x))]
++                    and _absorb_over(float(pp["price"]), _lv_at(float(pp["index"])))]
+             if _bad:
+                 break
+             _head.insert(0, _q)
+diff --git a/bot/messages_v7.py b/bot/messages_v7.py
+index 441f30c..81f2e12 100644
+--- a/bot/messages_v7.py
+@@ -902,16 +902,19 @@ _TF_PATTERN_CACHE: Dict[Tuple[str, str, str], list] = {}
+ # r52/r53 — HIS dictated CryptoCove candle counts, the single source of
+ # truth for the render window AND every monitor/update chart fetch:
+ # 4h/8h→140-200 (170), 12h/1d→170-250 (210), 3d→250-350 (300), 1w→170-250 (210).
+-_CHART_CANDLE_COUNTS = {"1d": 210, "4h": 170, "2h": 132, "1h": 150, "8h": 170,
+-                        "12h": 210, "30m": 160, "15m": 164, "5m": 164,
+-                        "3d": 300, "1w": 210}
++# R64 (his 10-02 dictation «۲۵۰ تا ۳۵۰ کندل بسته به تایم‌فریم … هم اسپات هم
++# پرپچوال، حتی روزانه»): the map now lives in analysis.candle_counts — the
++# SAME numbers the engine fits on, so the chart shows exactly the candles the
++# trade geometry was built from.
++from analysis.candle_counts import CANDLE_COUNTS as _R64_CANDLE_COUNTS
++_CHART_CANDLE_COUNTS = dict(_R64_CANDLE_COUNTS)
+ 
+ 
+ def _chart_fetch_size(tf: str) -> int:
+     """Bars to FETCH so a chart of `tf` can actually render its dictated
+     count (monitor/update paths used a blind 180 — 1w/3d spot chains then
+     rendered a decade of needle candles instead of the CryptoCove density)."""
+-    return int(_CHART_CANDLE_COUNTS.get(str(tf or "").lower(), 200))
++    return int(_CHART_CANDLE_COUNTS.get(str(tf or "").lower(), 300))
+ 
+ 
+ def _log_axis_decorate(ax) -> None:
+@@ -1075,7 +1078,7 @@ def _refit_viva_points(frame, side: str) -> list:
+             _reset = _reset.rename(columns={_reset.columns[0]: "timestamp"})
+         _cols = [c for c in ("timestamp", "open", "high", "low", "close",
+                              "volume", "turnover") if c in _reset.columns]
+-        _ln51 = _fvl(_reset[_cols].tail(170).reset_index(drop=True), side, _cfg51)
++        _ln51 = _fvl(_reset[_cols].tail(350).reset_index(drop=True), side, _cfg51)
+         if _ln51 is None:
+             return []
+         # The draw path searchsorts point timestamps against frame.index —
+@@ -1824,7 +1827,8 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
+                     ov_lo: Optional[float] = None,
+                     ov_hi: Optional[float] = None,
+                     recent_lo: Optional[float] = None,
+-                    recent_hi: Optional[float] = None) -> Optional[tuple]:
++                    recent_hi: Optional[float] = None,
++                    log_space: bool = False) -> Optional[tuple]:
+     """r37 SMART price zoom — «کندلها تا حد امکان در مرکز صفحه چارت قرار
+     بگیرند … ابزار نصفه نیمه رسم میشه».
+ 
+@@ -1869,7 +1873,9 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
+     r_hi = max(r_hi, r_lo)
+     r_mid = 0.5 * (r_lo + r_hi)
+     r_span = max(r_hi - r_lo, 1e-12)
+-    base = max(r_span / 0.60, 4.0 * _a, 0.025 * mid, 0.35 * span)
++    # R64: in log10 space the 2.5%-of-price floor is the constant log10(1.025)
++    _pct_floor = math.log10(1.025) if log_space else 0.025 * mid
++    base = max(r_span / 0.60, 4.0 * _a, _pct_floor, 0.35 * span)
+     ylo, yhi = r_mid - 0.5 * base, r_mid + 0.5 * base
+     # r37: overlays included IN FULL — the half-drawn tool is a bug, not style
+     if ov_hi is not None and math.isfinite(float(ov_hi)) and float(ov_hi) > yhi:
+@@ -2089,7 +2095,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
+         # RETIRED — deep stored anchors older than the window are handled by
+         # the r51 per-TF re-fit, and «نقطهٔ شروع زوم» must always show the
+         # CryptoCove density, never a month of needle candles.
+-        _lookback = _CHART_CANDLE_COUNTS.get(_chart_tf, 164)
++        _lookback = _CHART_CANDLE_COUNTS.get(_chart_tf, 300)
+         # r37 (Viva 09-26, «ترندهای ماژور و مینور مهم اصلا دیده نمیشن و رسم
+         # نمیشن»): the r33 identity pins a chain's geometry forever, but the
+         # render window is re-cut per render — when the fetch returns fewer
+@@ -3883,11 +3889,36 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
+                     pass
+             _ovs28 = [v for v in _ovs28 if v is not None and math.isfinite(v) and v > 0]
+             _atr28 = float((frame["high"] - frame["low"]).tail(14).mean())
+-            _win28 = _smart_y_window(
+-                float(frame["low"].min()), float(frame["high"].max()), _atr28,
+-                min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None,
+-                recent_lo=float(frame["low"].tail(40).min()),
+-                recent_hi=float(frame["high"].tail(40).max()))
++            _win28 = None
++            # ── R64 SMART LOG ZOOM (his 10-02: «چارت‌ها تا حد امکان لگاریتمی …
++            # اسپایک → محور جمع شه، کندل‌های فلت → محور باز شه»): on a LOG axis
++            # the window is solved in log10 space — centering/padding become
++            # PERCENT-honest (a 2× tape no longer crams its low half), and the
++            # candle unit is the window's MEDIAN log-height, so one liquidation
++            # spike cannot shrink every candle and a flat tape is opened up
++            # instead of drawn as a flat line. Candles are never cut (r40).
++            try:
++                if str(ax.get_yscale()) == "log":
++                    _lh64 = np.log10(frame["high"].astype(float).clip(lower=1e-12).to_numpy())
++                    _ll64 = np.log10(frame["low"].astype(float).clip(lower=1e-12).to_numpy())
++                    _u64 = float(np.median(_lh64 - _ll64)) * 1.35
++                    _ovl64 = [math.log10(v) for v in _ovs28]
++                    _w64 = _smart_y_window(
++                        float(_ll64.min()), float(_lh64.max()), _u64,
++                        min(_ovl64) if _ovl64 else None, max(_ovl64) if _ovl64 else None,
++                        recent_lo=float(_ll64[-40:].min()),
++                        recent_hi=float(_lh64[-40:].max()),
++                        log_space=True)
++                    if _w64:
++                        _win28 = (10.0 ** _w64[0], 10.0 ** _w64[1])
++            except Exception:
++                _win28 = None
++            if _win28 is None:
++                _win28 = _smart_y_window(
++                    float(frame["low"].min()), float(frame["high"].max()), _atr28,
++                    min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None,
++                    recent_lo=float(frame["low"].tail(40).min()),
++                    recent_hi=float(frame["high"].tail(40).max()))
+             if _win28:
+                 ax.set_ylim(*_win28)
+                 if confirmed:
+diff --git a/data/fetcher.py b/data/fetcher.py
+index 4c61bcb..b3b21d5 100644
+--- a/data/fetcher.py
+@@ -437,6 +437,7 @@ def _derive_from_base(
+     daily: Optional[pd.DataFrame],
+     requested: tuple,
+     limits: Dict[str, int],
++    base_1h: Optional[pd.DataFrame] = None,
+ ) -> Dict[str, Optional[pd.DataFrame]]:
+     """Derive exact multiples locally where this saves a venue request.
+ 
+@@ -457,13 +458,23 @@ def _derive_from_base(
+         elif tf == "1d":
+             out[tf] = daily
+         elif tf == "1h":
+-            out[tf] = _resample_ohlcv(base_15m, "1h", 4)
++            # R64: the direct 1h tape (300+ bars) wins when fetched — a 15m
++            # base can only ever give 250 hourly candles in one venue call.
++            out[tf] = base_1h.tail(int(limits.get("1h", 340))).reset_index(drop=True) \
++                if base_1h is not None and len(base_1h) else \
++                _resample_ohlcv(base_15m, "1h", 4)
+         elif tf == "30m":
+             out[tf] = _resample_ohlcv(base_15m, "30min", 2)
+         elif tf == "2h":
+             # r48: the 2h trigger lane rides the SAME 15m base (8×15m) — no
+             # extra venue request, honest OHLCV aggregation.
+-            out[tf] = _resample_ohlcv(base_15m, "2h", 8)
++            # R64: with the direct 1h tape present, 2h = 2×1h (500 candles
++            # from one call instead of 125 from the 15m base).
++            _h2 = _resample_ohlcv(base_1h, "2h", 2) \
++                if base_1h is not None and len(base_1h) else None
++            out[tf] = _h2.tail(int(limits.get("2h", 290))).reset_index(drop=True) \
++                if _h2 is not None and len(_h2) else \
++                _resample_ohlcv(base_15m, "2h", 8)
+         elif tf == "8h":
+             out[tf] = _resample_ohlcv(base_4h, "8h", 2)
+         elif tf == "12h":
+@@ -496,13 +507,25 @@ def get_market_bundle(
+     lineage links and unique IDs are untouched.
+     """
+     requested = tuple(dict.fromkeys(str(tf).lower() for tf in (timeframes or ())))
+-    limits = limits or {}
++    limits = dict(limits or {})
++    # R64 CANDLE-COUNT LAW: unspecified depths default to the dictated map
++    # (+40 warm-up bars) — detection and chart both read analysis.candle_counts.
++    try:
++        from analysis.candle_counts import CANDLE_COUNTS as _CC64
++        for _tf64 in requested:
++            if _tf64 not in limits and _tf64 in _CC64:
++                limits[_tf64] = int(_CC64[_tf64]) + 40
++    except Exception:
++        pass
+     # Fetch only the base tapes that the caller actually needs. In particular,
+     # a spot-only 4h/8h/12h/1d/3d/1w scan must not pull unused 5m/15m data.
+     need_5m = "5m" in requested
+     # R63 (audit W8): 2h is resampled from the 15m base too — requesting it
+     # alone used to return None (base never fetched).
+-    need_15m = any(tf in requested for tf in ("15m", "30m", "1h", "2h"))
++    # R64: 1h/2h ride a DIRECT 1h tape (one call, cached until the next 1h
++    # close) — 300 hourly / 250 two-hour candles cannot come from ≤1000 15m.
++    need_1h = any(tf in requested for tf in ("1h", "2h"))
++    need_15m = any(tf in requested for tf in ("15m", "30m"))
+     need_4h = any(tf in requested for tf in ("4h", "8h", "12h"))
+     need_1d = any(tf in requested for tf in ("1d", "3d", "1w"))
+ 
+@@ -515,14 +538,20 @@ def get_market_bundle(
+     need_15m_bars = max(
+         int(limits.get("15m", 200)),
+         int(limits.get("30m", 200)) * 2 if "30m" in requested else 0,
+-        int(limits.get("1h", 200)) * 4 if "1h" in requested else 0,
+-        # R63 W8: the 2h structure lane needs ≥60 bars after the resample;
+-        # 120×8 = 960 15m bars stays inside ONE venue call (≤1000).
+-        int(limits.get("2h", 120)) * 8 if "2h" in requested else 0,
+     )
+     base_15m = get_klines(
+         symbol, "15m", min(1000, max(200, need_15m_bars)), closed_only=True
+     ) if need_15m else None
++    need_1h_bars = max(
++        int(limits.get("1h", 340)) if "1h" in requested else 0,
++        int(limits.get("2h", 290)) * 2 + 2 if "2h" in requested else 0,
++    )
++    base_1h = get_klines(
++        symbol, "1h", min(1000, max(200, need_1h_bars)), closed_only=True
++    ) if need_1h else None
++    if need_1h and (base_1h is None or not len(base_1h)) and base_15m is None:
++        # venue without a 1h route: fall back to the legacy 15m-derived path
++        base_15m = get_klines(symbol, "15m", 1000, closed_only=True)
+ 
+     # Derived 8h/12h views must retain enough source 4h candles to preserve
+     # the same structural lookback that a direct feed would have provided.
+@@ -558,7 +587,8 @@ def get_market_bundle(
+ 
+     # Direct fallbacks for unusual requested frames not covered by the local
+     # resampler. They preserve backward compatibility without changing callers.
+-    frames = _derive_from_base(base_15m, base_4h, daily, requested, limits)
++    frames = _derive_from_base(base_15m, base_4h, daily, requested, limits,
++                               base_1h=base_1h)
+     for tf in requested:
+         if frames.get(tf) is None and tf not in ("5m", "15m", "4h", "1d", "1h", "30m", "8h", "12h", "3d", "1w"):
+             frames[tf] = get_klines(symbol, tf, int(limits.get(tf, 200)), closed_only=True)
+diff --git a/data/history_store.py b/data/history_store.py
+index 72aaa26..008cad0 100644
+--- a/data/history_store.py
+@@ -47,12 +47,23 @@ def _list_to_frame(rows: list) -> pd.DataFrame:
+     return frame[["timestamp", "open", "high", "low", "close", "volume"]]
+ 
+ 
++# R64 (Railway cost bug): a coin YOUNGER than the requested depth (listed
++# < ~4 years ago) can never reach ``need`` bars — the old store treated it as
++# «not deep yet» and re-ran the full PAGINATED download on EVERY scan (the
++# memory cache also demanded len ≥ need). A deep fetch that returned fewer
++# bars than asked has reached the listing date: the tape is COMPLETE and is
++# only tail-refreshed from then on.
++_COMPLETE: Dict[str, bool] = {}
++
++
+ def _load(symbol: str) -> Optional[pd.DataFrame]:
+     try:
+         from database.bot_kv import get_json
+         payload = get_json(_KV_PREFIX + symbol.upper())
+         if not payload or not payload.get("rows"):
+             return None
++        if payload.get("complete"):
++            _COMPLETE[symbol.upper()] = True
+         return _list_to_frame(payload["rows"])
+     except Exception:
+         return None
+@@ -65,11 +76,17 @@ def _save(symbol: str, frame: pd.DataFrame) -> None:
+         set_json(_KV_PREFIX + symbol.upper(), {
+             "saved_at": pd.Timestamp.utcnow().tz_localize(None).isoformat(),
+             "rows": _row_to_list(frame),
++            "complete": bool(_COMPLETE.get(symbol.upper(), False)),
+         })
+     except Exception:
+         pass
+ 
+ 
++def _deep_enough(symbol: str, frame: Optional[pd.DataFrame], need: int) -> bool:
++    return frame is not None and len(frame) > 0 and (
++        len(frame) >= need or bool(_COMPLETE.get(symbol.upper(), False)))
++
++
+ def get_deep_daily(symbol: str, need: int) -> Optional[pd.DataFrame]:
+     """The daily tape with ≥`need` bars: fetched deep ONCE, tail-refreshed
+     after that. Returns None only when even the direct fetch fails — the
+@@ -78,19 +95,22 @@ def get_deep_daily(symbol: str, need: int) -> Optional[pd.DataFrame]:
+     need = max(200, int(need or 200))
+     import time as _t
+     hit = _MEMORY.get(symbol)
+-    if hit and _t.monotonic() - hit[0] < _MEMORY_TTL and len(hit[1]) >= need:
++    if hit and _t.monotonic() - hit[0] < _MEMORY_TTL and _deep_enough(symbol, hit[1], need):
+         return hit[1].tail(need).reset_index(drop=True)
+ 
+     frame = _load(symbol)
+     fetched_full = False
+-    if frame is None or len(frame) < need:
++    if not _deep_enough(symbol, frame, need):
+         # ONE-TIME deep scan (paginated), plus headroom for future 1w growth.
+         try:
+             from data.fetcher import get_klines_paginated
+-            frame = get_klines_paginated(symbol, "1d",
+-                                         max(need + 220, 1500),
+-                                         closed_only=True)
+-            fetched_full = frame is not None and len(frame) > 0
++            _ask = max(need + 220, 1500)
++            _deep = get_klines_paginated(symbol, "1d", _ask, closed_only=True)
++            if _deep is not None and len(_deep) > 0:
++                frame = _deep
++                fetched_full = True
++                if len(_deep) < need:
++                    _COMPLETE[symbol] = True     # listing date reached
+         except Exception:
+             frame = frame  # keep whatever the kv had
+     else:
+diff --git a/handoff/HANDOFF.md b/handoff/HANDOFF.md
+index 90af60b..fc25652 100644
+--- a/handoff/HANDOFF.md
+@@ -1,3 +1,55 @@
++> ## 🟩 R64-ARENA — شروع تغییرات راند چهارم از اینجا (2026-10-02)
++> کد با برچسب `R64` علامت خورده است. پایه: `origin/main` = `0384a51`. سشن Arena بسته است، پس تحویل به‌صورت پچ است: `patches/R64-smart-geometry.patch`.
++>
++> 1. **ریشهٔ ۱ خاموشیِ TC: ALBROX جلوی TECHCLASSIC را می‌گرفت** (`analysis/setups_v7.py:_active_detectors`).
++>    - لِین A در ALBROX همان موتور TC را اجرا می‌کند، زودتر اجرا می‌شد و گاردِ مشترکِ `TCMINT` را مهر می‌زد. در نتیجه TECHCLASSIC بی‌صدا رد می‌شد.
++>    - حالا TC قبل از ALBROX ثبت می‌شود. ALBROX که لِین A آن با گارد ساکت شده، به لِین زون می‌رود و سیگنال تکراری ساخته نمی‌شود.
++>    - پروب ۰۹-۰۴ تا ۰۹-۲۴ (DB تازه، گام ۲ ساعته): TC در کنار ALBROX برای ETH/SUI/BTC/SOL به‌ترتیب ۱۰/۴/۶/۸ است، دقیقاً برابر اجرای TC به‌تنهایی. ALBROX_pattern = ۰ (قبل از R64، TC = ۰ بود).
++> 2. **قانون ناحیهٔ عاقلانه برای لِین‌های شکست** (`trade_management.sane_zone_geometry_ok`):
++>    - لِین شکست حالا `line_price` را پاس می‌دهد. زونِ آن کریدورِ «خط شکسته ← قیمت لایو» است، نه باکسی که دنبال سیگنال می‌گردد. برای همین قانون ① روی باندِ خودِ خط سنجیده می‌شود.
++>    - کفِ ریسک در قانون ② حداکثر ۰٫۹ برابرِ سقفِ استاپِ همان TF است (`MAX_STOP_PCT_BY_TF`). قبلاً ۱٫۵×ATR1d > ۸٪ هر GRAND روی کوین پرنوسان را غیرممکن می‌کرد.
++>    - لِین‌های پین و زون قانون ① را عیناً نگه می‌دارند. فقط کفِ آن‌ها هم به سقف TF محدود شده است.
++> 3. **باگ برچسب H&S** (`pattern_engine._structural_refine`):
++>    - برچسب سر و شانه (نزولی) و سر و شانهٔ معکوس (صعودی) فقط روی رویدادی می‌نشیند که جهتش با همان دکترین یکی باشد.
++>    - شکستِ لبهٔ خودِ خط (لبهٔ بالا = LONG، لبهٔ پایین = SHORT) «سرِ شکست‌خورده» است. نام هندسی‌اش می‌ماند.
++> 4. **هندسهٔ هوشمند (زوم موتور)** (`viva_tlbreak.fit_validated_line`):
++>    - خط‌کشِ لمس و residual دیگر میانگینِ رِنجِ ۱۴ کندل آخر به قیمت خطی نیست. حالا میانهٔ ارتفاع کندل‌های کل پنجره (×۲٫۰) است، و وقتی فیت لگاریتمی است، در فضای log10 سنجیده می‌شود.
++>    - اثر: اسپایک خط‌کش را باد نمی‌کند، کندل‌های فلت دقتِ کاذب نمی‌سازند، و دو سرِ یک نوار ۲ برابری با یک معیار سنجیده می‌شوند.
++>    - وزن‌ها فقط امتیاز می‌دهند و گیت نیستند:
++>      - اندازهٔ سوینگِ پیوت‌های لمس‌شده (ماژورها برنده‌اند).
++>      - پاداشِ «اکستریمِ لگ» از نیمهٔ اخیرِ پنجره می‌آید، نه از ۱۰ پیوت آخر (یک سقف محلی دیگر این پاداش را نمی‌گیرد).
++>      - طول جفتِ تعریف‌کننده حداقل ۱۰٪ پنجره است.
++>    - رندر روی ۵ سطح زوم فیت می‌شود (کل پنجره، ۲۰۰، ۱۳۰، ۹۰، ۶۰).
++>    - کلید برگشت: `TLBREAK_R64_GEOMETRY=0`.
++>    - کالیبراسیون (ضریب ۲٫۰) روی دو آزمون انجام شد:
++>
++>      **ریپلی TC** (۰۹-۰۴ تا ۰۹-۲۴، ۴ نماد، اولین ظهور هر الگو، TP1 در برابر استاپ ظرف ۷۲ ساعت):
++>
++>      | پیکربندی | تعداد ستاپ | TP1 | استاپ |
++>      |---|---|---|---|
++>      | قدیم (خط‌کش قدیم + پنجره‌های ۱۱۰ تا ۲۰۰) | ۳۳ | ۱۹ | ۱۱ |
++>      | R64 (ضریب ۲٫۰ + ۳۰۰ کندل) | ۲۸ | ۱۹ | ۴ |
++>
++>      **مطالعهٔ شکست خط زنده در 15m** (برد = +۳ATR قبل از −۱٫۵ATR):
++>
++>      | پیکربندی | تعداد رویداد | نرخ برد |
++>      |---|---|---|
++>      | قدیم، پنجرهٔ ۲۰۰ | ۳۰۷ | ۰٫۳۷ |
++>      | R64، پنجرهٔ ۳۰۰ | ۲۸۹ | ۰٫۴۰ |
++>
++>      در داده‌های 5m (آزمون با ضریب اولیهٔ ۱٫۳۵) نتیجه خنثی بود.
++> 5. **قانون تعداد کندل** (`analysis/candle_counts.py`، یک منبع واحد):
++>    - تعدادها: 15m/30m/1h/4h/1d/3d = ۳۰۰، 2h = ۲۵۰، 8h = ۲۸۰، 12h = ۲۶۰، 1w = ۲۵۰.
++>    - هر جا از همین نقشه می‌خواند: موتور TC (`_FIT_WINDOW`)، پنجرهٔ چارت (`_CHART_CANDLE_COUNTS`)، `enrich_render`، اسکن اسپات (قبلاً اسپات روی کل نوار، مثلاً ۱٬۴۸۰ کندل روزانه، اسکن می‌کرد) و عمق پیش‌فرضِ باندل.
++>    - 1h و 2h حالا از نوارِ مستقیمِ 1h می‌آیند (یک کال با کش تا کلوزِ بعدی). از 15m نمی‌شد بیش از ۲۵۰ کندل 1h و ۱۲۵ کندل 2h ساخت. اگر روت 1h نباشد، به مسیر قدیمیِ 15m برمی‌گردد.
++> 6. **زوم لگاریتمی چارت** (`messages_v7._smart_y_window(log_space=True)`):
++>    - روی محور log، پنجره در فضای log10 حل می‌شود و واحد کندل میانهٔ ارتفاعِ log است. اسپایک کندل‌ها را کوچک نمی‌کند و نوار فلت باز می‌شود.
++>    - کندل‌ها هرگز بریده نمی‌شوند (قانون r40).
++> 7. **دو باگ که در حین کار پیدا شد:**
++>    - **نردبان ریسک r63 هرگز اجرا نمی‌شد:** `from config import SETTINGS` (این نماد در config وجود ندارد) در هر بیلدِ TC/ALBROX خطا می‌داد و چون fail-open بود، بی‌صدا رد می‌شد. حالا از `get_settings()` استفاده می‌شود.
++>    - **هزینهٔ Railway:** کوینی که از عمقِ درخواستی جوان‌تر است، در هر اسکن دوباره دانلودِ صفحه‌بندی‌شدهٔ کامل می‌شد. حالا وقتی دانلود عمیق کمتر از مقدار خواسته‌شده برگرداند، تاریخچه «کامل» علامت می‌خورد و از آن به بعد فقط tail-refresh می‌شود.
++> 8. **پیام‌ها، قالب‌ها، زنجیرهٔ لینک‌ها و کدهای یکتا: بدون هیچ تغییری.**
++
+ > ## 🟩 R63-ARENA — شروع تغییرات راند سوم از اینجا (2026-10-01)
+ > کد با برچسب `R63` علامت خورده است. شاخه `arena/01a0d606-smc-scanner2` (PR #5).
+ >
+diff --git a/handoff/VIVA_LAWS.md b/handoff/VIVA_LAWS.md
+index 5a02613..9261d43 100644
+--- a/handoff/VIVA_LAWS.md
+@@ -1,3 +1,55 @@
++# 🟩 R64-ARENA — شروع تغییرات راند چهارم از اینجا (2026-10-02)
++کد با برچسب `R64` علامت خورده است. پایه: `origin/main` = `0384a51`. سشن Arena بسته است، پس تحویل به‌صورت پچ است: `patches/R64-smart-geometry.patch`.
++
++1. **ریشهٔ ۱ خاموشیِ TC: ALBROX جلوی TECHCLASSIC را می‌گرفت** (`analysis/setups_v7.py:_active_detectors`).
++   - لِین A در ALBROX همان موتور TC را اجرا می‌کند، زودتر اجرا می‌شد و گاردِ مشترکِ `TCMINT` را مهر می‌زد. در نتیجه TECHCLASSIC بی‌صدا رد می‌شد.
++   - حالا TC قبل از ALBROX ثبت می‌شود. ALBROX که لِین A آن با گارد ساکت شده، به لِین زون می‌رود و سیگنال تکراری ساخته نمی‌شود.
++   - پروب ۰۹-۰۴ تا ۰۹-۲۴ (DB تازه، گام ۲ ساعته): TC در کنار ALBROX برای ETH/SUI/BTC/SOL به‌ترتیب ۱۰/۴/۶/۸ است، دقیقاً برابر اجرای TC به‌تنهایی. ALBROX_pattern = ۰ (قبل از R64، TC = ۰ بود).
++2. **قانون ناحیهٔ عاقلانه برای لِین‌های شکست** (`trade_management.sane_zone_geometry_ok`):
++   - لِین شکست حالا `line_price` را پاس می‌دهد. زونِ آن کریدورِ «خط شکسته ← قیمت لایو» است، نه باکسی که دنبال سیگنال می‌گردد. برای همین قانون ① روی باندِ خودِ خط سنجیده می‌شود.
++   - کفِ ریسک در قانون ② حداکثر ۰٫۹ برابرِ سقفِ استاپِ همان TF است (`MAX_STOP_PCT_BY_TF`). قبلاً ۱٫۵×ATR1d > ۸٪ هر GRAND روی کوین پرنوسان را غیرممکن می‌کرد.
++   - لِین‌های پین و زون قانون ① را عیناً نگه می‌دارند. فقط کفِ آن‌ها هم به سقف TF محدود شده است.
++3. **باگ برچسب H&S** (`pattern_engine._structural_refine`):
++   - برچسب سر و شانه (نزولی) و سر و شانهٔ معکوس (صعودی) فقط روی رویدادی می‌نشیند که جهتش با همان دکترین یکی باشد.
++   - شکستِ لبهٔ خودِ خط (لبهٔ بالا = LONG، لبهٔ پایین = SHORT) «سرِ شکست‌خورده» است. نام هندسی‌اش می‌ماند.
++4. **هندسهٔ هوشمند (زوم موتور)** (`viva_tlbreak.fit_validated_line`):
++   - خط‌کشِ لمس و residual دیگر میانگینِ رِنجِ ۱۴ کندل آخر به قیمت خطی نیست. حالا میانهٔ ارتفاع کندل‌های کل پنجره (×۲٫۰) است، و وقتی فیت لگاریتمی است، در فضای log10 سنجیده می‌شود.
++   - اثر: اسپایک خط‌کش را باد نمی‌کند، کندل‌های فلت دقتِ کاذب نمی‌سازند، و دو سرِ یک نوار ۲ برابری با یک معیار سنجیده می‌شوند.
++   - وزن‌ها فقط امتیاز می‌دهند و گیت نیستند:
++     - اندازهٔ سوینگِ پیوت‌های لمس‌شده (ماژورها برنده‌اند).
++     - پاداشِ «اکستریمِ لگ» از نیمهٔ اخیرِ پنجره می‌آید، نه از ۱۰ پیوت آخر (یک سقف محلی دیگر این پاداش را نمی‌گیرد).
++     - طول جفتِ تعریف‌کننده حداقل ۱۰٪ پنجره است.
++   - رندر روی ۵ سطح زوم فیت می‌شود (کل پنجره، ۲۰۰، ۱۳۰، ۹۰، ۶۰).
++   - کلید برگشت: `TLBREAK_R64_GEOMETRY=0`.
++   - کالیبراسیون (ضریب ۲٫۰) روی دو آزمون انجام شد:
++
++     **ریپلی TC** (۰۹-۰۴ تا ۰۹-۲۴، ۴ نماد، اولین ظهور هر الگو، TP1 در برابر استاپ ظرف ۷۲ ساعت):
++
++     | پیکربندی | تعداد ستاپ | TP1 | استاپ |
++     |---|---|---|---|
++     | قدیم (خط‌کش قدیم + پنجره‌های ۱۱۰ تا ۲۰۰) | ۳۳ | ۱۹ | ۱۱ |
++     | R64 (ضریب ۲٫۰ + ۳۰۰ کندل) | ۲۸ | ۱۹ | ۴ |
++
++     **مطالعهٔ شکست خط زنده در 15m** (برد = +۳ATR قبل از −۱٫۵ATR):
++
++     | پیکربندی | تعداد رویداد | نرخ برد |
++     |---|---|---|
++     | قدیم، پنجرهٔ ۲۰۰ | ۳۰۷ | ۰٫۳۷ |
++     | R64، پنجرهٔ ۳۰۰ | ۲۸۹ | ۰٫۴۰ |
++
++     در داده‌های 5m (آزمون با ضریب اولیهٔ ۱٫۳۵) نتیجه خنثی بود.
++5. **قانون تعداد کندل** (`analysis/candle_counts.py`، یک منبع واحد):
++   - تعدادها: 15m/30m/1h/4h/1d/3d = ۳۰۰، 2h = ۲۵۰، 8h = ۲۸۰، 12h = ۲۶۰، 1w = ۲۵۰.
++   - هر جا از همین نقشه می‌خواند: موتور TC (`_FIT_WINDOW`)، پنجرهٔ چارت (`_CHART_CANDLE_COUNTS`)، `enrich_render`، اسکن اسپات (قبلاً اسپات روی کل نوار، مثلاً ۱٬۴۸۰ کندل روزانه، اسکن می‌کرد) و عمق پیش‌فرضِ باندل.
++   - 1h و 2h حالا از نوارِ مستقیمِ 1h می‌آیند (یک کال با کش تا کلوزِ بعدی). از 15m نمی‌شد بیش از ۲۵۰ کندل 1h و ۱۲۵ کندل 2h ساخت. اگر روت 1h نباشد، به مسیر قدیمیِ 15m برمی‌گردد.
++6. **زوم لگاریتمی چارت** (`messages_v7._smart_y_window(log_space=True)`):
++   - روی محور log، پنجره در فضای log10 حل می‌شود و واحد کندل میانهٔ ارتفاعِ log است. اسپایک کندل‌ها را کوچک نمی‌کند و نوار فلت باز می‌شود.
++   - کندل‌ها هرگز بریده نمی‌شوند (قانون r40).
++7. **دو باگ که در حین کار پیدا شد:**
++   - **نردبان ریسک r63 هرگز اجرا نمی‌شد:** `from config import SETTINGS` (این نماد در config وجود ندارد) در هر بیلدِ TC/ALBROX خطا می‌داد و چون fail-open بود، بی‌صدا رد می‌شد. حالا از `get_settings()` استفاده می‌شود.
++   - **هزینهٔ Railway:** کوینی که از عمقِ درخواستی جوان‌تر است، در هر اسکن دوباره دانلودِ صفحه‌بندی‌شدهٔ کامل می‌شد. حالا وقتی دانلود عمیق کمتر از مقدار خواسته‌شده برگرداند، تاریخچه «کامل» علامت می‌خورد و از آن به بعد فقط tail-refresh می‌شود.
++8. **پیام‌ها، قالب‌ها، زنجیرهٔ لینک‌ها و کدهای یکتا: بدون هیچ تغییری.**
++
+ # 🟩 R63-ARENA — شروع تغییرات راند سوم از اینجا (2026-10-01)
+ کد با برچسب `R63` علامت خورده است. شاخه `arena/01a0d606-smc-scanner2` (PR #5).
+ 
+diff --git a/main.py b/main.py
+index 166a792..9ddfc73 100644
+--- a/main.py
+@@ -808,9 +808,8 @@ def run_spot_scan() -> Dict[str, int]:
+                 # r52 CryptoCove counts (his dictation 09-28): 4h/8h→170,
+                 # 12h/1d→210, 3d→300, 1w→210 candles — the deep dailies come
+                 # from the one-time history store, not per-scan downloads.
+-                limits={"4h": 200, "8h": 200, "12h": 210,
+-                        "1d": 210, "3d": 300, "1w": 210,
+-                        "5m": 300, "15m": 200})
++                # R64 (his 10-02 «۲۵۰ تا ۳۵۰ کندل … هم اسپات»): the ONE map.
++                limits=__import__("analysis.candle_counts", fromlist=["fetch_limits"]).fetch_limits())
+             bundles[symbol.upper()] = bundle
+             for cand in spot_signals_for(symbol, bundle):
+                 stats["found"] += 1
+@@ -2201,9 +2200,7 @@ def _spot_urgent_recheck() -> int:
+             try:
+                 bundle = get_market_bundle(
+                     symbol, _tfs58,
+-                    limits={"4h": 200, "8h": 200, "12h": 210,
+-                            "1d": 210, "3d": 300, "1w": 210,
+-                            "5m": 300, "15m": 200})
++                    limits=__import__("analysis.candle_counts", fromlist=["fetch_limits"]).fetch_limits())
+                 for cand in spot_signals_for(symbol, bundle):
+                     key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"
+                            f"{(cand.metadata or {}).get('pattern_type')}")
+diff --git a/tests/test_pattern_engine.py b/tests/test_pattern_engine.py
+index 32bcd49..243b376 100644
+--- a/tests/test_pattern_engine.py
+@@ -346,9 +346,21 @@ def test_head_shoulders_label_and_note():
+         (0, 84.3), (45, 99.4), (52, 80.0), (70, 108.0), (88, 78.0),
+         (105, 99.4), (118, 92.0), (132, 99.4), (139, 84.0)])
+     events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
+-    assert events and events[0]["pattern"] == "HEAD_SHOULDERS"
+-    assert "گردن" in events[0].get("struct_note", "")
+-    assert events[0]["touches"] >= 3
++    # R64 (label bug, SOL 09-14 «SHORT INVERSE_HEAD_SHOULDERS»): the edge
++    # still validates through the pierce (1-outlier fit, 3 touches) — but its
++    # own break is a LONG, and H&S is a bearish doctrine: a head above a
++    # broken shoulder line is a failed head, never an H&S label.
++    assert events and events[0]["touches"] >= 3
++    assert events[0]["direction"] == "LONG"
++    assert events[0]["pattern"] != "HEAD_SHOULDERS"
++    assert "گردن" not in (events[0].get("struct_note") or "")
++    from analysis.pattern_engine import _structural_refine
++    class _L:
++        slope = 0.0
++        points = tuple({"index": i} for i in (45, 105, 132))
++    lab, note = _structural_refine(pat, _L(), "upper", len(pat) - 1, 20.0,
++                                   "HORIZONTAL_SR", direction="SHORT")
++    assert lab == "HEAD_SHOULDERS" and "گردن" in note
+ 
+ 
+ def test_triple_top_label():
+diff --git a/tests/test_r63_wiring.py b/tests/test_r63_wiring.py
+index 4ad19c9..3cab113 100644
+--- a/tests/test_r63_wiring.py
+@@ -23,18 +23,38 @@ def test_profile_override_is_thread_local_W4():
+ 
+ 
+ def test_2h_alone_fetches_the_15m_base_W8(monkeypatch):
++    # R64: 2h rides the DIRECT 1h tape now (250 two-hour candles cannot come
++    # from ≤1000 15m bars); the W8 guarantee — 2h alone is never None — stays.
+     import data.fetcher as f
+     calls = []
+ 
+     def fake(symbol, interval, limit, closed_only=True, **kw):
+         calls.append((interval, limit))
++        freq = {"15m": "15min", "1h": "1h"}.get(interval, "15min")
++        ts = pd.date_range("2026-09-01", periods=limit, freq=freq)
++        return pd.DataFrame({"timestamp": ts, "open": 1.0, "high": 1.0, "low": 1.0,
++                             "close": 1.0, "volume": 1.0})
++    monkeypatch.setattr(f, "get_klines", fake)
++    b = f.get_market_bundle("XUSDT", ("2h",))
++    assert b.get("2h") is not None and len(b.get("2h")) >= 250
++    assert calls and calls[0][0] == "1h" and calls[0][1] <= 1000
++
++
++def test_2h_falls_back_to_15m_when_no_1h_route_R64(monkeypatch):
++    import data.fetcher as f
++    calls = []
++
++    def fake(symbol, interval, limit, closed_only=True, **kw):
++        calls.append((interval, limit))
++        if interval == "1h":
++            return None
+         ts = pd.date_range("2026-09-01", periods=limit, freq="15min")
+         return pd.DataFrame({"timestamp": ts, "open": 1.0, "high": 1.0, "low": 1.0,
+                              "close": 1.0, "volume": 1.0})
+     monkeypatch.setattr(f, "get_klines", fake)
+     b = f.get_market_bundle("XUSDT", ("2h",))
+     assert b.get("2h") is not None and len(b.get("2h")) >= 100
+-    assert calls and calls[0][0] == "15m" and calls[0][1] <= 1000
++    assert [c[0] for c in calls] == ["1h", "15m"]
+ 
+ 
+ def test_fit_window_has_2h_30m_W8():
+diff --git a/tests/test_r64_smart_geometry.py b/tests/test_r64_smart_geometry.py
+new file mode 100644
+index 0000000..972e9fc
+--- /dev/null
+@@ -0,0 +1,226 @@
++"""R64 — TC/ALBROX order, sane-zone for break lanes, H&S label direction,
++smart (log/robust) trendline geometry, the ONE candle-count map, spot window
++unity, deep-history cost fix and the log-space chart zoom."""
++import os
++import sys
++
++import numpy as np
++import pandas as pd
++
++ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++sys.path.insert(0, ROOT)
++
++
++# ── 1. TECHCLASSIC registers BEFORE ALBROX (TC root cause #1) ─────────────
++def test_technoclassic_runs_before_albrox(monkeypatch):
++    import dataclasses
++    import analysis.setups_v7 as v7
++    monkeypatch.setattr(v7, "SETTINGS", dataclasses.replace(
++        v7.SETTINGS, albrox_enabled=True, technoclassic_enabled=True))
++    names = [getattr(d, "__name__", "") for d in v7._active_detectors()]
++    assert "detect_technoclassic" in names and "detect_albrox" in names
++    assert names.index("detect_technoclassic") < names.index("detect_albrox")
++
++
++# ── 2. sane-zone: break corridor + floor capped by the TF stop ceiling ────
++def test_sane_zone_break_corridor_is_not_a_watch_box():
++    from analysis.trade_management import sane_zone_geometry_ok as ok
++    # 1d break: line 1.00, live 1.24 → corridor 0.99..1.25 (26%) — the old
++    # law killed it as a «4.7% box»; the corridor is not a watch zone.
++    assert not ok(0.99, 1.25, 1.24, 1.15, "LONG", 0.07, "SWING")
++    assert ok(0.99, 1.25, 1.24, 1.15, "LONG", 0.07, "SWING",
++              line_price=1.00, trigger_tf="1d")
++    # a pin/zone lane (no line) keeps law ① exactly
++    assert not ok(0.99, 1.25, 1.24, 1.15, "LONG", 0.07, "SWING", trigger_tf="1d")
++
++
++def test_sane_zone_floor_never_exceeds_the_stop_ceiling():
++    from analysis.trade_management import sane_zone_geometry_ok as ok
++    # SUI-like 1d: ATR 7.3% → 1.5×ATR = 10.95% > the 8% 1d ceiling → every
++    # GRAND was impossible. Floor is now ≤ 0.9×8% = 7.2%.
++    assert not ok(0.999, 1.001, 1.0, 0.925, "LONG", 0.073, "GRAND")
++    assert ok(0.999, 1.001, 1.0, 0.925, "LONG", 0.073, "GRAND", trigger_tf="1d")
++    # below the capped floor it still refuses (no glued stops)
++    assert not ok(0.999, 1.001, 1.0, 0.95, "LONG", 0.073, "GRAND", trigger_tf="1d")
++
++
++# ── 3. H&S label only rides its own doctrine direction ────────────────────
++def _hs_frame():
++    # flat upper line at 10.0 touched at 5, 25, 45; a head to 11.0 at 15
++    n = 60
++    hi = np.full(n, 9.5)
++    lo = np.full(n, 9.0)
++    for i in (5, 25, 45):
++        hi[i] = 10.0
++    hi[15] = 11.0
++    return pd.DataFrame({"open": 9.2, "high": hi, "low": lo, "close": 9.3, "volume": 1.0})
++
++
++class _Line:
++    slope = 0.0
++    points = ({"index": 5}, {"index": 25}, {"index": 45})
++
++
++def test_head_label_never_on_the_opposite_break():
++    from analysis.pattern_engine import _structural_refine
++    df = _hs_frame()
++    # upper-edge break = LONG → a «head» above is a failed head, never H&S
++    pat, note = _structural_refine(df, _Line(), "upper", 59, 2.0, "HORIZONTAL_SR",
++                                   direction="LONG")
++    assert pat == "HORIZONTAL_SR" and note == ""
++    pat, _ = _structural_refine(df, _Line(), "upper", 59, 2.0, "HORIZONTAL_SR",
++                                direction="SHORT")
++    assert pat == "HEAD_SHOULDERS"
++    # legacy call (no direction) unchanged
++    pat, _ = _structural_refine(df, _Line(), "upper", 59, 2.0, "HORIZONTAL_SR")
++    assert pat == "HEAD_SHOULDERS"
++
++
++# ── 4. smart geometry: robust, scale-honest ruler ─────────────────────────
++def _tape(n=300, seed=7, base=100.0):
++    rng = np.random.default_rng(seed)
++    c = base * np.exp(np.cumsum(rng.normal(0, 0.004, n)))
++    o = np.r_[c[0], c[:-1]]
++    h = np.maximum(o, c) * (1 + np.abs(rng.normal(0, 0.002, n)))
++    l = np.minimum(o, c) * (1 - np.abs(rng.normal(0, 0.002, n)))
++    return pd.DataFrame({"timestamp": pd.date_range("2026-01-01", periods=n, freq="h"),
++                         "open": o, "high": h, "low": l, "close": c, "volume": 1.0})
++
++
++def test_robust_unit_is_scale_invariant_and_spike_proof():
++    from analysis.viva_tlbreak import _robust_unit, _atr
++    d = _tape()
++    u = _robust_unit(d, True)
++    d2 = d.copy()
++    for col in ("open", "high", "low", "close"):
++        d2[col] = d2[col] * 1000.0
++    assert abs(_robust_unit(d2, True) - u) < 1e-12          # log ruler: scale-free
++    d3 = d.copy()
++    d3.loc[len(d3) - 3, "high"] = float(d3["high"].iloc[-3]) * 1.08   # liquidation spike
++    assert abs(_robust_unit(d3, True) - u) / u < 0.02        # median ignores it
++    assert _atr(d3) > 1.3 * _atr(d)                          # the legacy ruler did not
++
++
++def test_prominence_ranks_majors_over_wiggles():
++    from analysis.viva_tlbreak import _pivot_prominence, _robust_unit
++    n = 80
++    hi = np.full(n, 10.0)
++    lo = np.full(n, 9.8)
++    hi[20], lo[30] = 13.0, 9.7          # a real swing high: big pullback after
++    hi[60] = 10.05                       # a wiggle on a flat tape
++    d = pd.DataFrame({"open": 9.9, "high": hi, "low": lo, "close": 9.9, "volume": 1.0})
++    d.loc[21:29, "low"] = 9.0            # reaction out of the major high
++    u = _robust_unit(d, True)
++    prom = _pivot_prominence(d, [{"index": 20, "price": 13.0},
++                                 {"index": 60, "price": 10.05}], "HIGH", True, u)
++    assert prom[20] > 5 * prom[60]
++
++
++def test_r64_switch_restores_legacy(monkeypatch):
++    import analysis.viva_tlbreak as V
++    d = _tape()
++    monkeypatch.setenv("TLBREAK_R64_GEOMETRY", "0")
++    legacy = [V.fit_validated_line(d, s) for s in ("HIGH", "LOW")]
++    monkeypatch.setenv("TLBREAK_R64_GEOMETRY", "1")
++    smart = [V.fit_validated_line(d, s) for s in ("HIGH", "LOW")]
++    # both modes run; the switch is honoured (never raises)
++    assert len(legacy) == len(smart) == 2
++    assert V._r64_enabled() is True
++    monkeypatch.setenv("TLBREAK_R64_GEOMETRY", "off")
++    assert V._r64_enabled() is False
++
++
++def test_smart_fit_rejects_a_short_local_pair_on_a_big_window():
++    """A 20-bar local pair on a 300-bar window must not be the «trend»."""
++    import analysis.viva_tlbreak as V
++    d = _tape(seed=11)
++    ln = V.fit_validated_line(d, "HIGH")
++    if ln is not None and ln.break_index is None:
++        assert (ln.points[-1]["index"] - ln.points[0]["index"]) >= 0.10 * (len(d) - 1) - 1
++
++
++# ── 5. ONE candle-count map (chart ≡ engine ≡ spot) ───────────────────────
++def test_candle_counts_single_source():
++    from analysis.candle_counts import CANDLE_COUNTS, candle_count, fetch_limits
++    from analysis.pattern_engine import _FIT_WINDOW
++    from bot.messages_v7 import _CHART_CANDLE_COUNTS
++    for tf, n in _FIT_WINDOW.items():
++        assert n == CANDLE_COUNTS[tf] and 250 <= n <= 350
++    assert _CHART_CANDLE_COUNTS == CANDLE_COUNTS
++    assert candle_count("1D") == 300 and fetch_limits(["4h"]) == {"4h": 340}
++
++
++def test_spot_scan_window_is_the_chart_window():
++    src = open(os.path.join(ROOT, "analysis", "spot_engine.py"), encoding="utf-8").read()
++    assert src.count("d = d.tail(_spot_count(tf)).reset_index(drop=True)") == 2
++    from analysis.spot_engine import _spot_count
++    assert _spot_count("1d") == 300 and _spot_count("1w") == 250
++
++
++def test_bundle_1h_2h_ride_direct_1h_tape(monkeypatch):
++    import data.fetcher as f
++    calls = []
++
++    def fake(symbol, interval, limit, closed_only=True, **kw):
++        calls.append((interval, limit))
++        freq = {"15m": "15min", "1h": "1h", "4h": "4h", "1d": "1D", "5m": "5min"}[interval]
++        ts = pd.date_range("2025-01-01", periods=limit, freq=freq)
++        return pd.DataFrame({"timestamp": ts, "open": 1.0, "high": 1.01, "low": 0.99,
++                             "close": 1.0, "volume": 1.0})
++    monkeypatch.setattr(f, "get_klines", fake)
++    monkeypatch.setattr("data.history_store.get_deep_daily", lambda s, n: None)
++    b = f.get_market_bundle("XUSDT", ("1d", "4h", "2h", "1h", "30m", "15m"))
++    assert len(b.get("1h")) >= 300 and len(b.get("2h")) >= 250
++    assert len(b.get("4h")) >= 300 and len(b.get("30m")) >= 300
++    assert all(lim <= 1000 for _, lim in calls)
++
++
++# ── 6. deep-history: a young coin is fetched deep ONCE (Railway cost) ─────
++def test_young_coin_is_not_redownloaded_every_scan(monkeypatch):
++    import data.history_store as hs
++    hs._MEMORY.clear()
++    hs._COMPLETE.clear()
++    calls = {"deep": 0, "tail": 0}
++    stored = {}
++    young = pd.DataFrame({"timestamp": pd.date_range("2025-06-01", periods=480, freq="D"),
++                          "open": 1.0, "high": 1.1, "low": 0.9, "close": 1.0, "volume": 1.0})
++
++    def fake_deep(sym, iv, limit, closed_only=True):
++        calls["deep"] += 1
++        return young.copy()
++
++    def fake_tail(sym, iv, limit, closed_only=True, use_cache=False, end_ms=None):
++        calls["tail"] += 1
++        return young.tail(3).copy()
++    monkeypatch.setattr("data.fetcher.get_klines_paginated", fake_deep)
++    monkeypatch.setattr("data.fetcher.get_klines", fake_tail)
++    monkeypatch.setattr(hs, "_load", lambda s: stored.get(s))
++    monkeypatch.setattr(hs, "_save", lambda s, fr: stored.__setitem__(s, fr.copy()))
++    assert len(hs.get_deep_daily("YNGUSDT", 1477)) == 480 and calls["deep"] == 1
++    hs._MEMORY.clear()                                   # TTL expired / restart
++    assert len(hs.get_deep_daily("YNGUSDT", 1477)) == 480
++    assert calls["deep"] == 1 and calls["tail"] == 1     # tail refresh only
++
++
++# ── 7. smart log zoom ─────────────────────────────────────────────────────
++def test_smart_y_window_log_space_percent_floor():
++    import math
++    from bot.messages_v7 import _smart_y_window
++    lo, hi = math.log10(100.0), math.log10(100.5)        # a flat 0.5% tape
++    w = _smart_y_window(lo, hi, 0.0002, None, None, recent_lo=lo, recent_hi=hi,
++                        log_space=True)
++    assert w is not None
++    span_pct = 10 ** (w[1] - w[0]) - 1
++    assert 0.02 < span_pct < 0.05                        # opened to ~2.5%, not 0.5%
++    src = open(os.path.join(ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()
++    assert "R64 SMART LOG ZOOM" in src and "log_space=True" in src
++
++
++# ── 8. r63 risk ladder actually runs (config has no SETTINGS symbol) ──────
++def test_risk_ladder_reads_settings_through_get_settings():
++    import config
++    assert not hasattr(config, "SETTINGS")
++    assert config.get_settings().risk_ladder_enabled in (True, False)
++    src = open(os.path.join(ROOT, "analysis", "pattern_engine.py"), encoding="utf-8").read()
++    assert "from config import SETTINGS" not in src
++    assert "from config import get_settings as _gs63" in src
+diff --git a/tests/test_round30_mtf_spot_architecture.py b/tests/test_round30_mtf_spot_architecture.py
+index 39c99b5..e904325 100644
+--- a/tests/test_round30_mtf_spot_architecture.py
+@@ -56,6 +56,8 @@ def test_market_bundle_derives_multiples_and_keeps_5m_direct(monkeypatch):
+             return _frame(300, "5min")
+         if interval == "15m":
+             return _frame(200, "15min")
++        if interval == "1h":            # R64: 1h/2h ride a direct 1h tape
++            return _frame(340, "1h")
+         if interval == "4h":
+             return _frame(170, "4h")
+         if interval == "1d":
+@@ -69,7 +71,7 @@ def test_market_bundle_derives_multiples_and_keeps_5m_direct(monkeypatch):
+         limits={"4h": 170, "1d": 420, "3d": 120, "1w": 60, "5m": 300, "15m": 200},
+     )
+ 
+-    assert [tf for tf, _ in calls] == ["5m", "15m", "4h", "1d"]
++    assert [tf for tf, _ in calls] == ["5m", "15m", "1h", "4h", "1d"]
+     assert len(bundle.get("5m")) == 300
+     assert len(bundle.get("15m")) == 200
+     assert len(bundle.get("4h")) == 170
+diff --git a/tests/test_round46_stability.py b/tests/test_round46_stability.py
+index 74235ec..b6780db 100644
+--- a/tests/test_round46_stability.py
+@@ -70,5 +70,7 @@ def test_chain_updates_capped_at_one():
+ 
+ def test_daily_lookback_widened():
+     src = _msg()
+-    assert '"1d": 210' in src   # r52 dictation: 12h/1d → 170-250 (mid 210)
++    # R64 dictation (10-02): 250..350 per TF — the map is analysis.candle_counts
++    from analysis.candle_counts import CANDLE_COUNTS
++    assert CANDLE_COUNTS["1d"] == 300 and "_R64_CANDLE_COUNTS" in src
+     assert '"1d": 96' not in src
+diff --git a/tests/test_round47_tohom.py b/tests/test_round47_tohom.py
+index 0b5bc62..93eee95 100644
+--- a/tests/test_round47_tohom.py
+@@ -183,7 +183,8 @@ def test_setup_routing_map():
+ def test_spot_chart_is_log_and_tohom_line_exists():
+     src = open(os.path.join(REPO, "bot", "messages_v7.py"), encoding="utf-8").read()
+     assert 'ax.set_yscale("log")' in src
+-    assert '"3d": 300' in src and '"8h": 170' in src
++    from analysis.candle_counts import CANDLE_COUNTS      # R64 counts
++    assert CANDLE_COUNTS["3d"] == 300 and CANDLE_COUNTS["8h"] == 280
+     assert "_tohom_line" in src
+ 
+ 
+diff --git a/tests/test_round50_wick_and_cove.py b/tests/test_round50_wick_and_cove.py
+index c3dcdf1..19fb42e 100644
+--- a/tests/test_round50_wick_and_cove.py
+@@ -84,15 +84,19 @@ def test_trend_fit_sites_opt_in():
+ def test_cryptocove_lookbacks():
+     # r52 — HIS dictation (09-28): 4h/8h→140-200, 12h/1d→170-250, 3d→250-350,
+     # 1w→170-250 (mid-points shipped); r50 measured numbers are superseded.
+-    src = open(os.path.join(REPO, "bot", "messages_v7.py"), encoding="utf-8").read()
+-    assert '"4h": 170' in src and '"8h": 170' in src and '"12h": 210' in src
+-    assert '"3d": 300' in src and '"1w": 210' in src and '"1d": 210' in src
++    # R64 — HIS 10-02 dictation supersedes r52: 250..350 candles per TF, spot
++    # AND perpetual, daily included — one map in analysis.candle_counts.
++    from analysis.candle_counts import CANDLE_COUNTS as C
++    assert (C["4h"], C["8h"], C["12h"], C["1d"], C["3d"], C["1w"]) == (300, 280, 260, 300, 300, 250)
+ 
+ 
+ def test_spot_bundle_fetches_the_depths():
+     src = open(os.path.join(REPO, "main.py"), encoding="utf-8").read()
+-    part = src.split("r52 CryptoCove counts")[1].split("limits={")[1][:220]
+-    assert '"3d": 300' in part and '"1w": 210' in part and '"4h": 200' in part
++    # R64: the spot bundle reads the ONE candle-count map (+40 warm-up)
++    assert src.count('fromlist=["fetch_limits"]).fetch_limits()') == 2
++    from analysis.candle_counts import fetch_limits
++    lim = fetch_limits()
++    assert lim["3d"] == 340 and lim["1w"] == 290 and lim["4h"] == 340
+     src2 = open(os.path.join(REPO, "data", "fetcher.py"), encoding="utf-8").read()
+     assert 'limits.get("4h", 200)' in src2
+     assert 'limits.get("1w", 210)) * 7 + 7' in src2
+diff --git a/tests/test_round52_dictation.py b/tests/test_round52_dictation.py
+index 36f3419..09d130c 100644
+--- a/tests/test_round52_dictation.py
+@@ -27,9 +27,14 @@ sys.path.insert(0, ROOT)
+ # ── 1. the dictated counts + hard cap ──────────────────────────────────────
+ def test_dictated_candle_counts_are_law():
+     src = open(os.path.join(ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()
+-    for token in ('"4h": 170', '"8h": 170', '"12h": 210', '"1d": 210',
+-                  '"3d": 300', '"1w": 210'):
+-        assert token in src, token
++    # R64 (his 10-02 dictation «۲۵۰ تا ۳۵۰ کندل بسته به تایم‌فریم … هم اسپات
++    # هم پرپچوال، حتی روزانه») supersedes the r52 counts — the map lives in
++    # analysis.candle_counts and every TF sits inside 250..350.
++    from analysis.candle_counts import CANDLE_COUNTS
++    from bot.messages_v7 import _CHART_CANDLE_COUNTS
++    assert _CHART_CANDLE_COUNTS == CANDLE_COUNTS
++    for tf in ("4h", "8h", "12h", "1d", "3d", "1w", "1h", "2h", "30m", "15m"):
++        assert 250 <= CANDLE_COUNTS[tf] <= 350, tf
+     # the r37 widen must be gone: no 2.2x window stretch may remain
+     assert "int(_lookback * 2.2)" not in src
+     assert "_need37" not in src
+@@ -39,7 +44,7 @@ def test_window_is_a_hard_cap_in_render():
+     src = open(os.path.join(ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()
+     # r53: the map is the module-level single source of truth; the render
+     # window is cut straight from it — no widen may sit in between.
+-    assert '_CHART_CANDLE_COUNTS = {"1d": 210' in src
++    assert "_CHART_CANDLE_COUNTS = dict(_R64_CANDLE_COUNTS)" in src
+     seg = src.split("_lookback = _CHART_CANDLE_COUNTS.get")[1].split("frame = _clean_render_frame")[0]
+     assert "_need37" not in seg and "2.2" not in seg
+     assert "frame = _clean_render_frame(df, window=_lookback)" in src
+diff --git a/tests/test_round53_announce_and_phantom.py b/tests/test_round53_announce_and_phantom.py
+index 8a63796..e7b91f6 100644
+--- a/tests/test_round53_announce_and_phantom.py
+@@ -62,10 +62,11 @@ def test_result_link_edit_keeps_confirm_stamp():
+ # ── 2. dictated depth on monitor/update charts ─────────────────────────────
+ def test_chart_fetch_size_map():
+     from bot.messages_v7 import _chart_fetch_size, _CHART_CANDLE_COUNTS
+-    assert _chart_fetch_size("1w") == 210 and _chart_fetch_size("3d") == 300
+-    assert _chart_fetch_size("12h") == 210 and _chart_fetch_size("1d") == 210
+-    assert _chart_fetch_size("4h") == 170 and _chart_fetch_size("8h") == 170
+-    assert _chart_fetch_size("15m") == 164
++    # R64 counts (analysis.candle_counts — 250..350 per TF, his 10-02 law)
++    assert _chart_fetch_size("1w") == 250 and _chart_fetch_size("3d") == 300
++    assert _chart_fetch_size("12h") == 260 and _chart_fetch_size("1d") == 300
++    assert _chart_fetch_size("4h") == 300 and _chart_fetch_size("8h") == 280
++    assert _chart_fetch_size("15m") == 300
+     assert set(_CHART_CANDLE_COUNTS) >= {"5m", "15m", "30m", "1h", "2h", "4h",
+                                          "8h", "12h", "1d", "3d", "1w"}
+ 
+-- 
+2.39.5
+
