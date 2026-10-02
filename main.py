@@ -2189,7 +2189,9 @@ def _spot_urgent_recheck() -> int:
         if not watch:
             return 0
         syms = sorted(watch.keys())[:6]   # keys are "SYMBOL|TF"
-        from analysis.spot_engine import spot_signals_for, SPOT_TRIGGERS
+        from analysis.spot_engine import (spot_signals_for, scan_spot_urgent_confirms,
+                                          spot_confirm_tf, build_spot_candidate,
+                                          SPOT_TRIGGERS)
         from bot.messages_v7 import (CHAT_ID_SPOT, generate_chart,
                                      tf_channel_publish_confirmed)
         from data.fetcher import get_market_bundle
@@ -2197,10 +2199,65 @@ def _spot_urgent_recheck() -> int:
         for key58 in syms:
             symbol, _, _want_tf = key58.partition("|")
             _tfs58 = (_want_tf,) if _want_tf else tuple(SPOT_TRIGGERS)
+            # ── R65 URGENT CONFIRM (Viva 10-02: «ترند سه روزه چرا بعد از بریک
+            # تایید سیگنال نکرده و سه روز بعد تایید کرده؟ … باید بعد از بریک،
+            # کلوز معتبر خارج از ترندلاین تایید ورود صادر بشه — حتی قبل از کلوز
+            # تایم تریگر»): the pinned timeframe's shape is judged against the
+            # ONE-STEP-LOWER frame's last closed candle. A valid break close
+            # there publishes the confirmation NOW (minutes after that close)
+            # instead of waiting for the pattern TF (up to 3 days on 3d).
+            # The sub frame is fetched in the same bundle — no extra pass.
+            _sub58 = spot_confirm_tf(_want_tf) if _want_tf else ""
+            if _sub58 and _sub58 not in _tfs58:
+                _tfs58 = tuple(_tfs58) + (_sub58,)
             try:
                 bundle = get_market_bundle(
                     symbol, _tfs58,
                     limits=__import__("analysis.candle_counts", fromlist=["fetch_limits"]).fetch_limits())
+                _urgent58 = []
+                if _want_tf:
+                    try:
+                        _urgent58 = scan_spot_urgent_confirms(symbol, bundle, _want_tf)
+                    except Exception as _u58:
+                        print(f"spot urgent confirm warning {symbol}: {_u58}")
+                for _u58item in _urgent58:
+                    try:
+                        _uc58 = build_spot_candidate(_u58item)
+                    except Exception as _ub58:
+                        print(f"spot urgent candidate warning {symbol}: {_ub58}")
+                        continue
+                    key = (f"spot|{_uc58.symbol}|{_uc58.trigger_timeframe}|"
+                           f"{(_uc58.metadata or {}).get('pattern_type')}")
+                    window = 72.0 if str(_uc58.trigger_timeframe) == "3d" else 36.0
+                    if _spot_stamp(key, window, commit=False):
+                        continue
+                    _frame58 = bundle.get(_uc58.trigger_timeframe)
+                    chart = (generate_chart(_frame58, _uc58, confirmed=True)
+                             if _frame58 is not None else None)
+                    if not chart:
+                        continue
+                    _alert_kv = _spot_alert_mid_kv(
+                        _uc58.symbol, _uc58.trigger_timeframe,
+                        str((_uc58.metadata or {}).get("pattern_type") or ""))
+                    mid = tf_channel_publish_confirmed(
+                        _uc58, chart=chart, chat_override=CHAT_ID_SPOT,
+                        reply_to=int(_alert_kv.get("mid") or 0))
+                    if mid:
+                        _spot_stamp(key, window)
+                        published += 1
+                        print(f"🪙 spot urgent confirm published {_uc58.symbol} "
+                              f"{_uc58.trigger_timeframe} (confirm "
+                              f"{(_uc58.metadata or {}).get('spot_confirm_tf')})")
+                        try:
+                            from bot.messages_v7 import (_public_code as _pc,
+                                                         _spot_chain_get as _scg,
+                                                         _spot_chain_set as _scs)
+                            _chain = _scg(_pc(_uc58))
+                            _chain.update({"alert": int(_alert_kv.get("mid") or 0),
+                                           "confirm": int(mid), "last": int(mid)})
+                            _scs(_pc(_uc58), _chain)
+                        except Exception:
+                            pass
                 for cand in spot_signals_for(symbol, bundle):
                     key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"
                            f"{(cand.metadata or {}).get('pattern_type')}")

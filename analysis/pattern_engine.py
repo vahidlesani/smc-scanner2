@@ -1327,6 +1327,20 @@ def _mint_guard_key(bundle, ev) -> str:
                      pts[0], pts[-1]))
 
 
+# R65: BREAK events refused because the price had already run past the
+# broken edge by more than the config's extension cap (see the gate in
+# detect_technoclassic). Kept as a visible ledger — a blocked break is a
+# decision, never a silent drop.
+R65_EXTENSION_BLOCKS: List[str] = []
+
+
+def drain_r65_extension_blocks() -> List[str]:
+    """Test/ops helper: notes collected since the last drain."""
+    out = list(R65_EXTENSION_BLOCKS)
+    R65_EXTENSION_BLOCKS.clear()
+    return out
+
+
 def _brooks_edge_ok(trig: pd.DataFrame, ev: Dict) -> bool:
     """R63: grade the trigger-TF bar that crossed a TC edge (Al Brooks).
     Only a FRESH cross (last 4 bars) is graded; an older recognised break is
@@ -1389,6 +1403,37 @@ def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
     events = [e for e in scan_edges(pat, trig, structure_tf,
                                     live_price=(live if live > 0 else None))
               if e["state"] == STATE_BREAK]
+    # ── R65 TRADEABLE-BREAK (no-chase) GATE — the TECHCLASSIC «nothing ever
+    # happens» root cause, measured on 121 real break events (2026-10-02):
+    # 66% arrive with price already 1.5–10 ATR PAST the broken edge (the 4h
+    # lane's median was 7.9 ATR — the probe case: broken edge 74,180 vs live
+    # 84,370). The mint then built a 12%-wide zone and a 3.5% stop on a 15m
+    # trigger, and the round-12 geometry net dropped it silently, so the setup
+    # looked dead while it was really emitting un-tradeable chases.
+    # Viva's own config names the law (max_extension_atr_multiple_without_
+    # retest): past it the break is HISTORY — a retest belongs to the retest
+    # lanes; TC waits for a new/fresh edge. Blocked events are recorded (never
+    # silently swallowed) and the gate never invents a level.
+    try:
+        _ext_cap = float(getattr(cfg, "extension_cap_atr_swing"
+                                 if str(style).upper() in ("SWING", "GRAND")
+                                 else "extension_cap_atr_daytrade", 1.5) or 1.5)
+    except Exception:
+        _ext_cap = 1.5
+    _kept = []
+    for _e65 in events:
+        try:
+            _d65 = abs(float(_e65.get("distance_atr") or 0.0))
+        except Exception:
+            _d65 = 0.0
+        if _d65 > _ext_cap:
+            _note65 = (f"{getattr(bundle, 'symbol', '?')}|{structure_tf}|"
+                       f"{_e65.get('pattern')}|{_e65.get('direction')}|{_d65:.1f}")
+            if len(R65_EXTENSION_BLOCKS) < 200:
+                R65_EXTENSION_BLOCKS.append(_note65)
+            continue
+        _kept.append(_e65)
+    events = _kept
     # ── R63 Brooks breakout law on the EDGE lane too: a weak (doji / tail
     # against) or climactic breakout bar, or a breakout that already failed
     # (close back inside), never mints — «بریک‌اوت فالوترو میخواد».

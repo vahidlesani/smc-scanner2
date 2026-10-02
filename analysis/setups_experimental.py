@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -815,6 +817,10 @@ EXPERIMENTAL_DETECTORS = [detect_pattern_1234]
 # --------------------------------------------------------------------------
 
 SETUP_NAMES["PINVAL"] = "Valid Pinbar in Important Zone (alert)"
+# R65: pins refused because they sat on the WRONG half of the drawn
+# shape (a long pin at the top of a channel / a short at the bottom).
+# A visible ledger, never a silent drop.
+PINVAL_LOCATION_BLOCKS: List[str] = []
 SETUP_NAMES_FA["PINVAL"] = "پین‌بار معتبر در ناحیه مهم"
 
 # PinWall/PINWALLQ primary trigger ladder.
@@ -878,6 +884,72 @@ def _context_zone(bundle: MarketBundle, ctx_tf: str, direction: str, atr_c: floa
     return {"kind": "SD_FRESH", "level": lv}
 
 
+def _channel_zone_position(df: pd.DataFrame) -> tuple:
+    """R65 PIN-LOCATION LAW — where the pin sits inside the shape the chart
+    draws: (pos, kind, upper, lower) with pos ∈ [0, 1] (0 = on the lower edge,
+    1 = on the upper edge). ``pos`` is None when no validated pair exists.
+
+    Cost-aware by design: two validated-line fits (≈15 ms) instead of a full
+    pattern scan — the same fitter the chart uses, so the guard agrees with
+    the picture.
+    """
+    try:
+        import dataclasses as _dc
+        from analysis.viva_tlbreak import fit_validated_line, load_config
+        from analysis.pattern_engine import classify_shape
+        cfg = _dc.replace(load_config(), pivot_left=3, pivot_right=3, min_touches=2,
+                          touch_tolerance_atr=0.20, max_fit_residual_atr=0.45,
+                          require_alive=False)
+        d = df.reset_index(drop=True)
+        n = len(d) - 1
+        up = fit_validated_line(d, "HIGH", cfg)
+        lo = fit_validated_line(d, "LOW", cfg)
+        if up is None or lo is None:
+            return None, "", 0.0, 0.0
+        hi = float(up.price_at(n))
+        low = float(lo.price_at(n))
+        if hi <= low:
+            return None, "", 0.0, 0.0
+        kind = str(classify_shape(up, lo, n) or "")
+        return (hi - low), kind, hi, low
+    except Exception:
+        return None, "", 0.0, 0.0
+
+
+def _pin_channel_top_blocked(df: pd.DataFrame, direction: str, probe: float) -> tuple:
+    """(blocked, note) — True when the pin contradicts its own half of the
+    drawn channel/box.
+
+    * LONG pin with the probe in the TOP third of the shape (pos ≥ 0.66) and
+      still INSIDE it → refused: that is a reversal DOWN, not a long («پین‌بار
+      معکوس در بالای کانال»).
+    * SHORT pin mirrored at the bottom third.
+    * A probe BEYOND an edge (price broke out and is retesting from outside)
+      is not a rejection — the guard stands down; break flows own that case.
+    """
+    try:
+        height, kind, hi, low = _channel_zone_position(df)
+        if not height or height <= 0:
+            return False, ""
+        pos = (float(probe) - low) / height
+        d = str(direction or "").upper()
+        if d == "LONG":
+            if probe > hi:                      # above the shape: post-break zone
+                return False, ""
+            if pos >= 0.66:
+                return True, (f"پین صعودی در یک‌سوم بالای {kind or 'کانال'} "
+                              f"(موقعیت {pos:.0%}) — برگشت از سقف، نه ورود خرید")
+        elif d == "SHORT":
+            if probe < low:
+                return False, ""
+            if pos <= 0.34:
+                return True, (f"پین نزولی در یک‌سوم پایین {kind or 'کانال'} "
+                              f"(موقعیت {pos:.0%}) — خرید از کف، نه ورود فروش")
+        return False, ""
+    except Exception:
+        return False, ""
+
+
 def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
     settings = get_settings()
     if not getattr(settings, "pinv_enabled", True):
@@ -908,6 +980,22 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             continue
         direction = "LONG" if is_bull else "SHORT"
         probe = l if is_bull else h
+
+        # ── R65 PIN-LOCATION LAW (Viva 10-02: «قبل از بریک چرا با وجود دیدن
+        # پین‌بار معکوس در بالای کانال سیگنال لانگ داده؟»): a LONG pin in the
+        # top third of the drawn channel/box (or a SHORT pin in the bottom
+        # third) is a reversal against itself — refused here, recorded in the
+        # metadata so the funnel stays visible. Probe beyond an edge stands the
+        # guard down (that is a post-break retest, not a rejection).
+        _chan_blocked, _chan_note = _pin_channel_top_blocked(df, direction, probe)
+        if _chan_blocked and str(os.getenv("PINVAL_CHANNEL_TOP_GATE", "1") or "1").strip() \
+                not in ("0", "false", "no", "off"):
+            try:
+                PINVAL_LOCATION_BLOCKS.append(
+                    f"{bundle.symbol}|{tf}|{direction}|{_chan_note}")
+            except Exception:
+                pass
+            continue
 
         fvg = _unmitigated_fvg_edge(df, direction, atr_v)
         in_fvg = bool(fvg) and fvg["bottom"] - 0.35 * atr_v <= probe <= fvg["top"] + 0.35 * atr_v

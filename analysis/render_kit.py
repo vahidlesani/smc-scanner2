@@ -778,7 +778,7 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
     # R64 CANDLE-COUNT LAW: the render patterns are fitted on EXACTLY the
     # candles the chart shows (analysis.candle_counts) — chart ≡ trade window.
     try:
-        from analysis.candle_counts import candle_count as _cc64
+        from analysis.candle_counts import render_count as _cc64
         _rw64 = _cc64(str(getattr(candidate, "trigger_timeframe", "") or ""), 300)
     except Exception:
         _rw64 = 300

@@ -32,7 +32,13 @@ def test_dictated_candle_counts_are_law():
     # analysis.candle_counts and every TF sits inside 250..350.
     from analysis.candle_counts import CANDLE_COUNTS
     from bot.messages_v7 import _CHART_CANDLE_COUNTS
-    assert _CHART_CANDLE_COUNTS == CANDLE_COUNTS
+    # R65 picture density: the chart has its OWN map now — 190–210 on the
+    # intraday frames (his «کندل ۱۹۰ تا ۲۱۰ تا کافیه … فقط شلوغ‌تر شد»),
+    # while DETECTION keeps the dictated 250–350 bars.
+    from analysis.candle_counts import RENDER_COUNTS
+    assert _CHART_CANDLE_COUNTS == RENDER_COUNTS
+    for _tf in ("5m", "15m", "30m", "1h", "2h"):
+        assert 190 <= RENDER_COUNTS[_tf] <= 210
     for tf in ("4h", "8h", "12h", "1d", "3d", "1w", "1h", "2h", "30m", "15m"):
         assert 250 <= CANDLE_COUNTS[tf] <= 350, tf
     # the r37 widen must be gone: no 2.2x window stretch may remain
@@ -44,7 +50,8 @@ def test_window_is_a_hard_cap_in_render():
     src = open(os.path.join(ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()
     # r53: the map is the module-level single source of truth; the render
     # window is cut straight from it — no widen may sit in between.
-    assert "_CHART_CANDLE_COUNTS = dict(_R64_CANDLE_COUNTS)" in src
+    assert "_CHART_CANDLE_COUNTS = dict(_R65_RENDER_COUNTS)" in src
+    assert "RENDER_COUNTS as _R65_RENDER_COUNTS" in src
     seg = src.split("_lookback = _CHART_CANDLE_COUNTS.get")[1].split("frame = _clean_render_frame")[0]
     assert "_need37" not in seg and "2.2" not in seg
     assert "frame = _clean_render_frame(df, window=_lookback)" in src

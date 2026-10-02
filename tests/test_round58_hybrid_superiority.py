@@ -121,7 +121,9 @@ def test_urgent_watch_exists_and_is_bounded():
 
 def test_urgent_recheck_uses_the_reply_chain():
     src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
-    seg = src.split("def _spot_urgent_recheck")[1][:4000]
+    # R65 added the urgent-confirm lane inside this function — the
+    # contract is about the WHOLE mini-pass, so scan the whole function.
+    seg = src.split("def _spot_urgent_recheck")[1].split("def run_monitor_cycle")[0]
     assert "reply_to=int(_alert_kv.get" in seg
     assert "_spot_stamp(" in seg     # dedupe law holds in the mini-pass too
 

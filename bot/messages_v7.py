@@ -907,14 +907,32 @@ _TF_PATTERN_CACHE: Dict[Tuple[str, str, str], list] = {}
 # SAME numbers the engine fits on, so the chart shows exactly the candles the
 # trade geometry was built from.
 from analysis.candle_counts import CANDLE_COUNTS as _R64_CANDLE_COUNTS
-_CHART_CANDLE_COUNTS = dict(_R64_CANDLE_COUNTS)
+try:      # R65 picture density (render-only map)
+    from analysis.candle_counts import RENDER_COUNTS as _R65_RENDER_COUNTS
+except Exception:  # pragma: no cover - defensive
+    _R65_RENDER_COUNTS = dict(_R64_CANDLE_COUNTS)
+# R65 PICTURE DENSITY: the chart window is the render map (190–210 on the
+# intraday frames, dictated counts above), while detection keeps hunting
+# on the deeper tape (analysis.candle_counts.candle_count).
+_CHART_CANDLE_COUNTS = dict(_R65_RENDER_COUNTS)
 
 
 def _chart_fetch_size(tf: str) -> int:
     """Bars to FETCH so a chart of `tf` can actually render its dictated
     count (monitor/update paths used a blind 180 — 1w/3d spot chains then
-    rendered a decade of needle candles instead of the CryptoCove density)."""
-    return int(_CHART_CANDLE_COUNTS.get(str(tf or "").lower(), 300))
+    rendered a decade of needle candles instead of the CryptoCove density).
+
+    R65: the chart window may be SHORTER than the detection window (the render
+    map: 190–210 intraday vs 250–350 for detection), but the FETCH depth must
+    always satisfy BOTH — the same tape feeds the engine, and a 210-bar fetch
+    would starve a 300-bar fit. Fetch deep, draw the density.
+    """
+    k = str(tf or "").lower()
+    try:
+        from analysis.candle_counts import candle_count as _cc65
+        return int(max(_CHART_CANDLE_COUNTS.get(k, 300), _cc65(k, 300)))
+    except Exception:
+        return int(_CHART_CANDLE_COUNTS.get(k, 300))
 
 
 def _log_axis_decorate(ax) -> None:
@@ -1758,6 +1776,126 @@ def _clean_render_frame(df: pd.DataFrame, window: int = 150) -> pd.DataFrame:
     return frame
 
 
+def _r65_focus_window(df: pd.DataFrame, candidate, base_n: int,
+                      confirmed: bool, max_n: Optional[int] = None) -> int:
+    """R65 SMART ZOOM (Viva 10-02, verbatim: «زوم رو درست کن در تایم‌های ۱۵
+    دقیقه و ۳۰ دقیقه و ۱ ساعته و ۲ ساعته … کندل ۱۹۰ تا ۲۱۰ تا کافیه اما زوم
+    درست بشه بارها گفتم روی ارتفاع کندل‌ها دقت بشه»).
+
+    The r52 law fixed the CANDLE COUNT; it never fixed what those candles do to
+    the price panel. A 300-bar window that contains one old capitulation low
+    drags the whole axis down — measured on the real tape (BTC 30m probe): the
+    live block sat in the TOP 30% of the panel with candles filling 57%, i.e.
+    exactly the «کندل‌ها ریز و بالا، پایین خالی» picture he keeps sending.
+
+    The frame is now chosen by FOCUS, not by a constant: the union of
+      • the recent block (last 60 closed bars — the action the trade lives on),
+      • the drawn pattern's own anchors (never cut a shape mid-air), and
+      • the trade tool (entry / stop / ladder) when the chart is confirmed
+    is the SUBJECT of the picture, and the window is shortened (never below
+    the floor, never past the earliest required anchor) until the subject owns
+    ≥65% of the candle box. Candles stay hard bounds (r40); on a tape whose
+    history is already tight the base count is returned untouched.
+    """
+    import math as _m
+    try:
+        n = int(min(base_n, len(df)))
+        _hard_cap = int(min(max_n, len(df))) if max_n else int(n)
+        if df is None or len(df) < 60:
+            return int(base_n)
+        md = getattr(candidate, "metadata", None) or {}
+        w_full = df.tail(n).reset_index(drop=True)
+        # ── the recent block ────────────────────────────────────────────────
+        recent = w_full.tail(min(60, len(w_full)))
+        f_lo = float(recent["low"].min())
+        f_hi = float(recent["high"].max())
+        for v in (getattr(candidate, "sl", 0), getattr(candidate, "entry_zone_bottom", 0),
+                  getattr(candidate, "entry_zone_top", 0), getattr(candidate, "tp1", 0),
+                  getattr(candidate, "tp2", 0)):
+            try:
+                v = float(v or 0)
+                if v > 0 and _m.isfinite(v):
+                    f_lo, f_hi = min(f_lo, v), max(f_hi, v)
+            except Exception:
+                pass
+        if confirmed:
+            for v in (((md.get("target_ladder") or {}).get("targets")) or []):
+                try:
+                    v = float(v or 0)
+                    if v > 0 and _m.isfinite(v):
+                        f_lo, f_hi = min(f_lo, v), max(f_hi, v)
+                except Exception:
+                    pass
+        # ── earliest anchor that must stay in frame ─────────────────────────
+        # (60 = the absolute floor; anchors may only RAISE it)
+        need_n = 60
+        try:
+            ts_all = (pd.to_datetime(df["timestamp"]) if "timestamp" in df.columns
+                      else pd.DatetimeIndex(pd.to_datetime(df.index)))
+            anchors = []
+            _g = md.get("break_line_geo") or {}
+            if _g.get("a_ts"):
+                anchors.append(str(_g["a_ts"]))
+            for _geo in (md.get("pattern_geo") or {}).values():
+                if isinstance(_geo, dict) and _geo.get("a_ts"):
+                    anchors.append(str(_geo["a_ts"]))
+            _idx_floor = None
+            for _p in (md.get("render_patterns") or []):
+                for _ln in (_p.get("lines") or []):
+                    _p0 = _ln.get("points") or []
+                    if _p0:
+                        anchors.append(str(_p0[0].get("ts") or ""))
+                    # R65: legacy / stuffed / zone-lane line dicts carry BAR
+                    # INDICES instead of timestamps — a stored pattern may never
+                    # be cut by the zoom, whatever way its start is recorded.
+                    try:
+                        _x0 = float(_ln.get("x0")) if _ln.get("x0") is not None else None
+                        if _x0 is not None and _x0 >= 0:
+                            _idx_floor = _x0 if _idx_floor is None else min(_idx_floor, _x0)
+                    except Exception:
+                        pass
+            if _idx_floor is not None:
+                need_n = max(need_n, int(len(df) - int(_idx_floor) + 3))
+            for a in anchors:
+                if not a:
+                    continue
+                try:
+                    a0 = (pd.Timestamp(a).tz_convert("UTC").tz_localize(None)
+                          if pd.Timestamp(a).tzinfo is not None else pd.Timestamp(a))
+                    _idx = int((ts_all < a0).sum())
+                    if _idx > 0:
+                        need_n = max(need_n, len(df) - _idx + 3)
+                except Exception:
+                    continue
+            # r37 ANCHOR LAW, kept: a stored pattern anchor may pull the
+            # picture back up — but never past the DETECTION count (the engine
+            # has no geometry older than that to draw anyway).
+            _hard = int(max_n) if max_n else n
+            need_n = min(max(need_n, 60), max(n, _hard))
+        except Exception:
+            need_n = n
+        if need_n >= n:
+            return need_n
+        # ── shorten while the subject is crushed by dead history ────────────
+        floor_n = max(int(need_n), int(0.42 * n))
+        step_n = max(int(n), int(need_n))
+        while True:
+            w = df.tail(step_n).reset_index(drop=True)
+            c_lo, c_hi = float(w["low"].min()), float(w["high"].min())
+            c_hi = float(w["high"].max())
+            box = max(c_hi - c_lo, 1e-12)
+            share = (min(c_hi, f_hi) - max(c_lo, f_lo)) / box
+            if share >= 0.65 and step_n >= n:
+                return int(step_n)
+            if share >= 0.65:
+                return int(step_n)
+            if step_n <= floor_n:
+                return int(min(step_n, _hard_cap))
+            step_n = max(floor_n, int(step_n * 0.90))
+    except Exception:
+        return int(base_n)
+
+
 def _r62_tool_fit_lookback(df: pd.DataFrame, candidate, lookback: int,
                            confirmed: bool) -> int:
     """R62-ARENA smart zoom, x side. Returns the bar count to render.
@@ -2119,6 +2257,20 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # own anchors, never below the band. Candles stay hard bounds (r40).
         try:
             _lookback = _r62_tool_fit_lookback(df, candidate, int(_lookback), bool(confirmed))
+        except Exception:
+            pass
+        # R65 FOCUS ZOOM (Viva 10-02: «زوم رو درست کن … روی ارتفاع کندل‌ها
+        # دقت بشه»): a 300-bar frame that carries one old capitulation low
+        # leaves the live block tiny in the top corner of the axis (BTC 30m
+        # probe: candles filled 57%, recent block at 70% height). The frame is
+        # shortened — never past the pattern's own anchors, never below the
+        # floor — until the recent block + pattern + tool own ≥65% of the
+        # candle box. Candles stay hard bounds (r40).
+        try:
+            from analysis.candle_counts import candle_count as _cc65
+            _lookback = _r65_focus_window(
+                df, candidate, int(_lookback), bool(confirmed),
+                max_n=_cc65(str(_chart_tf), int(_lookback)))
         except Exception:
             pass
         frame = _clean_render_frame(df, window=_lookback)

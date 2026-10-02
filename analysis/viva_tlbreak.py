@@ -145,6 +145,15 @@ _R64_UNIT_FACTOR = 2.0
 _R64_WEIGHTS = True      # prominence / leg-extreme / min-span selection weights
 _R64_MIN_SPAN_FRAC = 0.10   # defining pair spans ≥ this share of the window
 _R64_LEG_HALF = True        # leg-extreme bonus measured on the window's recent half
+# R65: the alternate geometry space (price-linear on a log window, or the
+# reverse) is a FALLBACK: when both spaces validate the same pair the chart's
+# own space must win, so the alternate carries this weight.
+_R65_ALT_SPACE_WEIGHT = 0.88
+
+
+def _r65_dual_space() -> bool:
+    return str(os.getenv("TLBREAK_R65_DUAL_SPACE", "1") or "1").strip().lower() \
+        not in ("0", "false", "no", "off")
 
 
 def _r64_enabled() -> bool:
@@ -287,171 +296,189 @@ def fit_validated_line(
 
     best: Optional[ValidatedLine] = None
     best_score = -1.0
+
+    # ── R65 DUAL-SPACE GEOMETRY (Viva 10-02: «انجین تشخیص ترندلاین‌ها و
+    # الگوها اصلا خوب عمل نمی‌کنه و خطاها خیلی زیاده» + «بعضی از ترندها از
+    # پیوت اشتباه گرفته شده»). Root cause found by probe: the R64 fit ran in
+    # ONE space — log10 whenever the window spanned >3%. A line through
+    # PRICE-collinear pivots (three clean descending touches, BTC 1h) then
+    # carries a curvature residual of ≈1 candle height, misses the touch
+    # tolerance, and the engine publishes NO upper line at all — so it either
+    # falls back to a local 2-touch pair (the «wrong pivot» chart) or draws
+    # nothing. Every anchor pair is now validated in BOTH spaces (log10 and
+    # price) and the space that actually validates the pair wins; a tie goes
+    # to the chart's own space, and the alternate space carries a weight so it
+    # is a fallback, never a rival. Kill switch: TLBREAK_R65_DUAL_SPACE=0.
+    _pidx = np.asarray([float(q["index"]) for q in pool], dtype=float)
+    _pprc = np.asarray([float(q["price"]) for q in pool], dtype=float)
+    _plog = np.log10(np.clip(_pprc, 1e-12, None))
+    _closes = df["close"].to_numpy(dtype=float)
+    _unit_lin = unit if not use_log else (_robust_unit(df, False) or tol)
+    _unit_log = unit if use_log else 0.0
+
+    def _fit_pair(x0: float, y0: float, x1: float, y1: float, log_space: bool):
+        """Validate ONE anchor pair in ONE geometry space → payload or None."""
+        if log_space and not (y0 > 0 and y1 > 0):
+            return None
+        if log_space:
+            ls = (math.log10(y1) - math.log10(y0)) / (x1 - x0)
+            li = math.log10(y0) - ls * x0
+        else:
+            ls = li = 0.0
+        slope = (y1 - y0) / (x1 - x0)
+        intercept = y0 - slope * x0
+        _u = _unit_log if log_space else _unit_lin
+
+        def _res_pair(a: float, b: float) -> float:
+            """Ruler residual between two prices in THIS space."""
+            if r64 and _u > 0:
+                if log_space and a > 0 and b > 0:
+                    return (math.log10(a) - math.log10(b)) / _u
+                return (a - b) / _u
+            return (a - b) / tol * tol_frac if tol > 0 else 0.0
+
+        if r64 and _u > 0:
+            if log_space:
+                res = (_plog - (ls * _pidx + li)) / _u
+            else:
+                res = (_pprc - (slope * _pidx + intercept)) / _u
+            near_mask = np.abs(res) <= tol_frac
+            over_mask = (res > tol_frac) if side == "HIGH" else (res < -tol_frac)
+        else:
+            _vals = (10.0 ** (ls * _pidx + li)) if log_space else (slope * _pidx + intercept)
+            res = _pprc - _vals
+            near_mask = np.abs(res) <= tol
+            over_mask = (res > tol) if side == "HIGH" else (res < -tol)
+        # touches: every pool pivot the line actually passes through
+        touching: list = []
+        _tres: list = []
+        for _pos in np.nonzero(near_mask)[0]:
+            q = pool[int(_pos)]
+            _r = float(res[_pos])
+            if touching and float(q["index"]) - \
+                    float(touching[-1]["index"]) <= max(2.0, float(cfg.pivot_right)):
+                if abs(_r) < abs(_tres[-1]):
+                    touching[-1] = q
+                    _tres[-1] = _r
+            else:
+                touching.append(q)
+                _tres.append(_r)
+        if len(touching) < cfg.min_touches:
+            return None
+        fx = min(float(q["index"]) for q in touching)
+        lx = max(float(q["index"]) for q in touching)
+        # VALID-UNTIL-BROKEN (classic doctrine, Viva 09-17): to the RIGHT of
+        # the defining pair no same-side pivot may cross the extended line — a
+        # broken line is history, never a live trendline. This is what killed
+        # the steep purple watch-line over candles.
+        break_at: Optional[int] = None
+        _right = np.nonzero(over_mask & (_pidx > x1))[0]
+        if len(_right):
+            break_at = int(min(_pidx[int(_k)] for _k in _right))
+        _mid = np.nonzero(over_mask & (_pidx > fx) & (_pidx < x1))[0]
+        pierces = int(len(_mid))
+        if cfg.require_alive:
+            # first close that crosses the extended line = the bar where the
+            # trend DIED (Viva 09-18: a broken leg-trend is still drawn — but
+            # only UP TO its break bar, never past it).
+            _kk = np.arange(int(x1) + 1, n + 1, dtype=float)
+            if len(_kk):
+                _lv = (10.0 ** (ls * _kk + li)) if log_space else (slope * _kk + intercept)
+                _cc = _closes[int(x1) + 1: n + 1]
+                if side == "HIGH":
+                    _hit = np.nonzero(_cc > _lv + 0.35 * atr)[0]
+                else:
+                    _hit = np.nonzero(_cc < _lv - 0.35 * atr)[0]
+                if len(_hit):
+                    _cb = int(_kk[_hit[0]])
+                    break_at = _cb if break_at is None else min(break_at, _cb)
+        if pierces:
+            # ONE piercing pivot = the head of a head-&-shoulders — and H&S
+            # shoulders are FLAT by definition. On a sloped line even a single
+            # pierce means the line cuts candles.
+            _flat_far = (abs(_res_pair(y1, y0)) >= 0.5) if r64 \
+                else (abs(y1 - y0) >= 0.5 * atr)
+            if pierces > 1 or _flat_far:
+                return None
+        if break_at is not None:
+            # BROKEN history line: must be substantial (3+ touches, 30+ bar
+            # span) and must have lived at least 10 bars past its last
+            # defining pivot — unless the break is FRESH (r31).
+            if len(touching) < max(cfg.min_touches, 3):
+                return None
+            if x1 - fx < 30:
+                return None
+            _fresh31 = int(getattr(cfg, "fresh_break_bars", 12) or 12)
+            if break_at - x1 < 10 and break_at < n - _fresh31:
+                return None
+        elif cfg.require_alive:
+            # ALIVE line: touched price recently AND its projected edge still
+            # sits near price (no line floating in the air).
+            if lx < n - cfg.recency_bars:
+                return None
+            _edge_now0 = (10.0 ** (ls * n + li)) if log_space else (slope * n + intercept)
+            if abs(_edge_now0 - float(_closes[n])) > cfg.edge_atr * atr:
+                return None
+        need = max(cfg.min_touches, 3) if pierces else cfg.min_touches
+        if len(touching) < need:
+            return None
+        dev = (max(abs(v) for v in _tres) if r64
+               else (max(abs(v) for v in _tres) / atr))
+        if dev > cfg.max_fit_residual_atr:
+            return None
+        span = x1 - x0
+        score = len(touching) * (span ** 0.5) + 0.25 * (x1 / max(1.0, float(n)))
+        if _w64 and _prom:
+            # majors win: mean prominence of the touches vs the pivot strength
+            _pm = [min(20.0, float(_prom.get(int(q["index"]), 4.0))) for q in touching]
+            score *= min(1.6, max(0.75, (sum(_pm) / max(1, len(_pm)) / 4.0) ** 0.5))
+        if pierces:
+            score *= 0.55      # a clean classic line always outranks a pierced one
+        if break_at is not None:
+            score *= 0.80      # a live trend outranks a finished one
+            if int(break_at) >= n - int(getattr(cfg, "fresh_break_bars", 12) or 12):
+                score *= 1.6   # a FRESH break IS the event (PYTH 09-26)
+        _edge_now2 = (10.0 ** (ls * n + li)) if log_space else (slope * n + intercept)
+        if abs(_edge_now2 - float(_closes[n])) <= 2.0 * atr:
+            score *= 1.15      # context_score §9: the line price sits near now
+        # Viva 09-17 schematics: the trendline of a leg STARTS AT THE LEG
+        # EXTREME (peak for highs, trough for lows) — reward such lines.
+        # R64: the leg is the zoomed window's recent half, not the last 10
+        # fractals — a local high must not earn the leg-extreme bonus.
+        _leg = _leg_pool
+        _ext = max((float(q["price"]) for q in _leg), default=y0) if side == "HIGH" \
+            else min((float(q["price"]) for q in _leg), default=y0)
+        if (abs(_res_pair(y0, _ext)) <= tol_frac) if r64 else (abs(y0 - _ext) <= tol):
+            score *= 2.0
+        return {"score": float(score), "touching": touching, "fx": fx, "lx": lx,
+                "dev": float(dev), "break_at": break_at, "ls": float(ls),
+                "li": float(li), "slope": float(slope),
+                "intercept": float(intercept), "log_space": bool(log_space)}
+
+    _dual = bool(use_log and _r65_dual_space())
+    _spaces = (True, False) if _dual else (False,)
     for i in range(len(pool)):
         for j in range(i + 1, len(pool)):
             x0, y0 = float(pool[i]["index"]), float(pool[i]["price"])
             x1, y1 = float(pool[j]["index"]), float(pool[j]["price"])
             if x1 - x0 < _min_pair:
                 continue
-            if use_log and y0 > 0 and y1 > 0:
-                # fit the line where the eye will see it: straight in log10
-                _ls = (math.log10(y1) - math.log10(y0)) / (x1 - x0)
-                _li = math.log10(y0) - _ls * x0
-            else:
-                _ls = 0.0
-                _li = 0.0
-            slope = (y1 - y0) / (x1 - x0)
-            intercept = y0 - slope * x0
-
-            def _val(p):
-                if _ls or _li:
-                    return float(10.0 ** (_ls * float(p["index"]) + _li))
-                return slope * float(p["index"]) + intercept
-
-            if r64:
-                def _over(p):
-                    ru = _res_u(float(p["price"]), _val(p))
-                    return (side == "HIGH" and ru > tol_frac) or \
-                           (side == "LOW" and ru < -tol_frac)
-
-                def _near(p):
-                    return abs(_res_u(float(p["price"]), _val(p))) <= tol_frac
-            else:
-                def _over(p):
-                    yk = float(p["price"])
-                    return (side == "HIGH" and yk > _val(p) + tol) or \
-                           (side == "LOW" and yk < _val(p) - tol)
-
-                def _near(p):
-                    return abs(float(p["price"]) - _val(p)) <= tol
-
-            # touches: every pool pivot the line actually passes through
-            raw_touch = [q for q in pool if _near(q)]
-            # spec §6.1: nearby touches are ONE cluster-touch (a single swing
-            # must not count as three touches because of twin pivots)
-            touching = []
-            for q in sorted(raw_touch, key=lambda z: float(z["index"])):
-                if touching and float(q["index"]) - \
-                        float(touching[-1]["index"]) <= max(2.0, float(cfg.pivot_right)):
-                    if abs(_res_u(float(q["price"]), _val(q))) < \
-                            abs(_res_u(float(touching[-1]["price"]), _val(touching[-1]))):
-                        touching[-1] = q
-                else:
-                    touching.append(q)
-            if len(touching) < cfg.min_touches:
-                continue
-            fx = min(float(q["index"]) for q in touching)
-            lx = max(float(q["index"]) for q in touching)
-            # VALID-UNTIL-BROKEN (classic doctrine, Viva 09-17): to the RIGHT
-            # of the defining pair no same-side pivot may cross the extended
-            # line — a broken line is history, never a live trendline. This
-            # is what killed the steep purple watch-line over candles.
-            hard = False
-            pierces = 0
-            break_at: Optional[int] = None
-            closes = df["close"].to_numpy()
-            if cfg.require_alive:
-                # first close that crosses the extended line = the bar where
-                # the trend DIED (Viva 09-18: a broken leg-trend is still
-                # drawn — but only UP TO its break bar, never past it).
-                for kk in range(int(x1) + 1, n + 1):
-                    _lv = float(10.0 ** (_ls * kk + _li)) if (_ls or _li) else slope * kk + intercept
-                    if side == "HIGH" and float(closes[kk]) > _lv + 0.35 * atr:
-                        break_at = kk
-                        break
-                    if side == "LOW" and float(closes[kk]) < _lv - 0.35 * atr:
-                        break_at = kk
-                        break
-            for q in pool:
-                xk = float(q["index"])
-                if xk > x1 and _over(q):
-                    cand = int(xk)
-                    break_at = cand if break_at is None else min(break_at, cand)
+            for _log_space in _spaces:
+                got = _fit_pair(x0, y0, x1, y1, _log_space)
+                if got is None:
                     continue
-                if fx < xk < x1 and _over(q):
-                    # ONE piercing pivot = the head of a head-&-shoulders —
-                    # and H&S shoulders are FLAT by definition. On a sloped
-                    # line even a single pierce means the line cuts candles.
-                    pierces += 1
-                    _flat_far = (abs(_res_u(y1, y0)) >= 0.5) if r64 else (abs(y1 - y0) >= 0.5 * atr)
-                    if pierces > 1 or _flat_far:
-                        hard = True
-                        break
-            if hard:
-                continue
-            if break_at is not None:
-                # BROKEN history line (Viva 09-18, his AAVE blue & LINK red
-                # rulings): drawn as the leg's record — must be substantial
-                # (3+ touches, 30+ bar span) and must have lived at least 10
-                # bars past its last defining pivot before dying.
-                if len(touching) < max(cfg.min_touches, 3):
+                _sc = float(got["score"])
+                if _dual and _log_space != bool(use_log):
+                    _sc *= _R65_ALT_SPACE_WEIGHT     # alternate space = fallback
+                if _sc <= best_score:
                     continue
-                if x1 - fx < 30:
-                    continue
-                # r31 calibration (Viva 09-26, «ترند ماژور ساعتها قبل شکسته
-                # اما سیستم بعلت رسم ترندلاین محلی هنوز منتظر شکست مونده»):
-                # dropping a MAJOR line just because it died soon after its
-                # last defining pivot made the fitter re-arm on a local pair
-                # and wait forever. A substantial line (3+ touches, 30+ span)
-                # whose break is FRESH stays admissible — the engine then
-                # recognises the break instead of watching a local line.
-                _fresh31 = int(getattr(cfg, "fresh_break_bars", 12) or 12)
-                if break_at - x1 < 10 and break_at < n - _fresh31:
-                    continue
-            elif cfg.require_alive:
-                # ALIVE line: touched price within the last 40 bars AND its
-                # projected edge value still sits near price (no line
-                # floating in the air above/below a market that moved on).
-                if lx < n - cfg.recency_bars:
-                    continue
-                _edge_now = float(10.0 ** (_ls * n + _li)) if (_ls or _li) else slope * n + intercept
-                if abs(_edge_now - float(closes[n])) > cfg.edge_atr * atr:
-                    continue
-            need = max(cfg.min_touches, 3) if pierces else cfg.min_touches
-            if len(touching) < need:
-                continue
-            if r64:
-                dev = max(abs(_res_u(float(q["price"]), _val(q))) for q in touching)
-            else:
-                dev = max(abs(float(q["price"]) - _val(q)) for q in touching) / atr
-            if dev > cfg.max_fit_residual_atr:
-                continue
-            span = x1 - x0
-            score = len(touching) * (span ** 0.5) + 0.25 * (x1 / max(1.0, float(n)))
-            if _w64 and _prom:
-                # majors win: mean prominence of the touches vs the pivot
-                # strength itself (a 3-bar fractal ≈ 1.0, a leg top ≈ 2.0)
-                _pm = [min(20.0, float(_prom.get(int(q["index"]), 4.0)))
-                       for q in touching]
-                score *= min(1.6, max(0.75, (sum(_pm) / max(1, len(_pm)) / 4.0) ** 0.5))
-            # a CLEAN classic line (nothing pierces it) always outranks a
-            # pierced one — the head exception exists for real H&S only.
-            if pierces:
-                score *= 0.55
-            if break_at is not None:
-                score *= 0.80  # a live trend outranks a finished one
-                # r31: a FRESH break of a substantial line IS the event —
-                # it must outrank the unbroken local pair so the engine
-                # recognises the real major break (PYTH 09-26).
-                if int(break_at) >= n - int(getattr(cfg, "fresh_break_bars", 12) or 12):
-                    score *= 1.6
-            # spec §9 context_score: a line price actually sits near right
-            # now is the line the chart must show (Viva 09-18: best-of-cands)
-            _edge_now2 = float(10.0 ** (_ls * n + _li)) if (_ls or _li) else slope * n + intercept
-            if abs(_edge_now2 - float(closes[n])) <= 2.0 * atr:
-                score *= 1.15
-            # Viva 09-17 schematics: the trendline of a leg STARTS AT THE LEG
-            # EXTREME (peak for highs, trough for lows) — reward such lines.
-            # R64: the leg is the zoomed window's recent half, not the last
-            # 10 fractals — a local high must not earn the leg-extreme bonus.
-            _leg = _leg_pool
-            _ext = max((float(q["price"]) for q in _leg), default=y0) if side == "HIGH" \
-                else min((float(q["price"]) for q in _leg), default=y0)
-            if (abs(_res_u(y0, _ext)) <= tol_frac) if r64 else (abs(y0 - _ext) <= tol):
-                score *= 2.0
-            if score > best_score:
-                best_score = score
-                if _ls or _li:
+                best_score = _sc
+                touching = got["touching"]
+                fx, lx = got["fx"], got["lx"]
+                break_at = got["break_at"]
+                _ls, _li = got["ls"], got["li"]
+                slope, intercept = got["slope"], got["intercept"]
+                if _log_space:
                     # local tangent at the newest touch: keeps `slope`'s
                     # price-per-bar meaning for every legacy consumer while
                     # price_at() walks the calibrated log curve.
@@ -464,11 +491,11 @@ def fit_validated_line(
                     side=side,
                     slope=float(_tan),
                     intercept=float(_int),
-                    log_fit=bool(_ls or _li),
+                    log_fit=bool(_log_space),
                     log_slope=float(_ls),
                     log_intercept=float(_li),
                     touch_count=len(touching),
-                    fit_residual_atr=float(dev),
+                    fit_residual_atr=float(got["dev"]),
                     first_index=int(fx),
                     last_index=int(lx),
                     points=tuple(touching),
@@ -488,13 +515,25 @@ def fit_validated_line(
                 return 10.0 ** (float(best.log_slope) * _x + float(best.log_intercept))
             return float(best.slope) * _x + float(best.intercept)
 
+        # R65: the absorber measures with the WINNER's own ruler — a linear
+        # (price-space) winner on a log window must not be re-measured with
+        # the log ruler, or its collinear head pivots are dropped again.
+        _win_log = bool(getattr(best, "log_fit", False))
+
+        def _res_win(a: float, b: float) -> float:
+            if r64 and _win_log:
+                return _res_u(a, b)
+            if r64 and _unit_lin > 0:
+                return (a - b) / _unit_lin
+            return (a - b) / tol * tol_frac if tol > 0 else 0.0
+
         if r64:
-            # same ruler as the fit: |residual| ≤ tol in robust (log) units
+            # same ruler as the fit: |residual| ≤ tol in robust units
             def _absorb_far(_p, _lv):
-                return abs(_res_u(_p, _lv)) > tol_frac
+                return abs(_res_win(_p, _lv)) > tol_frac
 
             def _absorb_over(_p, _lv):
-                ru = _res_u(_p, _lv)
+                ru = _res_win(_p, _lv)
                 return (side == "HIGH" and ru > tol_frac) or (side == "LOW" and ru < -tol_frac)
         else:
             def _absorb_far(_p, _lv):
