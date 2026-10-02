@@ -356,3 +356,74 @@ def test_tf_seconds_table_is_complete():
     assert '{"1m": 60, "5m": 300, "15m": 900, "1h": 3600}.get' not in src
     msrc = io.open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
     assert '{"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}.get(pin_tf' not in msrc
+
+
+# ── 9. the NIGHTUSDT repro: a 3d break must confirm at the 1d close ──────────
+def _night_3d_frames():
+    """The tape of his first question: a 3d descending trendline, the breakout
+    happening INSIDE the still-forming 3d candle, confirmed by a 1d close."""
+    n = 170
+    up = lambda i: 130.0 - 0.28 * i
+    low = lambda i: 100.0 + 0.05 * i
+    up_idx, lo_idx = (40, 95, 145), (65, 120, 160)
+    nodes = [(0, 0.5 * (up(0) + low(0)))]
+    for a, b in zip(up_idx, lo_idx):
+        nodes.append((a, float(up(a))))
+        nodes.append((b, float(low(b))))
+    vals = np.zeros(n)
+    for (i0, v0), (i1, v1) in zip(nodes, nodes[1:]):
+        vals[i0:i1 + 1] = np.linspace(v0, v1, i1 - i0 + 1)
+    vals[nodes[-1][0] + 1:] = nodes[-1][1]      # the tail holds the last pivot
+    o, c = vals - 0.10, vals + 0.10
+    h, lo = np.maximum(o, c) + 0.25, np.minimum(o, c) - 0.25
+    for i in up_idx:
+        h[i] = float(up(i)); c[i] = float(up(i)) - 0.15
+        o[i] = float(up(i)) - 0.35; lo[i] = o[i] - 0.25
+    for i in lo_idx:
+        lo[i] = float(low(i)); c[i] = float(low(i)) + 0.15
+        o[i] = float(low(i)) + 0.35; h[i] = o[i] + 0.25
+    now = pd.Timestamp.utcnow().tz_localize(None).floor("1d")
+    d3 = pd.DataFrame({"timestamp": pd.date_range(end=now - pd.Timedelta(days=5),
+                                                 periods=n - 1, freq="3D"),
+                       "open": o[:-1], "high": h[:-1], "low": lo[:-1],
+                       "close": c[:-1], "volume": np.full(n - 1, 1000.0),
+                       "turnover": np.full(n - 1, 50000.0)})
+    from analysis.render_kit import detect_patterns
+    pats = detect_patterns(d3, "LONG", log_axis=True)
+    n3 = len(d3) - 1
+    edges = []
+    import analysis.spot_engine as _S
+    for p in pats:
+        e = _S._edge_at_frac_index(p, float(n3) + 4.0 / 3.0)
+        if e:
+            edges.append(float(e))
+    edge = max(edges) if edges else 109.0
+    m = 40
+    ts = pd.date_range(end=now - pd.Timedelta(days=1), periods=m, freq="1D")
+    px = np.linspace(100.0, float(d3["close"].iloc[-2]) - 0.4, m)
+    so, sc = px - 0.2, px + 0.2
+    sh, sl = sc + 0.35, so - 0.35
+    so[-2], sc[-2], sh[-2], sl[-2] = sc[-3] - 0.1, sc[-3] + 0.25, sc[-3] + 0.55, sc[-3] - 0.45
+    brk = edge * 1.003 + 0.30
+    so[-1], sc[-1], sh[-1], sl[-1] = sc[-2] + 0.1, brk, brk + 0.20, sc[-2] - 0.15
+    sub = pd.DataFrame({"timestamp": ts, "open": so, "high": sh, "low": sl,
+                        "close": sc, "volume": np.full(m, 1000.0),
+                        "turnover": np.full(m, 50000.0)})
+    return {"3d": d3, "1d": sub, "4h": sub.tail(30).copy()}, edge
+
+
+def test_nightusdt_3d_break_confirms_at_the_1d_close_not_three_days_later():
+    from analysis.spot_engine import scan_spot_symbol, scan_spot_urgent_confirms
+    frames, edge = _night_3d_frames()
+    # the OLD lane needs the PATTERN TF to close before it can say anything:
+    # the last closed 3d candle is still inside the shape -> silence.
+    assert scan_spot_symbol("NIGHTUSDT", frames) == []
+    # the new urgent lane confirms on the 1d close that left the edge
+    items = scan_spot_urgent_confirms("NIGHTUSDT", frames, "3d")
+    assert items, "a 1d close beyond the broken 3d edge must confirm"
+    it = items[0]
+    assert it["urgent_confirm"] is True and it["confirm_tf"] == "1d"
+    assert it["entry"] == float(frames["1d"]["close"].iloc[-1])
+    assert it["entry"] > float(it["broken_level"])
+    assert it["break_bar_ts"] == it["confirm_bar_ts"]     # the break is THIS close
+    assert "ماروبوزو" in str(it["confirm_candle_fa"])
