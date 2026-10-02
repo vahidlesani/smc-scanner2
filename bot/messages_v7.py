@@ -2934,6 +2934,51 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         frame, bool(use_log),
                         need_upper=not _has_up61, need_lower=not _has_lo61):
                     _draw_pats.append(_fb61)
+
+        # R66 DEDUPLICATION OF OVERLAPPING TRENDLINES (Viva 10-03: «حذف ترندلاین‌های
+        # همپوشان تکراری»): if two trendlines on the same side (HIGH/LOW) are nearly
+        # identical across the visible window (|y1 - y2| <= 0.40 * ATR everywhere),
+        # keep only the primary one and drop the overlapping duplicate.
+        def _dedupe_draw_patterns(pats: list, frame_df, atr_val: float) -> list:
+            if not pats or len(pats) <= 1 or atr_val <= 0:
+                return pats
+            kept = []
+            seen_lines = []
+            cnt = len(frame_df)
+            for p in pats:
+                lns = p.get("lines") or []
+                if not lns:
+                    kept.append(p)
+                    continue
+                filtered_lns = []
+                for ln in lns:
+                    side = str(ln.get("side") or "").upper()
+                    try:
+                        y0 = float(_line_y_cal(ln, 0))
+                        ym = float(_line_y_cal(ln, cnt // 2))
+                        ye = float(_line_y_cal(ln, cnt))
+                    except Exception:
+                        filtered_lns.append(ln)
+                        continue
+                    is_dup = False
+                    for s_prev, y0_p, ym_p, ye_p in seen_lines:
+                        if s_prev == side:
+                            d0 = abs(y0 - y0_p)
+                            dm = abs(ym - ym_p)
+                            de = abs(ye - ye_p)
+                            if max(d0, dm, de) <= 0.40 * atr_val:
+                                is_dup = True
+                                break
+                    if not is_dup:
+                        seen_lines.append((side, y0, ym, ye))
+                        filtered_lns.append(ln)
+                if filtered_lns:
+                    kept.append({**p, "lines": filtered_lns})
+            return kept
+
+        _draw_pats = _dedupe_draw_patterns(
+            _draw_pats, frame, float((frame["high"] - frame["low"]).tail(14).mean()))
+
         for _pat in _draw_pats:
             if _pat.get("type") == "RANGE":
                 # anchored to its oldest tested pivot when it carries a time
@@ -4096,8 +4141,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _ll64 = np.log10(frame["low"].astype(float).clip(lower=1e-12).to_numpy())
                     _u64 = float(np.median(_lh64 - _ll64)) * 1.35
                     _ovl64 = [math.log10(v) for v in _ovs28]
+                    # R66 SPIKE CANDLE ISOLATION: protect active price action from being
+                    # squashed by isolated extreme outlier spike wicks.
+                    _p1_64 = float(np.percentile(_ll64, 1.0))
+                    _p99_64 = float(np.percentile(_lh64, 99.0))
+                    _c_lo64 = max(float(_ll64.min()), _p1_64 - 2.5 * _u64)
+                    _c_hi64 = min(float(_lh64.max()), _p99_64 + 2.5 * _u64)
                     _w64 = _smart_y_window(
-                        float(_ll64.min()), float(_lh64.max()), _u64,
+                        _c_lo64, _c_hi64, _u64,
                         min(_ovl64) if _ovl64 else None, max(_ovl64) if _ovl64 else None,
                         recent_lo=float(_ll64[-40:].min()),
                         recent_hi=float(_lh64[-40:].max()),
@@ -4107,8 +4158,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception:
                 _win28 = None
             if _win28 is None:
+                _lh_lin = frame["high"].astype(float).to_numpy()
+                _ll_lin = frame["low"].astype(float).to_numpy()
+                _p1_lin = float(np.percentile(_ll_lin, 1.0))
+                _p99_lin = float(np.percentile(_lh_lin, 99.0))
+                _c_lo_lin = max(float(_ll_lin.min()), _p1_lin - 2.5 * _atr28)
+                _c_hi_lin = min(float(_lh_lin.max()), _p99_lin + 2.5 * _atr28)
                 _win28 = _smart_y_window(
-                    float(frame["low"].min()), float(frame["high"].max()), _atr28,
+                    _c_lo_lin, _c_hi_lin, _atr28,
                     min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None,
                     recent_lo=float(frame["low"].tail(40).min()),
                     recent_hi=float(frame["high"].tail(40).max()))
@@ -5287,10 +5344,11 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     # 09-14 UPDATE-SPAM(3) law): a chain posts at most THREE numbered updates;
     # past that it goes quiet — the chain still lives and can confirm, but the
     # channel is no longer flooded with «آپدیت ۳۰».
-    # r61.1: AT MOST ONE non-critical update between the initial alert and
-    # the confirm («آپدیت فقط یکبار …»); critical single events (verdict ❌⚪,
-    # cancellation ⛔) still close the chain's slot.
-    if upd_n > 1 and not _critical:
+    # r61.1 / R66: AT MOST ONE update between the initial alert and
+    # the confirm («آپدیت فقط یکبار بین هشدار ابتدایی و پیام کانفرمد»); critical
+    # single events (verdict ❌⚪, cancellation ⛔) still close the chain's slot.
+    if (upd_n > 1 or bool((candidate.metadata or {}).get("approaching_sent"))
+            or bool(getattr(candidate, "approaching_sent", False))) and not _critical:
         return False
     caption = _setup_update_caption(
         candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>", upd_n,
@@ -6613,8 +6671,37 @@ def _lifecycle_chart_frame(candidate: SignalCandidate, levels: list[float],
     return frame
 
 
+def _is_ladder_exit_sent(signal_id: str) -> bool:
+    if not signal_id:
+        return False
+    try:
+        from database.bot_kv import get_json
+        return bool(get_json(f"ladder_exit_sent:{signal_id}"))
+    except Exception:
+        return False
+
+
+def _mark_ladder_exit_sent(signal_id: str) -> None:
+    if not signal_id:
+        return
+    try:
+        from database.bot_kv import set_json
+        set_json(f"ladder_exit_sent:{signal_id}", True)
+    except Exception:
+        pass
+
+
 def send_trade_close_event(event: dict) -> bool:
     """Final result with a live chart under its exact lifecycle parent."""
+    # R66 CONSOLIDATION (Viva 10-03: «خیلی از پیامها رو گفتیم در یک پیام بیاد …
+    # آخرین هیت شدن تی پی با نتیجه نهایی در یک پیام و یک چارت بیاد … استاپ و نتیجه
+    # نهایی هم در یک پیام بیاد»):
+    # If the trade already announced its final exit via send_ladder_event (final TP
+    # or STOP/TRAIL_STOP), skip posting a redundant duplicate chart/message to
+    # CHAT_ID_EXECUTION.
+    sid = str(event.get("signal_id") or "")
+    if event.get("ladder_exit_sent") or (sid and _is_ladder_exit_sent(sid)):
+        return True
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
     reply_id = _final_lifecycle_anchor(event) or None
     result = str(event.get("result") or "")
@@ -6993,6 +7080,8 @@ def send_ladder_event(event: dict) -> bool:
                            title_fa=_ttl))
     mid = _tm
     if mid:
+        if _is_final:
+            _mark_ladder_exit_sent(str(event.get("signal_id") or ""))
         # PROP-1 mirror: the journal channel gets the same ladder — TP1 under
         # Confirmed, TPn under TP(n-1), stops under Confirmed — buttoned back
         # to this exact receipt in the main channel.

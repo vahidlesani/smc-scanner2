@@ -97,11 +97,12 @@ def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
     if not has_body:
         wick_noise_filter = False
     _med_wick = 0.0
-    if wick_noise_filter and has_body:
-        _tail = df.tail(WICK_NOISE_LOOKBACK)
-        _med_wick = float(np.median(np.maximum(
-            (_tail["high"] - np.maximum(_tail["open"], _tail["close"])).to_numpy(dtype=float),
-            (np.minimum(_tail["open"], _tail["close"]) - _tail["low"]).to_numpy(dtype=float))))
+    if (wick_noise_filter or wick_policy in ("bodies", "hybrid")) and has_body:
+        _w_up = (df["high"] - np.maximum(df["open"], df["close"])).to_numpy(dtype=float)
+        _w_dn = (np.minimum(df["open"], df["close"]) - df["low"]).to_numpy(dtype=float)
+        _med_wick = float(np.median(np.maximum(_w_up, _w_dn)))
+        if _med_wick <= 0:
+            _med_wick = float(atr14 * 0.25) if atr14 > 0 else 1e-6
     for i in range(left, len(df) - right):
         if h[i] >= np.max(h[i - left : i + right + 1]):
             _price = float(h[i])
@@ -114,12 +115,13 @@ def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
                         _wick_up >= WICK_EXTREME_ATR_FRAC * atr14):
                     _price = float(max(o[i], c[i]))
                     _anchor = "body"
-            elif wick_noise_filter and atr14 > 0:
+            elif wick_noise_filter and atr14 > 0 and has_body:
                 _wick = float(h[i] - max(o[i], c[i]))
                 _body = abs(float(c[i] - o[i]))
-                if (_wick >= WICK_NOISE_OUTLIER_MULT * _med_wick
+                if ((_wick >= WICK_NOISE_OUTLIER_MULT * _med_wick
                         and _wick >= WICK_NOISE_BODY_MULT * _body
-                        and _wick >= WICK_NOISE_ATR_FRAC * atr14):
+                        and _wick >= WICK_NOISE_ATR_FRAC * atr14)
+                        or (_wick >= 2.5 * _med_wick and _wick >= 0.8 * atr14)):
                     _price = float(max(o[i], c[i]))
                     _anchor = "body"
             highs.append({"index": i, "price": _price, "raw_price": float(h[i]),
@@ -135,12 +137,13 @@ def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
                         _wick_dn >= WICK_EXTREME_ATR_FRAC * atr14):
                     _price = float(min(o[i], c[i]))
                     _anchor = "body"
-            elif wick_noise_filter and atr14 > 0:
+            elif wick_noise_filter and atr14 > 0 and has_body:
                 _wick = float(min(o[i], c[i]) - l[i])
                 _body = abs(float(c[i] - o[i]))
-                if (_wick >= WICK_NOISE_OUTLIER_MULT * _med_wick
+                if ((_wick >= WICK_NOISE_OUTLIER_MULT * _med_wick
                         and _wick >= WICK_NOISE_BODY_MULT * _body
-                        and _wick >= WICK_NOISE_ATR_FRAC * atr14):
+                        and _wick >= WICK_NOISE_ATR_FRAC * atr14)
+                        or (_wick >= 2.5 * _med_wick and _wick >= 0.8 * atr14)):
                     _price = float(min(o[i], c[i]))
                     _anchor = "body"
             lows.append({"index": i, "price": _price, "raw_price": float(l[i]),
