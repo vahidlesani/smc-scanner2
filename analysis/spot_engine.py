@@ -454,6 +454,20 @@ def spot_confirm_tf(tf: str) -> Optional[str]:
     return SPOT_CONFIRM_TF.get(str(tf or "").lower())
 
 
+# ── R65 SPOT TOHOM (Viva 10-02, verbatim: «تایید اسپات با موتور توهم هوشمند
+# میتونه زودتر از کلوز تایم تریگر تایید ورود بده»): the smart engine reads the
+# frame ONE STEP BELOW THE CONFIRM TF, so while the confirm candle is still
+# forming, its closed sub-candles may confirm the entry — hours (1d/3d/1w) or
+# minutes (4h) before the confirm candle itself closes.
+SPOT_TOHOM_SUB = {"1h": "15m", "4h": "1h", "1d": "4h"}
+
+
+def spot_tohom_tf(want_tf: str) -> Optional[str]:
+    """The sub frame the smart (TOHOM) engine reads for a spot trigger TF."""
+    ctf = SPOT_CONFIRM_TF.get(str(want_tf or "").lower())
+    return SPOT_TOHOM_SUB.get(str(ctf or "").lower()) if ctf else None
+
+
 def find_break_bar(d: pd.DataFrame, edge: float, eps: float,
                    lookback: int = 6) -> Optional[int]:
     """Index of the FIRST closed bar whose close cleared ``edge`` by ``eps``,
@@ -484,8 +498,198 @@ def _edge_at_frac_index(pat: dict, x: float) -> Optional[float]:
         return None
 
 
+SPOT_TF_MIN = {"4h": 240.0, "8h": 480.0, "12h": 720.0, "1d": 1440.0,
+               "3d": 4320.0, "1w": 10080.0}
+
+
+def lock_spot_snapshot(cand) -> str:
+    """R65 SPOT DETECTION SNAPSHOT (Viva 10-02, verbatim: «در اسپات وقتی یک ترند
+    یا الگو شناسایی میشه باید اسنپ‌شات بشه تا تکلیفش یا با شکست و بریک شدن
+    تایید بشه یا اینکه ریجکت بشه و هشدار و پیامش بیاد»).
+
+    The chain's drawn geometry is stamped into the per-code snapshot the MOMENT
+    the chain is born (detection/publish), not at its first render: every later
+    chart — the confirmation, the updates, the rejection alert — restores
+    exactly this geometry, so the fate is judged and shown on ONE unchanged
+    picture. Fail-open (KV down = the r63 stamp at first render still covers
+    it). Returns "STAMPED" / "RESTORED" / "".
+    """
+    try:
+        from analysis.snapshot_lock import lock_render_geometry
+        return str(lock_render_geometry(cand) or "")
+    except Exception:
+        return ""
+
+
+def _spot_bull_shapes(pats: list, price: float, x_index: float,
+                      eps: float = 0.0):
+    """The ONE shape-filter ladder of the spot lane: yields (pattern, upper)
+    for every BULLISH shape whose upper edge at ``x_index`` price has cleared
+    (single lines only when they are the resistance side; bearish families are
+    refused — a rising wedge / double top is never a spot LONG)."""
+    from analysis.patterns import pattern_info
+    for pat in pats:
+        if pat.get("child"):
+            continue
+        _shape = str(pat.get("shape") or "single")
+        _lns = list(pat.get("lines") or [])
+        if not _lns:
+            continue
+        if _shape in ("converging", "parallel") and len(_lns) < 2:
+            continue
+        if _shape == "single" and str(_lns[0].get("side") or "").upper() != "HIGH":
+            continue
+        _kind = str(pat.get("type") or "NONE").upper()
+        if _kind in ("DOUBLE_TOP", "HEAD_SHOULDERS", "WEDGE_RISING", "FLAG_BEAR"):
+            continue
+        upper = _edge_at_frac_index(pat, x_index)
+        if upper is None or price <= upper + eps:
+            continue
+        _biased = pat if pat.get("bias") else {**pat,
+                                               "bias": pattern_info(_kind).get("bias")}
+        if not bullish_pattern_ok(_biased, price, upper):
+            continue
+        yield pat, float(upper)
+
+
+def _spot_sub_frame(sub_df: pd.DataFrame):
+    """Sanitized sub frame + its closed-bar freshness in minutes."""
+    from analysis.confirm_r62 import frame_minutes
+    sub = _sane_ohlcv(sub_df.reset_index(drop=True)).reset_index(drop=True)
+    bar_min = frame_minutes(sub) or 15.0
+    return sub, float(bar_min)
+
+
+def scan_spot_tohom_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
+                             want_tf: str, shape: Optional[dict] = None) -> List[dict]:
+    """SMART (TOHOM) confirmation for a spot chain — Viva 10-02.
+
+    The shape lives on ``want_tf``; its confirm TF is one step below; the smart
+    engine reads ONE STEP BELOW THE CONFIRM TF, so the entry can confirm while
+    the confirm candle is STILL FORMING (its closed sub-candles carry the
+    evidence: directional closes beyond the broken edge, a noticeable volume
+    jump and a supportive candle pattern). This is strictly EARLIER than
+    ``scan_spot_urgent_confirms`` (which waits for the confirm candle itself)
+    and far earlier than the trigger-TF close — the «سه روز بعد» delay dies
+    here. Fail-closed: the engine may only ADD a confirmation the close law
+    would grant later, never invent one.
+    """
+    from analysis.render_kit import detect_patterns
+    from analysis.patterns import pattern_info, state_label
+    from analysis.tohom import evaluate_tohom_confirmation
+    out: List[dict] = []
+    sub_tf = spot_tohom_tf(want_tf)
+    if not sub_tf:
+        return out
+    pat_df = frames.get(want_tf)
+    sub_df = frames.get(sub_tf)
+    if pat_df is None or sub_df is None or len(pat_df) < 45 or len(sub_df) < 25:
+        return out
+    d = _sane_ohlcv(pat_df.reset_index(drop=True)).tail(
+        _spot_count(want_tf)).reset_index(drop=True)
+    atr = _atr(d)
+    if atr <= 0 or len(d) < 45:
+        return out
+    sub, bar_min = _spot_sub_frame(sub_df)
+    # the last closed sub candle must belong to NOW (≤2.5 of its own bars)
+    try:
+        _last = pd.Timestamp(sub["timestamp"].iloc[-1])
+        _now = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+        if _last.tzinfo is not None:
+            _last = _last.tz_convert("UTC").tz_localize(None)
+        if (_now - (_last + pd.Timedelta(minutes=bar_min))).total_seconds() / 60.0 \
+                > 2.5 * bar_min:
+            return out
+    except Exception:
+        pass
+    # SNAPSHOT LAW: a shape stored by the ladder is judged AS DETECTED — the
+    # live detector may pick different pivots on a shifted window, and a spot
+    # chain's fate must belong to the drawing it was born with.
+    pats = [shape] if shape else detect_patterns(d, "LONG", log_axis=True)
+    if not pats:
+        return out
+    n_pat = len(d) - 1
+    tf_min = SPOT_TF_MIN.get(want_tf, 1440.0)
+    c_sub = float(sub["close"].iloc[-1])
+    eps = 0.02 * atr
+    _open_now = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+    trigger_open = _open_now.floor(pd.Timedelta(minutes=tf_min))
+    for pat, upper in _spot_bull_shapes(pats, c_sub, float(n_pat), eps):
+        _kind = str(pat.get("type") or "NONE").upper()
+        _lns = list(pat.get("lines") or [])
+        _lower = []
+        for _l in _lns:
+            from analysis.render_kit import line_y as _ly3
+            _lower.append(float(_ly3(_l, n_pat)))
+        _sl_struct = _minor_swing_low(d)
+        _measured = (c_sub + (float(upper) - min(_lower))) if _lower else c_sub * 1.06
+        _floor = c_sub * MIN_PATH_PCT_BY_TF.get(want_tf, 5.0) / 100.0
+        _path = max(_measured - c_sub, _floor)
+        base_item = {
+            "symbol": symbol.upper(), "tf": want_tf, "pattern": _kind,
+            "horizon": ("SHORT" if want_tf in SPOT_SHORT_TFS
+                        else "MID" if want_tf in SPOT_MID_TFS else "LONG"),
+            "pattern_fa": pattern_info(_kind)["fa"],
+            "label": state_label(_kind, "UP"),
+            "rule_fa": pattern_info(_kind)["rule_fa"],
+            "entry": c_sub, "sl": c_sub * 0.98,
+            "targets": [c_sub * 1.05, c_sub * 1.10],
+            "weights": list(SPOT_WEIGHTS), "path_pct": round(_path / c_sub * 100.0, 3),
+            "broken_level": float(upper), "pattern_commands": [pat],
+            "atr": float(atr), "mtf_fa": _mtf_bias_fa(frames),
+            "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        try:
+            cand = build_spot_candidate(base_item)
+        except Exception:
+            continue
+        # the smart engine judges the SAME edge the trade uses
+        cand.entry_zone_top = float(upper)
+        cand.entry_zone_bottom = float(min(_lower) if _lower else c_sub * 0.98)
+        cand.metadata["atr"] = float(atr)
+        try:
+            ok, cand2, why = evaluate_tohom_confirmation(
+                cand, sub, trigger_open=trigger_open, sub_tf=sub_tf)
+        except Exception:
+            continue
+        if not ok:
+            continue
+        md2 = cand2.metadata or {}
+        entry = float(md2.get("tohom_confirm_close") or c_sub)
+        if not spot_break_recency_ok(0, (entry - float(upper)) / atr if atr else 99.0):
+            continue
+        _risk = spot_risk_levels(entry, float(upper), _lower, atr, _path,
+                                 _sl_struct, df_highs=list(d["high"].tail(120)))
+        sl = float(_risk["sl"]) * (1.0 - 0.10 / 100.0)
+        if sl >= entry:
+            sl = entry * 0.98
+        item = dict(base_item)
+        item.update({
+            "entry": entry, "sl": float(sl),
+            "targets": list(_risk["targets"]),
+            "path_pct": round((max(_path, entry - float(upper))) / entry * 100.0, 3),
+            "break_bar_ts": str(sub["timestamp"].iloc[-1]),
+            "confirm_bar_ts": str(md2.get("tohom_confirm_bar")
+                                  or sub["timestamp"].iloc[-1]),
+            "urgent_confirm": True, "tohom_confirm": True,
+            "confirm_tf": sub_tf,
+            "confirm_candle_fa": f"تأیید زودهنگام توهم ({md2.get('tohom_pattern') or 'الگوی موافق'})",
+            "tohom_note_fa": str(md2.get("tohom_note_fa") or why),
+        })
+        out.append(item)
+    best: Dict[str, dict] = {}
+    for item in out:
+        key = (item["symbol"], item["tf"])
+        _w = _structural_weight((item.get("pattern_commands") or [{}])[0])
+        if key not in best or _w > best[key]["_w"]:
+            item["_w"] = _w
+            best[key] = item
+    return list(best.values())
+
+
 def scan_spot_urgent_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
-                              want_tf: str) -> List[dict]:
+                              want_tf: str,
+                              shape: Optional[dict] = None) -> List[dict]:
     """A spot CONFIRM that does not wait for the pattern TF to close.
 
     For the alerting timeframe ``want_tf`` (pinned by the ladder) the pattern is
@@ -528,12 +732,11 @@ def scan_spot_urgent_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
             return out
     except Exception:
         pass
-    pats = detect_patterns(d, "LONG", log_axis=True)
+    pats = [shape] if shape else detect_patterns(d, "LONG", log_axis=True)
     if not pats:
         return out
     n_pat = len(d) - 1
-    tf_min = {"4h": 240.0, "8h": 480.0, "12h": 720.0, "1d": 1440.0,
-              "3d": 4320.0, "1w": 10080.0}.get(want_tf, 1440.0)
+    tf_min = SPOT_TF_MIN.get(want_tf, 1440.0)
     # fractional bar index of the LAST CLOSED sub candle on the pattern's axis
     try:
         t_pat_last = pd.Timestamp(d["timestamp"].iloc[-1])
@@ -548,27 +751,9 @@ def scan_spot_urgent_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
         return out
     c_sub = float(sub["close"].iloc[-1])
     eps = 0.02 * atr
-    for pat in pats:
-        if pat.get("child"):
-            continue
-        _shape = str(pat.get("shape") or "single")
+    for pat, upper in _spot_bull_shapes(pats, c_sub, x_sub, eps):
         _lns = list(pat.get("lines") or [])
-        if not _lns:
-            continue
-        if _shape in ("converging", "parallel") and len(_lns) < 2:
-            continue
-        if _shape == "single" and str(_lns[0].get("side") or "").upper() != "HIGH":
-            continue
         _kind = str(pat.get("type") or "NONE").upper()
-        if _kind in ("DOUBLE_TOP", "HEAD_SHOULDERS", "WEDGE_RISING", "FLAG_BEAR"):
-            continue
-        upper = _edge_at_frac_index(pat, x_sub)
-        if upper is None or c_sub <= upper + eps:
-            continue
-        _pat_biased = pat if pat.get("bias") else {**pat,
-                                                   "bias": pattern_info(_kind).get("bias")}
-        if not bullish_pattern_ok(_pat_biased, c_sub, upper):
-            continue
         _sub_atr = float((sub["high"] - sub["low"]).tail(14).mean() or 0.0) or atr
         ok, candle_fa = valid_break_candle(sub.iloc[-1],
                                           sub.iloc[-2] if len(sub) > 1 else None,

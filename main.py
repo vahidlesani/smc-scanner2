@@ -821,9 +821,17 @@ def run_spot_scan() -> Dict[str, int]:
                 ladder.extend(_items58)
                 # pin per SYMBOL|TF so the recheck scans one TF, not six
                 import time as _time      # R62: `_time` was undefined → spot pins never saved
-                _pin58 = {f"{symbol}|{str(i.get('tf') or '')}": {"ts": _time.time()}
-                          for i in _items58
-                          if str(i.get("stage")) in ("NEAR_BREAK", "TOUCH")}
+                # R65 SNAPSHOT: the ladder pins the SHAPE ITSELF (not just the
+                # symbol) — the later recheck judges the geometry the alert was
+                # born with, so a shifted window can never swap the drawing.
+                _pin58 = {}
+                for _i58 in _items58:
+                    if str(_i58.get("stage")) not in ("NEAR_BREAK", "TOUCH"):
+                        continue
+                    _k58 = f"{symbol}|{str(_i58.get('tf') or '')}"
+                    _pin58[_k58] = {
+                        "ts": _time.time(), "stage": str(_i58.get("stage") or ""),
+                        "shape": (_i58.get("pattern_commands") or [None])[0]}
                 if _pin58:
                     from database.bot_kv import get_json as _g58, set_json as _s58
                     _w58 = _g58("spot_urgent_watch", {}) or {}
@@ -881,6 +889,14 @@ def run_spot_scan() -> Dict[str, int]:
         if _spot_stamp(key, window, commit=False):
             stats["stamp_skip"] = stats.get("stamp_skip", 0) + 1
             continue
+        # R65 SNAPSHOT AT DETECTION (spot): the shape/trend is frozen the
+        # moment its chain is born, so the confirmation or the rejection is
+        # always judged and drawn on the SAME geometry.
+        try:
+            from analysis.spot_engine import lock_spot_snapshot as _lss65b
+            _lss65b(cand)
+        except Exception:
+            pass
         try:
             _bundle_for_chart = bundles.get(cand.symbol.upper())
             frame = (_bundle_for_chart.get(cand.trigger_timeframe)
@@ -2193,7 +2209,8 @@ def _spot_urgent_recheck() -> int:
             return 0
         syms = sorted(watch.keys())[:6]   # keys are "SYMBOL|TF"
         from analysis.spot_engine import (spot_signals_for, scan_spot_urgent_confirms,
-                                          spot_confirm_tf, build_spot_candidate,
+                                          scan_spot_tohom_confirms, spot_confirm_tf,
+                                          spot_tohom_tf, build_spot_candidate,
                                           SPOT_TRIGGERS)
         from bot.messages_v7 import (CHAT_ID_SPOT, generate_chart,
                                      tf_channel_publish_confirmed)
@@ -2202,6 +2219,10 @@ def _spot_urgent_recheck() -> int:
         for key58 in syms:
             symbol, _, _want_tf = key58.partition("|")
             _tfs58 = (_want_tf,) if _want_tf else tuple(SPOT_TRIGGERS)
+            # R65: the pinned SHAPE (snapshot) of this symbol|TF, if any
+            _pin_entry58 = watch.get(key58) or {}
+            _pin_shape58 = (_pin_entry58.get("shape")
+                            if isinstance(_pin_entry58, dict) else None)
             # ── R65 URGENT CONFIRM (Viva 10-02: «ترند سه روزه چرا بعد از بریک
             # تایید سیگنال نکرده و سه روز بعد تایید کرده؟ … باید بعد از بریک،
             # کلوز معتبر خارج از ترندلاین تایید ورود صادر بشه — حتی قبل از کلوز
@@ -2213,6 +2234,14 @@ def _spot_urgent_recheck() -> int:
             _sub58 = spot_confirm_tf(_want_tf) if _want_tf else ""
             if _sub58 and _sub58 not in _tfs58:
                 _tfs58 = tuple(_tfs58) + (_sub58,)
+            # R65 SPOT-TOHOM (Viva 10-02: «تایید اسپات با موتور توهم هوشمند
+            # میتونه زودتر از کلوز تایم تریگر تایید ورود بده»): the smart engine
+            # reads ONE STEP BELOW THE CONFIRM TF, so while the confirm candle is
+            # still forming its closed sub-candles may confirm — the same bundle
+            # carries the frame, zero extra requests.
+            _th58 = spot_tohom_tf(_want_tf) if _want_tf else ""
+            if _th58 and _th58 not in _tfs58:
+                _tfs58 = tuple(_tfs58) + (_th58,)
             try:
                 bundle = get_market_bundle(
                     symbol, _tfs58,
@@ -2220,15 +2249,31 @@ def _spot_urgent_recheck() -> int:
                 _urgent58 = []
                 if _want_tf:
                     try:
-                        _urgent58 = scan_spot_urgent_confirms(symbol, bundle, _want_tf)
+                        _urgent58 = scan_spot_urgent_confirms(
+                            symbol, bundle, _want_tf, shape=_pin_shape58)
                     except Exception as _u58:
                         print(f"spot urgent confirm warning {symbol}: {_u58}")
+                    # the SMART lane first: TOHOM may confirm on the forming
+                    # confirm candle, i.e. strictly earlier than the urgent lane
+                    try:
+                        _urgent58 = (scan_spot_tohom_confirms(
+                            symbol, bundle, _want_tf, shape=_pin_shape58)
+                                     + list(_urgent58))
+                    except Exception as _t58:
+                        print(f"spot tohom confirm warning {symbol}: {_t58}")
                 for _u58item in _urgent58:
                     try:
                         _uc58 = build_spot_candidate(_u58item)
                     except Exception as _ub58:
                         print(f"spot urgent candidate warning {symbol}: {_ub58}")
                         continue
+                    # R65 SNAPSHOT AT DETECTION: freeze the geometry now, so the
+                    # first chart and every later update/alert draw ONE picture.
+                    try:
+                        from analysis.spot_engine import lock_spot_snapshot as _lss65
+                        _lss65(_uc58)
+                    except Exception:
+                        pass
                     key = (f"spot|{_uc58.symbol}|{_uc58.trigger_timeframe}|"
                            f"{(_uc58.metadata or {}).get('pattern_type')}")
                     window = 72.0 if str(_uc58.trigger_timeframe) == "3d" else 36.0

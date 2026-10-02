@@ -427,3 +427,196 @@ def test_nightusdt_3d_break_confirms_at_the_1d_close_not_three_days_later():
     assert it["entry"] > float(it["broken_level"])
     assert it["break_bar_ts"] == it["confirm_bar_ts"]     # the break is THIS close
     assert "ماروبوزو" in str(it["confirm_candle_fa"])
+
+
+# ── 10. SPOT + the smart engine (TOHOM): earlier than the confirm candle ─────
+def _fake_bull_shape(upper=105.0):
+    """A bullish shape whose upper edge sits at ``upper`` (no pivots needed:
+    the spot lane's own filters are exercised by the round-15 tests)."""
+    def _fake(df, direction="", log_axis=None):
+        n = len(df) - 1
+        line = {"side": "HIGH", "slope": 0.0, "intercept": upper, "x0": 30,
+                "x1": n, "points": [{"ts": str(df["timestamp"].iloc[30]),
+                                     "price": upper},
+                                    {"ts": str(df["timestamp"].iloc[n]),
+                                     "price": upper}]}
+        return [{"type": "TRENDLINE", "lines": [line], "name": "TRENDLINE",
+                 "bias": "NEUTRAL", "shape": "single", "break_direction": "UP",
+                 "label": "TRENDLINE"}]
+    return _fake
+
+
+def test_spot_tohom_confirms_before_the_confirm_candle_closes(monkeypatch):
+    """Viva 10-02: «تایید اسپات با موتور توهم هوشمند می‌تونه زودتر از کلوز تایم
+    تریگر تایید ورود بده». For a 4h spot chain the confirm TF is 1h and the
+    smart engine reads 15m: three directional 15m closes (last one beyond the
+    edge, volume jump, power candle) confirm the entry while the 4h candle is
+    still forming."""
+    from analysis.spot_engine import scan_spot_tohom_confirms, spot_tohom_tf
+    assert spot_tohom_tf("4h") == "15m"
+    now = pd.Timestamp.utcnow().tz_localize(None)
+    # ── the 4h shape tape (its last bar is the STILL-FORMING candle) ──
+    n4 = 90
+    ts4 = pd.date_range(end=now.floor("4h"), periods=n4, freq="4h")
+    px4 = np.linspace(100.0, 106.0, n4)
+    d4 = pd.DataFrame({"timestamp": ts4, "open": px4 - 0.2, "high": px4 + 0.4,
+                       "low": px4 - 0.5, "close": px4,
+                       "volume": np.full(n4, 1000.0),
+                       "turnover": np.full(n4, 5e4)})
+    # ── the 15m sub tape: the last three CLOSED bars ride the break ──
+    n15 = 60
+    ts15 = pd.date_range(end=now.floor("15min") - pd.Timedelta(minutes=15),
+                         periods=n15, freq="15min")
+    px15 = np.linspace(102.0, 104.2, n15)
+    o15, c15 = px15 - 0.1, px15 + 0.1
+    h15, l15 = c15 + 0.2, o15 - 0.2
+    vol15 = np.full(n15, 1000.0)
+    for k, (oo, cc) in enumerate(((104.3, 104.6), (104.5, 105.2), (104.9, 105.7))):
+        i = n15 - 3 + k
+        o15[i], c15[i] = oo, cc
+        h15[i] = cc + 0.12
+        l15[i] = oo - 0.12
+    vol15[-1], vol15[-2] = 2000.0, 900.0
+    d15 = pd.DataFrame({"timestamp": ts15, "open": o15, "high": h15, "low": l15,
+                        "close": c15, "volume": vol15,
+                        "turnover": vol15 * np.linspace(100.0, 105.7, n15)})
+    monkeypatch.setattr("analysis.render_kit.detect_patterns",
+                        _fake_bull_shape(105.0))
+    frames = {"4h": d4, "15m": d15, "1h": d15.tail(20).copy()}
+    items = scan_spot_tohom_confirms("TESTUSDT", frames, "4h")
+    assert items, "the smart engine must confirm on the sub-candles of the forming candle"
+    it = items[0]
+    assert it["tohom_confirm"] is True and it["urgent_confirm"] is True
+    assert it["confirm_tf"] == "15m"
+    assert float(it["entry"]) == float(c15[-1])
+    assert float(it["entry"]) > float(it["broken_level"])
+    assert "توهم" in str(it["confirm_candle_fa"])
+
+
+def test_spot_tohom_is_fail_closed_without_evidence(monkeypatch):
+    """No volume jump / no directional streak → NO confirmation (the engine may
+    only grant early what the close law would grant later)."""
+    from analysis.spot_engine import scan_spot_tohom_confirms
+    now = pd.Timestamp.utcnow().tz_localize(None)
+    n4 = 90
+    ts4 = pd.date_range(end=now.floor("4h"), periods=n4, freq="4h")
+    px4 = np.linspace(100.0, 106.0, n4)
+    d4 = pd.DataFrame({"timestamp": ts4, "open": px4 - 0.2, "high": px4 + 0.4,
+                       "low": px4 - 0.5, "close": px4,
+                       "volume": np.full(n4, 1000.0),
+                       "turnover": np.full(n4, 5e4)})
+    n15 = 60
+    ts15 = pd.date_range(end=now.floor("15min") - pd.Timedelta(minutes=15),
+                         periods=n15, freq="15min")
+    px15 = np.linspace(102.0, 103.0, n15)
+    o15, c15 = px15 - 0.1, px15 + 0.1          # flat closes: no direction, no volume
+    d15 = pd.DataFrame({"timestamp": ts15, "open": o15, "high": c15 + 0.2,
+                        "low": o15 - 0.2, "close": c15,
+                        "volume": np.full(n15, 1000.0),
+                        "turnover": np.full(n15, 5e4)})
+    monkeypatch.setattr("analysis.render_kit.detect_patterns",
+                        _fake_bull_shape(101.5))
+    frames = {"4h": d4, "15m": d15, "1h": d15.tail(20).copy()}
+    assert scan_spot_tohom_confirms("TESTUSDT", frames, "4h") == []
+
+
+# ── 11. the spot SNAPSHOT law: born frozen, judged on its own drawing ────────
+def test_spot_snapshot_is_stamped_at_detection(monkeypatch):
+    """Viva 10-02: «در اسپات وقتی یک ترند یا الگو شناسایی میشه باید اسنپ‌شات بشه
+    تا تکلیفش … تایید بشه یا ریجکت». The stamp happens on the born candidate —
+    NOT on the first render — so the whole life of the chain draws one picture."""
+    import analysis.snapshot_lock as SL
+    from analysis.spot_engine import lock_spot_snapshot
+    calls = []
+    monkeypatch.setattr(SL, "lock_render_geometry",
+                        lambda cand, **kw: calls.append(str(cand.signal_id)) or "STAMPED")
+    from tests.test_r65_geometry_urgency import _fake_bull_shape  # self import
+    from analysis.spot_engine import scan_spot_symbol
+    import pandas as pd
+    n = 80
+    ts = pd.date_range(end=pd.Timestamp.utcnow().tz_localize(None).floor("4h"),
+                       periods=n, freq="4h")
+    px = np.linspace(100.0, 104.4, n)      # everything below the 105 edge …
+    o, cc = px - 0.2, px + 0.2
+    hh, ll = cc + 0.35, o - 0.35
+    o[-1], cc[-1], hh[-1], ll[-1] = 104.3, 105.6, 105.7, 104.2   # … the break bar
+    d = pd.DataFrame({"timestamp": ts, "open": o, "high": hh,
+                      "low": ll, "close": cc,
+                      "volume": np.full(n, 1000.0), "turnover": np.full(n, 5e4)})
+    monkeypatch.setattr("analysis.render_kit.detect_patterns",
+                        _fake_bull_shape(105.0))
+    items = scan_spot_symbol("TESTUSDT", {"4h": d})
+    assert items, "the shape must confirm on the 4h close"
+    from analysis.spot_engine import build_spot_candidate
+    cand = build_spot_candidate(items[0])
+    assert lock_spot_snapshot(cand) == "STAMPED"
+    assert calls and calls[0] == str(cand.signal_id)
+
+
+def test_stored_shape_is_judged_instead_of_a_refit(monkeypatch):
+    """The ladder's pinned SHAPE is the one the confirm lane judges — a shifted
+    window may not swap the drawing (snapshot law)."""
+    from analysis.spot_engine import scan_spot_urgent_confirms
+    now = pd.Timestamp.utcnow().tz_localize(None)
+    n = 80
+    ts = pd.date_range(end=now.floor("4h") - pd.Timedelta(hours=4), periods=n, freq="4h")
+    px = np.linspace(100.0, 104.4, n)
+    o, c = px - 0.2, px + 0.2
+    h, l = c + 0.35, o - 0.35
+    vol = np.full(n, 1000.0)
+    o[-1], c[-1], h[-1], l[-1] = 104.3, 104.6, 104.7, 104.2
+    d = pd.DataFrame({"timestamp": ts, "open": o, "high": h, "low": l,
+                      "close": c, "volume": vol, "turnover": vol * c})
+    # a 1h sub frame whose LAST CLOSED bar cleared the edge with a strong close
+    n1 = 60
+    ts1 = pd.date_range(end=now.floor("1h") - pd.Timedelta(minutes=60),
+                        periods=n1, freq="1h")
+    base = np.linspace(100.0, 103.0, n1)
+    o1, c1 = base - 0.15, base + 0.15
+    h1, l1 = c1 + 0.3, o1 - 0.3
+    o1[-1], c1[-1], h1[-1], l1[-1] = c1[-2] + 0.1, 106.5, 106.6, c1[-2] - 0.1
+    v1 = np.full(n1, 500.0)
+    d1 = pd.DataFrame({"timestamp": ts1, "open": o1, "high": h1, "low": l1,
+                       "close": c1, "volume": v1, "turnover": v1 * c1})
+    # a shape snapshot whose upper edge is 106 — the LIVE detector (refit) would
+    # say 104 and miss the break; the stored shape must be used
+    shape = {"type": "TRENDLINE", "shape": "single", "bias": "BULL",
+             "name": "TRENDLINE", "break_direction": "UP",
+             "lines": [{"side": "HIGH", "slope": 0.0, "intercept": 106.0,
+                        "x0": 10, "x1": n - 1,
+                        "points": [{"ts": str(ts[10]), "price": 106.0},
+                                   {"ts": str(ts[-1]), "price": 106.0}]}]}
+    frames = {"4h": d, "1h": d1, "15m": d1.tail(20).copy()}
+    items = scan_spot_urgent_confirms("TESTUSDT", frames, "4h", shape=shape)
+    assert items and float(items[0]["broken_level"]) == 106.0
+    # without the stored shape the fresh detector sees a different (lower)
+    # structure — the point of the snapshot
+    monkeypatch.setattr("analysis.render_kit.detect_patterns", lambda *a, **k: [])
+    assert scan_spot_urgent_confirms("TESTUSDT", frames, "4h") == []
+
+
+# ── 12. the chart must NOT re-fit a spot snapshot ────────────────────────────
+def test_spot_chart_never_refits_its_snapshot():
+    """Viva 10-02: «وقتی چارت تغییر میکنه ری‌فیت میکنن» — a spot chain's stored
+    geometry is drawn as-is; only futures keep the legacy per-TF re-fit."""
+    import bot.messages_v7 as M
+    import pandas as pd
+    n = 120
+    ts = pd.date_range("2026-06-01", periods=n, freq="1h")
+    px = np.linspace(100.0, 110.0, n)
+    frame = pd.DataFrame({"open": px - 0.2, "high": px + 0.4, "low": px - 0.4,
+                          "close": px, "volume": np.full(n, 100.0)},
+                         index=ts)
+    # a stored pattern whose pivots are FAR OLDER than the frame (foreign)
+    stored = [{"type": "TRENDLINE", "shape": "single", "bias": "BULL",
+               "lines": [{"side": "HIGH", "slope": 0.0, "intercept": 90.0,
+                          "x0": 5, "x1": 40,
+                          "points": [{"ts": "2025-01-01", "price": 90.0},
+                                     {"ts": "2025-02-01", "price": 90.0}]}]}]
+    out = M._native_patterns_for_frame(frame, "LONG", "1h", "sid", stored,
+                                       log_axis=True, allow_refit=False)
+    assert out is stored, "the snapshot must be drawn verbatim"
+    # and the call site gives spot chains that flag
+    src = io.open(os.path.join(ROOT, "bot", "messages_v7.py"),
+                  encoding="utf-8").read()
+    assert 'os.getenv("R65_SPOT_CHART_REFIT", "0")' in src

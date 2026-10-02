@@ -976,7 +976,8 @@ def _pattern_anchors_in_frame(pattern: dict, t0, t1) -> bool:
 
 def _native_patterns_for_frame(frame, direction: str, chart_tf: str,
                                candidate_id: str, stored: list,
-                               log_axis: bool = True, locked: bool = False) -> list:
+                               log_axis: bool = True, locked: bool = False,
+                               allow_refit: bool = True) -> list:
     """r51 MULTI-TF-TREND LAW (Viva 09-27, «باید توی هر تایمی که میره
     ترندلاین‌ها و الگوها رو دقیق نشون بده … در همه ستاپ‌ها باید اصلاح بشه»):
     stored render_patterns are native to the DETECTION tape. On another chart
@@ -1000,6 +1001,16 @@ def _native_patterns_for_frame(frame, direction: str, chart_tf: str,
     except Exception:
         return stored
     if all(_pattern_anchors_in_frame(_p, _t0, _t1) for _p in stored):
+        return stored
+    # ── R65 NO-REFIT LAW (Viva 10-02, verbatim: «موتور تشخیص ترندلاین، موتور
+    # تشخیص الگوها، موتور هوشمند زوم درست کار نمی‌کنن … وقتی چارت تغییر می‌کنه
+    # ری‌فیت می‌کنن»): a SPOT chain is born with a SNAPSHOT, and its picture must
+    # be that snapshot on every zoom/update — a re-fit may pick different pivots
+    # and silently move the very edge the trade was judged on (chart ≠ trade).
+    # The stored geometry is time-projected by the painter (_viva_points_xs),
+    # so an off-window pivot lands at its true x instead of fanning out.
+    if not allow_refit:
+        print(f"R65 chart refit suppressed ({candidate_id} {chart_tf}) — snapshot drawn")
         return stored
     _last_bar = str(pd.Timestamp(frame.index[-1]).isoformat())[:16]
     _key = (str(candidate_id), str(chart_tf), _last_bar)
@@ -2867,12 +2878,20 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # r51 MULTI-TF-TREND LAW: foreign patterns (anchors outside THIS
         # frame's time span) are re-fitted on the frame's own tape instead of
         # fanning out of x≈0 — «هر تایمی که میره باید خطوطِ خودش رو نشون بده».
+        _md65 = candidate.metadata or {}
+        _spot65 = bool(str(_md65.get("market") or "").upper() == "SPOT"
+                       or _md65.get("is_spot"))
+        # R65: SPOT chains never re-fit their drawn geometry (kill switch
+        # R65_SPOT_CHART_REFIT=1 restores the r51 behaviour for spot).
+        _allow_refit65 = not (_spot65
+                              and os.getenv("R65_SPOT_CHART_REFIT", "0") != "1")
         _draw_pats = _native_patterns_for_frame(
             frame, getattr(candidate, "direction", ""), _chart_tf,
             candidate.signal_id,
-            ((candidate.metadata or {}).get("render_patterns") or []),
+            (_md65.get("render_patterns") or []),
             log_axis=bool(use_log),
-            locked=bool((candidate.metadata or {}).get("snapshot_locked")))
+            locked=bool(_md65.get("snapshot_locked")),
+            allow_refit=_allow_refit65)
         # r59 FAR-MAJOR PRESERVE (Viva: «الگوی ماژورِ دورتر معتبرتر است» +
         # «الگوهای ماژور آبی کشیده بشن»): when the r51 window-refit replaced
         # the stored set, a classic shape FAR from the live price (>2.5×ATR,
