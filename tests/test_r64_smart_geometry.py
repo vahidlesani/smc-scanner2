@@ -141,12 +141,21 @@ def test_smart_fit_rejects_a_short_local_pair_on_a_big_window():
 
 # ── 5. ONE candle-count map (chart ≡ engine ≡ spot) ───────────────────────
 def test_candle_counts_single_source():
-    from analysis.candle_counts import CANDLE_COUNTS, candle_count, fetch_limits
+    from analysis.candle_counts import CANDLE_COUNTS, RENDER_COUNTS, candle_count, fetch_limits
     from analysis.pattern_engine import _FIT_WINDOW
     from bot.messages_v7 import _CHART_CANDLE_COUNTS
+    # DETECTION keeps the dictated 250–350 pivots-hunting window (his 10-02
+    # «۲۵۰ تا ۳۵۰ کندل … برای پیوت‌های بیشتر در تایم‌های بالاتر»).
     for tf, n in _FIT_WINDOW.items():
         assert n == CANDLE_COUNTS[tf] and 250 <= n <= 350
-    assert _CHART_CANDLE_COUNTS == CANDLE_COUNTS
+    # R65 PICTURE DENSITY: the CHART is the render map now — 190–210 on the
+    # intraday frames (his 10-02 «کندل ۱۹۰ تا ۲۱۰ تا کافیه … فقط شلوغ‌تر شد»),
+    # dictated counts above, and never a third number anywhere.
+    assert _CHART_CANDLE_COUNTS == RENDER_COUNTS
+    for tf in ("5m", "15m", "30m", "1h", "2h"):
+        assert 190 <= RENDER_COUNTS[tf] <= 210
+    for tf in ("4h", "8h", "12h", "1d", "3d", "1w"):
+        assert RENDER_COUNTS[tf] == CANDLE_COUNTS[tf]
     assert candle_count("1D") == 300 and fetch_limits(["4h"]) == {"4h": 340}
 
 

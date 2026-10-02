@@ -126,12 +126,15 @@ def _aggregate_daily(frame: pd.DataFrame, k: int) -> Optional[pd.DataFrame]:
 _COST = {"kline_calls": 0, "kline_cache_hits": 0}
 
 
-def closed_candle_ttl(interval: str, cap: int = 1800) -> int:
-    """Seconds until this timeframe's next close (min 20s, max `cap`)."""
+def closed_candle_ttl(interval: str, cap: Optional[int] = None) -> int:
+    """Seconds until this timeframe's next close (min 20s).
+    HTF candles (4h, 8h, 12h, 1d, 3d, 1w) cache until their actual close
+    to prevent repetitive API calls and reduce Railway CPU / network costs."""
     try:
         sec = int(_TF_SECONDS.get(str(interval).lower(), 300))
         remaining = int(sec - (time.time() % sec)) + 2
-        return int(max(20, min(remaining, cap)))
+        _cap = cap if cap is not None else sec
+        return int(max(20, min(remaining, _cap)))
     except Exception:
         return 45
 

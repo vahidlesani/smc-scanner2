@@ -907,14 +907,32 @@ _TF_PATTERN_CACHE: Dict[Tuple[str, str, str], list] = {}
 # SAME numbers the engine fits on, so the chart shows exactly the candles the
 # trade geometry was built from.
 from analysis.candle_counts import CANDLE_COUNTS as _R64_CANDLE_COUNTS
-_CHART_CANDLE_COUNTS = dict(_R64_CANDLE_COUNTS)
+try:      # R65 picture density (render-only map)
+    from analysis.candle_counts import RENDER_COUNTS as _R65_RENDER_COUNTS
+except Exception:  # pragma: no cover - defensive
+    _R65_RENDER_COUNTS = dict(_R64_CANDLE_COUNTS)
+# R65 PICTURE DENSITY: the chart window is the render map (190–210 on the
+# intraday frames, dictated counts above), while detection keeps hunting
+# on the deeper tape (analysis.candle_counts.candle_count).
+_CHART_CANDLE_COUNTS = dict(_R65_RENDER_COUNTS)
 
 
 def _chart_fetch_size(tf: str) -> int:
     """Bars to FETCH so a chart of `tf` can actually render its dictated
     count (monitor/update paths used a blind 180 — 1w/3d spot chains then
-    rendered a decade of needle candles instead of the CryptoCove density)."""
-    return int(_CHART_CANDLE_COUNTS.get(str(tf or "").lower(), 300))
+    rendered a decade of needle candles instead of the CryptoCove density).
+
+    R65: the chart window may be SHORTER than the detection window (the render
+    map: 190–210 intraday vs 250–350 for detection), but the FETCH depth must
+    always satisfy BOTH — the same tape feeds the engine, and a 210-bar fetch
+    would starve a 300-bar fit. Fetch deep, draw the density.
+    """
+    k = str(tf or "").lower()
+    try:
+        from analysis.candle_counts import candle_count as _cc65
+        return int(max(_CHART_CANDLE_COUNTS.get(k, 300), _cc65(k, 300)))
+    except Exception:
+        return int(_CHART_CANDLE_COUNTS.get(k, 300))
 
 
 def _log_axis_decorate(ax) -> None:
@@ -958,7 +976,8 @@ def _pattern_anchors_in_frame(pattern: dict, t0, t1) -> bool:
 
 def _native_patterns_for_frame(frame, direction: str, chart_tf: str,
                                candidate_id: str, stored: list,
-                               log_axis: bool = True, locked: bool = False) -> list:
+                               log_axis: bool = True, locked: bool = False,
+                               allow_refit: bool = True) -> list:
     """r51 MULTI-TF-TREND LAW (Viva 09-27, «باید توی هر تایمی که میره
     ترندلاین‌ها و الگوها رو دقیق نشون بده … در همه ستاپ‌ها باید اصلاح بشه»):
     stored render_patterns are native to the DETECTION tape. On another chart
@@ -983,6 +1002,16 @@ def _native_patterns_for_frame(frame, direction: str, chart_tf: str,
         return stored
     if all(_pattern_anchors_in_frame(_p, _t0, _t1) for _p in stored):
         return stored
+    # ── R65 NO-REFIT LAW (Viva 10-02, verbatim: «موتور تشخیص ترندلاین، موتور
+    # تشخیص الگوها، موتور هوشمند زوم درست کار نمی‌کنن … وقتی چارت تغییر می‌کنه
+    # ری‌فیت می‌کنن»): a SPOT chain is born with a SNAPSHOT, and its picture must
+    # be that snapshot on every zoom/update — a re-fit may pick different pivots
+    # and silently move the very edge the trade was judged on (chart ≠ trade).
+    # The stored geometry is time-projected by the painter (_viva_points_xs),
+    # so an off-window pivot lands at its true x instead of fanning out.
+    if not allow_refit:
+        print(f"R65 chart refit suppressed ({candidate_id} {chart_tf}) — snapshot drawn")
+        return stored
     _last_bar = str(pd.Timestamp(frame.index[-1]).isoformat())[:16]
     _key = (str(candidate_id), str(chart_tf), _last_bar)
     if len(_TF_PATTERN_CACHE) > 512:
@@ -1002,6 +1031,28 @@ def _native_patterns_for_frame(frame, direction: str, chart_tf: str,
             _fresh = _dp(_fdf, direction or "", log_axis=bool(log_axis))
     except Exception as exc:
         print(f"r51 per-TF refit warning: {exc}")
+    # ── R65 BREAK-EVENT CARRY-ACROSS (found on the SPOT probe chart): a refit
+    # produces a NEW fit of the same edge, and a BREAK is an event of the tape —
+    # not a property of the fit. Without this the spot chart painted a broken
+    # descending edge running SOLID into the live candle (no break marker, the
+    # line looked live). The stored break TIME is carried onto the same-SIDE
+    # fresh line; the painter's timestamp path anchors it on this frame.
+    try:
+        _brk: dict = {}
+        for _pp in stored:
+            for _st in (_pp.get("lines") or []):
+                _bts = _st.get("break_ts")
+                if _bts and str(_st.get("side") or ""):
+                    _brk.setdefault(str(_st.get("side")), []).append(_bts)
+        if _brk and _fresh:
+            for _fp in _fresh:
+                for _fl in (_fp.get("lines") or []):
+                    _sd = str(_fl.get("side") or "")
+                    if _sd in _brk and _brk[_sd] and not _fl.get("break_ts"):
+                        _fl["break_ts"] = _brk[_sd].pop(0)
+                        _fl["break_x"] = None   # index is frame-local: never trust it
+    except Exception:
+        pass
     _TF_PATTERN_CACHE[_key] = _fresh
     return _fresh
 
@@ -1758,6 +1809,126 @@ def _clean_render_frame(df: pd.DataFrame, window: int = 150) -> pd.DataFrame:
     return frame
 
 
+def _r65_focus_window(df: pd.DataFrame, candidate, base_n: int,
+                      confirmed: bool, max_n: Optional[int] = None) -> int:
+    """R65 SMART ZOOM (Viva 10-02, verbatim: «زوم رو درست کن در تایم‌های ۱۵
+    دقیقه و ۳۰ دقیقه و ۱ ساعته و ۲ ساعته … کندل ۱۹۰ تا ۲۱۰ تا کافیه اما زوم
+    درست بشه بارها گفتم روی ارتفاع کندل‌ها دقت بشه»).
+
+    The r52 law fixed the CANDLE COUNT; it never fixed what those candles do to
+    the price panel. A 300-bar window that contains one old capitulation low
+    drags the whole axis down — measured on the real tape (BTC 30m probe): the
+    live block sat in the TOP 30% of the panel with candles filling 57%, i.e.
+    exactly the «کندل‌ها ریز و بالا، پایین خالی» picture he keeps sending.
+
+    The frame is now chosen by FOCUS, not by a constant: the union of
+      • the recent block (last 60 closed bars — the action the trade lives on),
+      • the drawn pattern's own anchors (never cut a shape mid-air), and
+      • the trade tool (entry / stop / ladder) when the chart is confirmed
+    is the SUBJECT of the picture, and the window is shortened (never below
+    the floor, never past the earliest required anchor) until the subject owns
+    ≥65% of the candle box. Candles stay hard bounds (r40); on a tape whose
+    history is already tight the base count is returned untouched.
+    """
+    import math as _m
+    try:
+        n = int(min(base_n, len(df)))
+        _hard_cap = int(min(max_n, len(df))) if max_n else int(n)
+        if df is None or len(df) < 60:
+            return int(base_n)
+        md = getattr(candidate, "metadata", None) or {}
+        w_full = df.tail(n).reset_index(drop=True)
+        # ── the recent block ────────────────────────────────────────────────
+        recent = w_full.tail(min(60, len(w_full)))
+        f_lo = float(recent["low"].min())
+        f_hi = float(recent["high"].max())
+        for v in (getattr(candidate, "sl", 0), getattr(candidate, "entry_zone_bottom", 0),
+                  getattr(candidate, "entry_zone_top", 0), getattr(candidate, "tp1", 0),
+                  getattr(candidate, "tp2", 0)):
+            try:
+                v = float(v or 0)
+                if v > 0 and _m.isfinite(v):
+                    f_lo, f_hi = min(f_lo, v), max(f_hi, v)
+            except Exception:
+                pass
+        if confirmed:
+            for v in (((md.get("target_ladder") or {}).get("targets")) or []):
+                try:
+                    v = float(v or 0)
+                    if v > 0 and _m.isfinite(v):
+                        f_lo, f_hi = min(f_lo, v), max(f_hi, v)
+                except Exception:
+                    pass
+        # ── earliest anchor that must stay in frame ─────────────────────────
+        # (60 = the absolute floor; anchors may only RAISE it)
+        need_n = 60
+        try:
+            ts_all = (pd.to_datetime(df["timestamp"]) if "timestamp" in df.columns
+                      else pd.DatetimeIndex(pd.to_datetime(df.index)))
+            anchors = []
+            _g = md.get("break_line_geo") or {}
+            if _g.get("a_ts"):
+                anchors.append(str(_g["a_ts"]))
+            for _geo in (md.get("pattern_geo") or {}).values():
+                if isinstance(_geo, dict) and _geo.get("a_ts"):
+                    anchors.append(str(_geo["a_ts"]))
+            _idx_floor = None
+            for _p in (md.get("render_patterns") or []):
+                for _ln in (_p.get("lines") or []):
+                    _p0 = _ln.get("points") or []
+                    if _p0:
+                        anchors.append(str(_p0[0].get("ts") or ""))
+                    # R65: legacy / stuffed / zone-lane line dicts carry BAR
+                    # INDICES instead of timestamps — a stored pattern may never
+                    # be cut by the zoom, whatever way its start is recorded.
+                    try:
+                        _x0 = float(_ln.get("x0")) if _ln.get("x0") is not None else None
+                        if _x0 is not None and _x0 >= 0:
+                            _idx_floor = _x0 if _idx_floor is None else min(_idx_floor, _x0)
+                    except Exception:
+                        pass
+            if _idx_floor is not None:
+                need_n = max(need_n, int(len(df) - int(_idx_floor) + 3))
+            for a in anchors:
+                if not a:
+                    continue
+                try:
+                    a0 = (pd.Timestamp(a).tz_convert("UTC").tz_localize(None)
+                          if pd.Timestamp(a).tzinfo is not None else pd.Timestamp(a))
+                    _idx = int((ts_all < a0).sum())
+                    if _idx > 0:
+                        need_n = max(need_n, len(df) - _idx + 3)
+                except Exception:
+                    continue
+            # r37 ANCHOR LAW, kept: a stored pattern anchor may pull the
+            # picture back up — but never past the DETECTION count (the engine
+            # has no geometry older than that to draw anyway).
+            _hard = int(max_n) if max_n else n
+            need_n = min(max(need_n, 60), max(n, _hard))
+        except Exception:
+            need_n = n
+        if need_n >= n:
+            return need_n
+        # ── shorten while the subject is crushed by dead history ────────────
+        floor_n = max(int(need_n), int(0.42 * n))
+        step_n = max(int(n), int(need_n))
+        while True:
+            w = df.tail(step_n).reset_index(drop=True)
+            c_lo, c_hi = float(w["low"].min()), float(w["high"].min())
+            c_hi = float(w["high"].max())
+            box = max(c_hi - c_lo, 1e-12)
+            share = (min(c_hi, f_hi) - max(c_lo, f_lo)) / box
+            if share >= 0.65 and step_n >= n:
+                return int(step_n)
+            if share >= 0.65:
+                return int(step_n)
+            if step_n <= floor_n:
+                return int(min(step_n, _hard_cap))
+            step_n = max(floor_n, int(step_n * 0.90))
+    except Exception:
+        return int(base_n)
+
+
 def _r62_tool_fit_lookback(df: pd.DataFrame, candidate, lookback: int,
                            confirmed: bool) -> int:
     """R62-ARENA smart zoom, x side. Returns the bar count to render.
@@ -2119,6 +2290,20 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # own anchors, never below the band. Candles stay hard bounds (r40).
         try:
             _lookback = _r62_tool_fit_lookback(df, candidate, int(_lookback), bool(confirmed))
+        except Exception:
+            pass
+        # R65 FOCUS ZOOM (Viva 10-02: «زوم رو درست کن … روی ارتفاع کندل‌ها
+        # دقت بشه»): a 300-bar frame that carries one old capitulation low
+        # leaves the live block tiny in the top corner of the axis (BTC 30m
+        # probe: candles filled 57%, recent block at 70% height). The frame is
+        # shortened — never past the pattern's own anchors, never below the
+        # floor — until the recent block + pattern + tool own ≥65% of the
+        # candle box. Candles stay hard bounds (r40).
+        try:
+            from analysis.candle_counts import candle_count as _cc65
+            _lookback = _r65_focus_window(
+                df, candidate, int(_lookback), bool(confirmed),
+                max_n=_cc65(str(_chart_tf), int(_lookback)))
         except Exception:
             pass
         frame = _clean_render_frame(df, window=_lookback)
@@ -2693,12 +2878,20 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # r51 MULTI-TF-TREND LAW: foreign patterns (anchors outside THIS
         # frame's time span) are re-fitted on the frame's own tape instead of
         # fanning out of x≈0 — «هر تایمی که میره باید خطوطِ خودش رو نشون بده».
+        _md65 = candidate.metadata or {}
+        _spot65 = bool(str(_md65.get("market") or "").upper() == "SPOT"
+                       or _md65.get("is_spot"))
+        # R65: SPOT chains never re-fit their drawn geometry (kill switch
+        # R65_SPOT_CHART_REFIT=1 restores the r51 behaviour for spot).
+        _allow_refit65 = not (_spot65
+                              and os.getenv("R65_SPOT_CHART_REFIT", "0") != "1")
         _draw_pats = _native_patterns_for_frame(
             frame, getattr(candidate, "direction", ""), _chart_tf,
             candidate.signal_id,
-            ((candidate.metadata or {}).get("render_patterns") or []),
+            (_md65.get("render_patterns") or []),
             log_axis=bool(use_log),
-            locked=bool((candidate.metadata or {}).get("snapshot_locked")))
+            locked=bool(_md65.get("snapshot_locked")),
+            allow_refit=_allow_refit65)
         # r59 FAR-MAJOR PRESERVE (Viva: «الگوی ماژورِ دورتر معتبرتر است» +
         # «الگوهای ماژور آبی کشیده بشن»): when the r51 window-refit replaced
         # the stored set, a classic shape FAR from the live price (>2.5×ATR,
@@ -2741,6 +2934,51 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         frame, bool(use_log),
                         need_upper=not _has_up61, need_lower=not _has_lo61):
                     _draw_pats.append(_fb61)
+
+        # R66 DEDUPLICATION OF OVERLAPPING TRENDLINES (Viva 10-03: «حذف ترندلاین‌های
+        # همپوشان تکراری»): if two trendlines on the same side (HIGH/LOW) are nearly
+        # identical across the visible window (|y1 - y2| <= 0.40 * ATR everywhere),
+        # keep only the primary one and drop the overlapping duplicate.
+        def _dedupe_draw_patterns(pats: list, frame_df, atr_val: float) -> list:
+            if not pats or len(pats) <= 1 or atr_val <= 0:
+                return pats
+            kept = []
+            seen_lines = []
+            cnt = len(frame_df)
+            for p in pats:
+                lns = p.get("lines") or []
+                if not lns:
+                    kept.append(p)
+                    continue
+                filtered_lns = []
+                for ln in lns:
+                    side = str(ln.get("side") or "").upper()
+                    try:
+                        y0 = float(_line_y_cal(ln, 0))
+                        ym = float(_line_y_cal(ln, cnt // 2))
+                        ye = float(_line_y_cal(ln, cnt))
+                    except Exception:
+                        filtered_lns.append(ln)
+                        continue
+                    is_dup = False
+                    for s_prev, y0_p, ym_p, ye_p in seen_lines:
+                        if s_prev == side:
+                            d0 = abs(y0 - y0_p)
+                            dm = abs(ym - ym_p)
+                            de = abs(ye - ye_p)
+                            if max(d0, dm, de) <= 0.40 * atr_val:
+                                is_dup = True
+                                break
+                    if not is_dup:
+                        seen_lines.append((side, y0, ym, ye))
+                        filtered_lns.append(ln)
+                if filtered_lns:
+                    kept.append({**p, "lines": filtered_lns})
+            return kept
+
+        _draw_pats = _dedupe_draw_patterns(
+            _draw_pats, frame, float((frame["high"] - frame["low"]).tail(14).mean()))
+
         for _pat in _draw_pats:
             if _pat.get("type") == "RANGE":
                 # anchored to its oldest tested pivot when it carries a time
@@ -3903,8 +4141,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _ll64 = np.log10(frame["low"].astype(float).clip(lower=1e-12).to_numpy())
                     _u64 = float(np.median(_lh64 - _ll64)) * 1.35
                     _ovl64 = [math.log10(v) for v in _ovs28]
+                    # R66 SPIKE CANDLE ISOLATION: protect active price action from being
+                    # squashed by isolated extreme outlier spike wicks.
+                    _p1_64 = float(np.percentile(_ll64, 1.0))
+                    _p99_64 = float(np.percentile(_lh64, 99.0))
+                    _c_lo64 = max(float(_ll64.min()), _p1_64 - 2.5 * _u64)
+                    _c_hi64 = min(float(_lh64.max()), _p99_64 + 2.5 * _u64)
                     _w64 = _smart_y_window(
-                        float(_ll64.min()), float(_lh64.max()), _u64,
+                        _c_lo64, _c_hi64, _u64,
                         min(_ovl64) if _ovl64 else None, max(_ovl64) if _ovl64 else None,
                         recent_lo=float(_ll64[-40:].min()),
                         recent_hi=float(_lh64[-40:].max()),
@@ -3914,8 +4158,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception:
                 _win28 = None
             if _win28 is None:
+                _lh_lin = frame["high"].astype(float).to_numpy()
+                _ll_lin = frame["low"].astype(float).to_numpy()
+                _p1_lin = float(np.percentile(_ll_lin, 1.0))
+                _p99_lin = float(np.percentile(_lh_lin, 99.0))
+                _c_lo_lin = max(float(_ll_lin.min()), _p1_lin - 2.5 * _atr28)
+                _c_hi_lin = min(float(_lh_lin.max()), _p99_lin + 2.5 * _atr28)
                 _win28 = _smart_y_window(
-                    float(frame["low"].min()), float(frame["high"].max()), _atr28,
+                    _c_lo_lin, _c_hi_lin, _atr28,
                     min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None,
                     recent_lo=float(frame["low"].tail(40).min()),
                     recent_hi=float(frame["high"].tail(40).max()))
@@ -4044,15 +4294,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # r47/r48 (Viva 09-27, «حتما که لگاریتمی» + «لگاریتمی از جایی فعال
         # میشه که نیاز باشه — در تایم کوتاه که فرق نداره»): SPOT tapes always
         # render LOG; FUTURES switch to LOG only when the rendered window's
-        # price span exceeds 30% — the point where a linear axis starts
-        # crushing the early candles (the squashed-ladder effect he flagged).
+        # R66 (Viva 10-03, verbatim: «حتما باید مشکلات ترندلاینها و الگوها در
+        # همه چارتها تایم فریم ها با سیستم لگاریتمی حل بشه»): ALWAYS logarithmic
+        # across ALL charts, setups, and timeframes.
         try:
             _lo48 = float(frame["low"].min())
             _hi48 = float(frame["high"].max())
-            _span48 = (_hi48 / _lo48) if _lo48 > 0 else 0.0
         except Exception:
-            _span48 = 0.0
-        if _is_spot or _span48 >= 1.30:
+            _lo48, _hi48 = 0.0, 0.0
+        if _lo48 > 0 and _hi48 > _lo48:
             try:
                 ax.set_yscale("log")
                 # r51 PRICE-AXIS LAW + r52 locator: full plain kit in one shot.
@@ -5094,10 +5344,11 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     # 09-14 UPDATE-SPAM(3) law): a chain posts at most THREE numbered updates;
     # past that it goes quiet — the chain still lives and can confirm, but the
     # channel is no longer flooded with «آپدیت ۳۰».
-    # r61.1: AT MOST ONE non-critical update between the initial alert and
-    # the confirm («آپدیت فقط یکبار …»); critical single events (verdict ❌⚪,
-    # cancellation ⛔) still close the chain's slot.
-    if upd_n > 1 and not _critical:
+    # r61.1 / R66: AT MOST ONE update between the initial alert and
+    # the confirm («آپدیت فقط یکبار بین هشدار ابتدایی و پیام کانفرمد»); critical
+    # single events (verdict ❌⚪, cancellation ⛔) still close the chain's slot.
+    if (upd_n > 1 or bool((candidate.metadata or {}).get("approaching_sent"))
+            or bool(getattr(candidate, "approaching_sent", False))) and not _critical:
         return False
     caption = _setup_update_caption(
         candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>", upd_n,
@@ -6420,8 +6671,37 @@ def _lifecycle_chart_frame(candidate: SignalCandidate, levels: list[float],
     return frame
 
 
+def _is_ladder_exit_sent(signal_id: str) -> bool:
+    if not signal_id:
+        return False
+    try:
+        from database.bot_kv import get_json
+        return bool(get_json(f"ladder_exit_sent:{signal_id}"))
+    except Exception:
+        return False
+
+
+def _mark_ladder_exit_sent(signal_id: str) -> None:
+    if not signal_id:
+        return
+    try:
+        from database.bot_kv import set_json
+        set_json(f"ladder_exit_sent:{signal_id}", True)
+    except Exception:
+        pass
+
+
 def send_trade_close_event(event: dict) -> bool:
     """Final result with a live chart under its exact lifecycle parent."""
+    # R66 CONSOLIDATION (Viva 10-03: «خیلی از پیامها رو گفتیم در یک پیام بیاد …
+    # آخرین هیت شدن تی پی با نتیجه نهایی در یک پیام و یک چارت بیاد … استاپ و نتیجه
+    # نهایی هم در یک پیام بیاد»):
+    # If the trade already announced its final exit via send_ladder_event (final TP
+    # or STOP/TRAIL_STOP), skip posting a redundant duplicate chart/message to
+    # CHAT_ID_EXECUTION.
+    sid = str(event.get("signal_id") or "")
+    if event.get("ladder_exit_sent") or (sid and _is_ladder_exit_sent(sid)):
+        return True
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
     reply_id = _final_lifecycle_anchor(event) or None
     result = str(event.get("result") or "")
@@ -6761,14 +7041,31 @@ def send_ladder_event(event: dict) -> bool:
             f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>"
         )
     _view_note = ""
+    chart = None
     try:
-        candidate = _event_chart_candidate(event)
-        ladder = (candidate.metadata or {}).get("target_ladder") or {}
-        frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, *(ladder.get("targets") or []), (candidate.metadata or {}).get("current_trailing_sl", 0)])
-        chart = generate_chart(frame, candidate, confirmed=True) if frame is not None else None
-        # Viva 09-20 (verbatim): TP charts may show the move on a higher TF
-        # and explain it in one or two lines. Tool never slides.
-        _view_note = str((candidate.metadata or {}).get("chart_view_note") or "")
+        # R66 RAILWAY DIET (Viva 10-03, verbatim: «خیلی از پیامها رو گفتیم در
+        # یک پیام بیاد … مثلا گفتیم آخرین هیت شدن تی پی فرقی نمیکنه تی پی یک باشه
+        # یا ۳ .. با نتیجه نهایی در یک پیام و یک چارت بیاد … گفتیم استاپ و نتیجه
+        # نهایی هم در یک پیام بیاد»):
+        # Intermediate TPs (e.g. TP1 when TP2/TP3 remain) send clean text updates
+        # without burning Railway CPU on heavy matplotlib renders; the final TP /
+        # exit event carries the full chart.
+        _targets = (event.get("targets") or [])
+        _hit_idx = int(event.get("hit_index") or 0)
+        _is_final = bool(
+            not kind.startswith("TP")
+            or (_targets and _hit_idx >= len(_targets))
+            or kind in {"TP3", "TP4", "TP5"}
+            or os.getenv("R66_INTERMEDIATE_TP_CHARTS", "0") == "1"
+        )
+        if _is_final:
+            candidate = _event_chart_candidate(event)
+            ladder = (candidate.metadata or {}).get("target_ladder") or {}
+            frame = _lifecycle_chart_frame(candidate, [candidate.planned_entry, candidate.sl, *(ladder.get("targets") or []), (candidate.metadata or {}).get("current_trailing_sl", 0)])
+            chart = generate_chart(frame, candidate, confirmed=True) if frame is not None else None
+            # Viva 09-20 (verbatim): TP charts may show the move on a higher TF
+            # and explain it in one or two lines. Tool never slides.
+            _view_note = str((candidate.metadata or {}).get("chart_view_note") or "")
     except Exception as exc:
         print(f"Live target chart warning {event.get('signal_id')}: {exc}")
         chart = None
@@ -6783,6 +7080,8 @@ def send_ladder_event(event: dict) -> bool:
                            title_fa=_ttl))
     mid = _tm
     if mid:
+        if _is_final:
+            _mark_ladder_exit_sent(str(event.get("signal_id") or ""))
         # PROP-1 mirror: the journal channel gets the same ladder — TP1 under
         # Confirmed, TPn under TP(n-1), stops under Confirmed — buttoned back
         # to this exact receipt in the main channel.

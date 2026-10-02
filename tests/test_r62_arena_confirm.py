@@ -18,7 +18,7 @@ from test_v7 import make_candidate  # noqa: E402
 # ── C7: every trigger TF listens ONE step below itself ─────────────────────
 @pytest.mark.parametrize("trig,conf,sub", [
     ("15m", "5m", "1m"), ("30m", "15m", "5m"), ("1h", "15m", "5m"),
-    ("2h", "30m", "5m"), ("4h", "1h", "15m"), ("1d", "4h", "1h"),
+    ("2h", "30m", "15m"), ("4h", "1h", "15m"), ("1d", "4h", "1h"),
 ])
 def test_confirm_ladder_follows_trigger(trig, conf, sub):
     from analysis.confirm_r62 import confirm_tf_for_trigger, tohom_sub_tf

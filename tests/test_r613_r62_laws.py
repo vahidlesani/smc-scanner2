@@ -86,7 +86,11 @@ def test_broken_leg_dashes_through_live(monkeypatch):
     dashes = [ln for ln in ax.lines
               if ln.get_color() == demand and ln.get_linestyle() != "-"]
     assert dashes, "no dashed continuation for the broken lower edge"
-    assert max(max(ln.get_xdata()) for ln in dashes) >= len(tape) - 3
+    # R65 focus zoom: the frame may be SHORTER than the fetched tape (his
+    # 190–210 density) — the law is «dashed through the picture's LIVE bar»,
+    # so the reference is the rendered right edge, not the raw tape length.
+    _right = float(ax.get_xlim()[1])
+    assert max(max(ln.get_xdata()) for ln in dashes) >= min(len(tape), _right) - 3
 
 
 # ── 2. zone lane with no stored points → BOTH edges ─────────────────────────

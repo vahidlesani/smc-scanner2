@@ -104,6 +104,11 @@ def _upper_edge(pattern: dict, n: int) -> Optional[float]:
 def bullish_pattern_ok(pattern: dict, close: float, upper: Optional[float]) -> bool:
     """LONG-only filter: the shape must lean bullish, or be neutral and already
     broken to the upside (his «شکست صعودی = تأیید»)."""
+    kind = str(pattern.get("type") or "NONE").upper()
+    # CryptoCove Law (Viva 10-03): Breaking ABOVE a descending channel or
+    # falling wedge is the classic bullish reversal breakout.
+    if kind in ("CHANNEL_DESCENDING", "WEDGE_FALLING", "FALLING_WEDGE") and upper is not None:
+        return close > float(upper)
     bias = str(pattern.get("bias") or "NEUTRAL").upper()
     if bias == "BULL":
         return True
@@ -331,6 +336,49 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 if sl >= close:
                     sl = close * (1.0 - 0.02)
                 targets = _risk["targets"]
+                # ── R65 A1 BREAK-BAR TRUTH: the entry/`tool_entry_ts` is the
+                # candle that PRINTED the break, not merely «the newest close».
+                # When the break is up to one bar old (the legal freshness
+                # window) the picture now carries the real break bar and the
+                # bars-since-break number, so nothing downstream can dress a
+                # second-day price as «the break close».
+                try:
+                    _beps = 0.02 * atr
+                    _bbar = find_break_bar(d, float(upper), _beps, lookback=6)
+                    _bts = (str(d["timestamp"].iloc[_bbar]) if _bbar is not None
+                            else str(d["timestamp"].iloc[-1]))
+                    _bsb = (len(d) - 1 - int(_bbar)) if _bbar is not None else None
+                except Exception:
+                    _bts, _bsb = str(d["timestamp"].iloc[-1]), None
+                # ── R65 BREAK MARKER TRUTH (found on the probe chart): the spot
+                # painter draws the SCAN's own line dicts (chart ≡ trade), but
+                # their bar indices live in the detection window while the
+                # picture may be shorter — so the broken edge ran SOLID to the
+                # live candle with no break marker (a descending trendline that
+                # had already broken looked live). The exact break bar (time +
+                # index, both of THIS frame) is stamped on the broken side, and
+                # the painter's timestamp path takes over from there.
+                try:
+                    _bbar_i = find_break_bar(d, float(upper), 0.02 * atr, lookback=6) \
+                        if upper is not None else None
+                    if _bbar_i is not None:
+                        for _cmd in (_pat62, pat):
+                            for _ln2 in (_cmd.get("lines") or []):
+                                if str(_ln2.get("side") or "").upper() == "HIGH":
+                                    _ln2["break_ts"] = str(d["timestamp"].iloc[_bbar_i])
+                                    _ln2["break_x"] = int(_bbar_i)
+                except Exception:
+                    pass
+                # ── R65 BREAK RECENCY (his 3-day-late confirmation): the
+                # publish must belong to the break bar (or the very next close)
+                # and must not chase — anything older/أبعد belongs to the
+                # retest lanes, not to a fresh-break confirmation.
+                _chase = (close - float(upper)) / atr if atr > 0 else 99.0
+                if not spot_break_recency_ok(_bsb, _chase):
+                    if len(SPOT_BREAK_BLOCKS) < 200:
+                        SPOT_BREAK_BLOCKS.append(
+                            f"{symbol}|{tf}|age={_bsb}|chase={_chase:.1f}atr")
+                    continue
                 out.append({
                     "symbol": symbol.upper(), "tf": tf, "pattern": kind,
                     "horizon": ("SHORT" if tf in SPOT_SHORT_TFS else "MID" if tf in SPOT_MID_TFS else "LONG"),
@@ -341,7 +389,9 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                     "weights": list(SPOT_WEIGHTS),
                     "path_pct": round(path / close * 100.0, 3),
                     "broken_level": float(upper),
-                    "break_bar_ts": str(d["timestamp"].iloc[-1]),
+                    "break_bar_ts": _bts,
+                    "break_close": close,
+                    "bars_since_break": _bsb,
                     "pattern_commands": [pat],
                     "atr": float(atr),
                     "mtf_fa": _mtf_bias_fa(frames),
@@ -361,6 +411,411 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 best[key]["_weight"], best[key]["path_pct"]):
             best[key] = item
     return [b for b in best.values()]
+
+
+# ── R65 SPOT URGENCY (Viva 10-02, verbatim): «ترند سه روزه چرا بعد از بریک
+# تایید سیگنال نکرده و سه روز بعد تایید کرده؟ … باید بعد از بریک ناحیه و کلوز
+# تایم تریگر خارج از ترندلاین یا ترند الگو که بریک شد تایید ورود صادر بشه …
+# حتی اگر شرایط مهیا بود حتی قبل از کلوز تایم تریگر، بشرط اینکه قیمت بالای ناحیه
+# بریک شده باشه، تایید پوزیشن داده».
+# ONE step below every spot timeframe — the frame whose close is allowed to
+# confirm the break without waiting for the pattern TF's own close:
+#   4h←1h · 8h←1h · 12h←4h · 1d←4h · 3d←1d · 1w←1d
+SPOT_CONFIRM_TF = {"4h": "1h", "8h": "4h", "12h": "4h", "1d": "4h",
+                   "3d": "1d", "1w": "1d"}
+
+
+# R65 BREAK-RECENCY LEDGER: spot breaks refused because the break was old
+# (the «سه روز بعد تایید کرده» case) or the price had already run too far past
+# the broken edge. Visible bookkeeping — a refusal is a decision, not a drop.
+SPOT_BREAK_BLOCKS: List[str] = []
+SPOT_BREAK_MAX_AGE_BARS = 1      # the break bar itself, or its immediate next
+SPOT_BREAK_MAX_CHASE_ATR = 1.6   # entry never more than this many ATR past
+                                 # the edge (≈ his own config's swing cap)
+
+
+def drain_spot_break_blocks() -> List[str]:
+    out = list(SPOT_BREAK_BLOCKS)
+    SPOT_BREAK_BLOCKS.clear()
+    return out
+
+
+def spot_break_recency_ok(bars_since_break, chase_atr: float) -> bool:
+    """Viva 10-02: a confirmation is the BREAK's own close — an entry quoted
+    N bars (or days) later at a price already gone is the «سه روز بعد تایید
+    کرده» bug. Fresh break (0-1 bars) and no chase (≤1 ATR past the edge) are
+    the two conditions; the retest lanes keep ownership of everything older."""
+    try:
+        if bars_since_break is None:
+            return False
+        if int(bars_since_break) > int(SPOT_BREAK_MAX_AGE_BARS):
+            return False
+        return abs(float(chase_atr)) <= float(SPOT_BREAK_MAX_CHASE_ATR)
+    except Exception:
+        return False
+
+
+def spot_confirm_tf(tf: str) -> Optional[str]:
+    return SPOT_CONFIRM_TF.get(str(tf or "").lower())
+
+
+# ── R65 SPOT TOHOM (Viva 10-02, verbatim: «تایید اسپات با موتور توهم هوشمند
+# میتونه زودتر از کلوز تایم تریگر تایید ورود بده»): the smart engine reads the
+# frame ONE STEP BELOW THE CONFIRM TF, so while the confirm candle is still
+# forming, its closed sub-candles may confirm the entry — hours (1d/3d/1w) or
+# minutes (4h) before the confirm candle itself closes.
+SPOT_TOHOM_SUB = {"1h": "15m", "4h": "1h", "1d": "4h"}
+
+
+def spot_tohom_tf(want_tf: str) -> Optional[str]:
+    """The sub frame the smart (TOHOM) engine reads for a spot trigger TF."""
+    ctf = SPOT_CONFIRM_TF.get(str(want_tf or "").lower())
+    return SPOT_TOHOM_SUB.get(str(ctf or "").lower()) if ctf else None
+
+
+def find_break_bar(d: pd.DataFrame, edge: float, eps: float,
+                   lookback: int = 6) -> Optional[int]:
+    """Index of the FIRST closed bar whose close cleared ``edge`` by ``eps``,
+    searched inside the last ``lookback`` bars (the break bar — the candle the
+    entry belongs to). None when no bar in the window broke the edge."""
+    try:
+        closes = d["close"].astype(float).to_numpy()
+        n = len(closes)
+        for i in range(max(0, n - lookback), n):
+            if closes[i] > edge + eps:
+                return int(i)
+        return None
+    except Exception:
+        return None
+
+
+def _edge_at_frac_index(pat: dict, x: float) -> Optional[float]:
+    """The shape's UPPER side projected to a FRACTIONAL bar index ``x`` of the
+    pattern frame (so a 1h close can be judged against a 4h-fitted edge)."""
+    lines = list(pat.get("lines") or [])
+    if not lines:
+        return None
+    try:
+        from analysis.render_kit import line_y as _ly
+        vals = [float(_ly(l, float(x))) for l in lines]
+        return float(max(vals))
+    except Exception:
+        return None
+
+
+SPOT_TF_MIN = {"4h": 240.0, "8h": 480.0, "12h": 720.0, "1d": 1440.0,
+               "3d": 4320.0, "1w": 10080.0}
+
+
+def lock_spot_snapshot(cand) -> str:
+    """R65 SPOT DETECTION SNAPSHOT (Viva 10-02, verbatim: «در اسپات وقتی یک ترند
+    یا الگو شناسایی میشه باید اسنپ‌شات بشه تا تکلیفش یا با شکست و بریک شدن
+    تایید بشه یا اینکه ریجکت بشه و هشدار و پیامش بیاد»).
+
+    The chain's drawn geometry is stamped into the per-code snapshot the MOMENT
+    the chain is born (detection/publish), not at its first render: every later
+    chart — the confirmation, the updates, the rejection alert — restores
+    exactly this geometry, so the fate is judged and shown on ONE unchanged
+    picture. Fail-open (KV down = the r63 stamp at first render still covers
+    it). Returns "STAMPED" / "RESTORED" / "".
+    """
+    try:
+        from analysis.snapshot_lock import lock_render_geometry
+        return str(lock_render_geometry(cand) or "")
+    except Exception:
+        return ""
+
+
+def _spot_bull_shapes(pats: list, price: float, x_index: float,
+                      eps: float = 0.0):
+    """The ONE shape-filter ladder of the spot lane: yields (pattern, upper)
+    for every BULLISH shape whose upper edge at ``x_index`` price has cleared
+    (single lines only when they are the resistance side; bearish families are
+    refused — a rising wedge / double top is never a spot LONG)."""
+    from analysis.patterns import pattern_info
+    for pat in pats:
+        if pat.get("child"):
+            continue
+        _shape = str(pat.get("shape") or "single")
+        _lns = list(pat.get("lines") or [])
+        if not _lns:
+            continue
+        if _shape in ("converging", "parallel") and len(_lns) < 2:
+            continue
+        if _shape == "single" and str(_lns[0].get("side") or "").upper() != "HIGH":
+            continue
+        _kind = str(pat.get("type") or "NONE").upper()
+        if _kind in ("DOUBLE_TOP", "HEAD_SHOULDERS", "WEDGE_RISING", "FLAG_BEAR"):
+            continue
+        upper = _edge_at_frac_index(pat, x_index)
+        if upper is None or price <= upper + eps:
+            continue
+        _biased = pat if pat.get("bias") else {**pat,
+                                               "bias": pattern_info(_kind).get("bias")}
+        if not bullish_pattern_ok(_biased, price, upper):
+            continue
+        yield pat, float(upper)
+
+
+def _spot_sub_frame(sub_df: pd.DataFrame):
+    """Sanitized sub frame + its closed-bar freshness in minutes."""
+    from analysis.confirm_r62 import frame_minutes
+    sub = _sane_ohlcv(sub_df.reset_index(drop=True)).reset_index(drop=True)
+    bar_min = frame_minutes(sub) or 15.0
+    return sub, float(bar_min)
+
+
+def scan_spot_tohom_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
+                             want_tf: str, shape: Optional[dict] = None) -> List[dict]:
+    """SMART (TOHOM) confirmation for a spot chain — Viva 10-02.
+
+    The shape lives on ``want_tf``; its confirm TF is one step below; the smart
+    engine reads ONE STEP BELOW THE CONFIRM TF, so the entry can confirm while
+    the confirm candle is STILL FORMING (its closed sub-candles carry the
+    evidence: directional closes beyond the broken edge, a noticeable volume
+    jump and a supportive candle pattern). This is strictly EARLIER than
+    ``scan_spot_urgent_confirms`` (which waits for the confirm candle itself)
+    and far earlier than the trigger-TF close — the «سه روز بعد» delay dies
+    here. Fail-closed: the engine may only ADD a confirmation the close law
+    would grant later, never invent one.
+    """
+    from analysis.render_kit import detect_patterns
+    from analysis.patterns import pattern_info, state_label
+    from analysis.tohom import evaluate_tohom_confirmation
+    out: List[dict] = []
+    sub_tf = spot_tohom_tf(want_tf)
+    if not sub_tf:
+        return out
+    pat_df = frames.get(want_tf)
+    sub_df = frames.get(sub_tf)
+    if pat_df is None or sub_df is None or len(pat_df) < 45 or len(sub_df) < 25:
+        return out
+    d = _sane_ohlcv(pat_df.reset_index(drop=True)).tail(
+        _spot_count(want_tf)).reset_index(drop=True)
+    atr = _atr(d)
+    if atr <= 0 or len(d) < 45:
+        return out
+    sub, bar_min = _spot_sub_frame(sub_df)
+    # the last closed sub candle must belong to NOW (≤2.5 of its own bars)
+    try:
+        _last = pd.Timestamp(sub["timestamp"].iloc[-1])
+        _now = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+        if _last.tzinfo is not None:
+            _last = _last.tz_convert("UTC").tz_localize(None)
+        if (_now - (_last + pd.Timedelta(minutes=bar_min))).total_seconds() / 60.0 \
+                > 2.5 * bar_min:
+            return out
+    except Exception:
+        pass
+    # SNAPSHOT LAW: a shape stored by the ladder is judged AS DETECTED — the
+    # live detector may pick different pivots on a shifted window, and a spot
+    # chain's fate must belong to the drawing it was born with.
+    pats = [shape] if shape else detect_patterns(d, "LONG", log_axis=True)
+    if not pats:
+        return out
+    n_pat = len(d) - 1
+    tf_min = SPOT_TF_MIN.get(want_tf, 1440.0)
+    c_sub = float(sub["close"].iloc[-1])
+    eps = 0.02 * atr
+    _open_now = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+    trigger_open = _open_now.floor(pd.Timedelta(minutes=tf_min))
+    for pat, upper in _spot_bull_shapes(pats, c_sub, float(n_pat), eps):
+        _kind = str(pat.get("type") or "NONE").upper()
+        _lns = list(pat.get("lines") or [])
+        _lower = []
+        for _l in _lns:
+            from analysis.render_kit import line_y as _ly3
+            _lower.append(float(_ly3(_l, n_pat)))
+        _sl_struct = _minor_swing_low(d)
+        _measured = (c_sub + (float(upper) - min(_lower))) if _lower else c_sub * 1.06
+        _floor = c_sub * MIN_PATH_PCT_BY_TF.get(want_tf, 5.0) / 100.0
+        _path = max(_measured - c_sub, _floor)
+        base_item = {
+            "symbol": symbol.upper(), "tf": want_tf, "pattern": _kind,
+            "horizon": ("SHORT" if want_tf in SPOT_SHORT_TFS
+                        else "MID" if want_tf in SPOT_MID_TFS else "LONG"),
+            "pattern_fa": pattern_info(_kind)["fa"],
+            "label": state_label(_kind, "UP"),
+            "rule_fa": pattern_info(_kind)["rule_fa"],
+            "entry": c_sub, "sl": c_sub * 0.98,
+            "targets": [c_sub * 1.05, c_sub * 1.10],
+            "weights": list(SPOT_WEIGHTS), "path_pct": round(_path / c_sub * 100.0, 3),
+            "broken_level": float(upper), "pattern_commands": [pat],
+            "atr": float(atr), "mtf_fa": _mtf_bias_fa(frames),
+            "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        try:
+            cand = build_spot_candidate(base_item)
+        except Exception:
+            continue
+        # the smart engine judges the SAME edge the trade uses
+        cand.entry_zone_top = float(upper)
+        cand.entry_zone_bottom = float(min(_lower) if _lower else c_sub * 0.98)
+        cand.metadata["atr"] = float(atr)
+        try:
+            ok, cand2, why = evaluate_tohom_confirmation(
+                cand, sub, trigger_open=trigger_open, sub_tf=sub_tf)
+        except Exception:
+            continue
+        if not ok:
+            continue
+        md2 = cand2.metadata or {}
+        entry = float(md2.get("tohom_confirm_close") or c_sub)
+        if not spot_break_recency_ok(0, (entry - float(upper)) / atr if atr else 99.0):
+            continue
+        _risk = spot_risk_levels(entry, float(upper), _lower, atr, _path,
+                                 _sl_struct, df_highs=list(d["high"].tail(120)))
+        sl = float(_risk["sl"]) * (1.0 - 0.10 / 100.0)
+        if sl >= entry:
+            sl = entry * 0.98
+        item = dict(base_item)
+        item.update({
+            "entry": entry, "sl": float(sl),
+            "targets": list(_risk["targets"]),
+            "path_pct": round((max(_path, entry - float(upper))) / entry * 100.0, 3),
+            "break_bar_ts": str(sub["timestamp"].iloc[-1]),
+            "confirm_bar_ts": str(md2.get("tohom_confirm_bar")
+                                  or sub["timestamp"].iloc[-1]),
+            "urgent_confirm": True, "tohom_confirm": True,
+            "confirm_tf": sub_tf,
+            "confirm_candle_fa": f"تأیید زودهنگام توهم ({md2.get('tohom_pattern') or 'الگوی موافق'})",
+            "tohom_note_fa": str(md2.get("tohom_note_fa") or why),
+        })
+        out.append(item)
+    best: Dict[str, dict] = {}
+    for item in out:
+        key = (item["symbol"], item["tf"])
+        _w = _structural_weight((item.get("pattern_commands") or [{}])[0])
+        if key not in best or _w > best[key]["_w"]:
+            item["_w"] = _w
+            best[key] = item
+    return list(best.values())
+
+
+def scan_spot_urgent_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
+                              want_tf: str,
+                              shape: Optional[dict] = None) -> List[dict]:
+    """A spot CONFIRM that does not wait for the pattern TF to close.
+
+    For the alerting timeframe ``want_tf`` (pinned by the ladder) the pattern is
+    detected on its own tape, then the ONE-STEP-LOWER frame decides: if the last
+    CLOSED sub-candle closed beyond the shape's upper edge with a valid break
+    candle (confirm_r62 vocabulary — marubozu / engulfing / pin / strong close,
+    shooting-star fake-outs refused), the confirmation is published NOW with the
+    sub-close as entry. The pattern-TF close still confirms as before; this lane
+    only makes it EARLY — it can never invent a break the tape did not print.
+    """
+    from analysis.render_kit import detect_patterns
+    from analysis.patterns import pattern_info, state_label
+    out: List[dict] = []
+    sub_tf = spot_confirm_tf(want_tf)
+    if not sub_tf:
+        return out
+    pat_df = frames.get(want_tf)
+    sub_df = frames.get(sub_tf)
+    if pat_df is None or sub_df is None or len(pat_df) < 45 or len(sub_df) < 20:
+        return out
+    try:
+        from analysis.confirm_r62 import valid_break_candle, frame_minutes
+    except Exception:
+        return out
+    d = _sane_ohlcv(pat_df.reset_index(drop=True)).tail(_spot_count(want_tf)).reset_index(drop=True)
+    atr = _atr(d)
+    if atr <= 0 or len(d) < 45:
+        return out
+    sub = _sane_ohlcv(sub_df.reset_index(drop=True)).reset_index(drop=True)
+    # the sub-candle must be FRESH (closed within ~2 of its own bars) — a
+    # days-old sub close is not "now"
+    sub_bar_min = frame_minutes(sub) or 60.0
+    try:
+        last_ts = pd.Timestamp(sub["timestamp"].iloc[-1])
+        now_ts = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+        if last_ts.tzinfo is not None:
+            last_ts = last_ts.tz_convert("UTC").tz_localize(None)
+        age_min = (now_ts - (last_ts + pd.Timedelta(minutes=sub_bar_min))).total_seconds() / 60.0
+        if age_min > 2.5 * sub_bar_min:
+            return out
+    except Exception:
+        pass
+    pats = [shape] if shape else detect_patterns(d, "LONG", log_axis=True)
+    if not pats:
+        return out
+    n_pat = len(d) - 1
+    tf_min = SPOT_TF_MIN.get(want_tf, 1440.0)
+    # fractional bar index of the LAST CLOSED sub candle on the pattern's axis
+    try:
+        t_pat_last = pd.Timestamp(d["timestamp"].iloc[-1])
+        t_sub_last = pd.Timestamp(sub["timestamp"].iloc[-1])
+        if t_pat_last.tzinfo is not None:
+            t_pat_last = t_pat_last.tz_convert("UTC").tz_localize(None)
+        if t_sub_last.tzinfo is not None:
+            t_sub_last = t_sub_last.tz_convert("UTC").tz_localize(None)
+        bars_ago = (t_pat_last - t_sub_last).total_seconds() / 60.0 / tf_min
+        x_sub = float(n_pat) - float(bars_ago)
+    except Exception:
+        return out
+    c_sub = float(sub["close"].iloc[-1])
+    eps = 0.02 * atr
+    for pat, upper in _spot_bull_shapes(pats, c_sub, x_sub, eps):
+        _lns = list(pat.get("lines") or [])
+        _kind = str(pat.get("type") or "NONE").upper()
+        _sub_atr = float((sub["high"] - sub["low"]).tail(14).mean() or 0.0) or atr
+        ok, candle_fa = valid_break_candle(sub.iloc[-1],
+                                          sub.iloc[-2] if len(sub) > 1 else None,
+                                          "LONG", float(upper), float(_sub_atr))
+        if not ok:
+            continue
+        # ── A1: the break bar ON THE SUB FRAME is the entry's candle ──
+        _bi = find_break_bar(sub, float(upper), eps, lookback=4)
+        if _bi is None:
+            continue
+        # the urgent lane is EARLY, never late: the break bar must be the last
+        # closed sub candle (or its immediate predecessor) and not a chase
+        if not spot_break_recency_ok(len(sub) - 1 - int(_bi),
+                                     (c_sub - float(upper)) / float(_sub_atr)):
+            continue
+        close = c_sub
+        sl_struct = _minor_swing_low(d)
+        lower_vals = []
+        for _l in _lns:
+            from analysis.render_kit import line_y as _ly2
+            lower_vals.append(float(_ly2(_l, n_pat)))
+        measured = close + (float(upper) - min(lower_vals)) if lower_vals else close * 1.06
+        floor_path = close * MIN_PATH_PCT_BY_TF.get(want_tf, 5.0) / 100.0
+        path = max(measured - close, floor_path)
+        _risk = spot_risk_levels(close, float(upper), lower_vals, atr, path,
+                                 sl_struct, df_highs=list(d["high"].tail(120)))
+        sl = float(_risk["sl"]) * (1.0 - 0.10 / 100.0)
+        if sl >= close:
+            sl = close * 0.98
+        out.append({
+            "symbol": symbol.upper(), "tf": want_tf, "pattern": _kind,
+            "horizon": ("SHORT" if want_tf in SPOT_SHORT_TFS
+                        else "MID" if want_tf in SPOT_MID_TFS else "LONG"),
+            "pattern_fa": pattern_info(_kind)["fa"],
+            "label": state_label(_kind, "UP"),
+            "rule_fa": pattern_info(_kind)["rule_fa"],
+            "entry": close, "sl": float(sl), "targets": list(_risk["targets"]),
+            "weights": list(SPOT_WEIGHTS),
+            "path_pct": round(path / close * 100.0, 3),
+            "broken_level": float(upper),
+            "break_bar_ts": str(sub["timestamp"].iloc[_bi]),
+            "pattern_commands": [pat],
+            "atr": float(atr),
+            "mtf_fa": _mtf_bias_fa(frames),
+            "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "urgent_confirm": True, "confirm_tf": sub_tf,
+            "confirm_candle_fa": candle_fa,
+            "confirm_bar_ts": str(sub["timestamp"].iloc[-1]),
+        })
+    best: Dict[str, dict] = {}
+    for item in out:
+        key = (item["symbol"], item["tf"])
+        _w = _structural_weight((item.get("pattern_commands") or [{}])[0])
+        if key not in best or _w > best[key]["_w"]:
+            item["_w"] = _w
+            best[key] = item
+    return list(best.values())
 
 
 def _next_spot_public_code() -> str:
@@ -416,7 +871,12 @@ def build_spot_candidate(item: dict):
         "pattern_rule_fa": str(item.get("rule_fa") or ""),
         "render_patterns": list(item.get("pattern_commands") or []),
         "spot_break_bar": str(item.get("break_bar_ts") or ""),
-        "tool_entry_ts": str(item.get("break_bar_ts") or ""),
+        "spot_break_close": float(item.get("break_close") or item.get("entry") or 0.0),
+        "spot_bars_since_break": item.get("bars_since_break"),
+        "spot_urgent_confirm": bool(item.get("urgent_confirm")),
+        "spot_confirm_tf": str(item.get("confirm_tf") or ""),
+        "spot_confirm_candle_fa": str(item.get("confirm_candle_fa") or ""),
+        "tool_entry_ts": str(item.get("confirm_bar_ts") or item.get("break_bar_ts") or ""),
         "spot_broken_level": float(item.get("broken_level") or 0.0),
         "target_ladder": {"targets": targets, "weights": weights,
                           "path_pct": float(item.get("path_pct") or 0.0)},

@@ -104,8 +104,11 @@ def _spot_frames():
     n = 90
     now = pd.Timestamp.utcnow().tz_localize(None).floor("4h")
     ts = pd.date_range(end=now, periods=n, freq="4h")
-    px = list(np.linspace(100.0, 108.0, n))
-    px[-1] = 112.0                     # the break close
+    px = list(np.linspace(100.0, 104.2, n))
+    # R65 BREAK RECENCY: the break close belongs to the LAST bar (a two-week
+    # grind that has already run 5 bars past the edge is the chase Viva
+    # reported, and it is refused by the spot break-recency law now).
+    px[-1] = 106.4                     # the break close, ~1.3 ATR past 105.0
     close = pd.Series(px)
     return {"4h": pd.DataFrame({"timestamp": ts, "open": close - 0.2,
                                 "high": close + 0.5, "low": close - 0.6,

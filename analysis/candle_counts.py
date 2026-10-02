@@ -23,9 +23,45 @@ CANDLE_COUNTS = {
 }
 
 
+# ── R65 PICTURE DENSITY (Viva 10-02, verbatim: «تعداد کندل‌های خیلی زیاد خوب
+# نشده فقط شلوغ‌تر شد و نواحی غیر قابل تشخیص‌تر … کندل ۱۹۰ تا ۲۱۰ تا کافیه اما
+# زوم درست بشه»).
+# Two numbers, two jobs, and they are deliberately different now:
+#   * DETECTION keeps the dictated 250–350 bars (his «۲۵۰ تا ۳۵۰ کندل … برای
+#     پیوت‌های بیشتر در تایم‌های بالاتر») — the engine must keep hunting pivots
+#     on the deeper tape, that is where the major lines come from;
+#   * the PICTURE on the low timeframes uses the 190–210 density he dictated,
+#     so a 15m/30m/1h/2h chart is not a wall of needles. Higher frames keep the
+#     dictated counts (they need the history for the shapes to exist at all).
+# The renderer may still stretch back up to the detection count when a stored
+# pattern anchor needs the older bars (r37 anchor law) — never further.
+RENDER_COUNTS = dict(CANDLE_COUNTS)
+RENDER_COUNTS.update({"5m": 210, "15m": 210, "30m": 210, "1h": 210, "2h": 210})
+
+
+# ── canonical TF → seconds (R65: the PINVAL freshness guard and the PINVAL
+# verdict window both carried a map that stopped at 1h — a 30m/2h/4h pin was
+# judged with a 300 s clock and silently dropped as «stale». One table, used by
+# every lane; sub-hour frames which this product never fetches are included for
+# completeness.)
+TF_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+              "1h": 3600, "2h": 7200, "4h": 14400, "8h": 28800, "12h": 43200,
+              "1d": 86400, "3d": 259200, "1w": 604800}
+
+
+def tf_seconds(tf: str, default: int = 300) -> int:
+    """Candle duration of ``tf`` in seconds (case-insensitive)."""
+    return int(TF_SECONDS.get(str(tf or "").strip().lower(), default))
+
+
 def candle_count(tf: str, default: int = 300) -> int:
-    """Dictated candle count for ``tf`` (case-insensitive)."""
+    """Dictated DETECTION candle count for ``tf`` (case-insensitive)."""
     return int(CANDLE_COUNTS.get(str(tf or "").strip().lower(), default))
+
+
+def render_count(tf: str, default: int = 300) -> int:
+    """Dictated PICTURE candle count for ``tf`` (case-insensitive)."""
+    return int(RENDER_COUNTS.get(str(tf or "").strip().lower(), default))
 
 
 def fetch_limits(timeframes=None, pad: int = 40) -> dict:

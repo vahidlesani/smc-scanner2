@@ -55,7 +55,7 @@ CONFIRM_LADDER: Dict[str, str] = {
 TOHOM_SUB_OF_CONFIRM: Dict[str, str] = {
     "4h": "1h",
     "1h": "15m",
-    "30m": "5m",
+    "30m": "15m",
     "15m": "5m",
     "5m": "1m",
 }
