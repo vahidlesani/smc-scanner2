@@ -1155,7 +1155,10 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         # Viva 09-20 round 11: «فرمول ریسک به ریوارد … اصلا اهمیت نداره» and
         # «همه این تغییرات روی همه ستاپها» → the PINVAL R:R floors are gone
         # (the ratios are reported on the message only).
-        tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}.get(str(tf), 300)
+        # R65: the map used to stop at 1h — 30m/2h/4h pins were judged on a
+        # 300 s clock and killed as stale. One canonical table now.
+        from analysis.candle_counts import tf_seconds as _tfsec65
+        tf_seconds = _tfsec65(str(tf))
         # Legacy one-direction / one-zone band-aid filters. When the polarity
         # gate is active it already decides correct direction + zone polarity
         # (including valid SHORTs at supply and post-break flips), so these

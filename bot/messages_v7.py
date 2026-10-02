@@ -1020,6 +1020,28 @@ def _native_patterns_for_frame(frame, direction: str, chart_tf: str,
             _fresh = _dp(_fdf, direction or "", log_axis=bool(log_axis))
     except Exception as exc:
         print(f"r51 per-TF refit warning: {exc}")
+    # ── R65 BREAK-EVENT CARRY-ACROSS (found on the SPOT probe chart): a refit
+    # produces a NEW fit of the same edge, and a BREAK is an event of the tape —
+    # not a property of the fit. Without this the spot chart painted a broken
+    # descending edge running SOLID into the live candle (no break marker, the
+    # line looked live). The stored break TIME is carried onto the same-SIDE
+    # fresh line; the painter's timestamp path anchors it on this frame.
+    try:
+        _brk: dict = {}
+        for _pp in stored:
+            for _st in (_pp.get("lines") or []):
+                _bts = _st.get("break_ts")
+                if _bts and str(_st.get("side") or ""):
+                    _brk.setdefault(str(_st.get("side")), []).append(_bts)
+        if _brk and _fresh:
+            for _fp in _fresh:
+                for _fl in (_fp.get("lines") or []):
+                    _sd = str(_fl.get("side") or "")
+                    if _sd in _brk and _brk[_sd] and not _fl.get("break_ts"):
+                        _fl["break_ts"] = _brk[_sd].pop(0)
+                        _fl["break_x"] = None   # index is frame-local: never trust it
+    except Exception:
+        pass
     _TF_PATTERN_CACHE[_key] = _fresh
     return _fresh
 

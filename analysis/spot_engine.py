@@ -345,6 +345,25 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                     _bsb = (len(d) - 1 - int(_bbar)) if _bbar is not None else None
                 except Exception:
                     _bts, _bsb = str(d["timestamp"].iloc[-1]), None
+                # ── R65 BREAK MARKER TRUTH (found on the probe chart): the spot
+                # painter draws the SCAN's own line dicts (chart ≡ trade), but
+                # their bar indices live in the detection window while the
+                # picture may be shorter — so the broken edge ran SOLID to the
+                # live candle with no break marker (a descending trendline that
+                # had already broken looked live). The exact break bar (time +
+                # index, both of THIS frame) is stamped on the broken side, and
+                # the painter's timestamp path takes over from there.
+                try:
+                    _bbar_i = find_break_bar(d, float(upper), 0.02 * atr, lookback=6) \
+                        if upper is not None else None
+                    if _bbar_i is not None:
+                        for _cmd in (_pat62, pat):
+                            for _ln2 in (_cmd.get("lines") or []):
+                                if str(_ln2.get("side") or "").upper() == "HIGH":
+                                    _ln2["break_ts"] = str(d["timestamp"].iloc[_bbar_i])
+                                    _ln2["break_x"] = int(_bbar_i)
+                except Exception:
+                    pass
                 # ── R65 BREAK RECENCY (his 3-day-late confirmation): the
                 # publish must belong to the break bar (or the very next close)
                 # and must not chase — anything older/أبعد belongs to the

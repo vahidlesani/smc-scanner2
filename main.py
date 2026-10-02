@@ -1017,7 +1017,10 @@ def _resolve_pinv_verdict(candidate: SignalCandidate, closed: Optional[pd.DataFr
     # verdict window before anyone could act — the "cancelled after 21
     # candles in 1 minute" bug.)
     pin_tf = str(md.get("pin_tf") or candidate.trigger_timeframe)
-    tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}.get(pin_tf, 300)
+    # R65: canonical table (30m/2h/3d were missing — a 2h pin got a 300 s
+    # verdict window and the monitor mass-verdicted it before it could run).
+    from analysis.candle_counts import tf_seconds as _tfsec65
+    tf_seconds = _tfsec65(str(pin_tf))
     try:
         det = pd.Timestamp(str(candidate.created_at)).tz_localize(None)
         threshold = det - pd.Timedelta(seconds=tf_seconds)

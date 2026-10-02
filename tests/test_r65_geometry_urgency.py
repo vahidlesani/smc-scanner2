@@ -339,3 +339,20 @@ def test_spot_break_recency_law():
     assert not spot_break_recency_ok(2, 0.1)      # the «3 days later» bug
     assert not spot_break_recency_ok(None, 0.1)   # no bar in window = stale
     assert not spot_break_recency_ok(0, 2.0)      # a chase is not a confirmation
+
+
+# ── 8. one canonical seconds table (the 30m/2h/4h PINVAL clock bug) ──────────
+def test_tf_seconds_table_is_complete():
+    from analysis.candle_counts import tf_seconds
+    assert tf_seconds("30m") == 1800
+    assert tf_seconds("2h") == 7200
+    assert tf_seconds("4h") == 14400
+    assert tf_seconds("3d") == 259200
+    assert tf_seconds("1w") == 604800
+    assert tf_seconds("nonsense") == 300
+    src = io.open(os.path.join(ROOT, "analysis", "setups_experimental.py"),
+                  encoding="utf-8").read()
+    # the truncated literal map must be gone from the freshness guard
+    assert '{"1m": 60, "5m": 300, "15m": 900, "1h": 3600}.get' not in src
+    msrc = io.open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
+    assert '{"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}.get(pin_tf' not in msrc

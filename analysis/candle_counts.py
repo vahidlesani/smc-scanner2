@@ -39,6 +39,21 @@ RENDER_COUNTS = dict(CANDLE_COUNTS)
 RENDER_COUNTS.update({"5m": 210, "15m": 210, "30m": 210, "1h": 210, "2h": 210})
 
 
+# ── canonical TF → seconds (R65: the PINVAL freshness guard and the PINVAL
+# verdict window both carried a map that stopped at 1h — a 30m/2h/4h pin was
+# judged with a 300 s clock and silently dropped as «stale». One table, used by
+# every lane; sub-hour frames which this product never fetches are included for
+# completeness.)
+TF_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+              "1h": 3600, "2h": 7200, "4h": 14400, "8h": 28800, "12h": 43200,
+              "1d": 86400, "3d": 259200, "1w": 604800}
+
+
+def tf_seconds(tf: str, default: int = 300) -> int:
+    """Candle duration of ``tf`` in seconds (case-insensitive)."""
+    return int(TF_SECONDS.get(str(tf or "").strip().lower(), default))
+
+
 def candle_count(tf: str, default: int = 300) -> int:
     """Dictated DETECTION candle count for ``tf`` (case-insensitive)."""
     return int(CANDLE_COUNTS.get(str(tf or "").strip().lower(), default))
