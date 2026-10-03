@@ -290,6 +290,78 @@ def test_open_zone_guard_sits_before_reservation_and_marks_after_send():
     assert send < mark
 
 
+def test_leading_gap_clip_drops_the_sparse_island():
+    """R64.6 (his LTC/ARB 4h: the left third of the chart was EMPTY) — an
+    isolated island of rows far before the dense tape is clipped so the
+    visible window is all candles; an INTERIOR gap of a mature tape stays."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from bot.messages_v7 import _clean_render_frame
+    ts = pd.date_range("2026-09-01", periods=120, freq="4h")
+    rows = []
+    for i, t in enumerate(ts):
+        rows.append({"timestamp": t, "open": 10, "high": 10.5, "low": 9.5,
+                     "close": 10, "volume": 1.0})
+    # a sparse island three weeks earlier
+    island = [{"timestamp": pd.Timestamp("2026-08-08") + pd.Timedelta(hours=4 * i),
+               "open": 10, "high": 10.5, "low": 9.5, "close": 10,
+               "volume": 1.0} for i in range(4)]
+    df = pd.DataFrame(island + rows)
+    out = _clean_render_frame(df, window=300)
+    assert len(out) == 120                      # the island is gone
+    assert pd.Timestamp(out.index[0]) >= ts[0]
+    # interior gap: untouched (market truth)
+    ts2 = pd.date_range("2026-09-01", periods=40, freq="4h")
+    part_b = pd.date_range("2026-09-20", periods=40, freq="4h")
+    df2 = pd.DataFrame(
+        [{"timestamp": t, "open": 10, "high": 10.5, "low": 9.5, "close": 10,
+          "volume": 1.0} for t in list(ts2) + list(part_b)])
+    out2 = _clean_render_frame(df2, window=300)
+    assert len(out2) == 80
+
+
+def test_pattern_flat_edge_draws_as_line_not_band():
+    """R64.6 (his ARB 4h: the descending triangle's flat lower edge turned
+    into a full-width green band and the channel look died) — the flat→band
+    law is for a STANDALONE single-line trendline only; a shape's edge stays
+    a LINE."""
+    src = open("bot/messages_v7.py", encoding="utf-8").read()
+    marker = src.index("STANDALONE flat")
+    window = src[marker:marker + 600]      # the condition sits inside the if
+    assert "len(_lns) == 1" in window
+
+
+def test_range_midline_hidden_on_spot():
+    """R64.6 (his AVAX/NEAR: a lone dashed line floating mid-chart) — the
+    range MIDLINE never draws on the CryptoCove-clean spot canvas."""
+    src = open("bot/messages_v7.py", encoding="utf-8").read()
+    marker = src.index('_mid8 = (float(_pat["lo"])')
+    window = src[marker:marker + 460]
+    assert "if not _spot_clean35:" in window
+    assert "ax.hlines(_mid8" in window
+
+
+def test_measured_box_skips_when_detached_from_live():
+    """R64.6 (his DOT 4h: the green box floated as a detached square above
+    the live candle) — when the shape's upper edge sits >1.2 ATR above live,
+    price never broke it: no measured move, no floating box."""
+    src = open("bot/messages_v7.py", encoding="utf-8").read()
+    assert "_upB8 - _lcB8 > 1.2 * _atrB8" in src
+
+
+def test_both_edges_fallback_is_pattern_context_permissive():
+    """R64.6 (his NEAR 8h: the red broken TL drew while the rally's rising
+    support stayed missing) — the both-edges fallback draws pattern CONTEXT:
+    the R64.3 ATR gate is OFF there and the touch/residual budget is
+    permissive enough for a real noisy support to pass."""
+    src = open("bot/messages_v7.py", encoding="utf-8").read()
+    marker = src.index("def _last_resort_edges")
+    body = src[marker:marker + 2600]
+    assert "atr_relevance_gate=False" in body
+    assert "touch_tolerance_atr=0.45" in body
+    assert "max_fit_residual_atr=0.90" in body
+
+
 def test_spot_chain_code_format():
     from analysis.models import generate_viva_public_code
     code = generate_viva_public_code("SPOT")

@@ -1818,6 +1818,27 @@ def _clean_render_frame(df: pd.DataFrame, window: int = 150) -> pd.DataFrame:
             _clean_render_frame.dropped_dead_rows = False
     except Exception:
         _clean_render_frame.dropped_dead_rows = False
+    # ── R64.6 LEADING-GAP CLIP (his 10-03 LTC/ARB 4h: the left third of the
+    # chart was EMPTY while the axis kept its dates) — a history-store stitch
+    # or a young symbol's sparse early tape puts an isolated island of rows
+    # far before the dense tape begins. The island renders as blank space and
+    # wastes half the canvas. Clip the frame to start AFTER the first big
+    # time-gap — but only when that gap sits in the leading third (an interior
+    # gap of a mature tape is market truth, never clipped).
+    try:
+        _ts64 = pd.to_datetime(frame["timestamp"])
+        _gaps64 = _ts64.diff().dt.total_seconds()
+        _med64 = float(_gaps64.median() or 0.0)
+        if _med64 > 0 and len(frame) > 20:
+            _bad64 = (_gaps64 > 2.5 * _med64).to_numpy()
+            _bad64[0] = False
+            if bool(_bad64.any()):
+                _fb64 = int(np.argmax(_bad64))
+                if 0 < _fb64 < max(4, len(frame) // 3):
+                    _clean_render_frame.dropped_dead_rows = True
+                    frame = frame.iloc[_fb64:].reset_index(drop=True)
+    except Exception:
+        pass
     # keep the renderer's contract: the frame is INDEXED by timestamp
     frame = frame.set_index("timestamp")
     frame.index = pd.DatetimeIndex(frame.index)
@@ -2179,10 +2200,17 @@ def _last_resort_edges(frame, use_log: bool,
         import dataclasses as _dc61
         from analysis.viva_tlbreak import fit_validated_line as _fvl61
         from analysis.viva_tlbreak import load_config as _lc61
+        # R64.6 (his 10-03 NEAR 8h: the red broken TL drew while the rally's
+        # whole rising support stayed missing): this fallback draws PATTERN
+        # CONTEXT edges, not trade lines — same ruling as scan_edges in R64.3,
+        # the ATR-distance gate is trade-side only. And a permissive touch/
+        # residual budget, or a noisy real support never passes and the side
+        # stays invisible («خط زیر الگو را نمی‌کشد»).
         cfg = _dc61.replace(_lc61(), pivot_left=3, pivot_right=3,
-                          min_touches=2, touch_tolerance_atr=0.30,
-                          max_fit_residual_atr=0.60, require_alive=False,
+                          min_touches=2, touch_tolerance_atr=0.45,
+                          max_fit_residual_atr=0.90, require_alive=False,
                           recency_bars=10_000, edge_atr=10_000.0,
+                          atr_relevance_gate=False,
                           wick_policy="hybrid")
         if not use_log:
             cfg = _dc61.replace(cfg, log_fit_min_span=99.0)
@@ -3067,9 +3095,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         color=_cBot9, linewidth=1.3 if _rgfar9 else 0.9,
                         alpha=0.8, zorder=2)
                 _mid8 = (float(_pat["lo"]) + float(_pat["hi"])) / 2
-                ax.hlines(_mid8, _range_start, zone_end,
-                          colors=_cTop9, linestyles="--",
-                          linewidth=0.7, alpha=0.55, zorder=2)
+                # R64.6 (his 10-03 AVAX/NEAR: a lone dashed line floating
+                # mid-chart read as a broken trendline) — the range MIDLINE
+                # is noise on the CryptoCove-clean spot canvas: edges carry
+                # the range, the mid says nothing.
+                if not _spot_clean35:
+                    ax.hlines(_mid8, _range_start, zone_end,
+                              colors=_cTop9, linestyles="--",
+                              linewidth=0.7, alpha=0.55, zorder=2)
                 _rg = _place_in_box({"x0": float(_range_start),
                                      "x1": float(zone_end),
                                      "bottom": float(_pat["lo"]),
@@ -3204,7 +3237,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # from, so paint it as a zone band instead of a line.
                 # r59: a FAR-MAJOR edge is exempt — it is a LINE of the big
                 # pattern, never a zone band.
-                if (not _pat.get("far_major") and _atr9 > 0
+                # R64.6 (his 10-03, ARB 4h: the descending triangle's FLAT
+                # lower edge turned into a full-width green band — the channel
+                # look died): the flat→band law is for a STANDALONE flat
+                # trendline (AAVE, single line). A line that belongs to a
+                # SHAPE (2+ edges) is the pattern's boundary — it stays a LINE
+                # so the shape reads as a shape, CryptoCove-style.
+                if (len(_lns) == 1 and not _pat.get("far_major") and _atr9 > 0
                         and abs(_sl) * max(1.0, count - _xa) < 0.5 * _atr9):
                     _y8 = _line_y_cal(_ln, count)
                     ax.fill_between([_xa, _xe], _y8 - 0.12 * _atr9,
@@ -3315,6 +3354,21 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # are born confirmed), while futures can never reach this branch.
             _spot8_box = bool(_spot8 and (not confirmed
                                           or (candidate.metadata or {}).get("spot_measured_box")))
+            # R64.6 (his 10-03, DOT 4h: the green box floated as a detached
+            # square ABOVE the live candle) — the measured box is the move
+            # FROM the breakout; when the shape's upper edge has already left
+            # the live price far below (edge − live > 1.2 ATR), price has NOT
+            # broken that edge and there is no measured move to project.
+            if _spot8_box and len(_lns) == 2:
+                try:
+                    _atrB8 = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
+                    _lcB8 = float(frame["close"].iloc[-1])
+                    _upB8 = max(float(_lns[0]["slope"]) * (count - 1) + float(_lns[0]["intercept"]),
+                                float(_lns[1]["slope"]) * (count - 1) + float(_lns[1]["intercept"]))
+                    if _atrB8 > 0 and _upB8 - _lcB8 > 1.2 * _atrB8:
+                        _spot8_box = False
+                except Exception:
+                    pass
             if _spot8_box and len(_lns) == 2 and not any(_flat8) and not any(_brk8):
                 # CryptoCove measured-move box: pattern height projected from
                 # the live price into the future panel — translucent green,
