@@ -70,6 +70,100 @@ def test_tl_live_relevance_gate_skips_stale_lines(monkeypatch):
     assert got_off is not None               # legacy behavior reachable
 
 
+def test_tl_atr_distance_gate_skips_far_archive_lines(monkeypatch):
+    """R64.3 (his ARB 1d, probe: a June base line at ~0.10 vs live 0.196 slid
+    under the 55% cap via the log rescue at 53.98%). Percentage caps argue
+    with vol regimes — the chart's ruler is the ATR: even in the most
+    favourable space the line must sit within TL_MAX_LIVE_DRAG_ATR
+    candle-heights of the live price. Env 0 restores legacy."""
+    from analysis.viva_tlbreak import fit_validated_line, load_config
+    import dataclasses as dc
+    n = 200
+    ts = pd.date_range("2026-03-01", periods=n, freq="1h")
+    closes = [0.10] * 50 + [0.10 + 0.00064 * i for i in range(n - 50)]
+    lows = [c - 0.0004 for c in closes]
+    lows[20] = 0.1001; lows[40] = 0.0998          # the far archive pair
+    highs = [c + 0.0004 for c in closes]
+    f = pd.DataFrame({"timestamp": ts, "open": closes, "high": highs,
+                      "low": lows, "close": closes, "volume": [1.0] * n})
+    cfg = dc.replace(load_config(), pivot_left=2, pivot_right=2, min_touches=2,
+                     touch_tolerance_atr=0.30, max_fit_residual_atr=2.0,
+                     require_alive=False, wick_policy="hybrid")
+    monkeypatch.setenv("TL_MAX_LIVE_DRAG", "0.55")
+    monkeypatch.setenv("TL_MAX_LIVE_DRAG_ATR", "8.0")     # the ship default
+    assert fit_validated_line(f, "LOW", cfg) is None      # ~120 ATR away
+    monkeypatch.setenv("TL_MAX_LIVE_DRAG_ATR", "0")
+    assert fit_validated_line(f, "LOW", cfg) is not None  # legacy reachable
+
+
+def test_legacy_snapshot_heals_once_under_geom_law():
+    """R64.3 (his 10-03: «چارت‌ها رو فکر کنم برگردوندی به زمان ایرادات
+    قبلی») — snapshots stamped under an older geometry law re-paint their
+    dead pivots FOREVER (the lock forbids re-fits). A law-tagged snapshot is
+    healed ONCE with the current fitter on the chart's own frame, then
+    re-frozen: a side that no longer validates is dropped, a valid side is
+    re-frozen, and the second restore touches nothing."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from analysis.snapshot_lock import lock_render_geometry, GEOM_LAW
+    n = 120
+    ts = pd.date_range("2026-08-01", periods=n, freq="1h")
+    closes = [100.0 + 0.3 * i for i in range(n)]
+    lows = [c - 2.0 for c in closes]
+    lows[20] = closes[20] - 5.0; lows[60] = closes[60] - 5.0
+    lows[100] = closes[100] - 5.0
+    highs = [c + 2.0 for c in closes]
+    frame = pd.DataFrame({"timestamp": ts, "open": closes, "high": highs,
+                          "low": lows, "close": closes, "volume": [1.0] * n})
+    garbage = [{"index": 3, "price": 999.0, "timestamp": "2026-01-01T00:00:00"}]
+    store = {"render_patterns": [{"type": "TRIANGLE"}], "render_zones": [],
+             "viva_upper_points": [dict(g) for g in garbage]}
+    class _C:
+        signal_id = "T-HEAL"
+        metadata = {"viva_upper_points": [dict(g) for g in garbage]}
+    c = _C()
+    lock_render_geometry(c, kv_get=lambda k: dict(store),
+                         kv_set=lambda k, v: store.update(v), frame=frame)
+    assert store.get("geom_law") == GEOM_LAW
+    assert c.metadata.get("viva_upper_points") is None      # dead side DROPPED
+    low_pts = c.metadata.get("viva_lower_points") or []
+    assert len(low_pts) >= 2 and float(low_pts[0]["price"]) < 120.0  # REAL refit
+    assert store.get("viva_lower_points") == low_pts
+    snapshot_after = {k: store[k] for k in ("viva_upper_points",
+                                            "viva_lower_points", "geom_law")}
+    lock_render_geometry(c, kv_get=lambda k: dict(store),
+                         kv_set=lambda k, v: store.update(v), frame=frame)
+    assert {k: store[k] for k in ("viva_upper_points",
+                                  "viva_lower_points", "geom_law")} == snapshot_after
+
+
+def test_log_axis_sub_decade_view_still_has_ticks():
+    """R64.3 (his HBAR 1h: «چرا روی محور قیمت فقط یک قیمت داره؟») — a
+    sub-decade log view (0.0964→0.1071) must print readable ticks, not one
+    lonely 0.1; the decade locator stays for wide views."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from bot.messages_v7 import _log_axis_decorate
+    fig, ax = plt.subplots()
+    ax.set_yscale("log")
+    ax.set_ylim(0.0964, 0.1071)
+    _log_axis_decorate(ax)
+    fig.canvas.draw()
+    vals = [float(t.get_text()) for t in ax.yaxis.get_ticklabels()
+            if t.get_text()]
+    assert len(vals) >= 3, vals
+    assert all(0.096 <= v <= 0.108 for v in vals), vals
+    ax2 = fig.add_subplot(212)
+    ax2.set_yscale("log")
+    ax2.set_ylim(0.09, 250.0)
+    _log_axis_decorate(ax2)
+    fig.canvas.draw()
+    wide = [t.get_text() for t in ax2.yaxis.get_ticklabels() if t.get_text()]
+    assert len(wide) >= 3, wide
+    plt.close(fig)
+
+
 def test_spot_chain_code_format():
     from analysis.models import generate_viva_public_code
     code = generate_viva_public_code("SPOT")

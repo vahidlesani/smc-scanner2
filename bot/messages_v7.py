@@ -944,10 +944,25 @@ def _log_axis_decorate(ax) -> None:
       * NullFormatter on minors (no scientific snippets)."""
     try:
         import matplotlib.ticker as _mt52
-        ax.yaxis.set_major_locator(
-            _mt52.LogLocator(base=10.0, subs="all", numticks=18))
-        ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
-        ax.yaxis.set_minor_formatter(_mt52.NullFormatter())
+        _lo52, _hi52 = ax.get_ylim()
+        _dec52 = (math.log10(_hi52) - math.log10(_lo52)
+                  if (_lo52 > 0 and _hi52 > 0) else 99.0)
+        if _dec52 < 1.0:
+            # R64.3 (his 10-03, HBAR 1h: «چرا روی محور قیمت فقط یک قیمت
+            # داره؟») — a sub-decade view (0.0964→0.1071) leaves the decade
+            # locator ONE label (0.1); every subs tick falls outside the
+            # view. Fixed GEOMETRIC ticks inside the view keep the log scale
+            # AND a readable axis.
+            _t52 = np.geomspace(max(_lo52, 1e-12), _hi52,
+                                6 if _dec52 < 0.3 else 4)
+            ax.yaxis.set_major_locator(_mt52.FixedLocator(_t52))
+            ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
+            ax.yaxis.set_minor_formatter(_mt52.NullFormatter())
+        else:
+            ax.yaxis.set_major_locator(
+                _mt52.LogLocator(base=10.0, subs="all", numticks=18))
+            ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
+            ax.yaxis.set_minor_formatter(_mt52.NullFormatter())
     except Exception as exc:
         print(f"log-axis decorate warning: {exc}")
 
@@ -2359,7 +2374,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # a zone). G1: a chain with trade lines paints ONLY the traded edges.
         try:
             from analysis.snapshot_lock import lock_render_geometry as _lock63
-            _lock63(candidate)
+            _lock63(candidate, frame=frame)
         except Exception as _l63:
             print(f"R63 snapshot-lock warning: {_l63}")
         if _CANDLE_STYLE == "cryptocove":

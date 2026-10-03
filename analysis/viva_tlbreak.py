@@ -33,6 +33,10 @@ class VivaTLBreakConfig:
     wick_policy: str = "outlier"
     max_fit_residual_atr: float = 0.25
     require_alive: bool = False
+    # R64.3 ATR-distance gate: ON for trade-side fits (a line candle-heights
+    # away from price is archive, not a trend), OFF for PATTERN-edge fits —
+    # the far side of a live range/triple-top IS the pattern's structure.
+    atr_relevance_gate: bool = True
     recency_bars: int = 40
     edge_atr: float = 8.0
     # r31 (Viva 09-26, PYTH): a substantial line whose close-break is inside
@@ -492,6 +496,19 @@ def fit_validated_line(
                         (_v <= 0) or abs(_v / _lp64 - 1.0) > _drag_max64
                         for _v in _cand64):
                     continue
+                # ── R64.3 ATR-DISTANCE (his 10-03, ARB 1D probe: a June base
+                # line at 0.075 vs live 0.196 slipped through because the log
+                # rescue landed at 53.98% vs the 55% cap). Percentage caps
+                # argue with vol regimes; the chart's own ruler is the ATR:
+                # even in the MOST FAVOURABLE space the line must sit within
+                # TL_MAX_LIVE_DRAG_ATR (default 4.0) candle-heights of the
+                # live price, else it is archive, not a working trend.
+                if _lp64 > 0 and atr > 0 and getattr(cfg, "atr_relevance_gate", True):
+                    _pos64 = [_v for _v in _cand64 if _v > 0]
+                    _capA64 = float(os.getenv("TL_MAX_LIVE_DRAG_ATR", "8.0") or "8.0")
+                    if _capA64 > 0 and (not _pos64 or
+                                        min(abs(_v - _lp64) for _v in _pos64) / atr > _capA64):
+                        continue
             # ── R64.1c MAJOR-ANCHOR LAW (his 10-03: LINK/ASTER/SUI — «پیوت‌های
             # اشتباه بعنوان نقطه اول گرفته میشه», the pink major vs the tool's
             # mid-range pair): a defining pair whose BOTH pivots sit in the

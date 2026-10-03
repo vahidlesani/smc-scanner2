@@ -721,6 +721,12 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
     if pattern_df is None or len(pattern_df) < 40 or trigger_df is None or len(trigger_df) < 6:
         return events
     cfg = load_config()
+    # R64.3: PATTERN edges are structure — the far side of a live range or a
+    # triple top is the pattern itself; his «ترند بی‌ربط» law targets single
+    # floating trendlines, never a pattern's own second edge. ATR gate OFF
+    # here, ON everywhere trade-side.
+    import dataclasses as _dc718
+    cfg = _dc718.replace(cfg, atr_relevance_gate=False)
     _n0 = len(pattern_df) - 1
     upper = fit_edge_line(pattern_df, "HIGH", cfg, _n0)
     lower = fit_edge_line(pattern_df, "LOW", cfg, _n0)
@@ -1580,8 +1586,13 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     n = len(pat) - 1
     live = float(ev.get("live") or float(trig["close"].iloc[-1]))
     line_now = float(ev["line_price"])
-    upper = fit_validated_line(pat, "HIGH", cfg)
-    lower = fit_validated_line(pat, "LOW", cfg)
+    # R64.3: these two re-fits are PATTERN CONTEXT (CHoCH slope, opposite
+    # edge) — the pattern's own far side is structure, never «ترند بی‌ربط».
+    # The ATR-distance gate stays on for trade-edge fits only.
+    import dataclasses as _dc1560
+    _ctx_cfg = _dc1560.replace(cfg, atr_relevance_gate=False)
+    upper = fit_validated_line(pat, "HIGH", _ctx_cfg)
+    lower = fit_validated_line(pat, "LOW", _ctx_cfg)
     opp = lower if direction == "LONG" else upper
     # ── r60.6 CHANGE OF CHARACTER (Viva 09-30, verbatim): «وقتی ترند نزولی
     # میشکنه به بالا دیگه اسمش خلاف روند نیست ... احتمال چنج آف کارکتر هست

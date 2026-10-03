@@ -203,6 +203,12 @@ def test_tlbreak_rejection_scalp_mints():
     import analysis.setups_experimental as exp
     from analysis.viva_tlbreak import fit_validated_line, load_config
     pattern, _trig = _wedge_frames()
+    # R64.3: the trade-side ATR gate needs the line within 8 ATR of price;
+    # the shared wedge fixture (wick=0.6 on a ~40-unit wedge) is sub-real vol.
+    # Widen the WICKS only — closes and line prices stay identical.
+    pattern = pattern.copy()
+    pattern["high"] = pattern["high"] + 1.5
+    pattern["low"] = pattern["low"] - 1.5
     upper = fit_validated_line(pattern, "HIGH", load_config())
     lower = fit_validated_line(pattern, "LOW", load_config())
     if upper is None:

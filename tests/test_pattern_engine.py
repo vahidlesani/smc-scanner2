@@ -66,9 +66,12 @@ def _mod():
 
 
 def _pattern_line(df, side):
+    import dataclasses as _dc
     from analysis.pattern_engine import fit_edge_line
     from analysis.viva_tlbreak import load_config
-    return fit_edge_line(df, side, load_config(), len(df) - 1)
+    # pattern edges are structure — R64.3 ATR gate is trade-side only
+    cfg = _dc.replace(load_config(), atr_relevance_gate=False)
+    return fit_edge_line(df, side, cfg, len(df) - 1)
 
 
 def test_scan_edges_finds_break_on_descending_triangle():

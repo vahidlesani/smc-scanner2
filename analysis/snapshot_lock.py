@@ -28,6 +28,8 @@ lane carry ``trade_geometry=True`` and are kept (they ARE the trade geometry).
 """
 from __future__ import annotations
 
+import os
+
 from typing import Any, Dict
 
 # Every metadata key that paints structure on the chart. The trade-geometry
@@ -99,7 +101,15 @@ def unify_trade_geometry(md: Dict[str, Any]) -> bool:
     return removed
 
 
-def lock_render_geometry(candidate, kv_get=None, kv_set=None) -> str:
+# Geometry-law generation tag. Bump it (or set VIVA_GEOM_LAW) whenever the
+# fitter laws change: every snapshot stamped under an older tag is healed ONCE
+# with the current fitter on its chart's own frame, then re-frozen —
+# immutability holds WITHIN a generation, his «ترندلاین روی پیوت‌های جدید
+# امتداد پیدا نکنه» stays true, and pre-law chains stop painting dead pivots.
+GEOM_LAW = os.getenv("VIVA_GEOM_LAW", "R64.3")
+
+
+def lock_render_geometry(candidate, kv_get=None, kv_set=None, frame=None) -> str:
     """Stamp (first chart) or restore (every later chart) the per-code render
     snapshot. Returns "STAMPED", "RESTORED" or "" (nothing to do / KV down).
     Fail-open: any KV problem leaves the metadata as it is."""
@@ -139,16 +149,42 @@ def lock_render_geometry(candidate, kv_get=None, kv_set=None) -> str:
         # one-geometry filter runs on every restore (it only REMOVES
         # non-traded lines, never adds new ones, so the lock law holds) and
         # a legacy snapshot is migrated once to the marked format.
+        # ── R64.3 HEAL-ONCE (his 10-03: «چارت‌ها رو فکر کنم برگردوندی به زمان
+        # ایرادات قبلی») — a snapshot stamped before the current geometry laws
+        # re-paints its dead pivots FOREVER (the lock forbids re-fits). Once
+        # per law generation: re-run the CURRENT fitter on this chart's own
+        # frame; a side that no longer validates is DROPPED, a side that does
+        # is re-frozen. The tag then locks it again until the next law bump.
+        _healed = False
+        if stored.get("geom_law") != GEOM_LAW and frame is not None:
+            try:
+                from analysis.viva_tlbreak import fit_validated_line as _fvl64, load_config as _lc64
+                _f2 = frame
+                if "timestamp" not in _f2.columns:
+                    _f2 = _f2.copy()
+                    _f2["timestamp"] = _f2.index
+                _f2 = _f2.reset_index(drop=True)
+                _cfg64 = _lc64()
+                for _side64, _key64 in (("HIGH", "viva_upper_points"),
+                                        ("LOW", "viva_lower_points")):
+                    _ln64 = _fvl64(_f2, _side64, _cfg64)
+                    if _ln64 is not None and getattr(_ln64, "points", None):
+                        md[_key64] = [dict(_p64) for _p64 in _ln64.points]
+                    else:
+                        md.pop(_key64, None)
+                md.pop("viva_retest_zone", None)   # derived from the old edges
+                _healed = True
+            except Exception as _heal:
+                print(f"R64.3 heal warning: {_heal}")
         _changed = unify_trade_geometry(md)
-        if _changed or "render_geometry_source" not in stored \
-                or any(_k64 in stored for _k64 in
-                       ("viva_upper_points", "viva_lower_points",
-                        "viva_retest_zone", "tc_projection", "tc_base")):
+        if _changed or _healed or stored.get("geom_law") != GEOM_LAW \
+                or "render_geometry_source" not in stored:
             try:
                 snap = {k: md.get(k) for k in SNAPSHOT_KEYS if k in md}
                 snap.setdefault("render_patterns", md.get("render_patterns") or [])
                 snap.setdefault("render_zones", md.get("render_zones") or [])
                 snap["render_geometry_source"] = md.get("render_geometry_source") or "RENDER"
+                snap["geom_law"] = GEOM_LAW
                 kv_set(snapshot_key(sid), snap)
             except Exception:
                 pass
