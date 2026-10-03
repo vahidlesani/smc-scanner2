@@ -152,10 +152,69 @@ def _update_too_fresh(holder: SignalCandidate) -> bool:
     return (_tt.time() - max(anchor_t, last_t)) < gap
 
 
+def _zone_band(cand, level: float) -> float:
+    """R64.5: what counts as «همان ناحیه» — half a candle of ATR, floor 0.75%."""
+    try:
+        _atr = float((getattr(cand, "metadata", None) or {}).get("atr", 0) or 0)
+    except Exception:
+        _atr = 0.0
+    return max(0.5 * _atr, 0.0075 * abs(float(level or 0.0)), 1e-12)
+
+
+def _open_zone_key(cand) -> str:
+    return (f"{str(getattr(cand, 'setup_code', '') or '').upper()}|"
+            f"{str(getattr(cand, 'symbol', '') or '').upper()}|"
+            f"{str(getattr(cand, 'trigger_timeframe', '') or '').lower()}|"
+            f"{str(getattr(cand, 'direction', '') or '').upper()}")
+
+
+def _open_zone_mark(cand) -> None:
+    """R64.5 OPEN-ZONE registry: written ONLY after a successful initial-alert
+    send (handoff law) — this zone now belongs to that chain until it resolves
+    (update / confirm / invalidation) or its own expiry passes."""
+    from database.bot_kv import get_json as _g, set_json as _s
+    from analysis.setups_v7 import expiry_hours_for
+    import time as _t
+    key = _open_zone_key(cand)
+    level = float(getattr(cand, "zone_mid"))
+    state = _g("open_alert_zone", {}) or {}
+    state[key] = {"mid": level, "band": float(_zone_band(cand, level)),
+                  "ts": _t.time(),
+                  "ttl_h": float(expiry_hours_for(getattr(cand, "style", ""),
+                                                  getattr(cand, "trigger_timeframe", ""))),
+                  "sid": str(getattr(cand, "signal_id", "") or "")}
+    _s("open_alert_zone", state)
+
+
+def _open_zone_dup(cand) -> bool:
+    """True when THIS lane already speaks for this zone and the chain is
+    still unresolved (his 10-03: ALBROX K884147/K948189 — two initial alerts
+    on one symbol/tf/zone/setup within 40 minutes must be impossible; the
+    follow-up detection waits for the ORIGINAL chain's update/confirm/abort)."""
+    from database.bot_kv import get_json as _g
+    import time as _t
+    entry = _g("open_alert_zone", {}) or {}
+    e = entry.get(_open_zone_key(cand))
+    if not isinstance(e, dict):
+        return False
+    now = _t.time()
+    ttl = float(e.get("ttl_h") or 0) * 3600.0
+    if ttl > 0 and now - float(e.get("ts") or 0) > ttl:
+        return False                     # chain's resolution window elapsed
+    level = float(getattr(cand, "zone_mid") or 0.0)
+    band = max(float(e.get("band") or 0.0), _zone_band(cand, level))
+    return abs(level - float(e.get("mid") or 0.0)) <= band
+
+
 def _dead_gate_recently_alerted(candidate: SignalCandidate) -> bool:
+    # R64.5: the zone-BUCKET, not the float — a hair-shifted re-detection of
+    # the SAME structure used to mint a fresh key (6-decimal exact) and alert
+    # again. Same zone ⇒ same key ⇒ silent until the chain resolves.
+    _lvl = float(candidate.metadata.get("structure_level", 0) or 0)
+    _band = _zone_band(candidate, _lvl)
     key = (
         f"{candidate.symbol}:{candidate.style}:{candidate.setup_code}:{candidate.direction}:"
-        f"{round(float(candidate.metadata.get('structure_level', 0) or 0), 6)}"
+        f"{round(_lvl / _band) if _band > 0 else 0}"
     )
     from analysis.setups_v7 import expiry_hours_for
     expiry_hours = expiry_hours_for(candidate.style, candidate.trigger_timeframe)
@@ -311,6 +370,13 @@ def run_discovery_scan() -> Dict[str, int]:
                 _sj60(_post_key, {"ts": _t60.time()})
             except Exception:
                 pass
+        if _sent:
+            # R64.5: the zone now belongs to this chain — register it so no
+            # follow-up detection of the same zone opens a second alert.
+            try:
+                _open_zone_mark(cand)
+            except Exception as _ozm:
+                print(f"open-zone mark warning {getattr(cand, 'symbol', '?')}: {_ozm}")
         return _sent
     # Observability only (no behaviour change): tally where each raw detector
     # candidate goes, per setup, so "0 confirmed" is diagnosable from logs.
@@ -323,6 +389,7 @@ def run_discovery_scan() -> Dict[str, int]:
             "suppressed_pre_tp1": 0, "dup": 0, "ready_new": 0,
             "absorbed": 0, "license_cap": 0, "same_zone_quiet": 0, "sep2pct": 0,
             "budget_deferred": 0, "add_failed": 0, "educate_failed": 0, "chain_slot": 0,
+            "open_zone_dup": 0,
         })
     print(
         f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC] "
@@ -385,6 +452,22 @@ def run_discovery_scan() -> Dict[str, int]:
                     candidate.metadata["publish_score"] = int(candidate.score or 0)
                 except Exception:
                     pass
+                # ── R64.5 OPEN-ZONE LAW (his 10-03, ALBROX K884147 vs K948189,
+                # two initial alerts one zone apart in <40min): the structural
+                # lanes are exempt from the generic chain gates, so their ONLY
+                # dedupe was float-exact keys. Before ANY publication (and
+                # before a public code is even reserved): if this lane already
+                # posted the initial alert for this (setup, symbol, trigger-TF,
+                # direction) ZONE and the chain is unresolved — stay silent.
+                # The ORIGINAL chain resolves by update / confirm / abort at
+                # its own (correct) level; nothing else in its flow changes.
+                if (str(getattr(candidate, "setup_code", "") or "").upper() in _STRUCTURAL_QUALITY_LANES
+                        and _open_zone_dup(candidate)):
+                    stats["open_zone_dup"] = stats.get("open_zone_dup", 0) + 1
+                    _t(candidate)["open_zone_dup"] = _t(candidate).get("open_zone_dup", 0) + 1
+                    print(f"OPEN_ZONE_DUP | {candidate.setup_code} | {candidate.symbol} | "
+                          f"{candidate.trigger_timeframe} | {candidate.direction} | suppressed")
+                    continue
                 try:
                     reserve_public_code(candidate)
                 except Exception as exc:

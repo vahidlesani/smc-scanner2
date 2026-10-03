@@ -223,6 +223,73 @@ def test_line_watch_registry_roundtrip(monkeypatch):
     assert "ARBUSDT|1d|HIGH" not in (store.get("line_watch") or {})
 
 
+def test_open_zone_guard_suppresses_same_zone_initial_alerts(monkeypatch):
+    """R64.5 (his 10-03: ALBROX K884147 + K948189 — two initial alerts on one
+    symbol/tf/zone/setup within 40 minutes) — once a structural lane posts the
+    initial alert, the registry owns that zone until the chain resolves: a
+    hair-shifted re-detection is suppressed, a genuinely different zone is not."""
+    store = {}
+    monkeypatch.setattr("database.bot_kv.get_json",
+                        lambda k, *a, **kw: store.get(k))
+    monkeypatch.setattr("database.bot_kv.set_json",
+                        lambda k, v, *a, **kw: store.__setitem__(k, v))
+    from main import _open_zone_mark, _open_zone_dup
+
+    class _C:
+        setup_code = "ALBROX"; symbol = "ARBUSDT"; trigger_timeframe = "2h"
+        direction = "LONG"; zone_mid = 0.21; style = "SWING"
+        metadata = {"atr": 0.004}; signal_id = "s1"
+    _open_zone_mark(_C())
+    c2 = _C(); c2.signal_id = "s2"; c2.zone_mid = 0.2105      # same zone
+    assert _open_zone_dup(c2) is True
+    c3 = _C(); c3.signal_id = "s3"; c3.zone_mid = 0.26        # a different zone
+    assert _open_zone_dup(c3) is False
+
+
+def test_open_zone_guard_expires_with_the_chain(monkeypatch):
+    """R64.5: the registry entry dies with the chain's own expiry window —
+    after it, the zone is free again (the law is «تا تعیین تکلیف», forever)."""
+    import time as _t
+    store = {}
+    monkeypatch.setattr("database.bot_kv.get_json",
+                        lambda k, *a, **kw: store.get(k))
+    monkeypatch.setattr("database.bot_kv.set_json",
+                        lambda k, v, *a, **kw: store.__setitem__(k, v))
+    from main import _open_zone_mark, _open_zone_dup
+
+    class _C:
+        setup_code = "TLBREAK"; symbol = "INJUSDT"; trigger_timeframe = "30m"
+        direction = "LONG"; zone_mid = 5.0; style = "DAYTRADE"
+        metadata = {"atr": 0.05}; signal_id = "s1"
+    _open_zone_mark(_C())
+    reg = store["open_alert_zone"]
+    k = [k for k in reg][0]
+    reg[k]["ts"] -= (reg[k]["ttl_h"] * 3600.0 + 60)          # past the window
+    store["open_alert_zone"] = reg
+    assert _open_zone_dup(_C()) is False
+
+
+def test_dead_gate_alert_key_is_zone_banded_not_float_exact():
+    """R64.5: the dead-gate dedupe key must not change when the anchor moves a
+    hair inside the same zone (the old 6-decimal float key was the leak)."""
+    src = open("main.py", encoding="utf-8").read()
+    assert "round(_lvl / _band)" in src
+    assert "round(float(candidate.metadata.get('structure_level', 0) or 0), 6)" not in src
+
+
+def test_open_zone_guard_sits_before_reservation_and_marks_after_send():
+    """R64.5 wiring: the guard runs BEFORE reserve_public_code (a suppressed
+    duplicate never burns a code) and the registry is written only after a
+    successful send (handoff law: never mark before success)."""
+    src = open("main.py", encoding="utf-8").read()
+    guard = src.index("_open_zone_dup(candidate)")
+    reserve = src.index("reserve_public_code(candidate)")
+    assert guard < reserve
+    send = src.index("_sent = send_educational_setup(cand, frame)")
+    mark = src.index("_open_zone_mark(cand)", send)   # the CALL, not the def
+    assert send < mark
+
+
 def test_spot_chain_code_format():
     from analysis.models import generate_viva_public_code
     code = generate_viva_public_code("SPOT")
