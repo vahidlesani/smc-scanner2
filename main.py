@@ -2632,6 +2632,7 @@ def main() -> None:
         _boot_set("boot_version", {
             "sha": _bi,
             "build": os.getenv("APP_VERSION", "dev"),
+            "round": "R67.2",   # bumped per round so the KV proves WHICH code booted
             "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     except Exception as _boot_exc:
