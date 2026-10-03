@@ -1477,7 +1477,28 @@ def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool =
         if _best_hits is None or _hits < _best_hits - 1e-9:
             _best, _best_hits, _best_tag = _yc, _hits, _tag
     _y0 = float(_best)
-    for _i, (text, color) in enumerate(notes[:_n]):
+    # R67 (Viva 10-03, INJ 30M: the label stack printed ON itself) — exact
+    # duplicate notes collapse to one, and a crowded ledger splits into TWO
+    # columns so the stack never crawls down onto the tape.
+    _seen_notes: set = set()
+    _uniq: list = []
+    for _nt in notes[:_n]:
+        if str(_nt[0]) in _seen_notes:
+            continue
+        _seen_notes.add(str(_nt[0]))
+        _uniq.append(_nt)
+    if len(_uniq) > 6:
+        _half = (len(_uniq) + 1) // 2
+        _cols = (_uniq[:_half], _uniq[_half:])
+        for _ci, _col in enumerate(_cols):
+            for _i, (text, color) in enumerate(_col):
+                ax.text(0.012 + _ci * 0.235, _y0 - _step * _i, text,
+                        ha="left", va="center", color=color, fontsize=5.8,
+                        fontweight="bold", zorder=25, transform=ax.transAxes,
+                        bbox={"boxstyle": "round,pad=0.22", "facecolor": "white",
+                              "edgecolor": "none", "alpha": 0.93})
+        return
+    for _i, (text, color) in enumerate(_uniq):
         ax.text(0.012, _y0 - _step * _i, text,
                 ha="left", va="center", color=color, fontsize=5.8,
                 fontweight="bold", zorder=25, transform=ax.transAxes,
@@ -3103,20 +3124,26 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     ax.hlines(_mid8, _range_start, zone_end,
                               colors=_cTop9, linestyles="--",
                               linewidth=0.7, alpha=0.55, zorder=2)
+                # R67 (Viva 10-03: «یک الگوی مستطیل داریم چرا رسم نشده؟؟») —
+                # a range the setup just BROKE out of is named RECTANGLE with
+                # its continuation bias; an intact range stays RANGE.
+                _rng_txt67 = "RANGE"
+                if _pat.get("broken"):
+                    _rng_txt67 = "RECTANGLE " + ("BULL" if _pat.get("broken") == "UP" else "BEAR")
                 _rg = _place_in_box({"x0": float(_range_start),
                                      "x1": float(zone_end),
                                      "bottom": float(_pat["lo"]),
                                      "top": float(_pat["hi"]),
-                                     "text": "RANGE"})
+                                     "text": _rng_txt67})
                 if _rg:
-                    ax.text(_rg[0], _rg[1], "RANGE", color=CHART_THEME["muted"],
+                    ax.text(_rg[0], _rg[1], _rng_txt67, color=CHART_THEME["muted"],
                             fontsize=7, va=_rg[2], ha="left", fontweight="bold",
                             zorder=12,
                             bbox={"boxstyle": "round,pad=0.26",
                                   "facecolor": CHART_THEME["panel"],
                                   "edgecolor": "none", "alpha": 0.78})
                 else:
-                    ax.text(zone_start + 0.6, float(_pat["hi"]), "RANGE",
+                    ax.text(zone_start + 0.6, float(_pat["hi"]), _rng_txt67,
                             color=CHART_THEME["muted"], fontsize=7,
                             va="bottom", ha="left", fontweight="bold",
                             zorder=12,
@@ -3997,8 +4024,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                      and abs(_y9v - _cl9v) > 2.5 * _atr9v)
                     except Exception:
                         _far9 = False
-                    _col9 = CHART_THEME.get("muted", color) if _far9 else color
-                    _lw9, _al9 = (1.1, 0.55) if _far9 else (2.3, 0.95)
+                    # R67 (Viva 10-03: «چرا نازک و خاکستری و ادامه خط چین
+                    # سبز؟»): a FAR edge keeps its OWN hue at a readable
+                    # weight — the trade's own pattern may never fade into a
+                    # gray hair (INJ/RENDER/FIL round-7 charts). De-emphasis
+                    # is alpha + a thinner projection dash, never recoloring.
+                    _col9 = color
+                    _lw9, _al9 = (1.6, 0.72) if _far9 else (2.3, 0.95)
                     ax.plot([x0, _xr], [_fy9(x0), _fy9(_xr)],
                             color=_col9, linewidth=_lw9, alpha=_al9, zorder=7, solid_capstyle="round")
                     if count < x_edge - 0.6:
@@ -4038,6 +4070,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                               + float(_l["log_intercept"]))
                             return float(_l["slope"]) * _x + float(_l["intercept"])
 
+                        # R67 (FIL 2H round-7: a lone near-flat gray line
+                        # floating mid-chart): a REFIT partner is honest only
+                        # when price actually trades near it — a far refit is
+                        # the floating-trendline bug (r61.3), never context.
+                        try:
+                            _cl61 = float(frame["close"].iloc[-1])
+                            _y61 = _fy61(float(count))
+                            _atr61 = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
+                            if _atr61 > 0 and abs(_y61 - _cl61) > 2.5 * _atr61:
+                                continue
+                        except Exception:
+                            pass
                         _xa61 = max(0.0, float(_fln61.get("x0", 0)))
                         ax.plot([_xa61, count], [_fy61(_xa61), _fy61(count)],
                                 color=CHART_THEME["muted"], linewidth=1.4,

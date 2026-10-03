@@ -649,9 +649,48 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
         atr = _atr(df)
         if ph and pl and atr > 0:
             last = float(df["close"].iloc[-1])
-            rhi = min((float(p["price"]) for p in ph[-8:]), default=None)
-            rlo = max((float(p["price"]) for p in pl[-8:]), default=None)
-            if rhi and rlo and rhi - rlo >= 2.2 * atr and rlo <= last <= rhi:
+            # R67 (ETC 15M round-7: the 8.75–8.91 rectangle never drew) — the
+            # last-8-pivot window floods with POST-BREAKOUT micro pivots and
+            # the real bound levels fall out of it. Bounds are now the widest
+            # TESTED clusters (≥2 touches within 0.4×ATR) among the last 16
+            # pivots: the top cluster with the highest price and the bottom
+            # cluster with the lowest, exactly the box the eye sees.
+            def _cluster_bound(pivots, want_high: bool):
+                pts = [float(p["price"]) for p in pivots[-16:]]
+                if not pts:
+                    return None
+                tol = 0.4 * _atr(df)
+                best = None
+                for v in sorted(set(round(x, 10) for x in pts), reverse=want_high):
+                    touches = sum(1 for x in pts if abs(x - v) <= tol)
+                    if touches >= 2:
+                        best = v
+                        break
+                if best is None:
+                    best = (max(pts) if want_high else min(pts))
+                return best
+            rhi = _cluster_bound(ph, want_high=True)
+            rlo = _cluster_bound(pl, want_high=False)
+            if rhi is None:
+                rhi = min((float(p["price"]) for p in ph[-8:]), default=None)
+            if rlo is None:
+                rlo = max((float(p["price"]) for p in pl[-8:]), default=None)
+            # R67 POST-BREAK RECTANGLE (Viva 10-03: «در چارت ۱۵ دقیقه اتریوم
+            # کلاسیک ما یک الگوی مستطیل داریم چرا رسم نشده؟؟») — the range the
+            # setup breaks out of IS the pattern; the old `rlo<=last<=rhi`
+            # gate dropped the box exactly at the breakout, i.e. precisely
+            # when he is watching. The box survives a FRESH break: a tested
+            # bound pivots within the last 25 bars and price still within
+            # 1.2×ATR of the broken edge.
+            _rect_brk = ""
+            if rhi and rlo and rhi - rlo >= 2.2 * atr and not (rlo <= last <= rhi):
+                _recent_px = [float(p["price"]) for p in ph[-8:] + pl[-8:]]
+                _recent_ix = [int(p.get("index", 0)) for p in ph[-8:] + pl[-8:]]
+                _fresh = bool(_recent_ix) and (len(df) - 1 - max(_recent_ix)) <= 25
+                _near = _atr(df) > 0 and min(abs(last - rhi), abs(last - rlo)) <= 1.2 * _atr(df)
+                if _fresh and _near:
+                    _rect_brk = "UP" if last > rhi else "DOWN"
+            if rhi and rlo and rhi - rlo >= 2.2 * atr and (rlo <= last <= rhi or _rect_brk):
                 # Viva 09-20 time-axis law: the range box is anchored to the
                 # oldest tested pivot's timestamp, never to the live candle.
                 _rx = min([int(p.get("index", 0)) for p in ph[-8:]]
@@ -663,7 +702,8 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                 except Exception:
                     _rts = ""
                 out.append({"type": "RANGE", "hi": rhi, "lo": rlo,
-                            "x0": int(max(0, _rx)), "ts0": _rts})
+                            "x0": int(max(0, _rx)), "ts0": _rts,
+                            **({"broken": _rect_brk} if _rect_brk else {})})
     except Exception:
         pass
     # ── Viva 09-20 (his AAVE correction chart): three near-parallel descending
@@ -733,6 +773,20 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
     try:
         _atr_p = _atr(df)
         if _atr_p > 0 and len(df) >= 40:
+            # R67 FLAG/PENNANT vocabulary (Viva 10-03: «۱۶ تا الگو داریم چرا
+            # فقط چند مورد وج پیدا میکنه فقط؟؟») — pole + counter-drift mini
+            # channel (flag) or converging mini triangle (pennant); render
+            # vocabulary only, alert detection untouched this round.
+            try:
+                from analysis.patterns16 import detect_flag_pennant as _dfp67
+                for _fp67 in _dfp67(df.reset_index(drop=True), _atr_p):
+                    _neck67 = float(_fp67.get("neckline") or 0.0)
+                    if abs(_neck67 - float(df["close"].iloc[-1])) > 6.0 * _atr_p:
+                        continue
+                    out.append(_fp67)
+                    break
+            except Exception:
+                pass
             from analysis.patterns16 import detect_pivot_patterns as _dpp16
             _have_sides = [(float(ln["slope"]) * (len(df) - 1) + float(ln["intercept"]),
                             str(ln.get("side") or ""))

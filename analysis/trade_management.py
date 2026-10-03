@@ -688,19 +688,26 @@ def band_trailing(state: Dict, candles: List[Dict], atr_n: Optional[float] = Non
         hit = int(out.get("hit_index") or 0)
         targets = [float(t) for t in (out.get("targets") or [])]
         floors = [float(f) for f in (out.get("band_floors") or [])]
+        # ── R67 (Viva 10-03 round-7: «قوانین جدید استاپ تریلینگ کجا رفت؟») —
+        # the v2 trail (his 10-01 law ⑥: the trail distance IS the initial
+        # stop distance) is armed from the FILL, not from TP1: ETC/ENA never
+        # printed TP1, so the member never saw the trail move at all. The
+        # band/protection floor between targets stays a post-TP1 mechanism.
+        _v2_dist = float(out.get("initial_stop_dist") or 0.0)
+        _v2_mode = str(out.get("trail_mode") or "").upper() == "INIT_DIST_V2" and _v2_dist > 0
         if hit < 1 or hit >= len(targets) or hit - 1 >= len(floors):
-            return {"state": out, "events": events}
+            if not (_v2_mode and hit == 0 and targets):
+                return {"state": out, "events": events}
         entry = float(out["entry"])
         sign = 1.0 if str(out.get("direction") or "LONG").upper() == "LONG" else -1.0
         tick_gap = float(out.get("tick_gap") or 0.0)
         ts = [float(x) for x in (out.get("trail_stops") or [])] or [entry]
         base = ts[min(max(hit - 1, 0), len(ts) - 1)]
-        floor = floors[hit - 1]
+        floor = floors[hit - 1] if (hit >= 1 and hit - 1 < len(floors)) else 0.0
         last = candles[-1]
         current = float(out.get("current_sl") or base)
         min_gap = max(tick_gap, abs(float(last["close"])) * 0.0010)
-        _v2_dist = float(out.get("initial_stop_dist") or 0.0)
-        if str(out.get("trail_mode") or "").upper() == "INIT_DIST_V2" and _v2_dist > 0:
+        if _v2_mode:
             # ── r63 · his 10-01 law ⑥: the trail sits at the INITIAL stop
             # distance behind the (closed-candle) price — a pure ratcheting
             # chandelier; no interpolation, no volatility swing tightening.
@@ -718,7 +725,7 @@ def band_trailing(state: Dict, candles: List[Dict], atr_n: Optional[float] = Non
                 out["current_sl"] = new_sl
                 events.append({"event": "TRAIL_V2", "new_sl": new_sl,
                                "dist": _v2_dist, "hit_index": hit})
-        else:
+        elif hit >= 1:
             if int(out.get("band_hit_index") or 0) != hit:
                 out["band_hit_index"] = hit
                 out["band_extreme"] = targets[hit - 1]
@@ -751,7 +758,8 @@ def band_trailing(state: Dict, candles: List[Dict], atr_n: Optional[float] = Non
         final_sl = float(out.get("current_sl") or base)
         reached = (final_sl >= floor - max(tick_gap, 1e-12)) if sign > 0 \
             else (final_sl <= floor + max(tick_gap, 1e-12))
-        if reached and int(out.get("floor_announced") or 0) != hit:
+        if (hit >= 1 and reached
+                and int(out.get("floor_announced") or 0) != hit):
             out["floor_announced"] = hit
             events.append({"event": "PROFIT_FLOOR", "floor": floor, "new_sl": final_sl,
                            "hit_index": hit, "target_index": hit - 1})

@@ -283,6 +283,90 @@ def classify16(upper, lower, n: int, df=None, tail: int = 12) -> Tuple[str, Dict
         return "NONE", meta
 
 
+# ─────────────────── flag / pennant (R67 render vocabulary) ───────────────────
+def detect_flag_pennant(df, atr_v: float, pole_bars: int = 12,
+                        flag_bars: int = 22) -> list:
+    """Pole → counter-drift consolidation, coded for the RENDER vocabulary
+    (Viva 10-03: «۱۶ تا الگو داریم چرا فقط چند مورد وج پیدا میکنه فقط؟؟»).
+
+    • POLE: a displacement of ≥ 2.5×ATR within ≤ ``pole_bars`` bars, ending
+      within the last ~``flag_bars`` bars (a fossil pole is not a setup).
+    • FLAG: the consolidation drifts AGAINST the pole (both mini-edges fall
+      after a bull pole / rise after a bear) and stays inside ~2×ATR width.
+    • PENNANT: the mini pair CONVERGES (width shrinks ≥ 30%).
+    Returns render commands of the same shape as ``detect_pivot_patterns``
+    (type + lines + neckline) so the painter needs no new branch. Alert
+    detection is deliberately untouched this round — render vocabulary only.
+    """
+    out: list = []
+    try:
+        import numpy as np
+        close = df["close"].astype(float).to_numpy()
+        high = df["high"].astype(float).to_numpy()
+        low = df["low"].astype(float).to_numpy()
+        n = len(close)
+        if n < pole_bars + flag_bars + 10 or atr_v <= 0:
+            return out
+        best = None
+        # the consolidation may run long (a 38-bar flag is still a flag);
+        # only the ANCHOR must be fresh enough to matter on the chart
+        for end in range(n - 6, max(pole_bars + 2, n - 3 * flag_bars) - 1, -1):
+            if end - pole_bars - 1 < 1:
+                break
+            # the pole may end slightly BEFORE the consolidation anchor — take
+            # the strongest pole window that closes within 10 bars of `end`
+            move, pole_end = 0.0, 0
+            for j in range(max(pole_bars + 1, end - 10), end):
+                _m = float(close[j] - close[j - pole_bars])
+                if abs(_m) > abs(move):
+                    move, pole_end = _m, j
+            if abs(move) < 2.5 * atr_v:
+                continue
+            span = n - end
+            if span < 5:
+                continue
+            width = float(high[end:].max() - low[end:].min())
+            if width > max(2.2 * atr_v, 0.35 * abs(move)):
+                continue
+            mid = float(close[end:min(n, end + span)].mean())
+            first_half = float(close[end:max(end + span // 2, end + 1)].mean())
+            last_half = float(close[end + span // 2:].mean())
+            drift = last_half - first_half
+            # honest pennant: the consolidation's second half is measurably
+            # TIGHTER than its first (convergence, not a guess)
+            _h1, _l1 = float(high[end:max(end + span // 2, end + 1)].max()), float(low[end:max(end + span // 2, end + 1)].min())
+            _h2, _l2 = float(high[end + span // 2:].max()), float(low[end + span // 2:].min())
+            _w1 = max(_h1 - _l1, 1e-12)
+            _w2 = max(_h2 - _l2, 0.0)
+            kind = ""
+            # R67: pennants are decided by CONVERGENCE first; flags need a
+            # meaningful counter-drift (≥0.25×ATR) — a sideways oscillation
+            # after a pole is a pennant, not a flag.
+            if _w2 <= 0.60 * _w1:
+                kind = "PENNANT_BULL" if move > 0 else "PENNANT_BEAR"
+            elif move > 0 and drift <= -0.25 * atr_v:
+                kind = "FLAG_BULL"
+            elif move < 0 and drift >= 0.25 * atr_v:
+                kind = "FLAG_BEAR"
+            if kind:
+                best = (kind, end, mid, width)
+                break
+            _ = pole_end
+        if not best:
+            return out
+        kind, end, mid, width = best
+        neckline = float(mid)
+        lines = [{"side": "HIGH", "slope": 0.0, "intercept": float(mid + width / 2.0),
+                  "x0": int(end), "x1": int(n - 1)},
+                 {"side": "LOW", "slope": 0.0, "intercept": float(mid - width / 2.0),
+                  "x0": int(end), "x1": int(n - 1)}]
+        out.append({"type": kind, "lines": lines, "neckline": neckline,
+                    "pole_atr": round(abs(close[end - 1] - close[end - 1 - pole_bars]) / atr_v, 2)})
+    except Exception:
+        return []
+    return out
+
+
 # ─────────────────── pivot-structure pattern detectors ───────────────────
 def _swings(df, left: int = 3, right: int = 3, max_pts: int = 8) -> Tuple[List[Dict], List[Dict]]:
     """Fractal swing highs/lows (robust zigzag): a pivot dominates its `left`

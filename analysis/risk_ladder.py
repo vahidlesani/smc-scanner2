@@ -80,6 +80,53 @@ def _pct_fallback(entry: float, direction: str, structural_pct: float) -> float:
         else float(entry) * (1.0 + pick / 100.0)
 
 
+def pin_corridor_stop(entry: float, direction: str, pin_stop: float,
+                      ladder_result: Optional[Dict] = None) -> tuple:
+    """R67 PIN RISK CORRIDOR (Viva 10-03 round-7, verbatim: «قوانین استاپ
+    ۳ تا ۵ درصد کجا رفت؟؟ … دوباره برگشتیم با هفته‌های قبل؟؟»).
+
+    The 10-01 amendment-① ladder has governed every break lane since r63;
+    the pin family kept the old micro stops and printed 0.70% (ETC) /
+    1.80% (ENA) risks. Law: final distance = max(pin structure, corridor)
+    where corridor = 3.5% floored, the +1TF swing anchors inside the
+    corridor, cap 5%. The pin's OWN extreme keeps sanctity — a structural
+    invalidation wider than 5% is never cut (basis PIN_EXTREME_WIDE).
+
+    Returns ``(stop_price, meta_dict)``; ``meta`` carries the full audit
+    (pin_pct / ladder_pct / final_pct / ladder_tf / basis) for the message.
+    """
+    try:
+        entry = float(entry)
+        pin_pct = abs(entry - float(pin_stop)) / entry * 100.0
+        lad = dict(ladder_result or {})
+        lad_px = float(lad.get("stop") or 0.0)
+        lad_pct = 0.0
+        if lad_px > 0:
+            _d = abs(entry - lad_px) / entry * 100.0
+            if _d <= CAP_PCT + 1.0:
+                lad_pct = _d
+        target = max(PCT_FALLBACK[0], lad_pct) if lad_pct else PCT_FALLBACK[0]
+        target = min(target, CAP_PCT)
+        if pin_pct > CAP_PCT:
+            final_pct, basis = pin_pct, "PIN_EXTREME_WIDE"
+        else:
+            final_pct = min(max(pin_pct, target), CAP_PCT)
+            if lad_pct >= PCT_FALLBACK[0]:
+                basis = "SWING_" + str(lad.get("tf") or "").upper()
+            elif lad_pct:
+                basis = "SWING_LT_CORRIDOR"
+            else:
+                basis = "CORRIDOR"
+        sign = 1.0 if str(direction or "").upper() == "LONG" else -1.0
+        stop = entry * (1.0 - sign * final_pct / 100.0)
+        meta = {"pin_pct": round(pin_pct, 3), "ladder_pct": round(lad_pct, 3),
+                "final_pct": round(final_pct, 3),
+                "ladder_tf": str(lad.get("tf") or ""), "basis": basis}
+        return float(stop), meta
+    except Exception:
+        return float(pin_stop), {}
+
+
 def ladder_stop(symbol: str, direction: str, entry: float, trigger_tf: str,
                 structural_pct: float,
                 get_klines_fn: Optional[Callable] = None,

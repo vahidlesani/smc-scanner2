@@ -1131,6 +1131,29 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         risk = abs(entry - sl)
         if risk <= 0:
             continue
+        # ── R67 PIN RISK CORRIDOR (Viva 10-03 round-7, verbatim: «قوانین استاپ
+        # ۳ تا ۵ درصد کجا رفت؟؟ … دوباره برگشتیم با هفته‌های قبل؟؟») — the
+        # 10-01 amendment-① ladder that has governed every break lane since
+        # r63 now governs the pin family too (DAYTRADE/SWING): the stop is
+        # anchored behind the +1TF swing (ladder), FLOORED by the 3.5%
+        # corridor (his ETC 0.70% / ENA 1.80% breaches) and capped at 5%.
+        # The pin's own extreme keeps sanctity: a structural invalidation
+        # wider than 5% is never cut. SCALP/rejection pins keep the micro
+        # regime; the round-14 clamp does not apply to this corridor
+        # (metadata flag `stop_corridor` — quality_engine skips the clamp).
+        _corridor_meta67 = None
+        if str(style).upper() in {"DAYTRADE", "SWING"}:
+            try:
+                from analysis.risk_ladder import ladder_stop as _ls67, pin_corridor_stop as _pcs67
+                from data.fetcher import get_klines as _gk67
+                _lad67 = _ls67(str(bundle.symbol), direction, entry, str(tf),
+                               risk / entry * 100.0, _gk67)
+                sl, _corridor_meta67 = _pcs67(entry, direction, sl, _lad67)
+                risk = abs(entry - sl)
+            except Exception as _corr67_exc:
+                print(f"pin risk corridor skipped {getattr(bundle, 'symbol', '?')}: {_corr67_exc}")
+            except Exception as _corr67_exc:
+                print(f"pin risk corridor skipped {getattr(bundle, 'symbol', '?')}: {_corr67_exc}")
         # PINWALL-only execution refinement: after a valid directional break,
         # place a second, earlier limit-entry zone just above the last valid
         # local swing for LONG (below it for SHORT), while the structural stop
@@ -1197,8 +1220,19 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         # and the monitor instantly mass-verdicts it from already-closed
         # candles — Viva's "10 alerts, all cancelled 1 minute later" bug.
         try:
-            age_s = (pd.Timestamp.utcnow().tz_localize(None) - pd.Timestamp(last_ts)).total_seconds()
-            if age_s > 2 * tf_seconds:
+            # R67: the naive utcnow(−)tz-aware subtraction raised TypeError on
+            # EVERY scan → `except: pass` → the guard was DEAD; stale pins
+            # (ETC: candle 15:30, alert 17:21) alerted and the monitor
+            # mass-verdicted them from candles closed BEFORE the alert —
+            # Viva round-7: «قوانین اولین کلوز بعد از شکست کجا رفته؟؟».
+            _now67 = pd.Timestamp.utcnow().tz_localize(None)
+            _last67 = pd.Timestamp(last_ts)
+            if _last67.tzinfo is not None:
+                _last67 = _last67.tz_convert("UTC").tz_localize(None)
+            age_s = (_now67 - _last67).total_seconds()
+            _max_age67 = max(2.0 * tf_seconds,
+                             (float(getattr(settings, "full_scan_minutes", 15)) + 5.0) * 60.0)
+            if age_s > _max_age67:
                 continue
         except Exception:
             pass
@@ -1259,6 +1293,10 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             "pinwall_entry2": float(pinwall_entry2 or 0.0),
             "pinwall_entry2_rule": "پس از کلوز معتبر، ورود دوم نزدیک سویینگ محلی؛ استاپ پشت همان سویینگ با بافر.",
         })
+        if _corridor_meta67:
+            # R67 PIN RISK CORRIDOR (Viva 10-03): quality_engine skips the
+            # round-14 clamp for corridor stops — his newer 3.5–5% law wins.
+            candidate.metadata["stop_corridor"] = _corridor_meta67
         if polarity_on and polarity is not None:
             active = polarity.active_zone
             candidate.metadata.update({

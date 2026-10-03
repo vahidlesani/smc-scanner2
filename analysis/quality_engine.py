@@ -1296,6 +1296,27 @@ def evaluate_confirmation(
 
     if invalid:
         return reject("CLOSE_THROUGH_INVALIDATION", "کندل بسته‌شده از سطح ابطال عبور کرده است.")
+    # ── R67 PIN FIRST-CLOSE LAW (Viva 10-03, verbatim: «قوانین اولین کلوز
+    # بعد از شکست کجا رفته؟؟») — ETC/ENA confirmed SECONDS after the alert on
+    # a FINER frame's micro-BOS (a 5m «سقف Micro Structure» printed as 15M in
+    # the message) without the promised close beyond the pin level ever
+    # existing. For the pin family a frame finer than the trigger TF confirms
+    # ONLY through the pin-level close (the fast lane above) or the TOHOM
+    # engine; the MSS/engulfing/pinbar candle vocabulary stays a
+    # TRIGGER-frame privilege. The own-TF close (late lane) is untouched.
+    _pin_r67 = str(getattr(candidate, "setup_code", "") or "").upper() in {"PINVAL", "PINWALLQ"}
+    if _pin_r67 and not fast_lane and not (candidate.metadata or {}).get("tohom"):
+        try:
+            from analysis.confirm_r62 import frame_minutes as _r62_fmin67, tf_minutes as _r62_tfm67
+            _fm67 = float(frame_tf_minutes or 0.0) or _r62_fmin67(closed_df)
+            _tm67 = _r62_tfm67(getattr(candidate, "trigger_timeframe", ""), 0.0)
+            _finer67 = bool(_fm67 > 0 and _tm67 > 0 and _fm67 < _tm67 * 0.99)
+        except Exception:
+            _finer67 = False
+        if _finer67:
+            return reject("PIN_NEEDS_LEVEL_CLOSE", (
+                "پین‌بار فقط با اولین کلوزِ فراتر از سطحِ خودِ پین (یا موتور توهم) "
+                "تأیید می‌شود؛ شکستِ میکروساختارِ تایمِ پایین‌تر تأییدِ ورود نیست."))
     trigger_valid = (
         directional
         and (structure_trigger or engulfing or pinbar)
@@ -1348,8 +1369,12 @@ def evaluate_confirmation(
     # «منتظر» for two days because DEGENERATE_GEOMETRY rejected every cycle).
     try:
         from analysis.trade_management import clamp_stop_price as _clamp_q
-        _q_sl, _q_clamped = _clamp_q(executable_entry, candidate.direction, candidate.sl,
-                                     str(candidate.trigger_timeframe or ""))
+        # R67 (Viva 10-03): a corridor stop (3.5–5% pin law) is his NEWER
+        # ceiling — the round-14 per-TF clamp must not cut it back to 2%.
+        _q_sl = _q_clamped = None
+        if not (candidate.metadata or {}).get("stop_corridor"):
+            _q_sl, _q_clamped = _clamp_q(executable_entry, candidate.direction, candidate.sl,
+                                         str(candidate.trigger_timeframe or ""))
         if _q_clamped:
             candidate.sl = float(_q_sl)
             candidate.metadata["stop_clamped"] = True
