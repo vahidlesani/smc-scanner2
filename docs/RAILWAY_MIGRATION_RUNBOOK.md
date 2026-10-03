@@ -100,3 +100,8 @@
 1. اول با همان دادهٔ واقعی، بک‌تست/پِیپرتدینگ روی سه رژیم (صعودی/رنج/اصلاح نزولی) تأیید شود (هدف بازگشت وین‌ریت اصلاح نزولی به ~۷۵٪+).
 2. سپس فیلترهای وصله‌ای قدیمی (`PINVAL_ALLOWED_DIRECTIONS`, `PINVAL_ALLOWED_ZONE_KINDS`) حذف/خالی شوند تا SHORTهای درستِ روی عرضه آزاد شوند.
 3. اگر نیاز به خاموش‌کردن موقت بود: `PINVAL_POLARITY_GATE_ENABLED=false` منطق قدیمی (بدون گیت) را برمی‌گرداند.
+
+## مهاجرت به حساب جدید — باندل ۲۰۲۶-۱۰-۰۴ (تازه‌ترین)
+- مسیر باندل: `backups/railway-20261004/` — `db_dump_20261004.sql.gz` (pg_dump 17.11 کامل، ۵۱ جدول؛ signals=3442، bot_kv=36394) + `variables-production.env` (مرجعِ متغیرها؛ DATABASE_URL و توکن‌ها را روزِ مهاجرت چک کن) + `SHA256SUMS.txt` + `README.md` (قدم‌به‌قدم).
+- خلاصه: پروژهٔ جدید → Postgres provision → `gunzip -c db_dump_20261004.sql.gz | psql "$NEW_DATABASE_URL"` → متغیرها (به‌جز DATABASE_URL جدید) → deploy از GitHub با startCommand `python combined_service.py` + healthcheck `/health` → بعد از بوت، `bot_kv.boot_version.round` باید نسخهٔ راند را نشان دهد (نشانهٔ کدِ زنده).
+- باندلِ قبلی (۱۰-۰۱) فقط به‌عنوان آرشیو می‌ماند؛ این باندل همهٔ داده‌های تا R67.2 را دارد.
