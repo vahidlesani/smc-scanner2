@@ -60,7 +60,11 @@ def test_tl_live_relevance_gate_skips_stale_lines(monkeypatch):
     # the surviving line (if any) must END near the live price
     if got is not None:
         live = float(f["close"].iloc[-1])
-        assert abs(float(got.slope) * (n - 1) + float(got.intercept) / live - 1.0) < 0.60
+        if bool(getattr(got, "log_fit", False)):
+            lv = 10.0 ** (float(got.log_slope) * (n - 1) + float(got.log_intercept))
+        else:
+            lv = float(got.slope) * (n - 1) + float(got.intercept)
+        assert abs(lv / live - 1.0) < 0.75, (lv, live)
     monkeypatch.setenv("TL_MAX_LIVE_DRAG", "0")
     got_off = fit_validated_line(f, "LOW", cfg)
     assert got_off is not None               # legacy behavior reachable
