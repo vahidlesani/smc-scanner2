@@ -1037,7 +1037,7 @@ def run_spot_scan() -> Dict[str, int]:
     # signal budget, but they carry their own daily cap and their own dedup.
     # Order: strongest stage first so the cap never eats a BREAK_DOWN to feed
     # a TOUCH.
-    _stage_rank = {"BREAK_DOWN": 3, "NEAR_BREAK": 2, "TOUCH": 1}
+    _stage_rank = {"BREAK_UP": 4, "BREAK_DOWN": 3, "NEAR_BREAK": 2, "TOUCH": 1}
     ladder.sort(key=lambda it: _stage_rank.get(str(it.get("stage") or ""), 0),
                 reverse=True)
     try:
@@ -2632,7 +2632,7 @@ def main() -> None:
         _boot_set("boot_version", {
             "sha": _bi,
             "build": os.getenv("APP_VERSION", "dev"),
-            "round": "R67.2",   # bumped per round so the KV proves WHICH code booted
+            "round": "R68",   # bumped per round so the KV proves WHICH code booted
             "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     except Exception as _boot_exc:

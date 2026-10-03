@@ -309,12 +309,12 @@ def _intrabar_base(bundle: MarketBundle, context_df, trigger_tf: str, direction:
     return {"bottom": lo, "top": hi, "kind": "INTRABAR_BASE", "bars": n_in}
 
 
-def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
+def detect_viva_tlbreak(bundle: MarketBundle, style: str, setup_code: str = "TLBREAK") -> Optional[SignalCandidate]:
     """Live-paper adapter for isolated Viva-TLBREAK v1.
 
-    Existing strategies are untouched. This creates a WATCH candidate only
-    after validated geometry and a closed trigger breakout; generic lifecycle
-    then waits for the configured retest/5M confirmation.
+    R68 UNIFIED ENGINE LAW: Can be called with setup_code='TECHCLASSIC' or
+    setup_code='ALBROX' so all pattern/trend setups share the exact same
+    professional Viva-TLBREAK engine.
     """
     from analysis.viva_tlbreak import (
         build_pattern_plan, classify_pattern, classify_pattern_detailed, fit_validated_line, fit_two_pivot_watch,
@@ -339,8 +339,8 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
                 continue
             candidate = SignalCandidate(
                 signal_id=f"viva-vtlwatch-{bundle.symbol}-{trigger_tf}-{str(trigger_df['timestamp'].iloc[-1])[:16]}",
-                symbol=bundle.symbol, style=str(style).upper(), setup_code="TLBREAK",
-                setup_name="VIVA TLBREAK 2-Pivot Watch", strategy_fa="VIVA-TLBREAK | خط دوپیوتی در انتظار اعتبار", direction=direction,
+                symbol=bundle.symbol, style=str(style).upper(), setup_code=setup_code,
+                setup_name=f"VIVA {setup_code} 2-Pivot Watch", strategy_fa=f"VIVA-{setup_code} | خط دوپیوتی در انتظار اعتبار", direction=direction,
                 score=6, status="EDUCATIONAL", entry_zone_bottom=line_price-.15*atr_watch,
                 entry_zone_top=line_price+.15*atr_watch, planned_entry=float(trigger_df['close'].iloc[-1]),
                 sl=float(trigger_df['low'].iloc[-1] if direction=="LONG" else trigger_df['high'].iloc[-1]),
@@ -364,7 +364,7 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
                               htf_df=bundle.get("4h") or bundle.get("1h"))
             except Exception:
                 pass
-            candidate.metadata.update({"strategy_variant":"VIVA_TLBREAK","viva_state":"S0_WATCH","viva_pattern":"TWO_PIVOT_WATCH","viva_watch_line":line_price,"viva_touch_count":2,"viva_watch_points":[dict(watch.first),dict(watch.last)],"public_code":generate_viva_public_code("TLBREAK", style),
+            candidate.metadata.update({"strategy_variant":"VIVA_TLBREAK","viva_state":"S0_WATCH","viva_pattern":"TWO_PIVOT_WATCH","viva_watch_line":line_price,"viva_touch_count":2,"viva_watch_points":[dict(watch.first),dict(watch.last)],"public_code":generate_viva_public_code(setup_code, style),
                                        "confirm_tf": confirm_timeframe_for_pattern(structure_tf, style, trigger_tf),
                                        "touched": False})
             return candidate
@@ -398,7 +398,7 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         context = {"bias": bias.get("bias", "NEUTRAL")}
         special = EvidenceItem("viva_tlbreak", "شکست ساختاری - VIVA-TLBREAK", f"سطح {pattern} با {line.touch_count} پیوت تاییدشده و خطای فیت {line.fit_residual_atr:.2f} ATR؛ کلوز شکست {breakout.beyond_atr:.2f} ATR بیرون خط است.", True, 2, level=breakout.line_price, timeframe=refine_tf)
         impulse = {"index": len(trigger_df)-1, "level": breakout.line_price, "valid": True, "direction": "BULLISH" if direction=="LONG" else "BEARISH", "body_atr": breakout.body_atr, "volume_ratio": 1.0}
-        candidate = _base_candidate(bundle, style, "TLBREAK", direction, structure_tf, trigger_tf, context, poi, impulse, special, "viva_tlbreak_geometry", True)
+        candidate = _base_candidate(bundle, style, setup_code, direction, structure_tf, trigger_tf, context, poi, impulse, special, "viva_tlbreak_geometry", True)
         if candidate is None:
             continue
         confluence = score_confluences(structure_df, refine_df, trigger_df, direction, retest_score=0.0)
@@ -469,12 +469,12 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         # Counter trend is allowed only after the lifecycle gets full retest/BOS.
         candidate.mandatory_gates["htf_alignment"] = True  # counter-trend is enforced by retest/BOS lifecycle, not a dead gate
         candidate.mandatory_gates["viva_tlbreak_geometry"] = True
-        candidate.strategy_fa = f"VIVA-TLBREAK | شکست {pattern} در انتظار Retest و BOS پنج‌دقیقه"
+        candidate.strategy_fa = f"VIVA-{setup_code} | شکست {pattern} در انتظار Retest و BOS پنج‌دقیقه"
         from analysis.viva_tlbreak_state import VivaTLState
         # R31.7: stable alert lineage = the broken line's defining pivots
         try:
             from analysis.pattern_engine import alert_lineage_key as _alk
-            _lk = _alk("TLBREAK", bundle.symbol, trigger_tf, refine_tf,
+            _lk = _alk(setup_code, bundle.symbol, trigger_tf, refine_tf,
                        "upper" if direction == "LONG" else "lower", direction,
                        [dict(p) for p in line.points], True)
             if _lk:
@@ -1522,8 +1522,7 @@ def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]
     if not getattr(settings, "albrox_enabled", False):
         return None
     try:
-        from analysis.pattern_engine import detect_technoclassic as _tc_engine
-        cand = _tc_engine(bundle, style, setup_code="ALBROX")
+        cand = detect_viva_tlbreak(bundle, style, setup_code="ALBROX")
         if cand is not None:
             return cand
     except Exception as exc:
@@ -1700,10 +1699,16 @@ SETUP_NAMES["TECHCLASSIC"] = "TechnoClassic HTF Pattern Break (4H/1D)"
 SETUP_NAMES_FA["TECHCLASSIC"] = "تکنوکلاسیک | شکست الگوی کلاسیک ۴ساعته/روزانه با پولبک تأییدشده"
 
 def detect_technoclassic(bundle, style: str) -> Optional[SignalCandidate]:
-    """Stage-5 wrapper: keeps the module gate (experimental symbol allowlists)
-    uniform while the real engine lives in analysis/pattern_engine.py."""
-    from analysis.pattern_engine import detect_technoclassic as _tc
-    return _tc(bundle, style)
+    """R68 UNIFIED ENGINE LAW (Viva 10-04, verbatim):
+    «همین الان انجین تی ال بریک رو مبنا برای همه ستاپها قرار بده...
+    تا از این به بعد همه ستاپها و اسپات اگر مشکلی داشتند فقط سراغ یک انجین بریم»
+    TECHCLASSIC now rides the EXACT VIVA-TLBREAK engine:
+    honest validated lines, 16-pattern doctrine, full-frame geometry.
+    """
+    settings = get_settings()
+    if not getattr(settings, "technoclassic_enabled", False):
+        return None
+    return detect_viva_tlbreak(bundle, style, setup_code="TECHCLASSIC")
 
 
 TECHCLASSIC_DETECTORS = [detect_technoclassic]

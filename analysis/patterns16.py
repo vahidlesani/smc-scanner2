@@ -326,7 +326,7 @@ def detect_flag_pennant(df, atr_v: float, pole_bars: int = 12,
             if span < 5:
                 continue
             width = float(high[end:].max() - low[end:].min())
-            if width > max(2.2 * atr_v, 0.35 * abs(move)):
+            if width > max(4.0 * atr_v, 0.60 * abs(move)):
                 continue
             mid = float(close[end:min(n, end + span)].mean())
             first_half = float(close[end:max(end + span // 2, end + 1)].mean())
@@ -356,9 +356,25 @@ def detect_flag_pennant(df, atr_v: float, pole_bars: int = 12,
             return out
         kind, end, mid, width = best
         neckline = float(mid)
-        lines = [{"side": "HIGH", "slope": 0.0, "intercept": float(mid + width / 2.0),
+        # R68 TRUE FLAG SLOPED CHANNEL (Viva 10-04, ENA/XRP/INJ hand-drawn):
+        # A flag consolidation is a real counter-trend channel (down-sloping
+        # after a bull pole, up-sloping after a bear pole), NOT a flat box!
+        span_f = max(5, n - 1 - end)
+        slope_f = float(drift / max(1, span_f))
+        if kind == "FLAG_BULL" and slope_f > 0:
+            slope_f = -abs(slope_f)
+        elif kind == "FLAG_BEAR" and slope_f < 0:
+            slope_f = abs(slope_f)
+        
+        # Upper edge through highest high of flag, lower edge through lowest low
+        h_flag = float(high[end:].max())
+        l_flag = float(low[end:].min())
+        ic_upper = float(h_flag - slope_f * end)
+        ic_lower = float(l_flag - slope_f * end)
+
+        lines = [{"side": "HIGH", "slope": float(slope_f), "intercept": float(ic_upper),
                   "x0": int(end), "x1": int(n - 1)},
-                 {"side": "LOW", "slope": 0.0, "intercept": float(mid - width / 2.0),
+                 {"side": "LOW", "slope": float(slope_f), "intercept": float(ic_lower),
                   "x0": int(end), "x1": int(n - 1)}]
         out.append({"type": kind, "lines": lines, "neckline": neckline,
                     "pole_atr": round(abs(close[end - 1] - close[end - 1 - pole_bars]) / atr_v, 2)})

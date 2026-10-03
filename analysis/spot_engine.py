@@ -969,7 +969,10 @@ def _stage_for_pattern(pat: dict, d: pd.DataFrame, atr: float, n: int) -> Option
     eps_break = 0.10 * atr
     eps_wick = 0.25 * atr
     near = 0.30 * atr
-    # 1) a valid break DOWN is the loudest event — his «هشدار شکست هر دو جهت»
+    # 1) a valid break of EITHER side — his «بریک‌های هر دو طرف چارت لایو باید بیاد»
+    if upper is not None and c > upper + eps_break and (c - o) >= 0.25 * atr:
+        return {"stage": "BREAK_UP", "side": "HIGH", "edge": float(upper),
+                "gap": float(c - upper)}
     if lower is not None and c < lower - eps_break and (o - c) >= 0.25 * atr:
         return {"stage": "BREAK_DOWN", "side": "LOW", "edge": float(lower),
                 "gap": float(lower - c)}
