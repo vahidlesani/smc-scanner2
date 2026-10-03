@@ -466,6 +466,26 @@ def fit_validated_line(
             x1, y1 = float(pool[j]["index"]), float(pool[j]["price"])
             if x1 - x0 < _min_pair:
                 continue
+            # ── R64.1 LIVE-RELEVANCE (his 10-03: «این ترند بی ربط به قیمت چی
+            # میکه») — a candidate whose value at the LIVE bar has drifted too
+            # far from the live price is archived history, not a working trend
+            # (NEAR 12h: a May TL against a 4.7 live). A just-broken edge sits
+            # near price, so TC/TLBREAK trades are untouched. Env
+            # TL_MAX_LIVE_DRAG (default 0.55; 0 disables).
+            _drag_max64 = float(os.getenv("TL_MAX_LIVE_DRAG", "0.55") or "0.55")
+            if _drag_max64 > 0:
+                _xe64 = float(n - 1)
+                _dt64 = max(x1 - x0, 1e-9)
+                _cand64 = [y0 + (y1 - y0) * (_xe64 - x0) / _dt64]
+                if y0 > 0 and y1 > 0:
+                    _ls64 = (math.log10(y1) - math.log10(y0)) / _dt64
+                    _cand64.append(10.0 ** (_ls64 * (_xe64 - x0)
+                                            + math.log10(y0) - _ls64 * x0))
+                _lp64 = float(df["close"].iloc[-1]) if "close" in df else 0.0
+                if _lp64 > 0 and all(
+                        _v > 0 and abs(_v / _lp64 - 1.0) > _drag_max64
+                        for _v in _cand64):
+                    continue
             for _log_space in _spaces:
                 got = _fit_pair(x0, y0, x1, y1, _log_space)
                 if got is None:

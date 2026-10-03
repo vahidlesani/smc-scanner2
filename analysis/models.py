@@ -132,10 +132,13 @@ def generate_viva_public_code(setup_code: str = "", style: str = "") -> str:
         # (different letter, unique digits reserved atomically by
         # reserve_public_code, never the randomness).
         "TECHCLASSIC": "TECHCLASSIC",
+        # R64.2 (his 10-02 dictation): the spot lane gets its own family code
+        # «VIVA-SPOT-Y######» from the SAME engine.
+        "SPOT": "SPOT",
     }
     raw = "".join(ch for ch in str(setup_code).upper() if ch.isalnum())[:12]
     label = label_map.get(raw, raw or "SETUP")
-    letter = "T" if raw == "TECHCLASSIC" else "K"
+    letter = "Y" if raw == "SPOT" else ("T" if raw == "TECHCLASSIC" else "K")
     # Human-readable proposal only. Before any Telegram publication it is
     # atomically reserved in PostgreSQL by `reserve_public_code`, so randomness
     # never becomes the uniqueness guarantee.

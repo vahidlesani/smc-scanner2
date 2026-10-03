@@ -1999,7 +1999,8 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
                     ov_hi: Optional[float] = None,
                     recent_lo: Optional[float] = None,
                     recent_hi: Optional[float] = None,
-                    log_space: bool = False) -> Optional[tuple]:
+                    log_space: bool = False,
+                    bars: int = 0) -> Optional[tuple]:
     """r37 SMART price zoom — «کندلها تا حد امکان در مرکز صفحه چارت قرار
     بگیرند … ابزار نصفه نیمه رسم میشه».
 
@@ -2055,14 +2056,27 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
         ylo = float(ov_lo)
     # r40 CHART-FILL: the whole tape is a hard bound — an early candle may
     # never fall outside the window (the invisible-left-half bug).
-    ylo = min(ylo, c_lo)
-    yhi = max(yhi, c_hi)
+    # R64.1 (his 10-03 gallery: AVAX/WLD/NEAR «زوم بی منطق», «محور قیمت جمع
+    # شده»): on DEEP frames (the 250–350-candle map) the whole-tape bound is
+    # demoted to a SOFT far clip — the window frames the region where the
+    # trends/patterns actually live. Overlays stay IN FULL; the recent block
+    # never clips.
+    _deep64 = int(bars or 0) > 240
+    if _deep64:
+        _reach64 = 2.6 * max(r_span, 4.0 * _a)
+        _flo64 = max(c_lo, r_mid - _reach64)
+        _fhi64 = min(c_hi, r_mid + _reach64)
+        _flo64, _fhi64 = min(_flo64, r_lo), max(_fhi64, r_hi)
+    else:
+        _flo64, _fhi64 = c_lo, c_hi
+    ylo = min(ylo, _flo64)
+    yhi = max(yhi, _fhi64)
     cap = max(base, 2.2 * span)
     if (yhi - ylo) > cap:
         ylo, yhi = r_mid - 0.5 * cap, r_mid + 0.5 * cap
         # the cap shrinks the OVERLAY stretch only — candles stay hard bounds
-        ylo = min(ylo, c_lo)
-        yhi = max(yhi, c_hi)
+        ylo = min(ylo, _flo64)
+        yhi = max(yhi, _fhi64)
     # the recent block itself may never be cut by the growth cap
     ylo = min(ylo, r_lo - 0.05 * cap)
     yhi = max(yhi, r_hi + 0.05 * cap)
@@ -4152,7 +4166,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         min(_ovl64) if _ovl64 else None, max(_ovl64) if _ovl64 else None,
                         recent_lo=float(_ll64[-40:].min()),
                         recent_hi=float(_lh64[-40:].max()),
-                        log_space=True)
+                        log_space=True,
+                        bars=len(frame))
                     if _w64:
                         _win28 = (10.0 ** _w64[0], 10.0 ** _w64[1])
             except Exception:
@@ -4168,7 +4183,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _c_lo_lin, _c_hi_lin, _atr28,
                     min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None,
                     recent_lo=float(frame["low"].tail(40).min()),
-                    recent_hi=float(frame["high"].tail(40).max()))
+                    recent_hi=float(frame["high"].tail(40).max()),
+                    bars=len(frame))
             if _win28:
                 ax.set_ylim(*_win28)
                 if confirmed:
@@ -5776,6 +5792,31 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
     tf = str(item.get("tf") or "").upper()
     fa = str(item.get("pattern_fa") or "")
 
+    # ── R64.2 SPOT CHAIN LAW (his 10-03, verbatim spec): ONE durable unique
+    # code VIVA-SPOT-Y###### per (symbol, tf, pattern) chain; the FIRST post
+    # and the key stages (touch / break / confirm / final target) carry a
+    # chart; EVERY other update REPLIES to the chain's newest message with NO
+    # new chart («چیزی بهم نمیریزه ... اما چارت اضافی هم رندر نمیشه»).
+    _reply64 = 0
+    try:
+        from database.bot_kv import get_json as _gj64, set_json as _sj64
+        _ck64 = f"spot_chain|{sym}|{tf}|{str(item.get('pattern') or '').upper()}"
+        _meta64 = _gj64(_ck64) or {}
+        if not _meta64.get("code") or (time.time() - float(_meta64.get("ts") or 0)) > 5 * 86400:
+            from analysis.models import generate_viva_public_code as _gpc64
+            _meta64 = {"code": _gpc64("SPOT"), "ts": time.time(), "mid": 0}
+        _key_stage64 = str(stage).upper() in {"TOUCH", "NEAR_BREAK", "BREAK_UP",
+                                              "BREAK_DOWN", "CONFIRM", "FINAL"}
+        _first64 = not int(_meta64.get("mid") or 0)
+        _reply64 = 0 if _first64 else int(_meta64.get("mid") or 0)
+        if not (_first64 or _key_stage64):
+            chart = None                    # reply-only update: no new chart
+        item["chain_code"] = str(_meta64.get("code") or "")
+        _sj64(_ck64, {"code": _meta64["code"], "ts": time.time(),
+                      "mid": int(_meta64.get("mid") or 0)})
+    except Exception:
+        item.setdefault("chain_code", "")
+
     # ── Viva 09-22: honest REASON lines in his own style («دلایل جهت لانگ
     # اعلام بشه … مثلا بگه این الگو نشان‌دهنده حرکت صعودی ممکن است بزودی بریک
     # شود … حجم معاملات …») — pattern meaning + the volume witness. Free data
@@ -5813,21 +5854,42 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
     lines += ["",
               "⚠️ هشدار تحلیلی اسپات — تأیید معامله فقط صعودی است (کلوز معتبر بالای الگو).",
               "📌 <b>VIVAMON-Labs-Pro</b>"]
+    if item.get("chain_code"):
+        lines += ["", "━━━━━━━━━━━━━━━━━━", f"🆔 {item['chain_code']}"]
     text = "\n".join(lines)
     try:
         # r57: the ladder warning's mid is STORED — the future confirmation of
         # this exact (symbol, tf, pattern) replies to it, and every later
         # update replies to the newest message (the chain law).
+        import inspect as _insp64
+        _rt64 = int(item.get("_reply_to") or _reply64)
+        _kw64 = {}
+        if _rt64:
+            _names = set(_insp64.signature(send_photo).parameters) \
+                | set(_insp64.signature(send_message).parameters)
+            if "reply_to" in _names:
+                _kw64 = {"reply_to": _rt64}
+            elif "reply_to_message_id" in _names:
+                _kw64 = {"reply_to_message_id": _rt64}
         mid = 0
         if chart:
-            mid = int(send_photo(chart, text, chat) or 0)
+            mid = int(send_photo(chart, text, chat, **_kw64) or 0)
         else:
-            mid = int(send_message(text, chat) or 0)
+            mid = int(send_message(text, chat, **_kw64) or 0)
         if mid:
             try:
                 from database.bot_kv import set_json
                 set_json(_spot_alert_mid_key(sym, tf, str(item.get("pattern") or "")),
                          {"mid": mid, "at": time.time()})   # R62: `_time` was undefined → the spot alert mid was never stored
+                if item.get("chain_code") and item.get("_chain_kv64"):
+                    pass
+                # keep the chain's reply target at its NEWEST message
+                from database.bot_kv import get_json as _gj64b, set_json as _sj64b
+                _ck64b = f"spot_chain|{sym}|{tf}|{str(item.get('pattern') or '').upper()}"
+                _m64b = _gj64b(_ck64b) or {}
+                if _m64b.get("code"):
+                    _m64b.update({"mid": mid, "ts": time.time()})
+                    _sj64b(_ck64b, _m64b)
             except Exception:
                 pass
         return mid

@@ -37,6 +37,12 @@ SNAPSHOT_KEYS = (
     "render_patterns", "render_zones", "render_htf_pattern", "pattern_band",
     "base_watch", "base_gate", "render_line_watch", "tool_anchor_ts",
     "htf_zones", "render_patterns_trade",
+    # R64.1 (his 10-03: «تکنوکلاسیک اسنپ‌شات نمیشه»): the TC/TLBREAK TRADE
+    # lines are drawn from these metadata keys on every chart — they were
+    # never snapshotted, so every update re-fitted them from the fresh scan
+    # and the chain's geometry drifted (HYPE T318773: two different charts).
+    "viva_upper_points", "viva_lower_points", "viva_retest_zone",
+    "tc_projection", "tc_base", "tl_line", "tl_touches",
 )
 
 _PREFIX = "render_identity:"
