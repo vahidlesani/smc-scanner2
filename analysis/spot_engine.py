@@ -819,16 +819,21 @@ def scan_spot_urgent_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
 
 
 def _next_spot_public_code() -> str:
-    """His ID format (09-22): VIVA-SPOT-E000000 — a monotonic counter in the
-    KV store; a timestamp fallback keeps IDs unique even if the KV hiccups."""
+    """His ID format (R64.2 dictation 10-03): VIVA-SPOT-Y###### — minted by
+    the SAME engine every other family uses. The old E-counter died here: the
+    ladder carried Y-codes while detection candidates still printed E-codes,
+    which read as «کد یکتا هنوز نیست». Uniqueness is reserved atomically at
+    publication by reserve_public_code; the timestamp fallback keeps IDs
+    unique even if the code engine hiccups."""
     try:
-        from database.bot_kv import get_json as _g, set_json as _s
-        cur = int((_g("spot_code_seq", {}) or {}).get("n", 0) or 0) + 1
-        _s("spot_code_seq", {"n": cur})
-        return f"VIVA-SPOT-E{cur:06d}"
+        from analysis.models import generate_viva_public_code
+        code = generate_viva_public_code("SPOT")
+        if str(code or "").startswith("VIVA-SPOT-"):
+            return str(code)
     except Exception:
-        return ("VIVA-SPOT-E"
-                + datetime.now(timezone.utc).strftime("%H%M%S"))
+        pass
+    return ("VIVA-SPOT-Y"
+            + datetime.now(timezone.utc).strftime("%H%M%S"))
 
 
 def build_spot_candidate(item: dict):

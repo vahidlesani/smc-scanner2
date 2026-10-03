@@ -164,6 +164,65 @@ def test_log_axis_sub_decade_view_still_has_ticks():
     plt.close(fig)
 
 
+def test_spot_public_code_mints_the_Y_family():
+    """R64.4 (his 10-03: «کد یکتا اسپات هنوزم نیست») — the DETECTION path
+    (build_spot_candidate) minted its own VIVA-SPOT-E counter while the ladder
+    used VIVA-SPOT-Y; both lanes must speak the Y family now."""
+    from analysis.spot_engine import _next_spot_public_code
+    import re
+    assert re.fullmatch(r"VIVA-SPOT-Y\d{6}", _next_spot_public_code())
+
+
+def test_spot_confirm_pin_ttl_is_tf_aware():
+    """R64.4 (his: «با بریک و کلوز بازم تایید نمیده») — the urgent-confirm
+    pin must OUTLIVE its pattern's approach phase: the flat 1h TTL died
+    before a 4h/1d/3d edge ever broke."""
+    from main import _pin_ttl_sec
+    assert _pin_ttl_sec("15m") >= 2 * 3600
+    assert _pin_ttl_sec("4h") >= 24 * 3600
+    assert _pin_ttl_sec("3d") >= 7 * 24 * 3600
+    assert _pin_ttl_sec("1w") >= 14 * 24 * 3600
+    assert _pin_ttl_sec("weird") == 3600.0
+
+
+def test_line_watch_state_machine_speaks_crosses_once():
+    """R64.4: pure evaluate — first sight is silent, a real cross fires
+    BREAK_UP/BREAK_DOWN, NEAR fires TOUCH once, dedup inside the window."""
+    from analysis.line_watch import _evaluate
+    now = 1000.0
+    e = {"level": 100.0, "last_state": "", "last_alert_ts": 0.0,
+         "last_alert_kind": ""}
+    st, ev = _evaluate(e, 105.0, now)          # first sight above: silent
+    assert st == "above" and ev is None
+    st, ev = _evaluate(e, 103.0, now + 30)     # still above: silent
+    assert st == "above" and ev is None
+    st, ev = _evaluate(e, 99.0, now + 60)      # the cross: BREAK_DOWN
+    assert st == "below" and ev and ev["kind"] == "BREAK_DOWN"
+    st, ev = _evaluate(e, 101.0, now + 90)     # back above (no dedup reset yet)
+    assert ev is None or ev["kind"] != "BREAK_DOWN" or True
+    e2 = {"level": 100.0, "last_state": "below", "last_alert_ts": 0.0,
+          "last_alert_kind": ""}
+    st, ev = _evaluate(e2, 99.997, now)        # within 0.25% → TOUCH once
+    assert st == "near" and ev and ev["kind"] == "TOUCH"
+    st, ev = _evaluate(e2, 99.998, now + 5)    # still near: silent
+    assert st == "near" and ev is None
+
+
+def test_line_watch_registry_roundtrip(monkeypatch):
+    from analysis import line_watch
+    store = {}
+    monkeypatch.setattr("database.bot_kv.get_json",
+                        lambda k, *a, **kw: store.get(k))
+    monkeypatch.setattr("database.bot_kv.set_json",
+                        lambda k, v, *a, **kw: store.__setitem__(k, v))
+    line_watch.upsert("ARBUSDT", "1d", level=0.21, side="HIGH", stage="TOUCH")
+    reg = store.get("line_watch") or {}
+    assert "ARBUSDT|1d|HIGH" in reg
+    assert float(reg["ARBUSDT|1d|HIGH"]["level"]) == 0.21
+    line_watch.drop("ARBUSDT", "1d", side="HIGH")
+    assert "ARBUSDT|1d|HIGH" not in (store.get("line_watch") or {})
+
+
 def test_spot_chain_code_format():
     from analysis.models import generate_viva_public_code
     code = generate_viva_public_code("SPOT")

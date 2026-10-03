@@ -5861,6 +5861,50 @@ _SPOT_ALERT_TITLE = {
 }
 
 
+def send_line_watch_alert(entry: dict, event: dict, price: float) -> bool:
+    """R64.4 (his 10-03: «در لحظه شکست‌ها یا برخوردها هشدار بده») — the ticker
+    line-watch speaks as a compact TEXT REPLY (spot chart economy: no chart,
+    never a trade signal). Chained to the lane's newest message."""
+    try:
+        sym = str(entry.get("symbol") or "")
+        tf = str(entry.get("tf") or "").upper()
+        kind = str(event.get("kind") or "")
+        icon = {"TOUCH": "🖐", "BREAK_UP": "💥⬆", "BREAK_DOWN": "💥⬇"}.get(kind, "⚡")
+        side_fa = "بالا" if str(entry.get("side") or "").upper() == "HIGH" else "پایین"
+        text = "\n".join([
+            f"🪙 <b>VIVA-SPOT-MON</b> · رصد لحظه‌ای خط",
+            f"{icon} <b>{_e(str(event.get('fa') or 'رویداد خط'))}</b>",
+            f"<code>{_e(sym)}/USDT · {_e(tf)}</code>",
+            "",
+            _e(f"• ضلع {'سقف' if side_fa == 'بالا' else 'کف'} ساختاری: {_price(float(entry.get('level') or 0))}"),
+            _e(f"• قیمت لحظه‌ای: {_price(float(price or 0))}"),
+            _e(f"• وضعیت پین: {str(entry.get('stage') or 'WATCH')}"),
+            "",
+            "⚠️ هشدار لحظه‌ای تحلیلی است — تأیید فقط با کلوز معتبر همان قانونِ همیشگی.",
+            "📌 <b>VIVAMON-Labs-Pro</b>",
+        ])
+        chat = str(CHAT_ID_SPOT or "")
+        if not chat:
+            return False
+        _reply = 0
+        try:
+            from database.bot_kv import get_json as _gj
+            _reply = int((_gj(f"spot_event_chain|{sym}|{tf}", {}) or {}).get("last") or 0)
+        except Exception:
+            _reply = 0
+        mid = int(send_message(text, chat, reply_to_message_id=_reply or None) or 0)
+        if mid:
+            try:
+                from database.bot_kv import set_json as _sj
+                _sj(f"spot_event_chain|{sym}|{tf}", {"last": mid})
+            except Exception:
+                pass
+        return bool(mid)
+    except Exception as exc:
+        print(f"line watch alert error: {exc}")
+        return False
+
+
 def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
     """Round 16 — the spot ladder's warning post: analysis only, never a trade
     signal («بقیه فقط هشدار ها و تحلیل های مختصر بشه»). The ONE confirmation

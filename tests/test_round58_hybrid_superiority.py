@@ -109,16 +109,20 @@ def test_scan_selects_the_superior_reference():
 def test_urgent_watch_exists_and_is_bounded():
     src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
     assert "_spot_urgent_recheck" in src
-    seg = src.split("def _spot_urgent_recheck")[1][:2200]
+    seg = src.split("def _spot_urgent_recheck")[1].split("\ndef ")[0]  # the whole fn
     assert "spot_urgent_watch" in seg
     assert "[:6]" in seg, "the mini-pass is bounded (Railway-friendly)"
-    assert "3600.0" in seg, "pins expire after 1h (r59.3 Railway-diet)"
+    assert "_pin_ttl_sec" in seg, ("R64.4: pins expire by their TF's breakout "
+                                   "window — the flat 1h died before a slow break")
     assert "SYMBOL|TF" in seg, "r59.3: pins are per (symbol, tf)"
     # the full pass pins NEAR_BREAK/TOUCH symbols (R65 added the per-pin SHAPE
-    # snapshot — the window grows with the contract, not around it)
-    seg2 = src.split("# the ladder rides the SAME fetched frames")[1][:1800]
+    # snapshot — the window grows with the contract, not around it);
+    # R64.4: BREAK_DOWN pins too — the confirm lane must be awake at the break
+    seg2 = src.split("# the ladder rides the SAME fetched frames")[1].split("# r57:")[0]
     assert "spot_urgent_watch" in seg2 and "NEAR_BREAK" in seg2
+    assert "BREAK_DOWN" in seg2, "R64.4: the break itself pins the confirm lane"
     assert '"shape"' in seg2      # R65: the pinned shape itself, not just the symbol
+    assert "line_watch" in seg2   # R64.4: pins feed the ticker line-watch
 
 
 def test_urgent_recheck_uses_the_reply_chain():
@@ -199,8 +203,10 @@ def test_send_spot_event_uses_photo_with_chart():
 
 
 def test_main_renders_update_chart_from_same_bundle():
+    """R64.4 REVERSED by Viva 10-03 («آپدیت‌ها هنوز همگی با چارت لایو میان و
+    مصرف بشدت بالا بردن») — the r57 generic update events are TEXT-ONLY
+    replies; charts render only at a chain's key stages."""
     src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
-    seg = src.split("r58: LIVE chart from the SAME bundle")[1][:800]
-    assert "generate_chart" in src.split("def _spot_urgent_recheck")[0] or True
-    assert "_spot_event_candidate(_ev57)" in seg
-    assert "send_spot_event(_ev57, chart=_chart57)" in seg
+    seg = src.split("R64.4 THE SPOT CHART ECONOMY")[1][:900]
+    assert "send_spot_event(_ev57)" in seg
+    assert "generate_chart" not in seg and "_chart57" not in seg

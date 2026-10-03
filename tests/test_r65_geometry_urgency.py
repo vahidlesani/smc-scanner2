@@ -455,7 +455,19 @@ def test_spot_tohom_confirms_before_the_confirm_candle_closes(monkeypatch):
     still forming."""
     from analysis.spot_engine import scan_spot_tohom_confirms, spot_tohom_tf
     assert spot_tohom_tf("4h") == "15m"
-    now = pd.Timestamp.utcnow().tz_localize(None)
+    # R64.4 FLAKE FIX: the fixture sampled the real clock, so the projected
+    # sub index (x_sub) — and with it the whole confirmation — depended on
+    # WHERE inside the 4h bucket the wall clock ran. Freeze the engine's
+    # clock and build the frames around the SAME frozen instant.
+    import datetime as _dt
+    _FROZEN = _dt.datetime(2026, 10, 3, 3, 30, tzinfo=_dt.timezone.utc)
+
+    class _FrozenDT(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _FROZEN if tz is not None else _FROZEN.replace(tzinfo=None)
+    monkeypatch.setattr("analysis.spot_engine.datetime", _FrozenDT)
+    now = pd.Timestamp(_FROZEN.replace(tzinfo=None))
     # ── the 4h shape tape (its last bar is the STILL-FORMING candle) ──
     n4 = 90
     ts4 = pd.date_range(end=now.floor("4h"), periods=n4, freq="4h")

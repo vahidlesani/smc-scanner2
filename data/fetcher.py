@@ -366,17 +366,20 @@ def get_klines_paginated(
     return result.iloc[-limit:].reset_index(drop=True)
 
 
-def get_tickers(use_cache: bool = True) -> List[Dict]:
-    key = ("tickers", "linear")
+def get_tickers(use_cache: bool = True, category: str = "linear") -> List[Dict]:
+    # R64.4: category-aware — the spot line-watch reads the SPOT tape (one
+    # request covers every symbol), perps keep the legacy call shape.
+    cat = "spot" if str(category or "").lower() == "spot" else "linear"
+    key = ("tickers", cat)
     if use_cache:
         cached = _cache_get(key)
         if cached is not None:
             return [dict(item) for item in cached]
-    payload = _request("/v5/market/tickers", {"category": "linear"})
+    payload = _request("/v5/market/tickers", {"category": cat})
     items = ((payload or {}).get("result") or {}).get("list") or []
     result = [dict(item) for item in items]
     if result:
-        _cache_set(key, result, 60)
+        _cache_set(key, result, 30 if cat == "spot" else 60)
     return result
 
 

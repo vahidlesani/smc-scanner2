@@ -61,7 +61,7 @@ def test_public_code_format():
             "pattern_commands": [], "atr": 1.0,
             "detected_at": "2026-09-22T01:00:00+00:00"}
     code = str(build_spot_candidate(item).metadata["public_code"])
-    assert re.fullmatch(r"VIVA-SPOT-E\d{6}", code), code
+    assert re.fullmatch(r"VIVA-SPOT-Y\d{6}", code), code   # R64.2: the Y family
 
 
 def test_spot_stop_ceiling_is_ten_percent():

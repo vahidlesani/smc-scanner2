@@ -826,17 +826,39 @@ def run_spot_scan() -> Dict[str, int]:
                 # born with, so a shifted window can never swap the drawing.
                 _pin58 = {}
                 for _i58 in _items58:
-                    if str(_i58.get("stage")) not in ("NEAR_BREAK", "TOUCH"):
+                    # R64.4: BREAK_DOWN pins TOO — the break already printed,
+                    # that is exactly when the confirm lane must be awake. And
+                    # the pin lives as long as the BREAKOUT WINDOW of its TF:
+                    # the old flat 1h TTL died long before a 4h/1d/3d pattern
+                    # broke, so «با بریک و کلوز بازم تایید نمیده» — the urgent
+                    # lane was simply asleep at the break. (his 10-03)
+                    if str(_i58.get("stage")) not in ("NEAR_BREAK", "TOUCH", "BREAK_DOWN"):
                         continue
                     _k58 = f"{symbol}|{str(_i58.get('tf') or '')}"
                     _pin58[_k58] = {
                         "ts": _time.time(), "stage": str(_i58.get("stage") or ""),
-                        "shape": (_i58.get("pattern_commands") or [None])[0]}
+                        "shape": (_i58.get("pattern_commands") or [None])[0],
+                        "level": float(_i58.get("edge") or 0.0) or None,
+                        "side": str(_i58.get("side") or "")}
                 if _pin58:
                     from database.bot_kv import get_json as _g58, set_json as _s58
                     _w58 = _g58("spot_urgent_watch", {}) or {}
                     _w58.update(_pin58)
                     _s58("spot_urgent_watch", _w58)
+                    # R64.4: the SAME pins feed the ticker line-watch — instant
+                    # touch/break alerts for every watched edge (1d/3d/1w
+                    # included) with ~one ticker request per 30s TOTAL.
+                    try:
+                        from analysis.line_watch import upsert as _lwu
+                        for _k58, _v58 in _pin58.items():
+                            _sym58, _, _tf58 = _k58.partition("|")
+                            if _v58.get("level"):
+                                _lwu(_sym58, _tf58,
+                                     level=float(_v58["level"]),
+                                     side=str(_v58.get("side") or "HIGH"),
+                                     stage=str(_v58.get("stage") or ""))
+                    except Exception as _lw58:
+                        print(f"line watch pin warning {symbol}: {_lw58}")
             except Exception as exc:
                 print(f"spot ladder scan warning {symbol}: {exc}")
             # r57: MAJOR-EVENT updates only (volume surge / displacement /
@@ -844,32 +866,17 @@ def run_spot_scan() -> Dict[str, int]:
             try:
                 from analysis.spot_engine import (scan_spot_update_events,
                                                   commit_spot_update_events)
-                from bot.messages_v7 import (send_spot_event,
-                                             _spot_event_candidate,
-                                             generate_chart as _gchart57)
+                from bot.messages_v7 import send_spot_event
                 _evs57 = scan_spot_update_events(symbol, bundle)
                 _sent57 = []
+                # ── R64.4 THE SPOT CHART ECONOMY (Viva 10-03, verbatim: «آپدیت
+                #‌ها هنوز همگی با چارت لایو میان و مصرف بشدت بالا بردن») — these
+                # generic vol/displacement/touch events are REPLIES, never chart
+                # posts. A spot chart renders ONLY at the chain's key stages
+                # (detection / touch / break / confirm / final target) inside
+                # send_spot_alert + the confirm publisher. Zero renders here.
                 for _ev57 in _evs57:
-                    # r59.3 Railway-diet (Viva: «مصرف بهینه ریلوی»): at most
-                    # 12 CHART RENDERS per pass — every event beyond it still
-                    # PUBLISHES (no publish cap), just text-only. Rendering is
-                    # the single most expensive thing a pass does.
-                    if stats.get("update_charts", 0) >= 12:
-                        if send_spot_event(_ev57):
-                            _sent57.append(_ev57)
-                        continue
-                    _chart57 = None
-                    try:   # r58: LIVE chart from the SAME bundle (no refetch)
-                        _frame57 = (bundle or {}).get(str(_ev57.get("tf") or ""))
-                        if _frame57 is not None and len(_frame57) > 0:
-                            _chart57 = _gchart57(
-                                _frame57, _spot_event_candidate(_ev57),
-                                confirmed=True)
-                    except Exception as _exc57:
-                        print(f"spot update chart warning {_ev57.get('symbol')}: {_exc57}")
-                    if _chart57 is not None:
-                        stats["update_charts"] = stats.get("update_charts", 0) + 1
-                    if send_spot_event(_ev57, chart=_chart57):
+                    if send_spot_event(_ev57):
                         _sent57.append(_ev57)
                 if _sent57:
                     commit_spot_update_events(_sent57)
@@ -2190,6 +2197,16 @@ def run_realtime_execution_cycle() -> int:
         return 0
 
 
+def _pin_ttl_sec(tf: str) -> float:
+    """R64.4: how long a spot confirm-pin stays awake, per TF — must outlive
+    the pattern's approach phase, not the clock of a 15m chart."""
+    return {"15m": 2 * 3600.0, "30m": 2 * 3600.0,
+            "1h": 8 * 3600.0, "2h": 8 * 3600.0,
+            "4h": 36 * 3600.0, "8h": 60 * 3600.0, "12h": 60 * 3600.0,
+            "1d": 96 * 3600.0, "3d": 216 * 3600.0, "1w": 384 * 3600.0,
+            }.get(str(tf or "").lower(), 3600.0)
+
+
 def _spot_urgent_recheck() -> int:
     """r58 (Viva: «روشی پیدا بکن که هم موقعیت‌های اسپوت از بین نره هم مصرف
     بهینه ریلوی») — symbols whose ladder showed NEAR_BREAK/TOUCH are pinned
@@ -2203,8 +2220,10 @@ def _spot_urgent_recheck() -> int:
         # r59.3 Railway-diet: pins are per (SYMBOL|TF) and live 1h — the
         # mini-pass re-scans ONLY the alerting timeframe (6× less detector
         # work) instead of all six TFs of the symbol.
+        # R64.4: the pin lives as long as its TF's breakout window (was a flat
+        # 1h — the confirm lane slept through every slow break).
         watch = {k: v for k, v in (_g("spot_urgent_watch", {}) or {}).items()
-                 if _t.time() - float((v or {}).get("ts", 0)) < 3600.0}
+                 if _t.time() - float((v or {}).get("ts", 0)) < _pin_ttl_sec(k.partition("|")[2])}
         if not watch:
             return 0
         syms = sorted(watch.keys())[:6]   # keys are "SYMBOL|TF"
@@ -2428,6 +2447,14 @@ def _candidate_monitor_loop() -> None:
                 monitor_candidates()
         except Exception as exc:
             print(f"Realtime candidate monitor error: {exc}")
+        # R64.4 LINE-WATCH: ticker-priced edge cross alerts (~1 request/30s
+        # per market, ALL watched symbols) — instant 1d/3d/1w break/touch
+        # without fetching a single candle early.
+        try:
+            from analysis.line_watch import run_once as _lw_run
+            _lw_run()
+        except Exception as exc:
+            print(f"Line watch error: {exc}")
         time.sleep(max(0.5, interval - (time.monotonic() - started)))
 
 
