@@ -123,6 +123,16 @@ def lock_render_geometry(candidate, kv_get=None, kv_set=None) -> str:
         for k in SNAPSHOT_KEYS:
             if k in stored:
                 md[k] = stored[k]
+        # R64.1b (his 10-03, HYPE T318773 class): snapshots taken BEFORE the
+        # trade-line keys existed carry no viva_upper/lower_points — the
+        # restore then left the FRESH re-fit in place and every update
+        # drifted again. A snapshot missing a key that the CURRENT chart
+        # just fitted is upgraded ONCE: the fresh fit is frozen into the
+        # stored snapshot (from this update on the chain is immutable).
+        for _k64 in ("viva_upper_points", "viva_lower_points",
+                     "viva_retest_zone", "tc_projection", "tc_base"):
+            if _k64 not in stored and md.get(_k64):
+                stored[_k64] = md[_k64]
         # R63.1 (Viva 10-01: «یه چیزایی قدیمی»): chains opened BEFORE the R63
         # deploy carry a legacy r33 snapshot (render-fitter lines, no marker)
         # — restoring it verbatim kept painting the OLD second geometry. The
@@ -130,7 +140,10 @@ def lock_render_geometry(candidate, kv_get=None, kv_set=None) -> str:
         # non-traded lines, never adds new ones, so the lock law holds) and
         # a legacy snapshot is migrated once to the marked format.
         _changed = unify_trade_geometry(md)
-        if _changed or "render_geometry_source" not in stored:
+        if _changed or "render_geometry_source" not in stored \
+                or any(_k64 in stored for _k64 in
+                       ("viva_upper_points", "viva_lower_points",
+                        "viva_retest_zone", "tc_projection", "tc_base")):
             try:
                 snap = {k: md.get(k) for k in SNAPSHOT_KEYS if k in md}
                 snap.setdefault("render_patterns", md.get("render_patterns") or [])

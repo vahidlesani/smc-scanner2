@@ -476,6 +476,15 @@ def evaluate_confirmation(
     """
     def reject(code: str, message: str) -> Tuple[bool, SignalCandidate, str]:
         candidate.metadata["last_reject_code"] = code
+        # R64.1e CONFIRM-FUNNEL (his INJ/TLBREAK «تأیید دیر یا هیچ»): every
+        # gate rejection prints ONE compact line — the boot log then answers
+        # «چرا تایید نشد» without a database autopsy.
+        try:
+            print(f"CONFIRM_REJECT | {getattr(candidate, 'symbol', '?')} | "
+                  f"{getattr(candidate, 'setup_code', '?')} | "
+                  f"{getattr(candidate, 'trigger_timeframe', '?')} | {code}")
+        except Exception:
+            pass
         return False, candidate, message
 
     if closed_df is None or len(closed_df) < 20:

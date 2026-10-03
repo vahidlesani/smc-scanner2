@@ -482,15 +482,37 @@ def fit_validated_line(
                     _cand64.append(10.0 ** (_ls64 * (_xe64 - x0)
                                             + math.log10(y0) - _ls64 * x0))
                 _lp64 = float(df["close"].iloc[-1]) if "close" in df else 0.0
+                # R64.1g FIX (probe 10-03): the old `_v > 0 and …` let a pair
+                # ESCAPE the gate exactly when its linear projection dove
+                # NEGATIVE past the live bar (steep pair extrapolated far) —
+                # `all()` went False and the stale pair survived via its log
+                # rescue (the red failing test). A non-positive projection IS
+                # total deviation; only a non-positive LIVE price disables.
                 if _lp64 > 0 and all(
-                        _v > 0 and abs(_v / _lp64 - 1.0) > _drag_max64
+                        (_v <= 0) or abs(_v / _lp64 - 1.0) > _drag_max64
                         for _v in _cand64):
                     continue
+            # ── R64.1c MAJOR-ANCHOR LAW (his 10-03: LINK/ASTER/SUI — «پیوت‌های
+            # اشتباه بعنوان نقطه اول گرفته میشه», the pink major vs the tool's
+            # mid-range pair): a defining pair whose BOTH pivots sit in the
+            # MIDDLE 50% of the side's price range is a chop line, not a
+            # structure — score ×0.35 so any real major beats it, while a
+            # genuinely validated mid line can still survive alone.
+            if _w64:
+                _pr64 = [float(q["price"]) for q in pool]
+                _hi64, _lo64 = max(_pr64), min(_pr64)
+                _rg64 = max(_hi64 - _lo64, 1e-12)
+                _mid_lo64, _mid_hi64 = _lo64 + 0.25 * _rg64, _lo64 + 0.75 * _rg64
+                _both_mid64 = (_mid_lo64 <= y0 <= _mid_hi64) and (_mid_lo64 <= y1 <= _mid_hi64)
+            else:
+                _both_mid64 = False
             for _log_space in _spaces:
                 got = _fit_pair(x0, y0, x1, y1, _log_space)
                 if got is None:
                     continue
                 _sc = float(got["score"])
+                if _both_mid64:
+                    _sc *= 0.35
                 if _dual and _log_space != bool(use_log):
                     _sc *= _R65_ALT_SPACE_WEIGHT     # alternate space = fallback
                 if _sc <= best_score:

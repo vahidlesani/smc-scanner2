@@ -27,9 +27,10 @@ def test_closed_candle_ttl_follows_the_candle_not_a_fixed_45s():
     from data.fetcher import closed_candle_ttl
     for tf, sec in (("15m", 900), ("1h", 3600), ("4h", 14400), ("1d", 86400)):
         ttl = closed_candle_ttl(tf)
-        assert 20 <= ttl <= 1800, tf
-        # never longer than the candle itself, never a flat 45 seconds
-        assert ttl <= sec
+        # R65+ cost law: the cache holds until the candle's ACTUAL close
+        # (Railway spend cap) — ttl may run the full TF, never past it,
+        # never a flat 45 seconds.
+        assert 20 <= ttl <= sec, tf
     assert closed_candle_ttl("5m") >= 20
     # unknown timeframe → a safe default instead of an exception
     assert closed_candle_ttl("nonsense") >= 20

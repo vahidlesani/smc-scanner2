@@ -96,7 +96,11 @@ def test_swing_channel_constants_read_the_tf_env_names():
 # ── 3. futures LOG axis, threshold-gated ───────────────────────────────────
 
 def test_log_axis_is_threshold_based():
+    """r57→R66 (Viva: «چارت حتماً لگاریتمی باشه، در اسپات و فیوچرز»): the
+    price axis is LOG on EVERY chart — the old spot/span>=1.30 gate is gone,
+    the plain-formatter kit (_log_axis_decorate) stays mandatory on the site."""
     src = open(os.path.join(REPO, "bot", "messages_v7.py"), encoding="utf-8").read()
-    assert 'if _is_spot or _span48 >= 1.30:' in src
+    assert 'use_log = True' in src
     assert 'ax.set_yscale("log")' in src
+    assert 'if _is_spot or _span48 >= 1.30:' not in src
     assert 'if _is_spot:\n            try:\n                ax.set_yscale' not in src

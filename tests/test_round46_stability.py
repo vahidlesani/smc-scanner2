@@ -61,9 +61,15 @@ def test_chain_updates_capped_at_one():
     کانفرمد بیشتر نباید بیاد») — the r46 cap of THREE is superseded: at most
     ONE non-critical update per chain."""
     src = _msg()
-    part = src.split('upd_n = int(chain.get("upd_n") or 0) + 1')[1][:800]
-    assert "if upd_n > 1 and not _critical:" in part
-    assert "return False" in part
+    parts = src.split('upd_n = int(chain.get("upd_n") or 0) + 1')[1:]
+    # R66 form-check: EVERY upd_n site blocks the second update (the futures
+    # gate allows critical events; the TC gate is strict), and each ends in
+    # silence (`return False`).
+    assert len(parts) >= 2
+    for part in parts[:2]:
+        window = part[:800]
+        assert "upd_n > 1" in window, window[:120]
+        assert "return False" in window
 
 
 # ── 3. the daily tape shows more candles (CryptoCove reference) ────────────

@@ -2061,7 +2061,8 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
     # demoted to a SOFT far clip — the window frames the region where the
     # trends/patterns actually live. Overlays stay IN FULL; the recent block
     # never clips.
-    _deep64 = int(bars or 0) > 240
+    _deep64 = (int(bars or 0) > 240) or (
+        int(bars or 0) > 110 and span >= 5.0 * max(r_span, 1e-12))
     if _deep64:
         _reach64 = 2.6 * max(r_span, 4.0 * _a)
         _flo64 = max(c_lo, r_mid - _reach64)
@@ -2656,6 +2657,25 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         if zone_start is None:
             zone_name = None
         if zone_start is not None:
+            # R64.1d (his 10-03 NEAR/WLD: «باکس غول‌پیکر», «ارتفاع کندلا
+            # زیاد شده»): the DRAWN POI box is capped at a trade-sized band —
+            # max(1.6×ATR_chart, |entry−stop|) — anchored on the edge nearest
+            # the live price. Detection math is untouched; this is draw-side.
+            try:
+                _atz64 = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
+                _zbz64, _ztz64 = float(candidate.entry_zone_bottom), float(candidate.entry_zone_top)
+                _capz64 = max(1.6 * _atz64, abs(float(candidate.planned_entry or _ztz64)
+                                                - float(candidate.sl or 0.0)),
+                              0.004 * float(candidate.planned_entry or _ztz64))
+                if _ztz64 - _zbz64 > _capz64 > 0:
+                    _clz64 = float(frame["close"].iloc[-1])
+                    if abs(_clz64 - _zbz64) <= abs(_ztz64 - _clz64):
+                        _ztz64 = _zbz64 + _capz64
+                    else:
+                        _zbz64 = _ztz64 - _capz64
+                    candidate.entry_zone_bottom, candidate.entry_zone_top = _zbz64, _ztz64
+            except Exception:
+                pass
             ax.fill_between(
                 [zone_start, zone_end],
                 candidate.entry_zone_bottom,
@@ -2775,6 +2795,19 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _bias8 = _z.get("bias") or ("DEMAND" if _dir_key == "LONG" else "SUPPLY")
             _fam8 = _zone_family(_z.get("kind", ""))
             _zb9, _zt9 = float(_z["bottom"]), float(_z["top"])
+            # R64.1d: same drawn-band cap as the POI box — clamp BEFORE the
+            # side/legend decision so labels always describe the drawn band.
+            try:
+                _atz9 = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
+                _capz9 = max(1.6 * _atz9, 0.004 * max(_zt9, 1e-12))
+                if _zt9 - _zb9 > _capz9 > 0:
+                    _clz9 = float(frame["close"].iloc[-1])
+                    if abs(_clz9 - _zb9) <= abs(_zt9 - _clz9):
+                        _zt9 = _zb9 + _capz9
+                    else:
+                        _zb9 = _zt9 - _capz9
+            except Exception:
+                pass
             _cl9z = float(frame["close"].iloc[-1])
             _away9 = (_zb9 > _cl9z) or (_zt9 < _cl9z)
             if _away9:
@@ -3811,6 +3844,42 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                 _apex9 = _ax9
                         except Exception:
                             _apex9 = None
+                # ── R64.1f CHANNEL GUIDE (his 10-03 ADA 4h: «کانال این چارت
+                # چرا رسم نشده؟») ── only ONE structural edge validated, yet a
+                # true parallel through the strongest OPPOSITE extreme makes
+                # it a channel. Synthesize the far edge ONCE as a faint guide
+                # line (same family styling), never as a trade line: 1.2–9×ATR
+                # wide only, and it is skipped entirely when a converging
+                # pair would fight the apex law.
+                if ("viva_upper_points" in _fits9) != ("viva_lower_points" in _fits9):
+                    try:
+                        _atrG = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
+                        if _atrG > 0:
+                            _have_loG = "viva_lower_points" in _fits9
+                            _srcG = _fits9["viva_lower_points" if _have_loG else "viva_upper_points"]
+                            _xsG = _srcG[0]
+                            _loG = max(0, int(min(_xsG)))
+                            _hiG = max(_loG + 1, int(min(len(frame) - 1, max(_xsG))))
+                            _segG = (frame["high"] if _have_loG else frame["low"]).iloc[_loG:_hiG + 1]
+                            _ixG = _loG + int(((_segG.values.argmax()) if _have_loG
+                                               else (_segG.values.argmin())))
+                            _pG = float(frame["high"].iloc[_ixG] if _have_loG
+                                        else frame["low"].iloc[_ixG])
+                            _onG = _srcG[3] * _ixG + _srcG[4]
+                            _offG = (math.log10(max(_pG, 1e-12)) - _onG) if _srcG[2] == "log" \
+                                else (_pG - _onG)
+                            if 1.2 * _atrG <= abs(_offG) <= 9.0 * _atrG:
+                                _misG = "viva_upper_points" if _have_loG else "viva_lower_points"
+                                _xs2G = sorted({min(_xsG), max(_xsG), _ixG})
+                                _ys2G = [10 ** (_srcG[3] * _xG + _srcG[4] + _offG)
+                                         if _srcG[2] == "log"
+                                         else _srcG[3] * _xG + _srcG[4] + _offG
+                                         for _xG in _xs2G]
+                                _fits9[_misG] = (_xs2G, _ys2G, _srcG[2], _srcG[3],
+                                                 _srcG[4] + _offG,
+                                                 CHART_THEME["structure"], "CHANNEL GUIDE")
+                    except Exception:
+                        pass
                 for key, (xs, ys, _mode9, slope, intercept, color, label) in _fits9.items():
                     def _fy9(_x9, _s=slope, _b=intercept, _m=_mode9):
                         return 10 ** (_s * _x9 + _b) if _m == "log" else _s * _x9 + _b
