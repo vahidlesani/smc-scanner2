@@ -610,6 +610,35 @@ def evaluate_confirmation(
             return float(_v62) if _v62 > 0 else static_edge
         _is_long = candidate.direction == "LONG"
         _buf = 0.10 * _atr
+        # ── R67.1 PIN DRAWN-LINE CLOSE (Viva 10-03, ENA: «ترندِ خوب اما با
+        # بریک لانگ در اولین کلوز تایید نداده بود») — the line HE watches on
+        # the chart is a confirm level for the pin family too: the FIRST of
+        # (pin level, consistent-side drawn line) the market closes beyond
+        # is the confirm level. Consistent side only (LONG → the HIGH-side
+        # line, SHORT → the LOW-side); the OPPOSITE side stays the 09-21
+        # veto's business. Nearest-to-price line wins; a line projected far
+        # from the tape is context, not a trigger.
+        _pin_line67 = None
+        if str(getattr(candidate, "setup_code", "") or "").upper() in {"PINVAL", "PINWALLQ"}:
+            try:
+                _want67 = "HIGH" if _is_long else "LOW"
+                _clast67 = float(closed_df["close"].iloc[-1])
+                _cands67 = []
+                for _l67 in (_md.get("render_line_watch") or []):
+                    if str(_l67.get("side") or "").upper() != _want67:
+                        continue
+                    try:
+                        _v67 = float(_project_watch_level(
+                            _l67, pd.Timestamp(str(closed_df["timestamp"].iloc[-1]))))
+                    except Exception:
+                        continue
+                    if _v67 > 0 and _atr > 0 and abs(_v67 - _clast67) <= 4.0 * _atr:
+                        _cands67.append((abs(_v67 - _clast67), _l67))
+                if _cands67:
+                    _cands67.sort(key=lambda t: t[0])
+                    _pin_line67 = _cands67[0][1]
+            except Exception:
+                _pin_line67 = None
         # R62: after a STALE verdict the old break bar may not confirm again —
         # only a later close, after a First-Time-Back touch of the edge.
         _stale_after = str(_md.get("stale_after_bar") or "")
@@ -653,6 +682,15 @@ def evaluate_confirmation(
                 except Exception:
                     _bar_close_ts = None
                 _edge_t = _edge_at(_bar_close_ts, _edge if _edge > 0 else _zone_edge)
+                if _pin_line67 is not None and not _major_src:
+                    try:
+                        _lv67 = float(_project_watch_level(
+                            _pin_line67, pd.Timestamp(str(_bar_ts))))
+                        # first of (pin level, drawn line) the market gives
+                        _edge_t = min(_edge_t, _lv67) if _is_long else max(_edge_t, _lv67)
+                        candidate.metadata["confirm_edge_source"] = "PIN_LINE_WATCH"
+                    except Exception:
+                        pass
                 if _stale_after:
                     try:
                         from analysis.confirm_r62 import _naive as _r62_naive

@@ -302,3 +302,110 @@ def test_corner_note_stack_dedupes_and_splits_columns():
         os.path.abspath(__file__))), "bot", "messages_v7.py"),
         encoding="utf-8").read()
     assert "_seen_notes" in src and "0.012 + _ci * 0.235" in src
+
+
+# ── ⑦ R67.1 — the pattern contract on pin charts (PYTH / ENA, 10-03) ───────
+def _watch_line(side, p0, p1):
+    return {"side": side,
+            "p0": {"ts": p0[0], "price": p0[1]},
+            "p1": {"ts": p1[0], "price": p1[1]},
+            "log_fit": False}
+
+
+def _pin15(direction="SHORT", pin_low=99.0, pin_high=100.0, sl=100.8, zone=(98.9, 99.3)):
+    from analysis.models import SignalCandidate
+    return SignalCandidate(
+        signal_id="R671-1", symbol="PYTHUSDT", style="SWING",
+        setup_code="PINVAL", setup_name="t", strategy_fa="t",
+        direction=direction, score=8, status="APPROACHING",
+        entry_zone_bottom=zone[0], entry_zone_top=zone[1],
+        planned_entry=(zone[0] + zone[1]) / 2,
+        sl=sl, tp1=96.8, tp2=95.2, rr_tp1=1.0, rr_tp2=2.0,
+        bias="BEAR", trigger_timeframe="15m",
+        mandatory_gates={"zone": True},
+        created_at="2026-10-03T16:05:00+00:00",
+        metadata={"atr": 0.45, "touched": True, "pin_tf": "15m",
+                  "pin_high": pin_high, "pin_low": pin_low})
+
+
+def _m2_frame(closes, start="2026-10-03 16:00", freq="15min", pad=20):
+    values = [float(c) for c in closes]
+    pad_values = [min(values) - 1.2 - 0.01 * i for i in range(pad)]
+    allc = pad_values + values
+    ts = pd.date_range(start, periods=len(allc), freq=freq)
+    return pd.DataFrame({"timestamp": ts,
+                         "open": [c - 0.05 for c in allc],
+                         "high": [c + 0.12 for c in allc],
+                         "low": [c - 0.12 for c in allc],
+                         "close": allc, "volume": [1000] * len(allc)})
+
+
+def test_pin_short_cannot_confirm_against_wedge_upbreak(monkeypatch):
+    """PYTH K245401: a falling wedge (bullish by nature — Viva: «ماهیتش
+    صعودیه؛ ربات در جریان هست؟؟») broke UP and the SHORT still confirmed
+    (→ LOSS). The 09-21 break-side veto now has its weapon on pins too."""
+    import data.fetcher as fetcher
+    monkeypatch.setattr(fetcher, "get_klines", lambda *a, **k: None)
+    from analysis.quality_engine import evaluate_confirmation
+    cand = _pin15("SHORT")
+    cand.metadata["render_line_watch"] = [
+        _watch_line("HIGH", ("2026-10-03 15:00", 100.9), ("2026-10-03 17:00", 99.9))]
+    frame = _m2_frame([99.2, 100.4])     # 18:00 close 1.0 ABOVE the HIGH line
+    ok, cand2, reason = evaluate_confirmation(cand, frame, frame_tf_minutes=15.0)
+    assert ok is False, reason
+    assert cand2.metadata.get("last_reject_code") == "BREAK_SIDE_MISMATCH"
+
+
+def test_pin_long_confirms_at_first_close_of_the_drawn_line(monkeypatch):
+    """ENA K142040: the descending TL he praised broke up — the first close
+    beyond the DRAWN line must confirm the LONG even before the pin level."""
+    import data.fetcher as fetcher
+    monkeypatch.setattr(fetcher, "get_klines", lambda *a, **k: None)
+    from analysis.quality_engine import evaluate_confirmation
+    # geometry mirrors the live ENA case: the TL sits just above the zone
+    # when it breaks (no chase), the pin level still stands above
+    cand = _pin15("LONG", pin_low=98.2, pin_high=100.6, sl=97.9, zone=(98.9, 99.3))
+    cand.tp1, cand.tp2 = 101.2, 102.4     # LONG-side ladder
+    cand.metadata["atr"] = 0.8
+    cand.metadata["render_line_watch"] = [
+        _watch_line("HIGH", ("2026-10-03 15:00", 100.35), ("2026-10-03 17:00", 99.75))]
+    frame = _m2_frame([99.55, 99.72])    # closes above the line, BELOW pin_high
+    ok, cand2, reason = evaluate_confirmation(cand, frame, frame_tf_minutes=15.0)
+    assert ok is True, reason
+    assert cand2.metadata.get("confirm_edge_source") == "PIN_LINE_WATCH"
+
+
+def test_pin_carries_the_pattern_contract():
+    """enrich_render now runs for PINVAL detection: pattern_band +
+    render_line_watch exist, so the confirm gate's contract laws apply."""
+    import numpy as np
+    from analysis.render_kit import enrich_render
+    from analysis.models import SignalCandidate
+    c = SignalCandidate(
+        signal_id="R671-2", symbol="X", style="SWING", setup_code="PINVAL",
+        setup_name="t", strategy_fa="t", direction="LONG", score=8,
+        status="APPROACHING", entry_zone_bottom=99.0, entry_zone_top=99.4,
+        planned_entry=99.2, sl=98.0, tp1=101.0, tp2=102.0, rr_tp1=1.0,
+        rr_tp2=2.0, bias="BULL", trigger_timeframe="15m",
+        mandatory_gates={"zone": True}, created_at="2026-10-03T16:00:00+00:00",
+        metadata={"atr": 0.5})
+    n = 90
+    base = np.full(n, 100.0)
+    df = pd.DataFrame({"timestamp": pd.date_range("2026-10-01", periods=n, freq="15min"),
+                       "open": base, "high": base + 0.5, "low": base - 0.5,
+                       "close": base, "volume": [100.0] * n})
+    enrich_render(c, df)
+    assert "render_line_watch" in c.metadata
+    assert "render_patterns" in c.metadata
+    assert "pattern_band" in c.metadata
+
+
+def test_far_edges_are_side_hues_never_blue():
+    """Viva: «آبی نازک خوب نبود همون قرمز و سبز .. با پررنگ و کمرنگ» — the
+    09-30 far/blue law is retired; hierarchy = bold vs faint, same hue."""
+    src = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "bot", "messages_v7.py"),
+        encoding="utf-8").read()
+    assert "_PATTERN_BLUE if _pblue9" not in src
+    assert "_cTop9 = _cBot9 = _PATTERN_BLUE" not in src
+    assert "_lw8 = 1.3 if _pat.get(\"far_major\")" in src

@@ -1297,6 +1297,18 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             # R67 PIN RISK CORRIDOR (Viva 10-03): quality_engine skips the
             # round-14 clamp for corridor stops — his newer 3.5–5% law wins.
             candidate.metadata["stop_corridor"] = _corridor_meta67
+        try:
+            # R67.1 (Viva 10-03 round-7.1: «وج نزولی ماهیتش صعودیه؛ ربات در
+            # جریان هست؟؟» + ENA: «با بریکِ لانگ در اولین کلوز تایید نداده
+            # بود») — the pin family carried NO pattern contract: no
+            # pattern_band, no render_line_watch, so the 09-21 break-side
+            # veto was unarmed on pins (PYTH K245401 confirmed a SHORT while
+            # the falling wedge broke UP → LOSS) and the drawn line's first
+            # close could never confirm (ENA missed). Same laws, every setup.
+            from analysis.render_kit import enrich_render as _er671
+            _er671(candidate, df, htf_df=ctx_df)
+        except Exception as _er671_exc:
+            print(f"pin enrich_render skipped {getattr(bundle, 'symbol', '?')}: {_er671_exc}")
         if polarity_on and polarity is not None:
             active = polarity.active_zone
             candidate.metadata.update({

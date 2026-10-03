@@ -3102,19 +3102,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _rgfar9 = bool(_atrR9 > 0 and min(
                     abs(_clR9 - float(_pat["lo"])),
                     abs(_clR9 - float(_pat["hi"]))) > 2.0 * _atrR9)
-                if _rgfar9:
-                    _cTop9 = _cBot9 = _PATTERN_BLUE
-                else:
-                    _cTop9, _cBot9 = CHART_THEME["supply"], CHART_THEME["demand"]
+                # R67.1: a far range box also keeps the side hues (faint),
+                # never blue — «همون قرمز و سبز با کمرنگ»
+                _cTop9, _cBot9 = CHART_THEME["supply"], CHART_THEME["demand"]
                 ax.fill_between([_range_start, zone_end], float(_pat["lo"]),
                                 float(_pat["hi"]), color=_cTop9,
                                 alpha=0.05, linewidth=0, zorder=1)
                 ax.plot([_range_start, zone_end], [float(_pat["hi"])] * 2,
                         color=_cTop9, linewidth=1.3 if _rgfar9 else 0.9,
-                        alpha=0.8, zorder=2)
+                        alpha=0.55 if _rgfar9 else 0.8, zorder=2)
                 ax.plot([_range_start, zone_end], [float(_pat["lo"])] * 2,
                         color=_cBot9, linewidth=1.3 if _rgfar9 else 0.9,
-                        alpha=0.8, zorder=2)
+                        alpha=0.55 if _rgfar9 else 0.8, zorder=2)
                 _mid8 = (float(_pat["lo"]) + float(_pat["hi"])) / 2
                 # R64.6 (his 10-03 AVAX/NEAR: a lone dashed line floating
                 # mid-chart read as a broken trendline) — the range MIDLINE
@@ -3256,9 +3255,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _sl, _ic = float(_ln["slope"]), float(_ln["intercept"])
                 _xa = max(0.0, float(_ln.get("x0", 0)))
                 _xe = count + future - 0.5
-                _col8 = _PATTERN_BLUE if _pblue9 else (
-                    CHART_THEME["supply"] if _ln.get("side") == "HIGH"
-                    else CHART_THEME["demand"])
+                # R67.1 (Viva 10-03: «آبی نازک خوب نبود همون قرمز و سبز ..
+                # با پررنگ و کمرنگ اگر چند ترند بود تغییرش مشخص باشه») — the
+                # far/blue law is RETIRED: every edge keeps its own side hue
+                # and the near/far hierarchy is BOLD vs FAINT weight.
+                _col8 = (CHART_THEME["supply"] if _ln.get("side") == "HIGH"
+                         else CHART_THEME["demand"])
                 # Viva 09-18 (his AAVE ruling): a FLAT «trendline» is not a
                 # trend — it is the supply/demand box of the base it came
                 # from, so paint it as a zone band instead of a line.
@@ -3320,9 +3322,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                           if _bx8 is not None else float(count))
                 # spec §13: parent patterns thick & solid, children thin;
                 # r59 far-majors sit between (a thin BLUE background major)
-                _lw8 = 1.8 if _pat.get("far_major") else (
+                # R67.1: faint far / thin child / bold parent — same hue
+                _lw8 = 1.3 if _pat.get("far_major") else (
                     1.2 if _pat.get("child") else 2.0)
-                _al8 = 0.92 if _pat.get("far_major") else (
+                _al8 = 0.55 if _pat.get("far_major") else (
                     0.60 if _pat.get("child") else 0.95)
                 # R16 phase 3: draw the CALIBRATED geometry. A log-fitted line
                 # is a curve on a log axis, so it is painted as a polyline
