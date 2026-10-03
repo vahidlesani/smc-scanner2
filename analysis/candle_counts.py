@@ -23,21 +23,20 @@ CANDLE_COUNTS = {
 }
 
 
-# ── R68 CRYPTOCOVE PICTURE DENSITY (Viva 10-04, LTC/ARB/ENA verbatim:
-# «چه مدل زوم هست .. ارتفاع کندلها باید کمتر بشه و تعداد کندلها کمتر تا کل نمودار
-# پر از کندل باشه و الگو اینقدر احمقانه رسم نشه .. روی زوم و تعداد کندلها در اسپات
-# بصورت هوشمند باید انجام بشه تا بتونیم چارتهایی شبیه رفرنسهای اسپات CryptoCove داشته باشیم»).
-# Macro & mid timeframes on the drawn chart now use the exact CryptoCove
-# golden density (140–180 candles):
-#   * 4h / 8h / 12h → 160 candles (readable swings, thick clear bodies)
-#   * 1d → 180 candles
-#   * 3d / 1w → 180–220 candles
-# Detection (CANDLE_COUNTS) keeps the deep 250–350 bars for discovering majors.
+# ── R65 PICTURE DENSITY (Viva 10-02, verbatim: «تعداد کندل‌های خیلی زیاد خوب
+# نشده فقط شلوغ‌تر شد و نواحی غیر قابل تشخیص‌تر … کندل ۱۹۰ تا ۲۱۰ تا کافیه اما
+# زوم درست بشه»).
+# Two numbers, two jobs, and they are deliberately different now:
+#   * DETECTION keeps the dictated 250–350 bars (his «۲۵۰ تا ۳۵۰ کندل … برای
+#     پیوت‌های بیشتر در تایم‌های بالاتر») — the engine must keep hunting pivots
+#     on the deeper tape, that is where the major lines come from;
+#   * the PICTURE on the low timeframes uses the 190–210 density he dictated,
+#     so a 15m/30m/1h/2h chart is not a wall of needles. Higher frames keep the
+#     dictated counts (they need the history for the shapes to exist at all).
+# The renderer may still stretch back up to the detection count when a stored
+# pattern anchor needs the older bars (r37 anchor law) — never further.
 RENDER_COUNTS = dict(CANDLE_COUNTS)
-RENDER_COUNTS.update({
-    "5m": 210, "15m": 210, "30m": 210, "1h": 210, "2h": 210,
-    "4h": 160, "8h": 160, "12h": 160, "1d": 180, "3d": 220, "1w": 180,
-})
+RENDER_COUNTS.update({"5m": 210, "15m": 210, "30m": 210, "1h": 210, "2h": 210})
 
 
 # ── canonical TF → seconds (R65: the PINVAL freshness guard and the PINVAL

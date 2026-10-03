@@ -418,14 +418,6 @@ def fit_validated_line(
             _fresh31 = int(getattr(cfg, "fresh_break_bars", 12) or 12)
             if break_at - x1 < 10 and break_at < n - _fresh31:
                 return None
-            # ── R68 STALE-BROKEN REJECT (Viva 10-04, PENGU 12H verbatim:
-            # «میشه بگی اصن ترند چه ربطی با لایو قیمت داره ؟؟؟»):
-            # If a line broke far in the past (>35 bars ago) and the live price
-            # has moved far away (>2.5×ATR), it is obsolete history, NEVER a
-            # working trend for live charts or signals.
-            _edge_now_brk = (10.0 ** (ls * n + li)) if log_space else (slope * n + intercept)
-            if break_at < n - 35 and abs(_edge_now_brk - float(_closes[n])) > 2.5 * atr:
-                return None
         elif cfg.require_alive:
             # ALIVE line: touched price recently AND its projected edge still
             # sits near price (no line floating in the air).
@@ -478,30 +470,6 @@ def fit_validated_line(
             x1, y1 = float(pool[j]["index"]), float(pool[j]["price"])
             if x1 - x0 < _min_pair:
                 continue
-
-            # ── R68 CLUSTER-EXTREME START (Viva 10-04, ZRO 2H verbatim):
-            # «ترند از پیوت پایین‌تر نمی‌گیرن واسه شروع ریم .. پیوت سقف بالاتر
-            # در خوشه اون قسمت انتخاب میشه نه از سقف پایین‌تر».
-            # A trendline MUST start at the TRUE PEAK/TROUGH of its initial
-            # cluster: if any same-side pivot within the start-cluster window
-            # (within 12 bars or 2.5×pivot_left) sits higher (for HIGH) or lower
-            # (for LOW) by more than 0.15×tol, this local sub-peak cannot anchor
-            # the trend — the true cluster extreme anchors it.
-            _c_win = max(10.0, float(cfg.pivot_left) * 2.5)
-            _has_better_cluster_anchor = False
-            for _cand_p in pool:
-                _c_idx = float(_cand_p["index"])
-                if abs(_c_idx - x0) <= _c_win:
-                    _c_prc = float(_cand_p["price"])
-                    if side == "HIGH" and _c_prc > y0 + 0.15 * tol:
-                        _has_better_cluster_anchor = True
-                        break
-                    elif side == "LOW" and _c_prc < y0 - 0.15 * tol:
-                        _has_better_cluster_anchor = True
-                        break
-            if _has_better_cluster_anchor:
-                continue
-
             # ── R64.1 LIVE-RELEVANCE (his 10-03: «این ترند بی ربط به قیمت چی
             # میکه») — a candidate whose value at the LIVE bar has drifted too
             # far from the live price is archived history, not a working trend

@@ -2969,16 +2969,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _a9 = int(max(0, float(_it["x0"])))
             _b9 = int(min(_n9, float(_it["x0"]) + _wb9 + 1))
             if _b9 > _a9:
-                for _try9 in range(12):
-                    if not np.any((_hi9[_a9:_b9] >= _y9 - 0.015 * _yr9)
-                                  & (_lo9[_a9:_b9] <= _y9 + 0.015 * _yr9)):
+                for _try9 in range(8):
+                    if not np.any((_hi9[_a9:_b9] >= _y9 - 0.012 * _yr9)
+                                  & (_lo9[_a9:_b9] <= _y9 + 0.012 * _yr9)):
                         break
-                    _y9 += 0.040 * _yr9
-                # R68 ABSOLUTE CANDLE-CLEARANCE: If still intersecting candle envelope,
-                # park safely above the highest candle in the window
-                if np.any((_hi9[_a9:_b9] >= _y9 - 0.015 * _yr9)
-                          & (_lo9[_a9:_b9] <= _y9 + 0.015 * _yr9)):
-                    _y9 = float(_hi9.max()) + 0.025 * _yr9
+                    _y9 += 0.035 * _yr9
             _prev9 = _y9
             _deferred_chips.append({"x": float(_it["x0"]) + 0.6, "y": float(_y9),
                                     "text": _it["text"], "color": _it["color"],
@@ -3147,9 +3142,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                   "facecolor": CHART_THEME["panel"],
                                   "edgecolor": "none", "alpha": 0.78})
                 else:
-                    # R68: Park clear of candles, at the safe forward edge of the range
-                    _safe_rx = min(float(zone_end) + 0.6, count + future - 1.5)
-                    ax.text(_safe_rx, float(_pat["hi"]) + 0.015 * _yr9, _rng_txt67,
+                    ax.text(zone_start + 0.6, float(_pat["hi"]), _rng_txt67,
                             color=CHART_THEME["muted"], fontsize=7,
                             va="bottom", ha="left", fontweight="bold",
                             zorder=12,
@@ -5965,7 +5958,6 @@ def send_spot_event(event: dict, chart: Optional[bytes] = None) -> bool:
 _SPOT_ALERT_TITLE = {
     "TOUCH": "🖐 برخورد اولیه به الگو",
     "NEAR_BREAK": "⏳ نزدیک شدن به شکست",
-    "BREAK_UP": "🚀 شکست صعودی ضلع الگو",
     "BREAK_DOWN": "💥 هشدار شکست نزولی",
 }
 
@@ -6065,10 +6057,7 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
     # r42 (Viva 09-26, «اسپات هم طبق قالب و فرمت پیامهای مختصر فیوچرز بیاد»):
     # geometry + meaning merge into ONE analysis line; the volume/on-chain
     # witnesses stay one-liners (he approved: «اگر بیاد خیلی خوبه»).
-    if stage == "BREAK_UP":
-        analysis_line = ("کلوز معتبر بالای ضلع بالای الگو ثبت شد — شکست رو به بالای ساختار همراه با چارت لایو؛ "
-                         "تأیید خرید با کلوز معتبر در گیت صعودی.")
-    elif stage == "BREAK_DOWN":
+    if stage == "BREAK_DOWN":
         analysis_line = ("کلوز معتبر زیر ضلع پایین الگو ثبت شد؛ شرط صعودیِ الگو نقض شده — "
                          "فقط هشدار تحلیلی، سیگنال نیست.")
     elif stage == "NEAR_BREAK":
