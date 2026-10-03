@@ -409,3 +409,63 @@ def test_far_edges_are_side_hues_never_blue():
     assert "_PATTERN_BLUE if _pblue9" not in src
     assert "_cTop9 = _cBot9 = _PATTERN_BLUE" not in src
     assert "_lw8 = 1.3 if _pat.get(\"far_major\")" in src
+
+
+# ── ⑧ R67.2 — Railway cost gates (Viva 10-04) ──────────────────────────────
+def test_realtime_lane_skips_tickers_with_zero_live_positions(monkeypatch):
+    """The 5s exit lane exists for LIVE positions only: with zero filled
+    PENDING positions the bulk venue-ticker fetch must be skipped — yet the
+    moment a position exists the full path runs (exit latency untouched)."""
+    import main
+    calls = {"tickers": 0}
+
+    def _no_tickers(*a, **k):
+        calls["tickers"] += 1
+        return []
+
+    import data.ourbit as ourbit
+    monkeypatch.setattr(ourbit, "get_ourbit_tickers", _no_tickers)
+    monkeypatch.setattr("database.realtime_monitor.pending_filled_count", lambda: 0)
+    import database.realtime_monitor as rm
+    assert rm.pending_filled_count() == 0
+    main.run_realtime_execution_cycle()
+    assert calls["tickers"] == 0, "ticker fetched despite zero live positions"
+
+
+def test_realtime_lane_runs_full_path_with_live_positions(monkeypatch):
+    import main
+    calls = {"tickers": 0}
+
+    def _tickers(*a, **k):
+        calls["tickers"] += 1
+        return []
+
+    import data.ourbit as ourbit
+    monkeypatch.setattr(ourbit, "get_ourbit_tickers", _tickers)
+    monkeypatch.setattr("database.realtime_monitor.pending_filled_count", lambda: 2)
+    monkeypatch.setattr("database.realtime_monitor.monitor_realtime_prices", lambda prices: [])
+    main.run_realtime_execution_cycle()
+    assert calls["tickers"] >= 1, "gate must not blind the exit lane"
+
+
+def test_pending_filled_count_failopen():
+    """A DB problem must never blind the exit lane: fail-open returns 1."""
+    import database.realtime_monitor as rm
+    import database.db as legacy_db
+    orig = legacy_db.db_cursor
+    def _boom(*a, **k):
+        raise RuntimeError("db down")
+    legacy_db.db_cursor = _boom
+    try:
+        assert rm.pending_filled_count() == 1
+    finally:
+        legacy_db.db_cursor = orig
+
+
+def test_candidate_loop_idle_interval_is_env_tunable():
+    """Idle ticks stretch to CANDIDATE_MONITOR_IDLE_SECONDS (default 20s);
+    any active chain snaps the cadence back to the full 10s."""
+    src = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "main.py"), encoding="utf-8").read()
+    assert 'CANDIDATE_MONITOR_IDLE_SECONDS' in src
+    assert "_idle_ticks = 0 if int((_stats67 or {}).get(\"active\") or 0)" in src

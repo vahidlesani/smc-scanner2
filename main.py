@@ -2254,8 +2254,21 @@ def monitor_confirmed_results() -> int:
 
 
 def run_realtime_execution_cycle() -> int:
-    """Fresh ticker path: TP/SL messages must not wait for trigger candle close."""
+    """Fresh ticker path: TP/SL messages must not wait for trigger candle close.
+
+    R67.2 RAILWAY COST GATE (Viva 10-04: «مصرف ریلوی بالاست، بهینه کن — اما
+    نه به قیمت دیلی هشدارها»): the 5s cadence serves LIVE positions only.
+    With zero filled PENDING positions there is nothing this lane can detect,
+    so the bulk venue-ticker fetch (≈17k calls/day) is skipped; one tiny
+    COUNT replaces it. The moment a position fills, the full 5s path is
+    back — exit latency untouched."""
     try:
+        try:
+            from database.realtime_monitor import pending_filled_count as _pfc67
+            if _pfc67() == 0:
+                return 0
+        except Exception:
+            pass   # fail-open: never let the cost gate blind the exit lane
         from data.ourbit import get_ourbit_tickers
         from data.fetcher import get_tickers
         from database.realtime_monitor import monitor_realtime_prices
@@ -2521,15 +2534,25 @@ def _realtime_execution_loop() -> None:
 
 
 def _candidate_monitor_loop() -> None:
-    """Confirmation/final-watch monitor independent of long discovery scans."""
+    """Confirmation/final-watch monitor independent of long discovery scans.
+
+    R67.2: with ZERO active chains the full pass is one DB SELECT that can
+    do nothing — idle ticks stretch to CANDIDATE_MONITOR_IDLE_SECONDS
+    (default 20s). The instant any chain exists the cadence snaps back to
+    the full 10s; a confirmation waits for CLOSED candles anyway, and
+    discovery (not this loop) mints candidates, so no alert can be delayed."""
     interval = max(5, int(SETTINGS.candidate_monitor_seconds))
+    idle_interval = max(interval, int(os.getenv("CANDIDATE_MONITOR_IDLE_SECONDS", "20") or 20))
+    _idle_ticks = 0
     while not _SHUTDOWN:
         started = time.monotonic()
         try:
             with _CANDIDATE_MONITOR_LOCK:
-                monitor_candidates()
+                _stats67 = monitor_candidates()
+            _idle_ticks = 0 if int((_stats67 or {}).get("active") or 0) else _idle_ticks + 1
         except Exception as exc:
             print(f"Realtime candidate monitor error: {exc}")
+            _idle_ticks = 0
         # R64.4 LINE-WATCH: ticker-priced edge cross alerts (~1 request/30s
         # per market, ALL watched symbols) — instant 1d/3d/1w break/touch
         # without fetching a single candle early.
@@ -2538,7 +2561,8 @@ def _candidate_monitor_loop() -> None:
             _lw_run()
         except Exception as exc:
             print(f"Line watch error: {exc}")
-        time.sleep(max(0.5, interval - (time.monotonic() - started)))
+        _cur67 = interval if _idle_ticks < 3 else idle_interval
+        time.sleep(max(0.5, _cur67 - (time.monotonic() - started)))
 
 
 def _daily_report() -> None:
