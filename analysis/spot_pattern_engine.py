@@ -40,184 +40,110 @@ def detect_spot_macro_pattern(df: pd.DataFrame, symbol: str = "") -> dict | None
     if n_all < 40:
         return None
 
-    highs_all = df["high"].astype(float).values
-    lows_all = df["low"].astype(float).values
-    closes_all = df["close"].astype(float).values
+    # Choose lookback in optimal 140–250 range
+    lookback = min(n_all, max(140, min(240, n_all)))
+    frame = df.tail(lookback).copy().reset_index(drop=True)
+    n = len(frame)
 
-    # 1. Smart Lookback Selection (140 to 260 bars):
-    # Scan recent windows to identify where the dominant pattern originated.
-    best_pat = None
+    highs = frame["high"].astype(float).values
+    lows = frame["low"].astype(float).values
+    closes = frame["close"].astype(float).values
+
+    log_h = np.log10(np.clip(highs, 1e-12, None))
+    log_l = np.log10(np.clip(lows, 1e-12, None))
+    log_c = np.log10(np.clip(closes, 1e-12, None))
+
+    # 1. Identify start pivot peak in the first 45% of the window
+    pk_scan_end = max(10, int(n * 0.45))
+    pk_idx = int(np.argmax(log_h[:pk_scan_end]))
+    tr_scan_end = max(10, int(n * 0.45))
+    tr_idx = int(np.argmin(log_l[:tr_scan_end]))
+
+    # Default to downward structure (most common in spot macro)
+    x0 = float(pk_idx)
+    y0 = float(log_h[pk_idx])
+
+    # Fit upper resistance line from peak through subsequent swing highs
+    best_up = None
     best_score = -1e9
+    min_dist = max(12, int((n - pk_idx) * 0.18))
 
-    # Test candidate pattern window sizes from 60 to 230 bars
-    step = 10
-    min_win = 60
-    max_win = min(240, n_all - 5)
+    for x1 in range(pk_idx + min_dist, n - 3):
+        y1 = float(log_h[x1])
+        if y1 >= y0:
+            continue
+        slope = (y1 - y0) / (x1 - x0)
+        ic = y0 - slope * x0
 
-    for win_len in range(min_win, max_win + 1, step):
-        sub_df = df.tail(win_len).reset_index(drop=True)
-        w_n = len(sub_df)
-        w_h = sub_df["high"].astype(float).values
-        w_l = sub_df["low"].astype(float).values
-        w_c = sub_df["close"].astype(float).values
+        xs = np.arange(pk_idx, n)
+        u_vals = slope * xs + ic
 
-        log_h = np.log10(np.clip(w_h, 1e-12, None))
-        log_l = np.log10(np.clip(w_l, 1e-12, None))
-        log_c = np.log10(np.clip(w_c, 1e-12, None))
+        cuts = np.sum(log_h[pk_idx:n-2] > u_vals[:-2] + 0.018)
+        if cuts > 2:
+            continue
+        diffs = np.abs(log_h[pk_idx:n-2] - u_vals[:-2])
+        touches = np.sum(diffs <= 0.028)
+        if touches < 2:
+            continue
 
-        # Peak and trough in the first 65% of the test window
-        pk_scan_end = max(10, int(w_n * 0.65))
-        pk_idx = int(np.argmax(log_h[:pk_scan_end]))
-        tr_idx = int(np.argmin(log_l[:pk_scan_end]))
+        score = touches * 35.0 + (x1 - x0) * 0.5 - cuts * 70.0
+        if score > best_score:
+            best_score = score
+            best_up = {"slope": slope, "intercept": ic, "x0": x0}
 
-        # --- A. Test Downward Structures (Falling Wedge / Descending Channel) ---
-        if pk_idx < w_n - 15:
-            x0 = float(pk_idx)
-            y0 = float(log_h[pk_idx])
+    if not best_up:
+        sub_highs = log_h[pk_idx + min_dist:n - 2]
+        if len(sub_highs) > 0:
+            x1 = pk_idx + min_dist + int(np.argmax(sub_highs))
+        else:
+            x1 = n - 5
+        slope = (float(log_h[int(x1)]) - y0) / max(1.0, float(x1) - x0)
+        best_up = {"slope": slope, "intercept": y0 - slope * x0, "x0": x0}
 
-            # Find second swing high
-            high_rem = log_h[pk_idx + 8: w_n - 2]
-            if len(high_rem) >= 5:
-                x1 = float(pk_idx + 8 + int(np.argmax(high_rem)))
-                y1 = float(log_h[int(x1)])
+    up_s = float(best_up["slope"])
+    up_ic = float(best_up["intercept"])
 
-                if y1 < y0:
-                    up_s = (y1 - y0) / (x1 - x0)
-                    up_ic = y0 - up_s * x0
+    # 2. Fit lower line & channel geometry
+    xs = np.arange(int(best_up["x0"]), n)
+    u_vals = up_s * xs + up_ic
+    diffs_low = u_vals - log_l[int(best_up["x0"]):]
+    valid_diffs = diffs_low[diffs_low > 0]
 
-                    # Fit lower line
-                    lo_scan = log_l[pk_idx: w_n - 2]
-                    lx0 = float(pk_idx + int(np.argmin(lo_scan[:max(6, len(lo_scan)//2)])))
-                    ly0 = float(log_l[int(lx0)])
+    # Measure swing lows after peak
+    lo_pk = int(best_up["x0"]) + int(np.argmin(log_l[int(best_up["x0"]): int(best_up["x0"]) + max(8, (n - int(best_up["x0"]))//2)]))
+    lx0, ly0 = float(lo_pk), float(log_l[lo_pk])
 
-                    lo_rem2 = log_l[int(lx0) + 8: w_n - 1]
-                    if len(lo_rem2) >= 5:
-                        lx1 = float(int(lx0) + 8 + int(np.argmin(lo_rem2)))
-                        ly1 = float(log_l[int(lx1)])
-                        lo_s = (ly1 - ly0) / (lx1 - lx0)
-                        lo_ic = ly0 - lo_s * lx0
+    # Default: Parallel Descending Channel
+    ch_w = float(np.percentile(valid_diffs, 95.0)) if len(valid_diffs) > 0 else 0.35
+    best_lo_s = up_s
+    best_lo_ic = up_ic - ch_w
+    pat_name = "Descending Channel"
+    direction = "LONG"
 
-                        # Check sanity
-                        xs = np.arange(pk_idx, w_n)
-                        u_vals = up_s * xs + up_ic
-                        l_vals = lo_s * xs + lo_ic
+    # Check for converging Falling Wedge
+    for lx1 in range(lo_pk + 12, n - 2):
+        ly1 = float(log_l[lx1])
+        s_cand = (ly1 - ly0) / (lx1 - lx0)
+        # Converging: lower slope is noticeably less steep than upper slope
+        if up_s < s_cand < 0 and (s_cand - up_s) >= 0.00045:
+            ic_cand = ly0 - s_cand * lx0
+            l_vals = s_cand * xs + ic_cand
+            cuts_under = np.sum(log_l[int(best_up["x0"]):] < l_vals - 0.02)
+            if cuts_under <= 2 and np.all(u_vals > l_vals):
+                best_lo_s = s_cand
+                best_lo_ic = ic_cand
+                pat_name = "Falling Wedge"
+                break
 
-                        # Ensure lower line is below upper line throughout
-                        if np.all(u_vals > l_vals):
-                            cuts_up = int(np.sum(log_h[pk_idx:w_n-3] > u_vals[:-3] + 0.022))
-                            cuts_lo = int(np.sum(log_l[pk_idx:w_n-3] < l_vals[:-3] - 0.022))
-
-                            if cuts_up <= 2 and cuts_lo <= 2:
-                                # Determine pattern classification
-                                diff_slopes = up_s - lo_s
-                                if up_s < lo_s < 0:
-                                    pat_name = "Falling Wedge"
-                                elif up_s < 0 and lo_s < 0 and abs(diff_slopes) < 0.0006:
-                                    pat_name = "Descending Channel"
-                                else:
-                                    pat_name = "Falling Wedge"
-
-                                # Check for bull flag: strong preceding rise in previous 30 bars
-                                if pk_idx >= 15:
-                                    pre_rise = (w_h[pk_idx] - np.min(w_l[:pk_idx])) / max(1e-6, np.min(w_l[:pk_idx]))
-                                    if pre_rise >= 0.35 and (w_n - pk_idx) <= 75:
-                                        pat_name = "Bull Flag"
-
-                                score = (w_n - pk_idx) * 2.0 - (cuts_up + cuts_lo) * 40.0
-                                if score > best_score:
-                                    best_score = score
-                                    best_pat = {
-                                        "win_len": win_len,
-                                        "pat_name": pat_name,
-                                        "direction": "LONG",
-                                        "upper": {"x0": x0, "slope": up_s, "intercept": up_ic},
-                                        "lower": {"x0": lx0, "slope": lo_s, "intercept": lo_ic},
-                                        "frame": sub_df
-                                    }
-
-        # --- B. Test Upward Structures (Rising Wedge / Ascending Channel) ---
-        if tr_idx < w_n - 15:
-            lx0 = float(tr_idx)
-            ly0 = float(log_l[tr_idx])
-
-            lo_rem = log_l[tr_idx + 8: w_n - 2]
-            if len(lo_rem) >= 5:
-                lx1 = float(tr_idx + 8 + int(np.argmin(lo_rem)))
-                ly1 = float(log_l[int(lx1)])
-
-                if ly1 > ly0:
-                    lo_s = (ly1 - ly0) / (lx1 - lx0)
-                    lo_ic = ly0 - lo_s * lx0
-
-                    hi_scan = log_h[tr_idx: w_n - 2]
-                    x0 = float(tr_idx + int(np.argmax(hi_scan[:max(6, len(hi_scan)//2)])))
-                    y0 = float(log_h[int(x0)])
-
-                    hi_rem2 = log_h[int(x0) + 8: w_n - 1]
-                    if len(hi_rem2) >= 5:
-                        x1 = float(int(x0) + 8 + int(np.argmax(hi_rem2)))
-                        y1 = float(log_h[int(x1)])
-                        up_s = (y1 - y0) / (x1 - x0)
-                        up_ic = y0 - up_s * x0
-
-                        xs = np.arange(tr_idx, w_n)
-                        u_vals = up_s * xs + up_ic
-                        l_vals = lo_s * xs + lo_ic
-
-                        if np.all(u_vals > l_vals):
-                            cuts_up = int(np.sum(log_h[tr_idx:w_n-3] > u_vals[:-3] + 0.022))
-                            cuts_lo = int(np.sum(log_l[tr_idx:w_n-3] < l_vals[:-3] - 0.022))
-
-                            if cuts_up <= 2 and cuts_lo <= 2:
-                                if lo_s > up_s > 0:
-                                    pat_name = "Rising Wedge"
-                                    direction = "SHORT"
-                                else:
-                                    pat_name = "Ascending Channel"
-                                    direction = "LONG" if w_c[-1] > l_vals[-1] else "SHORT"
-
-                                score = (w_n - tr_idx) * 2.0 - (cuts_up + cuts_lo) * 40.0
-                                if score > best_score:
-                                    best_score = score
-                                    best_pat = {
-                                        "win_len": win_len,
-                                        "pat_name": pat_name,
-                                        "direction": direction,
-                                        "upper": {"x0": x0, "slope": up_s, "intercept": up_ic},
-                                        "lower": {"x0": lx0, "slope": lo_s, "intercept": lo_ic},
-                                        "frame": sub_df
-                                    }
-
-    if not best_pat:
-        # Fallback to macro channel
-        lookback = min(n_all, 180)
-        sub_df = df.tail(lookback).reset_index(drop=True)
-        w_n = len(sub_df)
-        w_h = sub_df["high"].astype(float).values
-        w_l = sub_df["low"].astype(float).values
-        pk = int(np.argmax(w_h[:int(w_n * 0.7)]))
-        up_s = (np.log10(w_h[-5]) - np.log10(w_h[pk])) / max(1.0, w_n - 5 - pk)
-        up_ic = np.log10(w_h[pk]) - up_s * pk
-        lo_s = up_s
-        lo_ic = np.log10(np.min(w_l[pk:])) - lo_s * pk
-        best_pat = {
-            "win_len": lookback,
-            "pat_name": "Parallel Channel",
-            "direction": "LONG",
-            "upper": {"x0": float(pk), "slope": up_s, "intercept": up_ic},
-            "lower": {"x0": float(pk), "slope": lo_s, "intercept": lo_ic},
-            "frame": sub_df
-        }
-
-    frame = best_pat["frame"]
-    fn = len(frame)
-    up = best_pat["upper"]
-    lo = best_pat["lower"]
-    direction = best_pat["direction"]
+    # Check for Bull Flag: sharp preceding impulse before peak
+    if pk_idx >= 15:
+        pre_rise = (highs[pk_idx] - np.min(lows[:pk_idx])) / max(1e-6, np.min(lows[:pk_idx]))
+        if pre_rise >= 0.40 and (n - pk_idx) <= 85:
+            pat_name = "Bull Flag"
 
     # Compute breakout level and measured move
-    up_at_end = float(10.0 ** (up["slope"] * (fn - 1) + up["intercept"]))
-    lo_at_end = float(10.0 ** (lo["slope"] * (fn - 1) + lo["intercept"]))
+    up_at_end = float(10.0 ** (up_s * (n - 1) + up_ic))
+    lo_at_end = float(10.0 ** (best_lo_s * (n - 1) + best_lo_ic))
     p_height = abs(up_at_end - lo_at_end)
 
     if direction == "LONG":
@@ -232,11 +158,11 @@ def detect_spot_macro_pattern(df: pd.DataFrame, symbol: str = "") -> dict | None
         profit_pct = (delta_price / max(1e-6, p_break)) * 100.0
 
     return {
-        "name": best_pat["pat_name"],
+        "name": pat_name,
         "direction": direction,
         "frame": frame,
-        "upper": up,
-        "lower": lo,
+        "upper": {"x0": best_up["x0"], "slope": up_s, "intercept": up_ic},
+        "lower": {"x0": lx0, "slope": best_lo_s, "intercept": best_lo_ic},
         "break_price": float(p_break),
         "target_price": float(p_target),
         "delta_price": float(delta_price),
@@ -246,8 +172,9 @@ def detect_spot_macro_pattern(df: pd.DataFrame, symbol: str = "") -> dict | None
 
 def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = False) -> bytes:
     """
-    Render the definitive VIVA SIGNALS PRO Spot Chart:
-    - Smart framing (140-260 bars) adapting to the identified pattern.
+    Render the definitive VIVA SIGNALS PRO Spot Chart with exact CryptoCove geometry:
+    - Tight Y limits (minimal headroom/footroom so candles stand tall and clear).
+    - Tight X limits (only 25 future bars for target box).
     - Official Viva Signals Pro watermark in center (NO symbol text over the logo).
     - Clear header information (Symbol, Timeframe, Pattern name, Log scale).
     - Precise target measurement box (green for bullish breakouts, red for bearish breakdowns).
@@ -292,20 +219,20 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     ax.set_yscale('log')
     ax.grid(True, which='both', color='#D5D0C5', linestyle='-', linewidth=0.5, alpha=0.35)
 
-    # 3. Y Limits with Headroom for Target Box
+    # 3. Y Limits with Minimal Margins (Tight CryptoCove framing)
     y_min_data = float(np.min(lows))
     y_max_data = float(np.max(highs))
 
     if direction == "LONG":
-        y_min = y_min_data * 0.85
-        y_max = max(y_max_data, p_target) * 1.25
+        y_min = y_min_data * 0.95
+        y_max = max(y_max_data, p_target) * 1.07
     else:
-        y_min = min(y_min_data, p_target) * 0.85
-        y_max = y_max_data * 1.15
+        y_min = min(y_min_data, p_target) * 0.95
+        y_max = y_max_data * 1.05
 
     ax.set_ylim(y_min, y_max)
-    future = 38
-    ax.set_xlim(-2, n + future)
+    future = 26
+    ax.set_xlim(-1.5, n + future)
 
     # 4. Center Watermark: Solely Official Viva Signals Pro Logo (NO symbol text over logo!)
     logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assets', 'vivasignals-logo.png')
@@ -318,14 +245,14 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
         except Exception:
             pass
 
-    # 5. Candlesticks (TradingView emerald & coral)
+    # 5. Candlesticks (TradingView emerald & coral with generous width)
     c_up = '#26A69A'
     c_dn = '#EF5350'
-    width = 0.58
+    width = 0.62
     for i in range(n):
         o, c, h, l = opens[i], closes[i], highs[i], lows[i]
         col = c_up if c >= o else c_dn
-        ax.plot([i, i], [l, h], color=col, linewidth=1.15, zorder=3)
+        ax.plot([i, i], [l, h], color=col, linewidth=1.2, zorder=3)
         rect = patches.Rectangle((i - width/2, min(o, c)), width, max(abs(c - o), 1e-6),
                                  facecolor=col, edgecolor=col, linewidth=0.8, zorder=4)
         ax.add_patch(rect)
@@ -341,7 +268,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     y_up_s = 10.0 ** (up_s * xs_up_s + up_ic)
     ax.plot(xs_up_s, y_up_s, color='#1F2328', linewidth=2.0, zorder=5)
 
-    xs_up_d = np.linspace(n - 1, n + future - 5, 80)
+    xs_up_d = np.linspace(n - 1, n + future - 4, 60)
     y_up_d = 10.0 ** (up_s * xs_up_d + up_ic)
     ax.plot(xs_up_d, y_up_d, color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.75, zorder=5)
 
@@ -350,13 +277,13 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     y_lo_s = 10.0 ** (lo_s * xs_lo_s + lo_ic)
     ax.plot(xs_lo_s, y_lo_s, color='#1F2328', linewidth=2.0, zorder=5)
 
-    xs_lo_d = np.linspace(n - 1, n + future - 5, 80)
+    xs_lo_d = np.linspace(n - 1, n + future - 4, 60)
     y_lo_d = 10.0 ** (lo_s * xs_lo_d + lo_ic)
     ax.plot(xs_lo_d, y_lo_d, color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.75, zorder=5)
 
     # 7. Measured Move Box (Green for LONG / Red for SHORT)
     bx0 = n - 1
-    bx1 = n + 30
+    bx1 = n + 22
     bw = bx1 - bx0
     ax.hlines(p_break, bx0, bx1, colors='#1F2328', linewidth=1.4, zorder=6)
 
@@ -372,10 +299,9 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
                     zorder=7)
         ticks = int(round(delta_price * 1000)) if delta_price < 10 else int(round(delta_price))
         label_text = f'{delta_price:.4g} (+{profit_pct:.2f}%) {ticks:,}'
-        ax.text(arrow_x, p_target * 1.025, label_text,
+        ax.text(arrow_x, p_target * 1.018, label_text,
                 color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='bottom', zorder=8)
     else:
-        # Bearish breakdown box (like HYPE / ETH Rising Wedge)
         rect_box = patches.Rectangle((bx0, p_target), bw, p_break - p_target,
                                      facecolor='#E57373', edgecolor='#C62828',
                                      linewidth=1.2, alpha=0.60, zorder=5)
@@ -386,7 +312,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
                     zorder=7)
         ticks = int(round(delta_price * 1000)) if delta_price < 10 else int(round(delta_price))
         label_text = f'-{delta_price:.4g} (-{profit_pct:.2f}%) {ticks:,}'
-        ax.text(arrow_x, p_target * 0.975, label_text,
+        ax.text(arrow_x, p_target * 0.982, label_text,
                 color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='top', zorder=8)
 
     # 8. Clean Header Information (Symbol, Timeframe, Pattern Name, Log Scale)
@@ -406,7 +332,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     else:
         fig.text(0.94, 0.038, brand_name, fontsize=12, fontweight='bold', color='#1F2328', ha='right', va='center')
 
-    # 10. Clean Spines & Price Formatter
+    # 10. Clean Spines & Price Formatter (No Scientific Notation)
     ax.spines['top'].set_visible(False)
     ax.spines['left'].set_visible(False)
     ax.spines['right'].set_color('#8A857D')
