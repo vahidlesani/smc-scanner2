@@ -470,6 +470,20 @@ def fit_validated_line(
             x1, y1 = float(pool[j]["index"]), float(pool[j]["price"])
             if x1 - x0 < _min_pair:
                 continue
+
+            # ── Round 8: CLUSTER ANCHOR PIVOT LAW (ZRO-2H Fix) ──
+            # Trendlines originating from a peak/valley cluster must anchor at the
+            # absolute highest pivot high (for HIGH) or lowest low (for LOW),
+            # never an interior lower pivot in the cluster.
+            _c_rad = max(4.0, float(cfg.pivot_left))
+            if side == "HIGH":
+                if any(float(q["price"]) > y0 + 0.15 * atr for q in pool
+                       if abs(float(q["index"]) - x0) <= _c_rad):
+                    continue
+            else:
+                if any(float(q["price"]) < y0 - 0.15 * atr for q in pool
+                       if abs(float(q["index"]) - x0) <= _c_rad):
+                    continue
             # ── R64.1 LIVE-RELEVANCE (his 10-03: «این ترند بی ربط به قیمت چی
             # میکه») — a candidate whose value at the LIVE bar has drifted too
             # far from the live price is archived history, not a working trend

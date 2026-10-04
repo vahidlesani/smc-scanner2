@@ -931,9 +931,9 @@ def spot_signals_for(symbol: str, bundle) -> List:
 # the upward valid close stays the ONE confirmation (scan_spot_symbol).
 # ═══════════════════════════════════════════════════════════════════════════
 
-STAGE_RANK = {"TOUCH": 1, "NEAR_BREAK": 2, "BREAK_DOWN": 3, "CONFIRM": 4}
+STAGE_RANK = {"TOUCH": 1, "NEAR_BREAK": 2, "BREAK_DOWN": 3, "BREAK_UP": 4, "CONFIRM": 5}
 _ALERT_TTL_H = 24 * 10                      # ladder state lives ten days
-_STAGE_COOLDOWN_H = {"TOUCH": 24.0, "NEAR_BREAK": 12.0, "BREAK_DOWN": 0.0}
+_STAGE_COOLDOWN_H = {"TOUCH": 24.0, "NEAR_BREAK": 12.0, "BREAK_DOWN": 0.0, "BREAK_UP": 0.0}
 
 
 def _edges_at(pat: dict, n: int) -> tuple:
@@ -969,7 +969,10 @@ def _stage_for_pattern(pat: dict, d: pd.DataFrame, atr: float, n: int) -> Option
     eps_break = 0.10 * atr
     eps_wick = 0.25 * atr
     near = 0.30 * atr
-    # 1) a valid break DOWN is the loudest event — his «هشدار شکست هر دو جهت»
+    # 1) valid break UP or DOWN — his «هشدار شکست هر دو جهت»
+    if upper is not None and c > upper + eps_break and (c - o) >= 0.20 * atr:
+        return {"stage": "BREAK_UP", "side": "HIGH", "edge": float(upper),
+                "gap": float(c - upper)}
     if lower is not None and c < lower - eps_break and (o - c) >= 0.25 * atr:
         return {"stage": "BREAK_DOWN", "side": "LOW", "edge": float(lower),
                 "gap": float(lower - c)}

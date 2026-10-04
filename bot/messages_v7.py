@@ -2118,8 +2118,8 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
     # demoted to a SOFT far clip — the window frames the region where the
     # trends/patterns actually live. Overlays stay IN FULL; the recent block
     # never clips.
-    _deep64 = (int(bars or 0) > 240) or (
-        int(bars or 0) > 110 and span >= 5.0 * max(r_span, 1e-12))
+    _deep64 = (not log_space) and ((int(bars or 0) > 240) or (
+        int(bars or 0) > 110 and span >= 5.0 * max(r_span, 1e-12)))
     if _deep64:
         _reach64 = 2.6 * max(r_span, 4.0 * _a)
         _flo64 = max(c_lo, r_mid - _reach64)
@@ -2362,29 +2362,29 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # re-fit instead of stretching the zoom over a month of candles.
         except Exception:
             pass
-        # R62-ARENA SMART ZOOM (Viva 09-30: «زوم هوشمند که الگو بهترین دیده
-        # بشه و ابزار لانگ/شورت در تأیید له نشه»): inside the dictated density
-        # band (≥70% of the r52 count) the window drops its oldest bars when
-        # an old swing would crush the trade tool — never past the pattern's
-        # own anchors, never below the band. Candles stay hard bounds (r40).
-        try:
-            _lookback = _r62_tool_fit_lookback(df, candidate, int(_lookback), bool(confirmed))
-        except Exception:
-            pass
-        # R65 FOCUS ZOOM (Viva 10-02: «زوم رو درست کن … روی ارتفاع کندل‌ها
-        # دقت بشه»): a 300-bar frame that carries one old capitulation low
-        # leaves the live block tiny in the top corner of the axis (BTC 30m
-        # probe: candles filled 57%, recent block at 70% height). The frame is
-        # shortened — never past the pattern's own anchors, never below the
-        # floor — until the recent block + pattern + tool own ≥65% of the
-        # candle box. Candles stay hard bounds (r40).
-        try:
-            from analysis.candle_counts import candle_count as _cc65
-            _lookback = _r65_focus_window(
-                df, candidate, int(_lookback), bool(confirmed),
-                max_n=_cc65(str(_chart_tf), int(_lookback)))
-        except Exception:
-            pass
+        if _is_spot:
+            # CryptoCove Spot Zoom Law: dynamically encompass the true macro peak (160–350 bars)
+            try:
+                _highs_all = df["high"].astype(float).to_numpy()
+                _n_all = len(df)
+                _search_lim = max(15, int(_n_all * 0.85))
+                _peak_idx = int(np.argmax(_highs_all[:_search_lim]))
+                _bars_from_peak = _n_all - _peak_idx
+                _lookback = min(_n_all, max(180, _bars_from_peak + 25))
+            except Exception:
+                _lookback = min(len(df), 320)
+        else:
+            try:
+                _lookback = _r62_tool_fit_lookback(df, candidate, int(_lookback), bool(confirmed))
+            except Exception:
+                pass
+            try:
+                from analysis.candle_counts import candle_count as _cc65
+                _lookback = _r65_focus_window(
+                    df, candidate, int(_lookback), bool(confirmed),
+                    max_n=_cc65(str(_chart_tf), int(_lookback)))
+            except Exception:
+                pass
         frame = _clean_render_frame(df, window=_lookback)
         if getattr(_clean_render_frame, "dropped_dead_rows", False):
             # r58: the frozen zoom was computed over dead data — discard it so
@@ -2698,8 +2698,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # r58: an update chart is analysis, not a trade — no POI/entry band
         # (Viva: «آپدیت‌ها هم با چارت زنده» + spot no-trade-tools r37), so its
         # chip can never sit on the live candles.
-        if (candidate.metadata or {}).get("update_event"):
-            zone_start = None
+        if (candidate.metadata or {}).get("update_event") or _is_spot:
+            zone_start = None  # CryptoCove Law: NO POI / DEMAND / ENTRY boxes on spot!
         _dir_key = "LONG" if candidate.direction == "LONG" else "SHORT"
         _poi = str((candidate.metadata or {}).get("poi_type") or "").upper()
         _fam = _zone_family(_poi)
@@ -3035,7 +3035,39 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # refit may return nothing → zones with zero structure lines. Any
         # missing side is fitted on THIS frame (the trigger-TF chart). The
         # VIVA_TLBREAK shell guarantees its own two edges downstream.
-        if str((candidate.metadata or {}).get("strategy_variant") or "") != "VIVA_TLBREAK":
+        # R68 (CryptoCove Spot Signature): For SPOT charts, use the dedicated
+        # spot macro pattern engine (Falling Wedge / Channel) instead of
+        # random crossed last resort edges!
+        if _is_spot:
+            try:
+                from analysis.spot_pattern_engine import detect_spot_macro_pattern as _dsmp68
+                _smp68 = _dsmp68(frame)
+                if _smp68 and _smp68.get("upper") and _smp68.get("lower"):
+                    _up68 = _smp68["upper"]
+                    _lo68 = _smp68["lower"]
+                    _kind68 = _smp68.get("pattern", "WEDGE_FALLING")
+                    fa_names = {
+                        "WEDGE_FALLING": "وج نزولی",
+                        "CHANNEL": "کانال نزولی",
+                        "TRIANGLE_DESCENDING": "مثلث نزولی",
+                        "TRIANGLE_SYMMETRICAL": "مثلث متقارن",
+                    }
+                    _draw_pats = [{
+                        "type": _kind68,
+                        "lines": [_up68, _lo68],
+                        "name": _kind68,
+                        "name_fa": fa_names.get(_kind68, "وج نزولی"),
+                        "shape": "converging" if _kind68 != "CHANNEL" else "parallel",
+                        "target_price": _smp68.get("target_price"),
+                    }]
+                    if candidate.metadata is None:
+                        candidate.metadata = {}
+                    if _smp68.get("target_price"):
+                        candidate.metadata["spot_box_top"] = float(_smp68["target_price"])
+            except Exception as _e_smp:
+                print(f"spot macro pattern engine warning: {_e_smp}")
+
+        if not _is_spot and str((candidate.metadata or {}).get("strategy_variant") or "") != "VIVA_TLBREAK":
             _has_up61 = any(_ln.get("side") == "HIGH"
                             for _p61 in _draw_pats for _ln in (_p61.get("lines") or []))
             _has_lo61 = any(_ln.get("side") == "LOW"
@@ -3210,8 +3242,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             frame.index, pd.Timestamp(str(_pt8[0].get("ts")))))
                     _ic8 = float(_pt8[0].get("price")) - _sl8 * _x0f
                 else:
-                    _x0f = max(0.0, (float(_ln0.get("x0", 0))
-                                     - max(0, len(df) - len(frame))) * _tfscale)
+                    if _is_spot:
+                        _x0f = max(0.0, float(_ln0.get("x0", 0)))
+                    else:
+                        _x0f = max(0.0, (float(_ln0.get("x0", 0))
+                                         - max(0, len(df) - len(frame))) * _tfscale)
                     _ic8 = float(_ln0["intercept"])
                 _ln8 = {**_ln0, "slope": _sl8, "intercept": _ic8, "x0": _x0f}
                 # R16 phase 3: a log-calibrated line rescales in LOG space
@@ -3393,13 +3428,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 try:
                     _atrB8 = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
                     _lcB8 = float(frame["close"].iloc[-1])
-                    _upB8 = max(float(_lns[0]["slope"]) * (count - 1) + float(_lns[0]["intercept"]),
-                                float(_lns[1]["slope"]) * (count - 1) + float(_lns[1]["intercept"]))
-                    if _atrB8 > 0 and _upB8 - _lcB8 > 1.2 * _atrB8:
+                    def _eval_tmp(ln, x_val):
+                        if ln.get("log_fit") and "log_slope" in ln:
+                            return 10.0 ** (float(ln["log_slope"]) * x_val + float(ln["log_intercept"]))
+                        return float(ln["slope"]) * x_val + float(ln["intercept"])
+                    _upB8 = max(_eval_tmp(_lns[0], count - 1), _eval_tmp(_lns[1], count - 1))
+                    # Allow target box whenever price is near or breaking the pattern
+                    if _atrB8 > 0 and (_upB8 - _lcB8 > 1.2 * _atrB8 and not (candidate.metadata or {}).get("is_spot")):
                         _spot8_box = False
                 except Exception:
                     pass
-            if _spot8_box and len(_lns) == 2 and not any(_flat8) and not any(_brk8):
+            if _spot8_box and len(_lns) == 2 and not any(_flat8):
                 # CryptoCove measured-move box: pattern height projected from
                 # the live price into the future panel — translucent green,
                 # double-arrow spine, small value label on top.
@@ -3416,52 +3455,42 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # the box crawl under price) and projects UP to the
                     # structural target. No arrow inside it.
                     _lc8 = float(frame["close"].iloc[-1])
+                    def _eval_ln8(ln, x_val):
+                        if ln.get("log_fit") and "log_slope" in ln:
+                            return 10.0 ** (float(ln["log_slope"]) * x_val + float(ln["log_intercept"]))
+                        return float(ln["slope"]) * x_val + float(ln["intercept"])
                     _up8 = max(float(_a8["slope"]) * (count - 1) + float(_a8["intercept"]),
-                               float(_b8["slope"]) * (count - 1) + float(_b8["intercept"]))
-                    _h8 = abs(float(_a8["slope"]) * (count - 1) + float(_a8["intercept"])
-                              - (float(_b8["slope"]) * (count - 1) + float(_b8["intercept"])))
+                               float(_b8["slope"]) * (count - 1) + float(_b8["intercept"])) if not (_a8.get("log_fit") or _b8.get("log_fit")) else max(_eval_ln8(_a8, count - 1), _eval_ln8(_b8, count - 1))
                     _sbt8 = float((candidate.metadata or {}).get("spot_box_top") or 0.0)
-                    _bt8 = _up8
-                    _tp8 = max(_sbt8, _lc8 + _h8, _bt8 * 1.004)
+                    _bt8 = _up8  # CryptoCove Law 5: anchored EXACTLY on upper trendline
+                    _tp8 = max(_sbt8, _bt8 * 1.15)
                     if _tp8 > _bt8 and _lc8 > 0:
                         _h8 = _tp8 - _bt8
-                        # r37: NO panel clamp — the smart zoom now reserves
-                        # room for spot_box_top, so the box renders WHOLE (the
-                        # old clamp squashed it into a 2% sliver).
-                        _clamp8 = False
-                        _label_clamp8 = False
-                        _bx0, _bx1 = count + 2, count + 2 + max(8, int(future * 0.55))
-                        # Viva 09-23 polish: a box riding the chart's top edge
-                        # keeps its value label INSIDE (va="top") — the label
-                        # used to clip at the axes top.
-                        # «باکس نصفش رو نزن» — a box sliced by the panel top is
-                        # re-anchored DOWN so the whole box stays visible; the
-                        # measured % label rides its top edge INSIDE the panel.
-                        _hi8p = float(frame["high"].max())
-                        _lo8p = float(frame["low"].min())
-                        _rng8l = (_hi8p - _lo8p) or 1.0
-                        if _tp8 > _hi8p + 0.02 * _rng8l and _bt8 < _hi8p:
-                            _shift8 = _tp8 - (_hi8p - 0.03 * _rng8l)
-                            _bt8 -= _shift8
-                            _tp8 -= _shift8
-                        _va8l, _yy8l = "bottom", _tp8
-                        if _tp8 > _hi8p - 0.05 * _rng8l:
-                            _va8l, _yy8l = "top", _tp8 - 0.014 * _rng8l
+                        # r37: NO panel clamp — the smart zoom now reserves room for spot_box_top
+                        _bx0, _bx1 = count + 1, count + 1 + max(8, int(future * 0.50))
+                        # Render CryptoCove translucent green target box
                         ax.fill_between([_bx0, _bx1], _bt8, _tp8,
-                                        color=CHART_THEME["demand"],
-                                        alpha=0.30, linewidth=0, zorder=2)
+                                        color="#4CAF50",
+                                        alpha=0.35, linewidth=0, zorder=2)
                         ax.plot([_bx0, _bx0, _bx1, _bx1, _bx0],
                                 [_bt8, _tp8, _tp8, _bt8, _bt8],
-                                color=CHART_THEME["demand"], linewidth=0.7,
-                                alpha=0.55, zorder=3)
+                                color="#388E3C", linewidth=1.2,
+                                alpha=0.85, zorder=3)
                         _mx8 = (_bx0 + _bx1) / 2
-                        # r37: NO arrow inside the spot box — «وسطش هم فلش نمیخواد»
-                        ax.text(_mx8, _yy8l if _va8l == "top" else _tp8,
-                                f"{_price(_h8)} ({_h8 / _lc8 * 100:.1f}%)",
-                                color=CHART_THEME["muted"], fontsize=6.5,
-                                ha="center",
-                                va="top" if (_clamp8 or _va8l == "top") else "bottom",
-                                zorder=9)
+                        # CryptoCove vertical target arrow inside the box
+                        # r37: NO arrow inside the spot box (legacy)
+                        try:
+                            ax.annotate("", xy=(_mx8, _tp8), xytext=(_mx8, _bt8),
+                                        arrowprops=dict(arrowstyle="->", color="#2E7D32", lw=1.6, mutation_scale=12),
+                                        zorder=6)
+                        except Exception:
+                            pass
+                        # CryptoCove profit percentage label at the top
+                        _pct_gain = (_tp8 / _bt8 - 1.0) * 100.0
+                        ax.text(_mx8, _tp8 * 1.02,
+                                f"+{_pct_gain:.1f}%",
+                                color="#1B5E20", fontsize=8.5, fontweight="bold",
+                                ha="center", va="bottom", zorder=9)
                 except Exception:
                     pass
             elif _spot8_box and _lns and str((candidate.metadata or {}).get("engine") or "") == "SPOT":
@@ -3995,14 +4024,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _pmin = float(frame["low"].min())
                     _pmax = float(frame["high"].max())
                     x0 = min(xs)
-                    if md.get("tc_clean"):
-                        # r28 (his «ترندهای احمقانه وسط چارت»): TECHCLASSIC
-                        # pattern lines respect PIVOT LOCALITY — they start at
-                        # their own first pivot (at most 15% of the pivot span
-                        # of lead-in), never as a chart-edge diagonal crossing
-                        # the whole tape (the RENDER 4H «X»). TLBREAK keeps its
-                        # full-frame edge law — it is the setup he trusts here.
-                        x0 = max(0.0, min(xs) - 0.15 * max(1.0, max(xs) - min(xs)))
+                    if md.get("tc_clean") or _is_spot:
+                        # Spot macro patterns and clean classical shapes start at their own first pivot
+                        x0 = max(0.0, min(xs) - 0.03 * max(1.0, max(xs) - min(xs)))
                     elif abs(slope) > 1e-12:
                         _xa = _fx9(_pmax)
                         _xb = _fx9(_pmin)
@@ -4307,7 +4331,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 if _is_spot:
                     _sbt28 = float((candidate.metadata or {}).get("spot_box_top") or 0.0)
                     if _sbt28 > 0:
-                        _ovs28.append(_sbt28)
+                        _ovs28.append(_sbt28 * 1.18)
                 # r59 (his quality law: «انجین … زوم و محور قیمت و زمان رو بالا
                 # و پایین بکنه در بهترین حالت الگوها و ترندها رو رسم بکنه») —
                 # the far-blue major frames the window too, clamped so a
@@ -4344,8 +4368,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # squashed by isolated extreme outlier spike wicks.
                     _p1_64 = float(np.percentile(_ll64, 1.0))
                     _p99_64 = float(np.percentile(_lh64, 99.0))
-                    _c_lo64 = max(float(_ll64.min()), _p1_64 - 2.5 * _u64)
-                    _c_hi64 = min(float(_lh64.max()), _p99_64 + 2.5 * _u64)
+                    if _is_spot:
+                        _c_lo64 = float(_ll64.min()) - 0.05 * abs(float(_lh64.max()) - float(_ll64.min()))
+                        _c_hi64 = float(_lh64.max())
+                    else:
+                        _c_lo64 = max(float(_ll64.min()), _p1_64 - 2.5 * _u64)
+                        _c_hi64 = min(float(_lh64.max()), _p99_64 + 2.5 * _u64)
                     _w64 = _smart_y_window(
                         _c_lo64, _c_hi64, _u64,
                         min(_ovl64) if _ovl64 else None, max(_ovl64) if _ovl64 else None,

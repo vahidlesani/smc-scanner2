@@ -518,15 +518,15 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                 if same_dir and 0 < _g1 < _g0:
                     shape = "WEDGE_FALLING" if gu["slope"] < 0 else "WEDGE_RISING"
             if shape not in ("NONE", ""):
-                # a pattern price has ALREADY LEFT is history, not a live
-                # pattern (Viva 09-17: no dead-leg wedges floating over
-                # price) — demote to two honest trendlines instead.
+                # R68: A pattern that has FRESHLY BROKEN OUT is the very trade to show
+                # (CryptoCove breakout signature) — do not kill the shape on a fresh break!
+                # Only demote if price has drifted astronomically far (>6.0×ATR) away.
                 _a = _atr(df)
                 _c = float(df["close"].iloc[-1])
                 _u = line_y(gu, n)
                 _l = line_y(gl, n)
-                if _a > 0 and (_c > max(_u, _l) + 0.75 * _a
-                               or _c < min(_u, _l) - 0.75 * _a):
+                if _a > 0 and (_c > max(_u, _l) + 6.0 * _a
+                               or _c < min(_u, _l) - 4.0 * _a):
                     shape = "NONE"
             if shape not in ("NONE", ""):
                 out.append({"type": str(shape), "lines": [gu, gl]})

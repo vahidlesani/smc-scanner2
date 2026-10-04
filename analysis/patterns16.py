@@ -356,9 +356,34 @@ def detect_flag_pennant(df, atr_v: float, pole_bars: int = 12,
             return out
         kind, end, mid, width = best
         neckline = float(mid)
-        lines = [{"side": "HIGH", "slope": 0.0, "intercept": float(mid + width / 2.0),
+        flag_xs = np.arange(end, n)
+        flag_h = high[end:]
+        flag_l = low[end:]
+        if len(flag_xs) >= 3:
+            s_up, ic_up = np.polyfit(flag_xs, flag_h, 1)
+            s_lo, ic_lo = np.polyfit(flag_xs, flag_l, 1)
+            if "FLAG_BULL" in kind:
+                # Bull flag tilts down against the upward impulse
+                avg_slope = min(s_up, s_lo, -0.02 * atr_v)
+                s_up = avg_slope
+                s_lo = avg_slope
+            elif "FLAG_BEAR" in kind:
+                avg_slope = max(s_up, s_lo, 0.02 * atr_v)
+                s_up = avg_slope
+                s_lo = avg_slope
+            # Anchor upper line on top of flag highs
+            up_vals = s_up * flag_xs + ic_up
+            ic_up += float(np.max(flag_h - up_vals))
+            # Anchor lower line to bottom of flag lows
+            lo_vals = s_lo * flag_xs + ic_lo
+            ic_lo += float(np.min(flag_l - lo_vals))
+        else:
+            s_up, ic_up = 0.0, float(mid + width / 2.0)
+            s_lo, ic_lo = 0.0, float(mid - width / 2.0)
+
+        lines = [{"side": "HIGH", "slope": float(s_up), "intercept": float(ic_up),
                   "x0": int(end), "x1": int(n - 1)},
-                 {"side": "LOW", "slope": 0.0, "intercept": float(mid - width / 2.0),
+                 {"side": "LOW", "slope": float(s_lo), "intercept": float(ic_lo),
                   "x0": int(end), "x1": int(n - 1)}]
         out.append({"type": kind, "lines": lines, "neckline": neckline,
                     "pole_atr": round(abs(close[end - 1] - close[end - 1 - pole_bars]) / atr_v, 2)})
