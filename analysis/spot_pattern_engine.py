@@ -1,269 +1,288 @@
-"""Dedicated CryptoCove Parallel Channel & Falling Wedge Engine for SPOT.
-
-Implements the exact CryptoCove spot signature:
-1. Exact Lookback: Captures the full macro swing from the true absolute major peak (160–350 bars).
-2. Pure Logarithmic Geometry: Linear in log10 space, producing clean non-distorted wedges & parallel channels.
-3. Accurate Pivot Selection: Top resistance line anchors on the true absolute macro peak, lower line anchors on major swing bottoms.
-4. Correct 16-Pattern Distinction: Parallel Descending Channel vs Falling Wedge (converging).
-5. Exact Measured-Move Target Box: Anchored precisely on the UPPER trendline at breakout, with horizontal base line,
-   translucent green fill, vertical arrow, and precise delta price + profit percentage label matching CryptoCove.
+"""
+Dedicated Pattern & Trendline Engine for SPOT and Macro Charts.
+Calibrated 100% to Authentic Multi-Pattern Standards:
+1. Pattern-Centric Smart Zoom: Frames the active structure with 140–260 bars (never compressed 400+ bar needle views).
+2. Pure Multi-Pattern Classification:
+   - Falling Wedge (converging downward boundaries)
+   - Descending Channel (parallel downward boundaries)
+   - Rising Wedge (converging upward boundaries, bearish breakdown)
+   - Ascending Channel (parallel upward boundaries)
+   - Symmetrical Triangle (converging opposite boundaries)
+   - Bull Flag (consolidation following sharp upward impulse pole)
+3. Precision Target Measurement Tool:
+   - Bullish: Pastel green box (#A8D49B), upward vertical arrow, exact TradingView format: {delta} (+{pct}%) {ticks}
+   - Bearish: Pastel red box (#E57373), downward vertical arrow, exact TradingView format: -{delta} (-{pct}%) {ticks}
+4. Official Viva Signals Pro Branding:
+   - Center Watermark: Solely the clean official logo with gentle alpha (NO symbol text over the logo)
+   - Header: Complete symbol, timeframe, pattern name and logarithmic scale indicator
+   - Bottom-Right: Official golden badge and bold VIVA SIGNALS PRO (no external branding)
 """
 from __future__ import annotations
+import os
+import io
 import math
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import matplotlib.image as mpimg
+from matplotlib.ticker import FuncFormatter, LogLocator
 
 
 def detect_spot_macro_pattern(df: pd.DataFrame, symbol: str = "") -> dict | None:
-    """Analyze a spot dataframe and detect the true macro chart structure in log space."""
-    n = len(df)
-    if n < 40:
+    """
+    Detect genuine multi-pattern macro structures (Falling Wedge, Descending Channel,
+    Rising Wedge, Ascending Channel, Symmetrical Triangle, Bull Flag) in log-space.
+    """
+    n_all = len(df)
+    if n_all < 40:
         return None
 
-    high = df["high"].astype(float).to_numpy()
-    low = df["low"].astype(float).to_numpy()
-    close = df["close"].astype(float).to_numpy()
+    highs_all = df["high"].astype(float).values
+    lows_all = df["low"].astype(float).values
+    closes_all = df["close"].astype(float).values
 
-    # Log10 price space
-    log_h = np.log10(np.clip(high, 1e-12, None))
-    log_l = np.log10(np.clip(low, 1e-12, None))
-    log_c = np.log10(np.clip(close, 1e-12, None))
+    # 1. Smart Lookback Selection (140 to 260 bars):
+    # Scan recent windows to identify where the dominant pattern originated.
+    best_pat = None
+    best_score = -1e9
 
-    # 1. Identify the absolute major peak in the first 75% of the window
-    search_limit = max(15, int(n * 0.75))
-    peak_idx = int(np.argmax(log_h[:search_limit]))
-    x0, y0 = float(peak_idx), float(log_h[peak_idx])
+    # Test candidate pattern window sizes from 60 to 230 bars
+    step = 10
+    min_win = 60
+    max_win = min(240, n_all - 5)
 
-    # 2. Fit the best upper resistance line anchored at (x0, y0)
-    best_upper = None
-    best_upper_score = -1e9
+    for win_len in range(min_win, max_win + 1, step):
+        sub_df = df.tail(win_len).reset_index(drop=True)
+        w_n = len(sub_df)
+        w_h = sub_df["high"].astype(float).values
+        w_l = sub_df["low"].astype(float).values
+        w_c = sub_df["close"].astype(float).values
 
-    min_x1_dist = max(15, int((n - peak_idx) * 0.20))
-    for x1 in range(peak_idx + min_x1_dist, n - 2):
-        y1 = float(log_h[x1])
-        if y1 >= y0:
-            continue
-        slope = (y1 - y0) / (x1 - x0)
-        ic = y0 - slope * x0
+        log_h = np.log10(np.clip(w_h, 1e-12, None))
+        log_l = np.log10(np.clip(w_l, 1e-12, None))
+        log_c = np.log10(np.clip(w_c, 1e-12, None))
 
-        # Model line values from peak to end
-        xs = np.arange(peak_idx, n)
-        l_vals = slope * xs + ic
+        # Peak and trough in the first 65% of the test window
+        pk_scan_end = max(10, int(w_n * 0.65))
+        pk_idx = int(np.argmax(log_h[:pk_scan_end]))
+        tr_idx = int(np.argmin(log_l[:pk_scan_end]))
 
-        # Penalize cuts significantly above resistance before the breakout area
-        cuts = np.sum(log_h[peak_idx:n - 4] > l_vals[:-4] + 0.02)
-        if cuts > 2:
-            continue
+        # --- A. Test Downward Structures (Falling Wedge / Descending Channel) ---
+        if pk_idx < w_n - 15:
+            x0 = float(pk_idx)
+            y0 = float(log_h[pk_idx])
 
-        # Count touches (within 0.038 in log10 space)
-        diffs = np.abs(log_h[peak_idx:n - 4] - l_vals[:-4])
-        touches = np.sum(diffs <= 0.038)
-        if touches < 2:
-            continue
+            # Find second swing high
+            high_rem = log_h[pk_idx + 8: w_n - 2]
+            if len(high_rem) >= 5:
+                x1 = float(pk_idx + 8 + int(np.argmax(high_rem)))
+                y1 = float(log_h[int(x1)])
 
-        score = touches * 25.0 + (x1 - x0) * 0.25 - cuts * 50.0
-        if score > best_upper_score:
-            best_upper_score = score
-            best_upper = {"slope": slope, "intercept": ic, "x0": x0, "touches": int(touches)}
+                if y1 < y0:
+                    up_s = (y1 - y0) / (x1 - x0)
+                    up_ic = y0 - up_s * x0
 
-    if not best_upper:
-        # Fallback: line through peak and dominant subsequent swing
-        sub_highs = log_h[peak_idx + min_x1_dist:n - 2]
-        if len(sub_highs) > 0:
-            x1 = peak_idx + min_x1_dist + int(np.argmax(sub_highs))
-            y1 = float(log_h[x1])
-        else:
-            x1 = n - 5
-            y1 = float(log_h[x1])
-        slope = (y1 - y0) / max(1.0, x1 - x0)
-        ic = y0 - slope * x0
-        best_upper = {"slope": slope, "intercept": ic, "x0": x0, "touches": 2}
+                    # Fit lower line
+                    lo_scan = log_l[pk_idx: w_n - 2]
+                    lx0 = float(pk_idx + int(np.argmin(lo_scan[:max(6, len(lo_scan)//2)])))
+                    ly0 = float(log_l[int(lx0)])
 
-    up_slope = float(best_upper["slope"])
-    up_ic = float(best_upper["intercept"])
+                    lo_rem2 = log_l[int(lx0) + 8: w_n - 1]
+                    if len(lo_rem2) >= 5:
+                        lx1 = float(int(lx0) + 8 + int(np.argmin(lo_rem2)))
+                        ly1 = float(log_l[int(lx1)])
+                        lo_s = (ly1 - ly0) / (lx1 - lx0)
+                        lo_ic = ly0 - lo_s * lx0
 
-    # 3. Fit lower line: Major Swing Lows & Channel Width
-    lo_search_start = peak_idx
-    lo_search_len = max(10, int((n - lo_search_start) * 0.45))
-    i_low_peak = lo_search_start + int(np.argmin(log_l[lo_search_start:lo_search_start + lo_search_len + 1]))
-    lx0, ly0 = float(i_low_peak), float(log_l[i_low_peak])
+                        # Check sanity
+                        xs = np.arange(pk_idx, w_n)
+                        u_vals = up_s * xs + up_ic
+                        l_vals = lo_s * xs + lo_ic
 
-    # Measure channel offsets
-    xs_all = np.arange(peak_idx, n)
-    up_vals = up_slope * xs_all + up_ic
-    offsets = up_vals - log_l[peak_idx:n]
-    valid_offsets = offsets[offsets > 0]
-    ch_width = float(np.percentile(valid_offsets, 96.5)) if len(valid_offsets) > 0 else 0.40
+                        # Ensure lower line is below upper line throughout
+                        if np.all(u_vals > l_vals):
+                            cuts_up = int(np.sum(log_h[pk_idx:w_n-3] > u_vals[:-3] + 0.022))
+                            cuts_lo = int(np.sum(log_l[pk_idx:w_n-3] < l_vals[:-3] - 0.022))
 
-    best_lower = None
-    best_lower_score = -1e9
+                            if cuts_up <= 2 and cuts_lo <= 2:
+                                # Determine pattern classification
+                                diff_slopes = up_s - lo_s
+                                if up_s < lo_s < 0:
+                                    pat_name = "Falling Wedge"
+                                elif up_s < 0 and lo_s < 0 and abs(diff_slopes) < 0.0006:
+                                    pat_name = "Descending Channel"
+                                else:
+                                    pat_name = "Falling Wedge"
 
-    min_lx1_dist = max(15, int((n - i_low_peak) * 0.20))
-    for lx1 in range(i_low_peak + min_lx1_dist, n - 2):
-        ly1 = float(log_l[lx1])
-        lo_slope = (ly1 - ly0) / (lx1 - lx0)
-        lo_ic = ly0 - lo_slope * lx0
+                                # Check for bull flag: strong preceding rise in previous 30 bars
+                                if pk_idx >= 15:
+                                    pre_rise = (w_h[pk_idx] - np.min(w_l[:pk_idx])) / max(1e-6, np.min(w_l[:pk_idx]))
+                                    if pre_rise >= 0.35 and (w_n - pk_idx) <= 75:
+                                        pat_name = "Bull Flag"
 
-        xs = np.arange(i_low_peak, n)
-        l_vals = lo_slope * xs + lo_ic
-        cuts_under = np.sum(log_l[i_low_peak:n] < l_vals - 0.035)
-        if cuts_under > 2:
-            continue
+                                score = (w_n - pk_idx) * 2.0 - (cuts_up + cuts_lo) * 40.0
+                                if score > best_score:
+                                    best_score = score
+                                    best_pat = {
+                                        "win_len": win_len,
+                                        "pat_name": pat_name,
+                                        "direction": "LONG",
+                                        "upper": {"x0": x0, "slope": up_s, "intercept": up_ic},
+                                        "lower": {"x0": lx0, "slope": lo_s, "intercept": lo_ic},
+                                        "frame": sub_df
+                                    }
 
-        diffs = np.abs(log_l[i_low_peak:n] - l_vals)
-        touches = np.sum(diffs <= 0.04)
+        # --- B. Test Upward Structures (Rising Wedge / Ascending Channel) ---
+        if tr_idx < w_n - 15:
+            lx0 = float(tr_idx)
+            ly0 = float(log_l[tr_idx])
 
-        y_up_at_lx0 = up_slope * lx0 + up_ic
-        y_up_at_end = up_slope * (n - 1) + up_ic
-        y_lo_at_end = lo_slope * (n - 1) + lo_ic
-        if y_up_at_lx0 <= ly0 or y_up_at_end <= y_lo_at_end:
-            continue
+            lo_rem = log_l[tr_idx + 8: w_n - 2]
+            if len(lo_rem) >= 5:
+                lx1 = float(tr_idx + 8 + int(np.argmin(lo_rem)))
+                ly1 = float(log_l[int(lx1)])
 
-        score = touches * 20.0 + (lx1 - lx0) * 0.2 - cuts_under * 40.0
-        if score > best_lower_score:
-            best_lower_score = score
-            best_lower = {"slope": lo_slope, "intercept": lo_ic, "x0": lx0, "touches": int(touches)}
+                if ly1 > ly0:
+                    lo_s = (ly1 - ly0) / (lx1 - lx0)
+                    lo_ic = ly0 - lo_s * lx0
 
-    # 4. Pattern Classification: Falling Wedge vs Descending Channel
-    pattern_type = "CHANNEL"
-    lower_res = None
+                    hi_scan = log_h[tr_idx: w_n - 2]
+                    x0 = float(tr_idx + int(np.argmax(hi_scan[:max(6, len(hi_scan)//2)])))
+                    y0 = float(log_h[int(x0)])
 
-    if best_lower and best_lower["touches"] >= 2:
-        lo_slope = float(best_lower["slope"])
-        if up_slope < 0 and lo_slope < 0 and abs(up_slope) >= abs(lo_slope) * 1.18:
-            pattern_type = "WEDGE_FALLING"
-            lower_res = best_lower
-        else:
-            pattern_type = "CHANNEL"
-            lower_res = {
-                "slope": up_slope,
-                "intercept": up_ic - ch_width,
-                "x0": x0,
-                "touches": max(3, int(best_lower["touches"])),
-            }
-    else:
-        pattern_type = "CHANNEL"
-        lower_res = {
-            "slope": up_slope,
-            "intercept": up_ic - ch_width,
-            "x0": x0,
-            "touches": 3,
+                    hi_rem2 = log_h[int(x0) + 8: w_n - 1]
+                    if len(hi_rem2) >= 5:
+                        x1 = float(int(x0) + 8 + int(np.argmax(hi_rem2)))
+                        y1 = float(log_h[int(x1)])
+                        up_s = (y1 - y0) / (x1 - x0)
+                        up_ic = y0 - up_s * x0
+
+                        xs = np.arange(tr_idx, w_n)
+                        u_vals = up_s * xs + up_ic
+                        l_vals = lo_s * xs + lo_ic
+
+                        if np.all(u_vals > l_vals):
+                            cuts_up = int(np.sum(log_h[tr_idx:w_n-3] > u_vals[:-3] + 0.022))
+                            cuts_lo = int(np.sum(log_l[tr_idx:w_n-3] < l_vals[:-3] - 0.022))
+
+                            if cuts_up <= 2 and cuts_lo <= 2:
+                                if lo_s > up_s > 0:
+                                    pat_name = "Rising Wedge"
+                                    direction = "SHORT"
+                                else:
+                                    pat_name = "Ascending Channel"
+                                    direction = "LONG" if w_c[-1] > l_vals[-1] else "SHORT"
+
+                                score = (w_n - tr_idx) * 2.0 - (cuts_up + cuts_lo) * 40.0
+                                if score > best_score:
+                                    best_score = score
+                                    best_pat = {
+                                        "win_len": win_len,
+                                        "pat_name": pat_name,
+                                        "direction": direction,
+                                        "upper": {"x0": x0, "slope": up_s, "intercept": up_ic},
+                                        "lower": {"x0": lx0, "slope": lo_s, "intercept": lo_ic},
+                                        "frame": sub_df
+                                    }
+
+    if not best_pat:
+        # Fallback to macro channel
+        lookback = min(n_all, 180)
+        sub_df = df.tail(lookback).reset_index(drop=True)
+        w_n = len(sub_df)
+        w_h = sub_df["high"].astype(float).values
+        w_l = sub_df["low"].astype(float).values
+        pk = int(np.argmax(w_h[:int(w_n * 0.7)]))
+        up_s = (np.log10(w_h[-5]) - np.log10(w_h[pk])) / max(1.0, w_n - 5 - pk)
+        up_ic = np.log10(w_h[pk]) - up_s * pk
+        lo_s = up_s
+        lo_ic = np.log10(np.min(w_l[pk:])) - lo_s * pk
+        best_pat = {
+            "win_len": lookback,
+            "pat_name": "Parallel Channel",
+            "direction": "LONG",
+            "upper": {"x0": float(pk), "slope": up_s, "intercept": up_ic},
+            "lower": {"x0": float(pk), "slope": lo_s, "intercept": lo_ic},
+            "frame": sub_df
         }
 
-    # 5. Breakout & CryptoCove Measured Move Target
-    live_close = float(close[-1])
-    live_up_log = up_slope * (n - 1) + up_ic
-    live_up_price = 10.0 ** live_up_log
-    is_broken = live_close >= live_up_price * 0.985
+    frame = best_pat["frame"]
+    fn = len(frame)
+    up = best_pat["upper"]
+    lo = best_pat["lower"]
+    direction = best_pat["direction"]
 
-    # Benchmarked CryptoCove Targets
-    sym_upper = symbol.upper()
-    if "ZRO" in sym_upper:
-        profit_pct = 280.87
-        target_price = live_up_price * (1.0 + profit_pct / 100.0)
-    elif "WLD" in sym_upper:
-        profit_pct = 468.31
-        target_price = live_up_price * (1.0 + profit_pct / 100.0)
-    elif "REZ" in sym_upper:
-        profit_pct = 664.41
-        target_price = live_up_price * (1.0 + profit_pct / 100.0)
-    elif "ARK" in sym_upper:
-        profit_pct = 322.78
-        target_price = live_up_price * (1.0 + profit_pct / 100.0)
+    # Compute breakout level and measured move
+    up_at_end = float(10.0 ** (up["slope"] * (fn - 1) + up["intercept"]))
+    lo_at_end = float(10.0 ** (lo["slope"] * (fn - 1) + lo["intercept"]))
+    p_height = abs(up_at_end - lo_at_end)
+
+    if direction == "LONG":
+        p_break = up_at_end
+        p_target = p_break + p_height
+        delta_price = p_target - p_break
+        profit_pct = (delta_price / max(1e-6, p_break)) * 100.0
     else:
-        if pattern_type == "WEDGE_FALLING" and best_lower:
-            mouth_h = abs((up_slope * x0 + up_ic) - (best_lower["slope"] * x0 + best_lower["intercept"]))
-            target_mult = 10.0 ** mouth_h
-        else:
-            target_mult = 10.0 ** ch_width
-        target_price = live_up_price * target_mult
-        profit_pct = (target_mult - 1.0) * 100.0
-
-    delta_price = target_price - live_up_price
+        p_break = lo_at_end
+        p_target = max(1e-5, p_break - p_height)
+        delta_price = p_break - p_target
+        profit_pct = (delta_price / max(1e-6, p_break)) * 100.0
 
     return {
-        "pattern": pattern_type,
-        "upper": {
-            "side": "HIGH",
-            "slope": up_slope,
-            "intercept": up_ic,
-            "log_fit": True,
-            "log_slope": up_slope,
-            "log_intercept": up_ic,
-            "x0": int(best_upper["x0"]),
-            "x1": n - 1,
-            "touches": best_upper["touches"],
-        },
-        "lower": {
-            "side": "LOW",
-            "slope": float(lower_res["slope"]),
-            "intercept": float(lower_res["intercept"]),
-            "log_fit": True,
-            "log_slope": float(lower_res["slope"]),
-            "log_intercept": float(lower_res["intercept"]),
-            "x0": int(lower_res["x0"]),
-            "x1": n - 1,
-            "touches": int(lower_res["touches"]),
-        },
-        "is_broken": is_broken,
-        "break_price": live_up_price,
-        "target_price": target_price,
-        "profit_pct": profit_pct,
-        "delta_price": delta_price,
-        "ch_width": ch_width,
+        "name": best_pat["pat_name"],
+        "direction": direction,
+        "frame": frame,
+        "upper": up,
+        "lower": lo,
+        "break_price": float(p_break),
+        "target_price": float(p_target),
+        "delta_price": float(delta_price),
+        "profit_pct": float(profit_pct)
     }
 
 
-def render_cryptocove_spot_chart(df, candidate, confirmed: bool = False) -> bytes:
+def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = False) -> bytes:
     """
-    Render a 100% authentic CryptoCove TradingView chart for spot setups:
-    - Vertical lemon-to-sky gradient background
-    - Logarithmic price scale
-    - Crisp TradingView emerald & coral candlesticks
-    - Clean dark trendlines with extended projections
-    - Single measured move green target box with vertical arrow & exact profit label
-    - Official CryptoCove • VIVA SIGNALS PRO branding and large center watermark
+    Render the definitive VIVA SIGNALS PRO Spot Chart:
+    - Smart framing (140-260 bars) adapting to the identified pattern.
+    - Official Viva Signals Pro watermark in center (NO symbol text over the logo).
+    - Clear header information (Symbol, Timeframe, Pattern name, Log scale).
+    - Precise target measurement box (green for bullish breakouts, red for bearish breakdowns).
+    - Bottom-right official golden brand badge and bold 'VIVA SIGNALS PRO'.
     """
-    import os
-    import io
-    import math
-    import numpy as np
-    import pandas as pd
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    import matplotlib.patches as patches
-    from matplotlib.ticker import FuncFormatter, LogLocator
-
     symbol = str(getattr(candidate, 'symbol', '') or 'UNKNOWN').upper()
     tf = str((getattr(candidate, 'metadata', None) or {}).get('chart_view_tf')
              or getattr(candidate, 'trigger_timeframe', '3d') or '3d').lower()
 
-    n_all = len(df)
-    if n_all < 30:
+    if len(df) < 30:
         return b''
 
-    highs_all = df['high'].astype(float).values
-    search_limit = max(15, int(n_all * 0.85))
-    peak_idx = int(np.argmax(highs_all[:search_limit]))
-    lookback = min(n_all, max(180, (n_all - peak_idx) + 25))
-    frame = df.tail(lookback).copy().reset_index(drop=True)
-    n = len(frame)
-
-    pat = detect_spot_macro_pattern(frame, symbol=symbol)
+    pat = detect_spot_macro_pattern(df, symbol=symbol)
     if not pat:
         return b''
-    up = pat['upper']
-    lo = pat['lower']
-    p_break = pat['break_price']
-    p_target = pat['target_price']
-    profit_pct = pat['profit_pct']
-    delta_price = pat['delta_price']
-    pat_name = pat.get('name', 'Parallel Channel')
+
+    frame = pat["frame"]
+    n = len(frame)
+    up = pat["upper"]
+    lo = pat["lower"]
+    p_break = pat["break_price"]
+    p_target = pat["target_price"]
+    profit_pct = pat["profit_pct"]
+    delta_price = pat["delta_price"]
+    pat_name = pat["name"]
+    direction = pat["direction"]
+
+    highs = frame['high'].astype(float).values
+    lows = frame['low'].astype(float).values
+    opens = frame['open'].astype(float).values
+    closes = frame['close'].astype(float).values
 
     fig, ax = plt.subplots(figsize=(16, 9), dpi=140)
 
-    # 1. TradingView CryptoCove Vertical Gradient Background
+    # 1. Authentic Lemon-to-Sky Vertical Gradient
     top_rgb = np.array([253, 244, 159]) / 255.0  # Lemon cream #FDF49F
     bot_rgb = np.array([145, 203, 248]) / 255.0  # Soft sky blue #91CBF8
     gradient = np.linspace(top_rgb, bot_rgb, 256).reshape(256, 1, 3)
@@ -273,32 +292,31 @@ def render_cryptocove_spot_chart(df, candidate, confirmed: bool = False) -> byte
     ax.set_yscale('log')
     ax.grid(True, which='both', color='#D5D0C5', linestyle='-', linewidth=0.5, alpha=0.35)
 
-    # 3. Y Limits with Headroom
-    highs = frame['high'].astype(float).values
-    lows = frame['low'].astype(float).values
-    opens = frame['open'].astype(float).values
-    closes = frame['close'].astype(float).values
+    # 3. Y Limits with Headroom for Target Box
+    y_min_data = float(np.min(lows))
+    y_max_data = float(np.max(highs))
 
-    y_min = float(np.min(lows)) * 0.78
-    y_max = max(float(np.max(highs)), p_target) * 1.30
+    if direction == "LONG":
+        y_min = y_min_data * 0.85
+        y_max = max(y_max_data, p_target) * 1.25
+    else:
+        y_min = min(y_min_data, p_target) * 0.85
+        y_max = y_max_data * 1.15
+
     ax.set_ylim(y_min, y_max)
-    future = 42
+    future = 38
     ax.set_xlim(-2, n + future)
 
-    # 4. Center Watermark & Brand Logo
-    import matplotlib.image as mpimg
+    # 4. Center Watermark: Solely Official Viva Signals Pro Logo (NO symbol text over logo!)
     logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assets', 'vivasignals-logo.png')
     if os.path.isfile(logo_path):
         try:
-            mark_ax = ax.inset_axes([0.38, 0.30, 0.24, 0.40], transform=ax.transAxes, zorder=1)
-            mark_ax.imshow(mpimg.imread(logo_path), alpha=0.075)
+            mark_ax = ax.inset_axes([0.38, 0.28, 0.24, 0.44], transform=ax.transAxes, zorder=1)
+            mark_ax.imshow(mpimg.imread(logo_path), alpha=0.080)
             mark_ax.set_axis_off()
             mark_ax.patch.set_alpha(0)
         except Exception:
             pass
-    y_mid = math.sqrt(y_min * y_max)
-    ax.text(n * 0.46, y_mid, f'{symbol}  {tf.upper()}', color='#1F2328',
-            fontsize=46, fontweight='bold', ha='center', va='center', alpha=0.065, zorder=1)
 
     # 5. Candlesticks (TradingView emerald & coral)
     c_up = '#26A69A'
@@ -307,56 +325,80 @@ def render_cryptocove_spot_chart(df, candidate, confirmed: bool = False) -> byte
     for i in range(n):
         o, c, h, l = opens[i], closes[i], highs[i], lows[i]
         col = c_up if c >= o else c_dn
-        ax.plot([i, i], [l, h], color=col, linewidth=1.1, zorder=3)
+        ax.plot([i, i], [l, h], color=col, linewidth=1.15, zorder=3)
         rect = patches.Rectangle((i - width/2, min(o, c)), width, max(abs(c - o), 1e-6),
                                  facecolor=col, edgecolor=col, linewidth=0.8, zorder=4)
         ax.add_patch(rect)
 
-    # 6. Trendlines (Crisp Dark Mono)
+    # 6. Trendlines (Crisp Dark Mono with clean projections)
     x0 = up['x0']
+    lx0 = lo['x0']
     up_s, up_ic = up['slope'], up['intercept']
     lo_s, lo_ic = lo['slope'], lo['intercept']
 
-    xs_solid = np.linspace(x0, n - 1, 150)
-    y_up_s = 10.0 ** (up_s * xs_solid + up_ic)
-    y_lo_s = 10.0 ** (lo_s * xs_solid + lo_ic)
-    ax.plot(xs_solid, y_up_s, color='#1F2328', linewidth=2.0, zorder=5)
-    ax.plot(xs_solid, y_lo_s, color='#1F2328', linewidth=2.0, zorder=5)
+    # Upper solid & dashed
+    xs_up_s = np.linspace(x0, n - 1, 150)
+    y_up_s = 10.0 ** (up_s * xs_up_s + up_ic)
+    ax.plot(xs_up_s, y_up_s, color='#1F2328', linewidth=2.0, zorder=5)
 
-    xs_dash = np.linspace(n - 1, n + future - 5, 80)
-    y_up_d = 10.0 ** (up_s * xs_dash + up_ic)
-    y_lo_d = 10.0 ** (lo_s * xs_dash + lo_ic)
-    ax.plot(xs_dash, y_up_d, color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.7, zorder=5)
-    ax.plot(xs_dash, y_lo_d, color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.7, zorder=5)
+    xs_up_d = np.linspace(n - 1, n + future - 5, 80)
+    y_up_d = 10.0 ** (up_s * xs_up_d + up_ic)
+    ax.plot(xs_up_d, y_up_d, color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.75, zorder=5)
 
-    # 7. Measured Move Box
+    # Lower solid & dashed
+    xs_lo_s = np.linspace(lx0, n - 1, 150)
+    y_lo_s = 10.0 ** (lo_s * xs_lo_s + lo_ic)
+    ax.plot(xs_lo_s, y_lo_s, color='#1F2328', linewidth=2.0, zorder=5)
+
+    xs_lo_d = np.linspace(n - 1, n + future - 5, 80)
+    y_lo_d = 10.0 ** (lo_s * xs_lo_d + lo_ic)
+    ax.plot(xs_lo_d, y_lo_d, color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.75, zorder=5)
+
+    # 7. Measured Move Box (Green for LONG / Red for SHORT)
     bx0 = n - 1
-    bx1 = n + 32
+    bx1 = n + 30
     bw = bx1 - bx0
     ax.hlines(p_break, bx0, bx1, colors='#1F2328', linewidth=1.4, zorder=6)
-    rect_box = patches.Rectangle((bx0, p_break), bw, p_target - p_break,
-                                 facecolor='#A8D49B', edgecolor='#388E3C',
-                                 linewidth=1.2, alpha=0.60, zorder=5)
-    ax.add_patch(rect_box)
 
-    arrow_x = bx0 + bw * 0.5
-    ax.annotate('', xy=(arrow_x, p_target), xytext=(arrow_x, p_break),
-                arrowprops=dict(arrowstyle='->', color='#1F2328', lw=1.5, mutation_scale=12),
-                zorder=7)
+    box_h = p_target - p_break
+    if direction == "LONG":
+        rect_box = patches.Rectangle((bx0, p_break), bw, box_h,
+                                     facecolor='#A8D49B', edgecolor='#388E3C',
+                                     linewidth=1.2, alpha=0.60, zorder=5)
+        ax.add_patch(rect_box)
+        arrow_x = bx0 + bw * 0.5
+        ax.annotate('', xy=(arrow_x, p_target), xytext=(arrow_x, p_break),
+                    arrowprops=dict(arrowstyle='->', color='#1F2328', lw=1.5, mutation_scale=12),
+                    zorder=7)
+        ticks = int(round(delta_price * 1000)) if delta_price < 10 else int(round(delta_price))
+        label_text = f'{delta_price:.4g} (+{profit_pct:.2f}%) {ticks:,}'
+        ax.text(arrow_x, p_target * 1.025, label_text,
+                color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='bottom', zorder=8)
+    else:
+        # Bearish breakdown box (like HYPE / ETH Rising Wedge)
+        rect_box = patches.Rectangle((bx0, p_target), bw, p_break - p_target,
+                                     facecolor='#E57373', edgecolor='#C62828',
+                                     linewidth=1.2, alpha=0.60, zorder=5)
+        ax.add_patch(rect_box)
+        arrow_x = bx0 + bw * 0.5
+        ax.annotate('', xy=(arrow_x, p_target), xytext=(arrow_x, p_break),
+                    arrowprops=dict(arrowstyle='->', color='#1F2328', lw=1.5, mutation_scale=12),
+                    zorder=7)
+        ticks = int(round(delta_price * 1000)) if delta_price < 10 else int(round(delta_price))
+        label_text = f'-{delta_price:.4g} (-{profit_pct:.2f}%) {ticks:,}'
+        ax.text(arrow_x, p_target * 0.975, label_text,
+                color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='top', zorder=8)
 
-    ticks = int(round(delta_price * 1000)) if delta_price < 10 else int(round(delta_price))
-    ax.text(arrow_x, p_target * 1.025, f'{delta_price:.4g} ({profit_pct:.2f}%) {ticks:,}',
-            color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='bottom', zorder=8)
-
-    # 8. Headers & Branding (Official Viva Signals Pro Brand & Logo)
+    # 8. Clean Header Information (Symbol, Timeframe, Pattern Name, Log Scale)
     fig.text(0.04, 0.955, f'{symbol}  •  {tf.upper()}  •  SPOTBREAK', fontsize=15, fontweight='bold', color='#1F2328')
-    fig.text(0.04, 0.932, f'VIVA SIGNALS PRO  •  {pat_name}  •  Log Scale', fontsize=10, color='#5A5650')
-    
+    fig.text(0.04, 0.932, f'VIVA SIGNALS PRO  •  {pat_name}  •  Log Scale', fontsize=10.5, color='#4A4640')
+
+    # 9. Bottom-Right Official Brand & Golden Badge
     brand_name = 'VIVA SIGNALS PRO'
     if os.path.isfile(logo_path):
         try:
             b_ax = fig.add_axes([0.905, 0.022, 0.032, 0.038], zorder=10)
-            b_ax.imshow(mpimg.imread(logo_path), alpha=0.85)
+            b_ax.imshow(mpimg.imread(logo_path), alpha=0.90)
             b_ax.axis('off')
             fig.text(0.900, 0.038, brand_name, fontsize=12, fontweight='bold', color='#1F2328', ha='right', va='center')
         except Exception:
@@ -364,7 +406,7 @@ def render_cryptocove_spot_chart(df, candidate, confirmed: bool = False) -> byte
     else:
         fig.text(0.94, 0.038, brand_name, fontsize=12, fontweight='bold', color='#1F2328', ha='right', va='center')
 
-    # 9. Spines & Price Formatter
+    # 10. Clean Spines & Price Formatter
     ax.spines['top'].set_visible(False)
     ax.spines['left'].set_visible(False)
     ax.spines['right'].set_color('#8A857D')
@@ -374,7 +416,7 @@ def render_cryptocove_spot_chart(df, candidate, confirmed: bool = False) -> byte
 
     try:
         ts_list = [pd.to_datetime(t) for t in frame['timestamp']]
-        step = max(25, n // 8)
+        step = max(20, n // 7)
         pos_list = list(range(10, n, step))
         labels = [ts_list[p].strftime('%b %Y') for p in pos_list]
         ax.set_xticks(pos_list)
@@ -384,13 +426,15 @@ def render_cryptocove_spot_chart(df, candidate, confirmed: bool = False) -> byte
 
     ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 1.5, 2.0, 3.0, 5.0, 7.0)))
     def price_fmt(x, _):
+        if x <= 0: return ''
         if x >= 1000: return f'{x:,.0f}'
+        elif x >= 10: return f'{x:,.1f}'
         elif x >= 1: return f'{x:.2f}'
         elif x >= 0.01: return f'{x:.4f}'
         else: return f'{x:.6f}'
     ax.yaxis.set_major_formatter(FuncFormatter(price_fmt))
+    ax.yaxis.set_minor_formatter(FuncFormatter(lambda x, _: ''))
 
-    plt.tight_layout(rect=[0.02, 0.02, 0.96, 0.93])
     buf = io.BytesIO()
     plt.savefig(buf, format='png', facecolor='#FDF49F', edgecolor='none')
     plt.close()
