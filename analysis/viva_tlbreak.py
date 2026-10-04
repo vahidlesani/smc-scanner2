@@ -336,6 +336,24 @@ def fit_validated_line(
         intercept = y0 - slope * x0
         _u = _unit_log if log_space else _unit_lin
 
+        # R68 Slope Sanity Guard (Kills steep 80-deg lines like QNT 1H/1D):
+        if log_space:
+            if abs(ls) > 0.040:
+                return None
+        else:
+            if atr > 0 and abs(slope) > 2.2 * atr:
+                return None
+
+        # R68 Start Pivot Cluster Rule:
+        # Anchor must be the extreme of its cluster (no interior lower/higher start):
+        for q in pool:
+            qx, qp = float(q['index']), float(q['price'])
+            if qx != x0 and abs(qx - x0) <= 8.0:
+                if side == 'HIGH' and qp > y0 * 1.003:
+                    return None
+                elif side == 'LOW' and qp < y0 * 0.997:
+                    return None
+
         def _res_pair(a: float, b: float) -> float:
             """Ruler residual between two prices in THIS space."""
             if r64 and _u > 0:

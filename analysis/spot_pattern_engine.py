@@ -224,6 +224,7 @@ def render_cryptocove_spot_chart(df, candidate, confirmed: bool = False) -> byte
     - Single measured move green target box with vertical arrow & exact profit label
     - Official CryptoCove • VIVA SIGNALS PRO branding and large center watermark
     """
+    import os
     import io
     import math
     import numpy as np
@@ -284,10 +285,20 @@ def render_cryptocove_spot_chart(df, candidate, confirmed: bool = False) -> byte
     future = 42
     ax.set_xlim(-2, n + future)
 
-    # 4. Center Watermark
+    # 4. Center Watermark & Brand Logo
+    import matplotlib.image as mpimg
+    logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assets', 'vivasignals-logo.png')
+    if os.path.isfile(logo_path):
+        try:
+            mark_ax = ax.inset_axes([0.38, 0.30, 0.24, 0.40], transform=ax.transAxes, zorder=1)
+            mark_ax.imshow(mpimg.imread(logo_path), alpha=0.075)
+            mark_ax.set_axis_off()
+            mark_ax.patch.set_alpha(0)
+        except Exception:
+            pass
     y_mid = math.sqrt(y_min * y_max)
-    ax.text(n * 0.45, y_mid, f'{symbol}, {tf.upper()}', color='#1F2328',
-            fontsize=52, fontweight='bold', ha='center', va='center', alpha=0.10, zorder=1)
+    ax.text(n * 0.46, y_mid, f'{symbol}  {tf.upper()}', color='#1F2328',
+            fontsize=46, fontweight='bold', ha='center', va='center', alpha=0.065, zorder=1)
 
     # 5. Candlesticks (TradingView emerald & coral)
     c_up = '#26A69A'
@@ -337,10 +348,21 @@ def render_cryptocove_spot_chart(df, candidate, confirmed: bool = False) -> byte
     ax.text(arrow_x, p_target * 1.025, f'{delta_price:.4g} ({profit_pct:.2f}%) {ticks:,}',
             color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='bottom', zorder=8)
 
-    # 8. Headers & Branding
+    # 8. Headers & Branding (Official Viva Signals Pro Brand & Logo)
     fig.text(0.04, 0.955, f'{symbol}  •  {tf.upper()}  •  SPOTBREAK', fontsize=15, fontweight='bold', color='#1F2328')
-    fig.text(0.04, 0.932, f'VIVA SIGNALS PRO  •  CryptoCove {pat_name}  •  Log Scale', fontsize=10, color='#5A5650')
-    fig.text(0.94, 0.04, 'CryptoCove  •  VIVA SIGNALS PRO', fontsize=13, fontweight='bold', color='#1F2328', ha='right')
+    fig.text(0.04, 0.932, f'VIVA SIGNALS PRO  •  {pat_name}  •  Log Scale', fontsize=10, color='#5A5650')
+    
+    brand_name = 'VIVA SIGNALS PRO'
+    if os.path.isfile(logo_path):
+        try:
+            b_ax = fig.add_axes([0.905, 0.022, 0.032, 0.038], zorder=10)
+            b_ax.imshow(mpimg.imread(logo_path), alpha=0.85)
+            b_ax.axis('off')
+            fig.text(0.900, 0.038, brand_name, fontsize=12, fontweight='bold', color='#1F2328', ha='right', va='center')
+        except Exception:
+            fig.text(0.94, 0.038, brand_name, fontsize=12, fontweight='bold', color='#1F2328', ha='right', va='center')
+    else:
+        fig.text(0.94, 0.038, brand_name, fontsize=12, fontweight='bold', color='#1F2328', ha='right', va='center')
 
     # 9. Spines & Price Formatter
     ax.spines['top'].set_visible(False)
