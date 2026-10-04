@@ -191,3 +191,34 @@ def test_scan_calls_the_risk_helper():
     assert 'df_highs=list(d["high"].tail(120))' in src
     # the old far-base stop is gone
     assert "sl_struct = min(sl_struct, min(lower_vals))" not in src
+
+def test_cryptocove_spot_chart_exact_signature():
+    from data.fetcher import get_klines
+    from analysis.models import SignalCandidate
+    from bot.messages_v7 import generate_chart
+    import numpy as np
+    import pandas as pd
+
+    # Synthetic or mock dataframe for test
+    n = 200
+    dates = pd.date_range('2024-01-01', periods=n, freq='3D')
+    prices = np.linspace(10, 2, n)
+    df = pd.DataFrame({
+        'timestamp': dates,
+        'open': prices * 1.01,
+        'high': prices * 1.05,
+        'low': prices * 0.95,
+        'close': prices,
+        'volume': np.random.uniform(100, 1000, n)
+    })
+    cand = SignalCandidate(
+        signal_id='spot_test', symbol='TESTUSDT', style='SWING', setup_code='SPOTBREAK',
+        setup_name='SPOT', strategy_fa='', direction='LONG', score=90, status='CONFIRMED',
+        entry_zone_bottom=2.0, entry_zone_top=2.0, planned_entry=2.0, sl=1.5,
+        tp1=5.0, tp2=8.0, rr_tp1=2.0, rr_tp2=3.0, bias='BULLISH', trigger_timeframe='3d',
+        metadata={'market': 'SPOT', 'is_spot': True}
+    )
+    png_bytes = generate_chart(df, cand)
+    assert png_bytes is not None
+    assert len(png_bytes) > 5000
+    assert png_bytes.startswith(b'\x89PNG')

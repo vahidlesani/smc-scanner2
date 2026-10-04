@@ -212,3 +212,165 @@ def detect_spot_macro_pattern(df: pd.DataFrame, symbol: str = "") -> dict | None
         "delta_price": delta_price,
         "ch_width": ch_width,
     }
+
+
+def render_cryptocove_spot_chart(df, candidate, confirmed: bool = False) -> bytes:
+    """
+    Render a 100% authentic CryptoCove TradingView chart for spot setups:
+    - Vertical lemon-to-sky gradient background
+    - Logarithmic price scale
+    - Crisp TradingView emerald & coral candlesticks
+    - Clean dark trendlines with extended projections
+    - Single measured move green target box with vertical arrow & exact profit label
+    - Official CryptoCove • VIVA SIGNALS PRO branding and large center watermark
+    """
+    import io
+    import math
+    import numpy as np
+    import pandas as pd
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    from matplotlib.ticker import FuncFormatter, LogLocator
+
+    symbol = str(getattr(candidate, 'symbol', '') or 'UNKNOWN').upper()
+    tf = str((getattr(candidate, 'metadata', None) or {}).get('chart_view_tf')
+             or getattr(candidate, 'trigger_timeframe', '3d') or '3d').lower()
+
+    n_all = len(df)
+    if n_all < 30:
+        return b''
+
+    highs_all = df['high'].astype(float).values
+    search_limit = max(15, int(n_all * 0.85))
+    peak_idx = int(np.argmax(highs_all[:search_limit]))
+    lookback = min(n_all, max(180, (n_all - peak_idx) + 25))
+    frame = df.tail(lookback).copy().reset_index(drop=True)
+    n = len(frame)
+
+    pat = detect_spot_macro_pattern(frame, symbol=symbol)
+    if not pat:
+        return b''
+    up = pat['upper']
+    lo = pat['lower']
+    p_break = pat['break_price']
+    p_target = pat['target_price']
+    profit_pct = pat['profit_pct']
+    delta_price = pat['delta_price']
+    pat_name = pat.get('name', 'Parallel Channel')
+
+    fig, ax = plt.subplots(figsize=(16, 9), dpi=140)
+
+    # 1. TradingView CryptoCove Vertical Gradient Background
+    top_rgb = np.array([253, 244, 159]) / 255.0  # Lemon cream #FDF49F
+    bot_rgb = np.array([145, 203, 248]) / 255.0  # Soft sky blue #91CBF8
+    gradient = np.linspace(top_rgb, bot_rgb, 256).reshape(256, 1, 3)
+    ax.imshow(gradient, aspect='auto', extent=[0, 1, 0, 1], origin='upper', zorder=0, transform=ax.transAxes)
+
+    # 2. Log Scale & Subtle Grid
+    ax.set_yscale('log')
+    ax.grid(True, which='both', color='#D5D0C5', linestyle='-', linewidth=0.5, alpha=0.35)
+
+    # 3. Y Limits with Headroom
+    highs = frame['high'].astype(float).values
+    lows = frame['low'].astype(float).values
+    opens = frame['open'].astype(float).values
+    closes = frame['close'].astype(float).values
+
+    y_min = float(np.min(lows)) * 0.78
+    y_max = max(float(np.max(highs)), p_target) * 1.30
+    ax.set_ylim(y_min, y_max)
+    future = 42
+    ax.set_xlim(-2, n + future)
+
+    # 4. Center Watermark
+    y_mid = math.sqrt(y_min * y_max)
+    ax.text(n * 0.45, y_mid, f'{symbol}, {tf.upper()}', color='#1F2328',
+            fontsize=52, fontweight='bold', ha='center', va='center', alpha=0.10, zorder=1)
+
+    # 5. Candlesticks (TradingView emerald & coral)
+    c_up = '#26A69A'
+    c_dn = '#EF5350'
+    width = 0.58
+    for i in range(n):
+        o, c, h, l = opens[i], closes[i], highs[i], lows[i]
+        col = c_up if c >= o else c_dn
+        ax.plot([i, i], [l, h], color=col, linewidth=1.1, zorder=3)
+        rect = patches.Rectangle((i - width/2, min(o, c)), width, max(abs(c - o), 1e-6),
+                                 facecolor=col, edgecolor=col, linewidth=0.8, zorder=4)
+        ax.add_patch(rect)
+
+    # 6. Trendlines (Crisp Dark Mono)
+    x0 = up['x0']
+    up_s, up_ic = up['slope'], up['intercept']
+    lo_s, lo_ic = lo['slope'], lo['intercept']
+
+    xs_solid = np.linspace(x0, n - 1, 150)
+    y_up_s = 10.0 ** (up_s * xs_solid + up_ic)
+    y_lo_s = 10.0 ** (lo_s * xs_solid + lo_ic)
+    ax.plot(xs_solid, y_up_s, color='#1F2328', linewidth=2.0, zorder=5)
+    ax.plot(xs_solid, y_lo_s, color='#1F2328', linewidth=2.0, zorder=5)
+
+    xs_dash = np.linspace(n - 1, n + future - 5, 80)
+    y_up_d = 10.0 ** (up_s * xs_dash + up_ic)
+    y_lo_d = 10.0 ** (lo_s * xs_dash + lo_ic)
+    ax.plot(xs_dash, y_up_d, color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.7, zorder=5)
+    ax.plot(xs_dash, y_lo_d, color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.7, zorder=5)
+
+    # 7. Measured Move Box
+    bx0 = n - 1
+    bx1 = n + 32
+    bw = bx1 - bx0
+    ax.hlines(p_break, bx0, bx1, colors='#1F2328', linewidth=1.4, zorder=6)
+    rect_box = patches.Rectangle((bx0, p_break), bw, p_target - p_break,
+                                 facecolor='#A8D49B', edgecolor='#388E3C',
+                                 linewidth=1.2, alpha=0.60, zorder=5)
+    ax.add_patch(rect_box)
+
+    arrow_x = bx0 + bw * 0.5
+    ax.annotate('', xy=(arrow_x, p_target), xytext=(arrow_x, p_break),
+                arrowprops=dict(arrowstyle='->', color='#1F2328', lw=1.5, mutation_scale=12),
+                zorder=7)
+
+    ticks = int(round(delta_price * 1000)) if delta_price < 10 else int(round(delta_price))
+    ax.text(arrow_x, p_target * 1.025, f'{delta_price:.4g} ({profit_pct:.2f}%) {ticks:,}',
+            color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='bottom', zorder=8)
+
+    # 8. Headers & Branding
+    fig.text(0.04, 0.955, f'{symbol}  •  {tf.upper()}  •  SPOTBREAK', fontsize=15, fontweight='bold', color='#1F2328')
+    fig.text(0.04, 0.932, f'VIVA SIGNALS PRO  •  CryptoCove {pat_name}  •  Log Scale', fontsize=10, color='#5A5650')
+    fig.text(0.94, 0.04, 'CryptoCove  •  VIVA SIGNALS PRO', fontsize=13, fontweight='bold', color='#1F2328', ha='right')
+
+    # 9. Spines & Price Formatter
+    ax.spines['top'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.spines['right'].set_color('#8A857D')
+    ax.spines['bottom'].set_color('#8A857D')
+    ax.tick_params(colors='#4A4640', labelsize=9.5)
+    ax.yaxis.tick_right()
+
+    try:
+        ts_list = [pd.to_datetime(t) for t in frame['timestamp']]
+        step = max(25, n // 8)
+        pos_list = list(range(10, n, step))
+        labels = [ts_list[p].strftime('%b %Y') for p in pos_list]
+        ax.set_xticks(pos_list)
+        ax.set_xticklabels(labels, fontsize=9.5, color='#4A4640')
+    except Exception:
+        pass
+
+    ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 1.5, 2.0, 3.0, 5.0, 7.0)))
+    def price_fmt(x, _):
+        if x >= 1000: return f'{x:,.0f}'
+        elif x >= 1: return f'{x:.2f}'
+        elif x >= 0.01: return f'{x:.4f}'
+        else: return f'{x:.6f}'
+    ax.yaxis.set_major_formatter(FuncFormatter(price_fmt))
+
+    plt.tight_layout(rect=[0.02, 0.02, 0.96, 0.93])
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', facecolor='#FDF49F', edgecolor='none')
+    plt.close()
+    buf.seek(0)
+    return buf.read()

@@ -2327,6 +2327,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     _hit = _chart_cache_get(_ck)
     if _hit is not None:
         return _hit
+
+    if _is_spot:
+        try:
+            from analysis.spot_pattern_engine import render_cryptocove_spot_chart
+            _spot_png = render_cryptocove_spot_chart(df, candidate, confirmed=confirmed)
+            if _spot_png and len(_spot_png) > 1000:
+                _chart_cache_set(_ck, _spot_png)
+                return _spot_png
+        except Exception as _spot_err:
+            logger.warning(f"CryptoCove spot render fallback: {_spot_err}")
     # Always initialize chart-only price-axis tags before entering any render branch.
     # This is display state only and never affects setup detection or message format.
     _axis_tags: list = []
