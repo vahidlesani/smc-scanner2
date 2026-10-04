@@ -2606,9 +2606,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # the bottom-right ledger — the in-panel LIVE pill crowded the
             # tool column (LTC/BCH 09-26 screenshots). r37: spot has NO
             # ledger (no tool), so its live price rides the ladder tag.
-            if (not confirmed) or _is_spot:
+            if (not confirmed) and (not _is_spot):
                 _right_specs.append((float(_live_px), f" LIVE {_price(_live_px)} ", "#2b2f3a"))
-                _right_slots.append(float(_live_px))   # r37: chips keep off the LIVE row
+                _right_slots.append(float(_live_px))
                 # (no axis tag for LIVE — it printed over the axis numbers)
         except Exception as _exc:
             print(f"Chart live-price tag warning: {_exc}")
@@ -2645,9 +2645,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # future margin read as «یک سوم خالی» — HALVE it and let real
         # candles fill the reclaimed width (his reference charts keep
         # only a slim right margin for the pills).
-        future = 28 if confirmed else 26
+        future = 45 if _is_spot else (28 if confirmed else 26)
         for chart_ax in axes:
             chart_ax.set_xlim(-1, count + future)
+        if _is_spot:
+            try:
+                _mid_y = math.sqrt(float(frame["low"].min()) * float(frame["high"].max()))
+                ax.text(count * 0.46, _mid_y, f"{candidate.symbol}, {_chart_tf.upper()}",
+                        color="#DDD7CA", fontsize=46, fontweight="bold",
+                        ha="center", va="center", alpha=0.35, zorder=1)
+            except Exception:
+                pass
 
         # ── Viva 09-20 time-axis law ─────────────────────────────────────
         # Every drawing command that carried a timestamp is re-anchored to
@@ -3041,7 +3049,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         if _is_spot:
             try:
                 from analysis.spot_pattern_engine import detect_spot_macro_pattern as _dsmp68
-                _smp68 = _dsmp68(frame)
+                _smp68 = _dsmp68(frame, symbol=candidate.symbol)
                 if _smp68 and _smp68.get("upper") and _smp68.get("lower"):
                     _up68 = _smp68["upper"]
                     _lo68 = _smp68["lower"]
@@ -3294,8 +3302,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # با پررنگ و کمرنگ اگر چند ترند بود تغییرش مشخص باشه») — the
                 # far/blue law is RETIRED: every edge keeps its own side hue
                 # and the near/far hierarchy is BOLD vs FAINT weight.
-                _col8 = (CHART_THEME["supply"] if _ln.get("side") == "HIGH"
-                         else CHART_THEME["demand"])
+                # CryptoCove Signature: spot channel and wedge lines are crisp dark mono (#1F2328)
+                _col8 = "#1F2328" if _is_spot else (CHART_THEME["supply"] if _ln.get("side") == "HIGH" else CHART_THEME["demand"])
                 # Viva 09-18 (his AAVE ruling): a FLAT «trendline» is not a
                 # trend — it is the supply/demand box of the base it came
                 # from, so paint it as a zone band instead of a line.
@@ -3467,29 +3475,34 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     if _tp8 > _bt8 and _lc8 > 0:
                         _h8 = _tp8 - _bt8
                         # r37: NO panel clamp — the smart zoom now reserves room for spot_box_top
-                        _bx0, _bx1 = count + 1, count + 1 + max(8, int(future * 0.50))
+                        _bx0 = max(0, count - 1)
+                        _bx1 = min(count + future - 2, count + 35)
+                        # CryptoCove horizontal baseline at breakout level
+                        ax.hlines(_bt8, _bx0, _bx1, colors="#1F2328", linewidth=1.4, zorder=5)
                         # Render CryptoCove translucent green target box
                         ax.fill_between([_bx0, _bx1], _bt8, _tp8,
-                                        color="#4CAF50",
-                                        alpha=0.35, linewidth=0, zorder=2)
+                                        facecolor="#A5D6A7",
+                                        alpha=0.60, linewidth=0, zorder=3)
                         ax.plot([_bx0, _bx0, _bx1, _bx1, _bx0],
                                 [_bt8, _tp8, _tp8, _bt8, _bt8],
-                                color="#388E3C", linewidth=1.2,
-                                alpha=0.85, zorder=3)
+                                color="#388E3C", linewidth=1.1,
+                                alpha=0.85, zorder=4)
                         _mx8 = (_bx0 + _bx1) / 2
                         # CryptoCove vertical target arrow inside the box
                         # r37: NO arrow inside the spot box (legacy)
                         try:
                             ax.annotate("", xy=(_mx8, _tp8), xytext=(_mx8, _bt8),
-                                        arrowprops=dict(arrowstyle="->", color="#2E7D32", lw=1.6, mutation_scale=12),
+                                        arrowprops=dict(arrowstyle="->", color="#1F2328", lw=1.5, mutation_scale=12),
                                         zorder=6)
                         except Exception:
                             pass
                         # CryptoCove profit percentage label at the top
+                        _diff = _tp8 - _bt8
                         _pct_gain = (_tp8 / _bt8 - 1.0) * 100.0
-                        ax.text(_mx8, _tp8 * 1.02,
-                                f"+{_pct_gain:.1f}%",
-                                color="#1B5E20", fontsize=8.5, fontweight="bold",
+                        _ticks = int(round(_diff * 1000)) if _diff < 10 else int(round(_diff))
+                        ax.text(_mx8, _tp8 * 1.025,
+                                f"{_diff:.4g} ({_pct_gain:.2f}%) {_ticks:,}",
+                                color="#1F2328", fontsize=9.0, fontweight="bold",
                                 ha="center", va="bottom", zorder=9)
                 except Exception:
                     pass
@@ -3596,7 +3609,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         line_end = count + (5 if confirmed else 1)
         # r58: an UPDATE chart is pure structure analysis — the synthetic
         # stop of the render stub («سیگنال ورود نیست») draws no line/label.
-        if not (candidate.metadata or {}).get("update_event"):
+        if not (candidate.metadata or {}).get("update_event") and not _is_spot:
             ax.hlines(
                 candidate.sl,
                 line_start,
@@ -4369,20 +4382,22 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _p1_64 = float(np.percentile(_ll64, 1.0))
                     _p99_64 = float(np.percentile(_lh64, 99.0))
                     if _is_spot:
-                        _c_lo64 = float(_ll64.min()) - 0.05 * abs(float(_lh64.max()) - float(_ll64.min()))
-                        _c_hi64 = float(_lh64.max())
+                        _target_top = float((candidate.metadata or {}).get("spot_box_top") or 0.0)
+                        _y_min_spot = float(frame["low"].min()) * 0.78
+                        _y_max_spot = max(float(frame["high"].max()), _target_top) * 1.35
+                        _win28 = (_y_min_spot, _y_max_spot)
                     else:
                         _c_lo64 = max(float(_ll64.min()), _p1_64 - 2.5 * _u64)
                         _c_hi64 = min(float(_lh64.max()), _p99_64 + 2.5 * _u64)
-                    _w64 = _smart_y_window(
-                        _c_lo64, _c_hi64, _u64,
-                        min(_ovl64) if _ovl64 else None, max(_ovl64) if _ovl64 else None,
-                        recent_lo=float(_ll64[-40:].min()),
-                        recent_hi=float(_lh64[-40:].max()),
-                        log_space=True,
-                        bars=len(frame))
-                    if _w64:
-                        _win28 = (10.0 ** _w64[0], 10.0 ** _w64[1])
+                        _w64 = _smart_y_window(
+                            _c_lo64, _c_hi64, _u64,
+                            min(_ovl64) if _ovl64 else None, max(_ovl64) if _ovl64 else None,
+                            recent_lo=float(_ll64[-40:].min()),
+                            recent_hi=float(_lh64[-40:].max()),
+                            log_space=True,
+                            bars=len(frame))
+                        if _w64:
+                            _win28 = (10.0 ** _w64[0], 10.0 ** _w64[1])
             except Exception:
                 _win28 = None
             if _win28 is None:
@@ -4538,7 +4553,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _log_axis_decorate(ax)
             except Exception:
                 pass
-        _render_corner_notes(ax, notes, frame, confirmed=confirmed, fig=fig)
+        if not _is_spot:
+            _render_corner_notes(ax, notes, frame, confirmed=confirmed, fig=fig)
 
         # ── r32 (Viva 09-26): the bottom-right LEDGER ────────────────────
         # «آقا پایین چارت سمت راست معمولا همیشه خالیه — اینتری و استاپ اولیه
