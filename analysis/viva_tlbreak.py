@@ -400,6 +400,25 @@ def fit_validated_line(
         _right = np.nonzero(over_mask & (_pidx > x1))[0]
         if len(_right):
             break_at = int(min(_pidx[int(_k)] for _k in _right))
+        # Strict Candle Cut Guard (Viva Law: Trendline must NOT slice through candle bodies)
+        _x_int_fx = int(round(fx))
+        _x_int_x1 = int(round(x1))
+        if _x_int_x1 > _x_int_fx:
+            _xs_span = np.arange(_x_int_fx, _x_int_x1 + 1, dtype=float)
+            _line_span = (10.0 ** (ls * _xs_span + li)) if log_space else (slope * _xs_span + intercept)
+            _opens_span = df['open'].iloc[_x_int_fx:_x_int_x1 + 1].to_numpy(dtype=float)
+            _closes_span = df['close'].iloc[_x_int_fx:_x_int_x1 + 1].to_numpy(dtype=float)
+            _bodies_lo = np.minimum(_opens_span, _closes_span)
+            _bodies_hi = np.maximum(_opens_span, _closes_span)
+            if side == 'LOW':
+                # Body significantly below lower trendline
+                if np.sum(_bodies_lo < _line_span - 0.25 * atr) > 2:
+                    return None
+            else:
+                # Body significantly above upper trendline
+                if np.sum(_bodies_hi > _line_span + 0.25 * atr) > 2:
+                    return None
+
         _mid = np.nonzero(over_mask & (_pidx > fx) & (_pidx < x1))[0]
         pierces = int(len(_mid))
         if cfg.require_alive:

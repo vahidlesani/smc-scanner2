@@ -1487,23 +1487,15 @@ def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool =
             continue
         _seen_notes.add(str(_nt[0]))
         _uniq.append(_nt)
-    if len(_uniq) > 6:
-        _half = (len(_uniq) + 1) // 2
-        _cols = (_uniq[:_half], _uniq[_half:])
-        for _ci, _col in enumerate(_cols):
-            for _i, (text, color) in enumerate(_col):
-                ax.text(0.012 + _ci * 0.235, _y0 - _step * _i, text,
-                        ha="left", va="center", color=color, fontsize=5.8,
-                        fontweight="bold", zorder=25, transform=ax.transAxes,
-                        bbox={"boxstyle": "round,pad=0.22", "facecolor": "white",
-                              "edgecolor": "none", "alpha": 0.93})
-        return
-    for _i, (text, color) in enumerate(_uniq):
-        ax.text(0.012, _y0 - _step * _i, text,
-                ha="left", va="center", color=color, fontsize=5.8,
+    # Viva Law: Clean, single-column unified notes stack (NO chaotic two-column splitting)
+    # Filter to most critical 5 structural notes so they never sprawl or collide with candles
+    _clean_stack = _uniq[:5]
+    for _i, (text, color) in enumerate(_clean_stack):
+        ax.text(0.015, _y0 - _step * _i, text,
+                ha="left", va="center", color=color, fontsize=6.2,
                 fontweight="bold", zorder=25, transform=ax.transAxes,
-                bbox={"boxstyle": "round,pad=0.22", "facecolor": "white",
-                      "edgecolor": "none", "alpha": 0.93})
+                bbox={"boxstyle": "round,pad=0.25", "facecolor": "white",
+                      "edgecolor": "#D0C9BE", "linewidth": 0.6, "alpha": 0.95})
 
 
 def _draw_visible_fvgs(ax, frame: pd.DataFrame, count: int) -> list:
@@ -5602,8 +5594,11 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     # r61.1 / R66: AT MOST ONE update between the initial alert and
     # the confirm («آپدیت فقط یکبار بین هشدار ابتدایی و پیام کانفرمد»); critical
     # single events (verdict ❌⚪, cancellation ⛔) still close the chain's slot.
+    # Viva Absolute Law: At most ONE update between initial alert and confirm
+    # Only true terminal events (⛔ cancellation / ❌ verdict) may close an already-updated chain
+    _is_terminal = str(state_fa or "")[:2].lstrip("<b ").strip()[:1] in {"❌", "⚪", "⛔"}
     if (upd_n > 1 or bool((candidate.metadata or {}).get("approaching_sent"))
-            or bool(getattr(candidate, "approaching_sent", False))) and not _critical:
+            or bool(getattr(candidate, "approaching_sent", False))) and not _is_terminal:
         return False
     caption = _setup_update_caption(
         candidate, note_fa, state_fa or "🔄 <b>به‌روزرسانی رصد</b>", upd_n,

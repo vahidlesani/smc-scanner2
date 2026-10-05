@@ -320,13 +320,13 @@ def detect_flag_pennant(df, atr_v: float, pole_bars: int = 12,
                 _m = float(close[j] - close[j - pole_bars])
                 if abs(_m) > abs(move):
                     move, pole_end = _m, j
-            if abs(move) < 2.5 * atr_v:
+            if abs(move) < 1.8 * atr_v:
                 continue
             span = n - end
-            if span < 5:
+            if span < 4:
                 continue
             width = float(high[end:].max() - low[end:].min())
-            if width > max(2.2 * atr_v, 0.35 * abs(move)):
+            if width > max(4.5 * atr_v, 0.58 * abs(move)):
                 continue
             mid = float(close[end:min(n, end + span)].mean())
             first_half = float(close[end:max(end + span // 2, end + 1)].mean())
@@ -385,7 +385,9 @@ def detect_flag_pennant(df, atr_v: float, pole_bars: int = 12,
                   "x0": int(end), "x1": int(n - 1)},
                  {"side": "LOW", "slope": float(s_lo), "intercept": float(ic_lo),
                   "x0": int(end), "x1": int(n - 1)}]
-        out.append({"type": kind, "lines": lines, "neckline": neckline,
+        fa_map = {"FLAG_BULL": "پرچم صعودی", "FLAG_BEAR": "پرچم نزولی",
+                  "PENNANT_BULL": "پرچم سه‌گوش صعودی", "PENNANT_BEAR": "پرچم سه‌گوش نزولی"}
+        out.append({"type": kind, "name_fa": fa_map.get(kind, kind), "lines": lines, "neckline": neckline,
                     "pole_atr": round(abs(close[end - 1] - close[end - 1 - pole_bars]) / atr_v, 2)})
     except Exception:
         return []

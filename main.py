@@ -508,9 +508,11 @@ def run_discovery_scan() -> Dict[str, int]:
                                     # content-hash inside send_setup_update still
                                     # swallows identical repeats.
                                     stats["update_throttled"] = stats.get("update_throttled", 0) + 1
+                                # Strict Law: absorb notes update internal state without spamming Telegram
+                                # Only the single official final-warning / touch alert posts to Telegram
                                 if send_setup_update(holder, _chart_frame(holder, bundle),
                                                         note_fa=absorb_note or "",
-                                                        critical=True):
+                                                        critical=False):
                                     hm = holder.metadata if isinstance(holder.metadata, dict) else {}
                                     import time as _tt
                                     hm["last_update_ts"] = _tt.time()
@@ -944,28 +946,9 @@ def run_spot_scan() -> Dict[str, int]:
                         print(f"line watch pin warning {symbol}: {_lw58}")
             except Exception as exc:
                 print(f"spot ladder scan warning {symbol}: {exc}")
-            # r57: MAJOR-EVENT updates only (volume surge / displacement /
-            # structural touch) — «الکی آپدیت نده»
-            try:
-                from analysis.spot_engine import (scan_spot_update_events,
-                                                  commit_spot_update_events)
-                from bot.messages_v7 import send_spot_event
-                _evs57 = scan_spot_update_events(symbol, bundle)
-                _sent57 = []
-                # ── R64.4 THE SPOT CHART ECONOMY (Viva 10-03, verbatim: «آپدیت
-                #‌ها هنوز همگی با چارت لایو میان و مصرف بشدت بالا بردن») — these
-                # generic vol/displacement/touch events are REPLIES, never chart
-                # posts. A spot chart renders ONLY at the chain's key stages
-                # (detection / touch / break / confirm / final target) inside
-                # send_spot_alert + the confirm publisher. Zero renders here.
-                for _ev57 in _evs57:
-                    if send_spot_event(_ev57):
-                        _sent57.append(_ev57)
-                if _sent57:
-                    commit_spot_update_events(_sent57)
-                    stats["update_events"] = stats.get("update_events", 0) + len(_sent57)
-            except Exception as exc:
-                print(f"spot update-event warning {symbol}: {exc}")
+            # Viva Law: No noisy volume/displacement spam in spot channel.
+            # Spot updates strictly restricted to 3 stages: TOUCH, BREAK, and CONFIRM.
+            # Zero unnecessary event spam to protect channel and server resources.
         except Exception as exc:
             stats["errors"] += 1
             print(f"spot scan warning {symbol}: {exc}")
