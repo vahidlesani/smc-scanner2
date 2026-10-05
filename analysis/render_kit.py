@@ -778,13 +778,16 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
             # channel (flag) or converging mini triangle (pennant); render
             # vocabulary only, alert detection untouched this round.
             try:
-                from analysis.patterns16 import detect_flag_pennant as _dfp67
-                for _fp67 in _dfp67(df.reset_index(drop=True), _atr_p):
-                    _neck67 = float(_fp67.get("neckline") or 0.0)
-                    if abs(_neck67 - float(df["close"].iloc[-1])) > 6.0 * _atr_p:
-                        continue
-                    out.append(_fp67)
-                    break
+                # Viva Rule: Mini flag/pennants must NEVER conflict with or clutter major patterns!
+                _has_major_shape = any(p.get("type") in ("TRIANGLE", "WEDGE_FALLING", "WEDGE_RISING", "CHANNEL", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING") for p in out)
+                if not _has_major_shape:
+                    from analysis.patterns16 import detect_flag_pennant as _dfp67
+                    for _fp67 in _dfp67(df.reset_index(drop=True), _atr_p):
+                        _neck67 = float(_fp67.get("neckline") or 0.0)
+                        if abs(_neck67 - float(df["close"].iloc[-1])) > 4.0 * _atr_p:
+                            continue
+                        out.append(_fp67)
+                        break
             except Exception:
                 pass
             from analysis.patterns16 import detect_pivot_patterns as _dpp16

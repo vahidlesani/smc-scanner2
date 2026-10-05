@@ -3384,24 +3384,26 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # instead of hanging in the air. Linear lines keep the exact
                 # two-point segment they always had.
                 _ln["x1"] = float(count)      # r59.2: paint THROUGH live
+                # Viva Anti-Vertical & Mini-Pattern Guard:
+                _is_mini_flag = str(_pat.get("type") or "").upper().startswith(("FLAG", "PENNANT"))
+                _is_too_steep = (_atr9 > 0 and abs(_sl) > 0.80 * _atr9)
+                _is_too_short = (_xend8 - _xa < 12 and not _ln.get("points"))
+
+                if _is_mini_flag or _is_too_steep or _is_too_short:
+                    continue  # Do not paint vertical or mini-flag artifact lines!
+
                 _xsA, _ysA = _line_xy(_ln, _xa, _xend8)
                 ax.plot(_xsA, _ysA,
                         color=_col8, linewidth=_lw8, alpha=_al8, zorder=7,
                         solid_capstyle="round")
+
                 if _bx8 is None and count < _xe - 0.6:
                     _xsB, _ysB = _line_xy(_ln, count, _xe)
                     ax.plot(_xsB, _ysB,
                             color=_col8, linewidth=_lw8 * 0.7, alpha=_al8 * 0.75,
                             zorder=6, linestyle=(0, (6, 4)),
                             solid_capstyle="butt")
-                elif _bx8 is not None and _bx8 < _xe - 0.6:
-                    # r61.3-R62 BOTH-EDGES LAW (Viva 09-30/10-01: «از هر جای
-                    # چارت که پیوت‌های مهم‌تر است رسم بشه اما باید تا قیمت
-                    # لایو بره و بعدش خطچین بشه» — TRX teal 08-14، LTC/LTC
-                    # 3-bar stub): a broken leg paints solid to ITS break bar
-                    # and then ONE dashed segment through LIVE to the canvas
-                    # edge — the confirmed-only gate is retired; the break
-                    # stays readable and the line never stops mid-air.
+                elif _bx8 is not None and _bx8 < _xe - 0.6 and not (_is_mini_flag or _is_too_steep or _is_too_short):
                     _xsC, _ysC = _line_xy(_ln, _xend8, _xe)
                     ax.plot(_xsC, _ysC,
                             color=_col8, linewidth=1.3, alpha=0.85,
@@ -4598,6 +4600,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             print(f"Chart live-stamp warning: {_exc}")
 
         buffer = io.BytesIO()
+
+
+
         fig.savefig(
             buffer,
             format="png",
