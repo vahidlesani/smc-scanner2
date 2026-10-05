@@ -36,7 +36,9 @@ CANDLE_COUNTS = {
 # The renderer may still stretch back up to the detection count when a stored
 # pattern anchor needs the older bars (r37 anchor law) — never further.
 RENDER_COUNTS = dict(CANDLE_COUNTS)
-RENDER_COUNTS.update({"5m": 210, "15m": 210, "30m": 210, "1h": 210, "2h": 210})
+# TradingView Calibrated Density: Low/medium TFs frame the active swing structure (85-135 bars)
+# to give candles proper body height and eliminate dead historical spikes.
+RENDER_COUNTS.update({"5m": 95, "15m": 105, "30m": 115, "1h": 125, "2h": 135, "4h": 145})
 
 
 # ── canonical TF → seconds (R65: the PINVAL freshness guard and the PINVAL

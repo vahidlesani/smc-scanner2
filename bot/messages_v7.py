@@ -1953,11 +1953,12 @@ def _r65_focus_window(df: pd.DataFrame, candidate, base_n: int,
             # picture back up — but never past the DETECTION count (the engine
             # has no geometry older than that to draw anyway).
             _hard = int(max_n) if max_n else n
-            need_n = min(max(need_n, 60), max(n, _hard))
+            # Viva TradingView Focus Law: Do NOT let a deep historical anchor blow up the candle window!
+            need_n = min(max(need_n, 60), _hard)
         except Exception:
-            need_n = n
-        if need_n >= n:
-            return need_n
+            need_n = min(n, int(max_n or n))
+        if need_n >= _hard:
+            return _hard
         # ── shorten while the subject is crushed by dead history ────────────
         floor_n = max(int(need_n), int(0.42 * n))
         step_n = max(int(n), int(need_n))
@@ -3128,6 +3129,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             if _pat.get("type") == "RANGE":
                 # anchored to its oldest tested pivot when it carries a time
                 _range_start = int(_anchored_x(_pat.get("ts0"), zone_start))
+                _atrR9 = float((frame["high"] - frame["low"]).tail(14).mean())
+                _clR9 = float(frame["close"].iloc[-1])
+                _r_height = float(_pat["hi"]) - float(_pat["lo"])
+                # Viva Law: Do NOT draw massive HTF/weekly range boxes that drown the trigger timeframe!
+                if _atrR9 > 0 and _r_height > 2.5 * _atrR9:
+                    continue
+                if _atrR9 > 0 and (_clR9 > float(_pat["hi"]) + 1.2 * _atrR9 or _clR9 < float(_pat["lo"]) - 1.2 * _atrR9):
+                    continue  # Retired range: price has completely moved past this structure
                 # r59: NEAR-price range = «بالا قرمز، پایین سبز» (top edge
                 # red, bottom edge green); a FAR range box paints BLUE as
                 # every classic pattern does.

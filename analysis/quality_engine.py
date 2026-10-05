@@ -1034,8 +1034,10 @@ def evaluate_confirmation(
     _inside_band20 = False
     if _fast_lane_ok and _lvl_used20 > 0 and _band_lo20 is not None and _band_hi20 is not None:
         _inside_band20 = (float(_band_lo20) + 1e-12) < _lvl_used20 < (float(_band_hi20) - 1e-12)
+    # Viva First-Close Breakout Law: When fast_lane confirms the first close beyond the trendline/edge,
+    # higher-TF containment bands must NOT veto the confirmation!
     if (_band_lo20 is not None and _band_hi20 is not None and not _is_internal
-            and _pattern_premise and (not _fast_lane_ok or _inside_band20)):
+            and _pattern_premise and not _fast_lane_ok):
         _dir20 = 1.0 if candidate.direction == "LONG" else -1.0
         _buf20 = 0.10 * _atr20
         _outside20 = (_close20 >= _band_hi20 + _buf20) if _dir20 > 0 \

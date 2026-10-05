@@ -228,7 +228,9 @@ def _recently_broken(line, n: int) -> bool:
         # r33 LAW (Viva 09-26): after the break the line stays dotted/faint
         # for AT LEAST 50 candles so retest touches stay visible — unless a
         # better-ranked valid line replaces it (the fitter's best-score pick).
-        return 0 <= age <= max(50, int(0.5 * max(n, 1)))
+        # Viva Post-Break Retirement Law: A broken line only stays relevant for the immediate retest (<=48 bars).
+        # Once price moves on past ~48 bars and forms a new base, the old line retires so the fresh price-action trend is detected!
+        return 0 <= age <= min(48, max(20, int(0.28 * max(n, 1))))
     except Exception:
         return False
 
@@ -426,7 +428,7 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
             # levels» — the score (touches²·fit·√span·proximity) keeps the
             # most valid line near price; a spike that only fits a small
             # window cannot outrank a major that holds across the big one.
-            for w in (len(df), 200, 130, 90, 60):
+            for w in (60, 90, 120, min(180, len(df))):
                 if w < 45:
                     continue
                 off = max(0, len(df) - w)
