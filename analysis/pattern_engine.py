@@ -63,28 +63,25 @@ STATE_FADE = "REJECTION_FADE"
 # never be created or confirmed. Internal کف→سقف / سقف→کف candidates stay
 # legal ONLY in parallel channels (the is_parallel fade gate below) —
 # channels and rectangles, exactly as he defined.
-_EDGE_RULES = {
-    "WEDGE_RISING": {"lower": "SHORT"},
-    "WEDGE_FALLING": {"upper": "LONG"},
-}
-_EDGE_RULES.update({p: {"upper": "LONG", "lower": "SHORT"} for p in (
+# Viva Law (Universal Breakout Direction): Break determines the trade direction.
+# A close above the UPPER edge is ALWAYS a LONG trade.
+# A close below the LOWER edge is ALWAYS a SHORT trade.
+# No dogmatic one-nature suppression: if price breaks the floor, the trade is SHORT!
+_EDGE_RULES = {p: {"upper": "LONG", "lower": "SHORT"} for p in (
     "TRIANGLE_ASCENDING", "TRIANGLE_DESCENDING", "TRIANGLE_SYMMETRICAL",
     "TRIANGLE", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING",
     "CHANNEL_FLAT", "CHANNEL", "TRENDLINE", "HORIZONTAL_SR", "BROADENING",
-)})
-_EDGE_RULES.update({
-    "FLAG_BULL": {"upper": "LONG"},
-    "FLAG_BEAR": {"lower": "SHORT"},
-})
-# Viva 09-24 «در مثلث‌ها هم همین» + his sheets (مثلث صعودی → بریک بالا،
-# مثلث نزولی → بریک پایین، کانال صعودی/نزولی likewise): directional
-# triangles/channels are ONE-NATURE — the opposite side can never confirm.
-_EDGE_RULES.update({
-    "TRIANGLE_ASCENDING": {"upper": "LONG"},
-    "TRIANGLE_DESCENDING": {"lower": "SHORT"},
-    "CHANNEL_ASCENDING": {"upper": "LONG"},
-    "CHANNEL_DESCENDING": {"lower": "SHORT"},
-})
+    "WEDGE_RISING", "WEDGE_FALLING", "FLAG_BULL", "FLAG_BEAR"
+)}
+
+_NATURAL_EDGE = {
+    "WEDGE_RISING": "lower",
+    "WEDGE_FALLING": "upper",
+    "FLAG_BULL": "upper",
+    "FLAG_BEAR": "lower",
+    "TRIANGLE_ASCENDING": "upper",
+    "TRIANGLE_DESCENDING": "lower",
+}
 
 # r54 (Viva 09-28, LIT falling-wedge short — verbatim: «این الگو ذاتا صعودی
 # است و با بریک ضلع بالا تایید میشه … اگر نزولی قراره بده اون هم با بریکِ
@@ -93,11 +90,14 @@ _EDGE_RULES.update({
 # trade and exists only through (a) the opposite side's break + valid close,
 # (b) TOHOM on that same edge, or (c) explicit supporting judgment — which
 # MUST be stated in the confirmation message.
-_DOCTRINE_DIRECTION = {}
-for _p54, _sides54 in _EDGE_RULES.items():
-    _dirs54 = {str(_d).upper() for _d in _sides54.values() if _d}
-    if len(_dirs54) == 1:
-        _DOCTRINE_DIRECTION[str(_p54).upper()] = _dirs54.pop()
+_DOCTRINE_DIRECTION = {
+    "WEDGE_RISING": "SHORT",
+    "WEDGE_FALLING": "LONG",
+    "FLAG_BULL": "LONG",
+    "FLAG_BEAR": "SHORT",
+    "TRIANGLE_ASCENDING": "LONG",
+    "TRIANGLE_DESCENDING": "SHORT",
+}
 
 
 def _counter_support_factors(bundle, direction: str, trigger_df):
@@ -180,32 +180,18 @@ _ONE_NATURE = frozenset((
     "HEAD_SHOULDERS", "INV_HEAD_SHOULDERS", "DOUBLE_TOP", "DOUBLE_BOTTOM",
 ))
 
-PATTERN_FA = {
-    "WEDGE_FALLING": "گوه نزولی (فالینگ‌وج)",
-    "WEDGE_RISING": "گوه صعودی (رایزینگ‌وج)",
-    "TRIANGLE_ASCENDING": "مثلث صعودی",
-    "TRIANGLE_DESCENDING": "مثلث نزولی",
-    "TRIANGLE_SYMMETRICAL": "مثلث متقارن",
-    "TRIANGLE": "مثلث",
-    "CHANNEL_ASCENDING": "کانال صعودی",
-    "CHANNEL_DESCENDING": "کانال نزولی",
-    "CHANNEL_FLAT": "کانال افقی",
-    "CHANNEL": "کانال",
-    "TRENDLINE": "خط روند اصلی",
-    "HORIZONTAL_SR": "سطح افقی مهم",
-    "BROADENING": "مگافون گشونده",
-    "HEAD_SHOULDERS": "سر و شانه (H&S)",
+from analysis.patterns16 import PATTERN16_LIBRARY as _P16_LIB
+
+PATTERN_FA = {k: v.get("fa", k) for k, v in _P16_LIB.items()}
+PATTERN_FA.update({
     "INVERSE_HEAD_SHOULDERS": "سر و شانه معکوس",
     "TRIPLE_TOP": "سقف سه‌برخوردی",
     "TRIPLE_BOTTOM": "کف سه‌برخوردی",
-    "FLAG_BULL": "پرچم/کنج صعودی",
-    "FLAG_BEAR": "پرچم/کنج نزولی",
-    # R63 P4: the pivot family is now TRADED (not chart-only)
-    "DOUBLE_TOP": "سقف دوقلو",
+    "FLAG_BULL": "پرچم صعودی",
+    "FLAG_BEAR": "پرچم نزولی",
     "DOUBLE_BOTTOM": "کف دوقلو",
-    "INV_HEAD_SHOULDERS": "سر و شانه معکوس",
-    "CUP_HANDLE": "فنجان و دسته",
-}
+    "CUP_HANDLE": "کاپ و دسته",
+})
 
 # fit windows per timeframe — pattern must be RECENT history, not the whole archive
 # R63 (audit W8): 30m/2h are structure TFs of the SWING 30m/2h lanes — they
@@ -469,6 +455,7 @@ def fit_edge_line(df: pd.DataFrame, side: str, cfg, n: int):
     Strict guard: the dropped pivot must lie at least 0.5 ATR OUTSIDE the fitted
     line, and the newest pivot must remain a touch (recency). Falls back to the
     plain validator; never loosens it for the other setups."""
+    side = "HIGH" if str(side).upper() in ("HIGH", "UPPER") else "LOW"
     from analysis.viva_tlbreak import fit_validated_line
     line = fit_validated_line(df, side, cfg)
     if line is not None:
@@ -802,7 +789,8 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         if not _line_alive(line, n):
             continue
         direction = rules.get(side)
-        _counter54 = False
+        _nat = _NATURAL_EDGE.get(pattern)
+        _counter54 = bool(_nat and _nat != side)
         if not direction:
             # Viva 09-24: the wrong-side break of a ONE-NATURE pattern was
             # warn-only. r54 (his 09-28 law, superseding): a wrong-side CLOSE
@@ -867,7 +855,11 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         # demanding a fresh displacement bar (the break candle closed bars
         # ago; waiting re-arms the engine on a weaker local line forever).
         _bk31 = getattr(line, "break_index", None)
-        _fw31 = int(getattr(cfg, "fresh_break_bars", 12) or 12)
+        # Freshness of breakout must match timeframe scale (Viva Fresh Break Law):
+        # 12 bars on 1D is 12 days ago (stale history, not a fresh setup!).
+        _tf_str = str(pattern_tf or "").lower()
+        _max_fw = 2 if _tf_str in ("1d", "3d", "1w") else (3 if _tf_str in ("4h", "8h", "12h") else 4)
+        _fw31 = min(int(getattr(cfg, "fresh_break_bars", 12) or 12), _max_fw)
         _fresh_bk31 = _bk31 is not None and 0 <= n - int(_bk31) <= _fw31
         if _fresh_bk31:
             state = STATE_BREAK

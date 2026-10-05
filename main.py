@@ -1032,11 +1032,16 @@ def run_spot_scan() -> Dict[str, int]:
                 if not spot_alert_check(aitem):
                     continue
                 cand = build_spot_alert_candidate(aitem)
-                _bundle_for_alert = bundles.get(cand.symbol.upper())
-                frame = (_bundle_for_alert.get(cand.trigger_timeframe)
-                         if _bundle_for_alert is not None else None)
-                chart = (generate_chart(frame, cand, confirmed=False)
-                         if frame is not None else None)
+                # ── Viva 10-05 Law: Chart ONLY at breakout! (TOUCH is text-only without chart)
+                _stage_str = str(aitem.get('stage') or '').upper()
+                _is_breakout_stage = _stage_str in ('BREAK_UP', 'BREAK_DOWN')
+                chart = None
+                if _is_breakout_stage:
+                    _bundle_for_alert = bundles.get(cand.symbol.upper())
+                    frame = (_bundle_for_alert.get(cand.trigger_timeframe)
+                             if _bundle_for_alert is not None else None)
+                    chart = (generate_chart(frame, cand, confirmed=False)
+                             if frame is not None else None)
                 if _send_spot_alert(aitem, chart):
                     spot_alert_commit(aitem)      # marker only AFTER the send
                     stats["alerts"] = stats.get("alerts", 0) + 1

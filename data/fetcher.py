@@ -184,8 +184,15 @@ def clear_market_cache() -> None:
         _CACHE.clear()
 
 
+_BYBIT_BLOCKED_UNTIL: float = 0.0
+
 def _request(path: str, params: Dict) -> Optional[Dict]:
+    global _BYBIT_BLOCKED_UNTIL
+    now_m = time.monotonic()
+    if now_m < _BYBIT_BLOCKED_UNTIL:
+        return None
     last_error = ""
+    blocked = False
     for base in _BASE_URLS:
         url = f"{base}{path}"
         try:
@@ -193,6 +200,7 @@ def _request(path: str, params: Dict) -> Optional[Dict]:
             response = _SESSION.get(url, params=params, timeout=_SETTINGS.bybit_timeout_seconds)
             if response.status_code in (403, 451):
                 last_error = f"HTTP {response.status_code} from {base}"
+                blocked = True
                 continue
             response.raise_for_status()
             payload = response.json()
@@ -202,6 +210,9 @@ def _request(path: str, params: Dict) -> Optional[Dict]:
             return payload
         except Exception as exc:
             last_error = str(exc)
+    if blocked:
+        # Cooldown Bybit requests for 180s when geo-blocked (403/451) to save Railway CPU/traffic
+        _BYBIT_BLOCKED_UNTIL = time.monotonic() + 180.0
     _log_error_once(
         f"{path}:{params.get('symbol', '')}",
         f"Bybit request failed {path} {params.get('symbol', '')}: {last_error}",

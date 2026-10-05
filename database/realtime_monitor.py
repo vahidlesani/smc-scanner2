@@ -126,11 +126,14 @@ def pending_filled_count() -> int:
     try:
         truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
         with legacy_db.db_cursor() as cursor:
+            # Viva Railway Cost Control: Only monitor live positions from last 48 hours
+            # Stale unclosed signals from months ago must not trigger infinite 5s venue ticker fetches!
             cursor.execute(f"""
                 SELECT COUNT(*) FROM signals
                 WHERE confirmed={truth} AND confirmation_sent={truth}
                   AND status='CONFIRMED' AND result='PENDING'
                   AND entry_filled={truth} AND strategy_version={legacy_db._ph()}
+                  AND confirmed_at >= NOW() - INTERVAL '48 hours'
             """, (SETTINGS.strategy_version,))
             row = cursor.fetchone()
         return int(row[0] or 0)
