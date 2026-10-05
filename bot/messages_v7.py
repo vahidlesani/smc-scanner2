@@ -3970,6 +3970,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         continue
                     # Phase-3: log-space fit when the log axis is live & span>3%
                     _mode9, slope, intercept = _pivot_line_fit(ax, frame, xs, ys)
+                    # Viva Steep-Slope Guard: A trendline cannot be vertical!
+                    _atr_chk = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
+                    if _atr_chk > 0 and _mode9 != "log" and abs(slope) > 1.25 * _atr_chk:
+                        continue  # skip vertical artifact lines
+                    if _mode9 == "log" and abs(slope) > 0.025:
+                        continue  # skip vertical artifact in log space
                     _fits9[key] = (xs, ys, _mode9, slope, intercept, color, label)
                 # r54 (his «ترند بالا و پایین دو تا روی هم افتاده»): a converging
                 # pair must END AT ITS APEX — projecting both dashed edges to
@@ -4038,17 +4044,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         x_edge = min(x_edge, max(0.0, _apex9))
                     _pmin = float(frame["low"].min())
                     _pmax = float(frame["high"].max())
-                    x0 = min(xs)
-                    if md.get("tc_clean") or _is_spot:
-                        # Spot macro patterns and clean classical shapes start at their own first pivot
-                        x0 = max(0.0, min(xs) - 0.03 * max(1.0, max(xs) - min(xs)))
-                    elif abs(slope) > 1e-12:
-                        _xa = _fx9(_pmax)
-                        _xb = _fx9(_pmin)
-                        x_left = max(0.0, min(_xa, _xb))
-                        x0 = min(x0, x_left)
-                    else:
-                        x0 = 0.0
+                    # Viva Trendline Clean Drawing Law: A trendline / pattern edge MUST strictly
+                    # start from its own first defining pivot (min(xs)), NEVER extrapolated to chart floor/ceiling!
+                    x0 = max(0.0, min(xs) - 0.03 * max(1.0, max(xs) - min(xs)))
                     x1 = min(max(xs) + 0.15 * max(1.0, max(xs) - min(xs)), x_edge, count)
                     _xr = max(x1, min(x_edge, count))
                     # r61.3-R62 FAR-FLOAT LAW (Viva 09-30, STX 15M/30M: the
