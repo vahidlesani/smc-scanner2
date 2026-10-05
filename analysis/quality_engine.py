@@ -1541,6 +1541,24 @@ def evaluate_confirmation(
                 "طبق قانون ۰۹-۲۱ استاپ باید پشت آخرین سویینگ با بافر و داخل همین افق باشد."))
     except Exception:
         pass
+    # ── Absolute Structural Stop Law: Stop MUST strictly sit on the trade's side!
+    from analysis.trade_management import structural_buffer as _sb_hard
+    _buf_hard = float(_sb_hard(executable_entry, candidate.market))
+    if candidate.direction == "LONG" and float(candidate.sl) >= executable_entry:
+        _zb_h = float(candidate.entry_zone_bottom or 0.0)
+        if 0 < _zb_h < executable_entry:
+            candidate.sl = round(_zb_h - _buf_hard, 8)
+        else:
+            _atr_h = float(candidate.metadata.get("atr", 0) or 0) or 0.015 * executable_entry
+            candidate.sl = round(executable_entry - max(1.5 * _atr_h, 0.015 * executable_entry), 8)
+    elif candidate.direction == "SHORT" and float(candidate.sl) <= executable_entry:
+        _zt_h = float(candidate.entry_zone_top or 0.0)
+        if _zt_h > executable_entry:
+            candidate.sl = round(_zt_h + _buf_hard, 8)
+        else:
+            _atr_h = float(candidate.metadata.get("atr", 0) or 0) or 0.015 * executable_entry
+            candidate.sl = round(executable_entry + max(1.5 * _atr_h, 0.015 * executable_entry), 8)
+
     candidate.planned_entry = executable_entry
     candidate.rr_tp1 = rr1
     candidate.rr_tp2 = rr2

@@ -383,9 +383,11 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         # ── Viva 09-23/24 (wedge NATURE law, verbatim): «رایزینگ وج ماهیت
         # نزولی داره … با شکست کف و کلوز زیرش تایید میشه». LONG-out-of-rising
         # / SHORT-out-of-falling is counter-nature and never becomes a signal.
-        if pattern == "WEDGE_RISING" and direction == "LONG":
-            continue
-        if pattern == "WEDGE_FALLING" and direction == "SHORT":
+        # Viva Universal Breakout Law: A confirmed close-break in the breakout direction
+        # is ALWAYS tradeable (CHoCH UP on rising wedge / CHoCH DOWN on falling wedge)
+        # when a valid displacement breakout bar is closed beyond the line!
+        _is_counter_wedge = (pattern == "WEDGE_RISING" and direction == "LONG") or                             (pattern == "WEDGE_FALLING" and direction == "SHORT")
+        if _is_counter_wedge and not (breakout.passed and breakout.beyond_atr >= 0.15):
             continue
         if not geometry_ok or not pattern_length_ok(line, style):
             continue
@@ -423,6 +425,13 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         # Viva 09-21: «استاپ نهایتا ۱.۲۵ درصد قیمت نماد» — a far swing anchor is
         # CUT at 1.25%, the scenario stays alive with an honest note.
         from analysis.trade_management import clamp_stop_price as _clamp_sl
+        # Viva Law: Invalidation MUST strictly sit beyond the entry zone and on the correct side
+        _zb_tl = float(candidate.entry_zone_bottom)
+        _zt_tl = float(candidate.entry_zone_top)
+        if direction == "LONG" and candidate.sl >= _zb_tl:
+            candidate.sl = round(_zb_tl - buffer, 8)
+        elif direction == "SHORT" and candidate.sl <= _zt_tl:
+            candidate.sl = round(_zt_tl + buffer, 8)
         _sl_c, _sl_clamped = _clamp_sl(candidate.planned_entry, direction, candidate.sl,
                                         str(candidate.trigger_timeframe or ""))
         candidate.sl = float(_sl_c)
@@ -498,10 +507,11 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             "viva_confluence_score": confluence.total, "viva_confluence": list(confluence.reasons),
             "viva_structure_score": structure_score(line), "viva_failed_breakout_penalty": failed_penalty,
             "viva_final_score": viva_score,
-            "viva_stop_anchor": plan.stop_anchor, "viva_measured_target": plan.measured_target,
+            "viva_stop_anchor": candidate.sl, "viva_measured_target": plan.measured_target,
             "viva_final_target": final_target,
             "viva_structural_target": plan.structural_target, "viva_state": "S2_BREAKOUT_CLOSED",
             "tl_context_tf": refine_tf, "tl_pattern": pattern,
+            "pattern_type": pattern,
             # Viva 2026-09-16: pattern names speak Persian in messages
             # («HORIZONTAL_SR در تایم ۱ ساعته...» scrambles the RTL line).
             "tl_pattern_fa": _PATTERN_FA.get(pattern, pattern),
@@ -511,6 +521,11 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             "viva_breakout_line": breakout.line_price,
             "viva_retest_zone": [poi["bottom"], poi["top"]],
         })
+        try:
+            from analysis.render_kit import enrich_render as _er_tl
+            _er_tl(candidate, trigger_df, htf_df=bundle.get("4h") or bundle.get("1h"))
+        except Exception:
+            pass
         return candidate
     return _tlbreak_rejection_scalp(bundle, style, refine_df, refine_tf,
                                     upper, lower, trigger_df, trigger_tf)
@@ -786,6 +801,7 @@ def detect_trendline_breakout(bundle: MarketBundle, style: str) -> Optional[Sign
             "tl_bound_now": float(fit["bound_now"]),
             "tl_base_kind": base["kind"] if stage == "JUST_BROKE" else "LINE_WATCH",
             "tl_pattern": pattern,
+            "pattern_type": pattern,
             "tl_pattern_fa": pattern_fa,
             "strategy_variant": "VIVA_TLBREAK" if viva_mode else "LEGACY_TLBREAK",
             "tl_fit_error_atr": float(fit.get("fit_error_atr", 0) or 0),
@@ -1675,7 +1691,7 @@ def _albrox_zone_lane(bundle, style):
                                  {"timestamp": str(row["timestamp"]), "price": entry}],
                                 is_break=not scalp)
         cand.metadata.update({
-            "strategy_variant": "ALBROX_ZONE", "zone_kind": _kind,
+            "strategy_variant": "ALBROX_ZONE", "zone_kind": _kind, "poi_type": _kind,
             "viva_break_line": edge, "viva_breakout_line": edge,
             "break_direction": "UP" if direction == "LONG" else "DOWN",
             "atr": atr_t, "touched": True, "scalp": bool(scalp),

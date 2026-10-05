@@ -934,18 +934,31 @@ def build_pattern_plan(
         height = max(2.0 * atr, abs(float(df["high"].tail(30).max()) - float(df["low"].tail(30).min())) * .25)
     if height <= 0:
         return None
+    atr_val = _atr(df)
     if direction == "LONG":
-        if pattern in {"WEDGE_FALLING", "TRIANGLE", "TRIANGLE_SYMMETRICAL", "CHANNEL"} and lower is not None:
-            stop_anchor = min(float(p["price"]) for p in lower.points)
+        # Stop anchor must ALWAYS be strictly BELOW the entry price for a LONG!
+        candidate_stops = []
+        if lower is not None and getattr(lower, 'points', None):
+            candidate_stops.extend(float(p["price"]) for p in lower.points if float(p["price"]) < price)
+        if upper is not None and getattr(upper, 'points', None):
+            candidate_stops.extend(float(p["price"]) for p in upper.points if float(p["price"]) < price)
+        if candidate_stops:
+            stop_anchor = max(candidate_stops)  # nearest swing low below entry
         else:
-            stop_anchor = float((lower or upper).points[-1]["price"])
+            stop_anchor = price - max(1.5 * atr_val, 0.015 * price)
         measured = price + height
         valid_structural = structural_target if structural_target and structural_target > price else None
     else:
-        if pattern in {"WEDGE_RISING", "TRIANGLE", "TRIANGLE_SYMMETRICAL", "CHANNEL"} and upper is not None:
-            stop_anchor = max(float(p["price"]) for p in upper.points)
+        # Stop anchor must ALWAYS be strictly ABOVE the entry price for a SHORT!
+        candidate_stops = []
+        if upper is not None and getattr(upper, 'points', None):
+            candidate_stops.extend(float(p["price"]) for p in upper.points if float(p["price"]) > price)
+        if lower is not None and getattr(lower, 'points', None):
+            candidate_stops.extend(float(p["price"]) for p in lower.points if float(p["price"]) > price)
+        if candidate_stops:
+            stop_anchor = min(candidate_stops)  # nearest swing high above entry
         else:
-            stop_anchor = float((upper or lower).points[-1]["price"])
+            stop_anchor = price + max(1.5 * atr_val, 0.015 * price)
         measured = price - height
         valid_structural = structural_target if structural_target and structural_target < price else None
     return PatternPlan(
