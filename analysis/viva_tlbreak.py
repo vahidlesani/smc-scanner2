@@ -338,10 +338,10 @@ def fit_validated_line(
 
         # R68 Slope Sanity Guard (Kills steep 80-deg lines like QNT 1H/1D):
         if log_space:
-            if abs(ls) > 0.040:
+            if abs(ls) > 0.025:
                 return None
         else:
-            if atr > 0 and abs(slope) > 2.2 * atr:
+            if atr > 0 and abs(slope) > 1.25 * atr:
                 return None
 
         # R68 Start Pivot Cluster Rule:

@@ -3077,16 +3077,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception as _e_smp:
                 print(f"spot macro pattern engine warning: {_e_smp}")
 
-        if not _is_spot and str((candidate.metadata or {}).get("strategy_variant") or "") != "VIVA_TLBREAK":
-            _has_up61 = any(_ln.get("side") == "HIGH"
-                            for _p61 in _draw_pats for _ln in (_p61.get("lines") or []))
-            _has_lo61 = any(_ln.get("side") == "LOW"
-                            for _p61 in _draw_pats for _ln in (_p61.get("lines") or []))
-            if not (_has_up61 and _has_lo61):
-                for _fb61 in _last_resort_edges(
-                        frame, bool(use_log),
-                        need_upper=not _has_up61, need_lower=not _has_lo61):
-                    _draw_pats.append(_fb61)
+        # Law G1: Do not force artificial second edges on patterns that only have one genuine side
+        pass
 
         # R66 DEDUPLICATION OF OVERLAPPING TRENDLINES (Viva 10-03: «حذف ترندلاین‌های
         # همپوشان تکراری»): if two trendlines on the same side (HIGH/LOW) are nearly
@@ -3298,7 +3290,21 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _brk8 = []
             for _ln in _lns:
                 _sl, _ic = float(_ln["slope"]), float(_ln["intercept"])
-                _xa = max(0.0, float(_ln.get("x0", 0)))
+                # Steep-slope guard: lines with slope > 1.15 ATR/bar are vertical spikes, not trendlines
+                if _atr9 > 0 and abs(_sl) > 1.15 * _atr9:
+                    continue
+                _pts_x = []
+                for q in (_ln.get("points") or []):
+                    try:
+                        _qx = float(np.searchsorted(frame.index, pd.Timestamp(str(q.get("ts")))))
+                        if 0 <= _qx < len(frame):
+                            _pts_x.append(_qx)
+                    except Exception:
+                        pass
+                if _pts_x:
+                    _xa = max(0.0, min(_pts_x) - 1.0)
+                else:
+                    _xa = max(0.0, float(_ln.get("x0", 0)))
                 _xe = count + future - 0.5
                 # R67.1 (Viva 10-03: «آبی نازک خوب نبود همون قرمز و سبز ..
                 # با پررنگ و کمرنگ اگر چند ترند بود تغییرش مشخص باشه») — the
@@ -4000,35 +4006,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # line (same family styling), never as a trade line: 1.2–9×ATR
                 # wide only, and it is skipped entirely when a converging
                 # pair would fight the apex law.
-                if ("viva_upper_points" in _fits9) != ("viva_lower_points" in _fits9):
-                    try:
-                        _atrG = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
-                        if _atrG > 0:
-                            _have_loG = "viva_lower_points" in _fits9
-                            _srcG = _fits9["viva_lower_points" if _have_loG else "viva_upper_points"]
-                            _xsG = _srcG[0]
-                            _loG = max(0, int(min(_xsG)))
-                            _hiG = max(_loG + 1, int(min(len(frame) - 1, max(_xsG))))
-                            _segG = (frame["high"] if _have_loG else frame["low"]).iloc[_loG:_hiG + 1]
-                            _ixG = _loG + int(((_segG.values.argmax()) if _have_loG
-                                               else (_segG.values.argmin())))
-                            _pG = float(frame["high"].iloc[_ixG] if _have_loG
-                                        else frame["low"].iloc[_ixG])
-                            _onG = _srcG[3] * _ixG + _srcG[4]
-                            _offG = (math.log10(max(_pG, 1e-12)) - _onG) if _srcG[2] == "log" \
-                                else (_pG - _onG)
-                            if 1.2 * _atrG <= abs(_offG) <= 9.0 * _atrG:
-                                _misG = "viva_upper_points" if _have_loG else "viva_lower_points"
-                                _xs2G = sorted({min(_xsG), max(_xsG), _ixG})
-                                _ys2G = [10 ** (_srcG[3] * _xG + _srcG[4] + _offG)
-                                         if _srcG[2] == "log"
-                                         else _srcG[3] * _xG + _srcG[4] + _offG
-                                         for _xG in _xs2G]
-                                _fits9[_misG] = (_xs2G, _ys2G, _srcG[2], _srcG[3],
-                                                 _srcG[4] + _offG,
-                                                 CHART_THEME["structure"], "CHANNEL GUIDE")
-                    except Exception:
-                        pass
+                # Law G1: Never fabricate artificial parallel lines (CHANNEL GUIDE) out of thin air.
+                # Only genuine validated pivot-backed lines are drawn.
                 for key, (xs, ys, _mode9, slope, intercept, color, label) in _fits9.items():
                     def _fy9(_x9, _s=slope, _b=intercept, _m=_mode9):
                         return 10 ** (_s * _x9 + _b) if _m == "log" else _s * _x9 + _b
@@ -4096,43 +4075,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # fewer than TWO edges (a one-sided range break, a side lost
                 # to a degenerate fit — DOT 15M / ETHFI 1H / STX 1H). The
                 # missing side is fitted on THIS frame and drawn here.
-                if len(_fits9) < 2:
-                    _up_drawn = "viva_upper_points" in _fits9
-                    _lo_drawn = "viva_lower_points" in _fits9
-                    for _fb61 in _last_resort_edges(
-                            frame, bool(use_log),
-                            need_upper=not _up_drawn, need_lower=not _lo_drawn):
-                        _fln61 = _fb61["lines"][0]
-
-                        def _fy61(_x, _l=_fln61):
-                            if _l.get("log_fit"):
-                                return 10 ** (float(_l["log_slope"]) * _x
-                                              + float(_l["log_intercept"]))
-                            return float(_l["slope"]) * _x + float(_l["intercept"])
-
-                        # R67 (FIL 2H round-7: a lone near-flat gray line
-                        # floating mid-chart): a REFIT partner is honest only
-                        # when price actually trades near it — a far refit is
-                        # the floating-trendline bug (r61.3), never context.
-                        try:
-                            _cl61 = float(frame["close"].iloc[-1])
-                            _y61 = _fy61(float(count))
-                            _atr61 = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
-                            if _atr61 > 0 and abs(_y61 - _cl61) > 2.5 * _atr61:
-                                continue
-                        except Exception:
-                            pass
-                        _xa61 = max(0.0, float(_fln61.get("x0", 0)))
-                        ax.plot([_xa61, count], [_fy61(_xa61), _fy61(count)],
-                                color=CHART_THEME["muted"], linewidth=1.4,
-                                alpha=0.8, zorder=6, solid_capstyle="round")
-                        ax.plot([count, count + future - .5],
-                                [_fy61(count), _fy61(count + future - .5)],
-                                color=CHART_THEME["muted"], linewidth=1.1,
-                                alpha=0.7, zorder=5, linestyle=(0, (5, 3)),
-                                solid_capstyle="butt")
-                        notes.append(("VALID " + ("UPPER" if _fln61.get("side") == "HIGH" else "LOWER")
-                                      + " LINE · REFIT", CHART_THEME["muted"]))
+                # Law G1: Single-line breakouts are legitimate; do not synthesize a fake second edge
+                # through _last_resort_edges that floats in mid-air.
                 line = md.get("viva_breakout_line") or md.get("viva_break_line")
                 if line:
                     ax.hlines(float(line), max(0, count-45), count+future-.5, color=CHART_THEME["structure"], linewidth=1.15, linestyles=(0,(5,3)), zorder=6)
