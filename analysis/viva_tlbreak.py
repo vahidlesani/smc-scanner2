@@ -400,7 +400,9 @@ def fit_validated_line(
         _right = np.nonzero(over_mask & (_pidx > x1))[0]
         if len(_right):
             break_at = int(min(_pidx[int(_k)] for _k in _right))
-        # Strict Candle Cut Guard (Viva Law: Trendline must NOT slice through candle bodies)
+        # Strict Candle Cut & Wick Envelope Guard (Viva 10-06 Law: Trendline must strictly respect wicks)
+        # Slicing through multiple wicks invalidates the trendline (XRP/LINK benchmark).
+        # Isolated outlier spikes (>2.2 ATR) are ignored so they don'''t distort valid trend slopes (ONDO benchmark).
         _x_int_fx = int(round(fx))
         _x_int_x1 = int(round(x1))
         if _x_int_x1 > _x_int_fx:
@@ -410,13 +412,25 @@ def fit_validated_line(
             _closes_span = df['close'].iloc[_x_int_fx:_x_int_x1 + 1].to_numpy(dtype=float)
             _bodies_lo = np.minimum(_opens_span, _closes_span)
             _bodies_hi = np.maximum(_opens_span, _closes_span)
+            _highs_span = df['high'].iloc[_x_int_fx:_x_int_x1 + 1].to_numpy(dtype=float)
+            _lows_span = df['low'].iloc[_x_int_fx:_x_int_x1 + 1].to_numpy(dtype=float)
             if side == 'LOW':
                 # Body significantly below lower trendline
-                if np.sum(_bodies_lo < _line_span - 0.25 * atr) > 2:
+                if np.sum(_bodies_lo < _line_span - 0.22 * atr) > 1:
+                    return None
+                # Wick respect: line must support swing wicks, never slice through them
+                _wick_under = _line_span - _lows_span
+                _norm_wick_under = _wick_under[(_wick_under > 0.18 * atr) & (_wick_under < 2.2 * atr)]
+                if len(_norm_wick_under) >= 2:
                     return None
             else:
                 # Body significantly above upper trendline
-                if np.sum(_bodies_hi > _line_span + 0.25 * atr) > 2:
+                if np.sum(_bodies_hi > _line_span + 0.22 * atr) > 1:
+                    return None
+                # Wick respect: line must cap swing wicks, never slice through them
+                _wick_over = _highs_span - _line_span
+                _norm_wick_over = _wick_over[(_wick_over > 0.18 * atr) & (_wick_over < 2.2 * atr)]
+                if len(_norm_wick_over) >= 2:
                     return None
 
         _mid = np.nonzero(over_mask & (_pidx > fx) & (_pidx < x1))[0]

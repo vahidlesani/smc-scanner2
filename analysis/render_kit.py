@@ -606,9 +606,11 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
             })
             _kept.append(_item)
         # main patterns before children; at most 2 main + 1 child
-        _mains = [x for x in _kept if not x.get("child")][:2]
+        # Viva Law: Prioritize 2-line active enclosing patterns (Wedge, Channel, Triangle, Flag) over 1-line markers
+        _mains = [x for x in _kept if not x.get("child")]
+        _mains.sort(key=lambda x: len(x.get("lines") or []) >= 2, reverse=True)
         _kids = [x for x in _kept if x.get("child")][:1]
-        out = _mains + _kids
+        out = _mains[:2] + _kids
     except Exception as exc:
         print(f"render-kit pattern warning: {exc}")
     # ── Viva 09-20 round 10 post-pass ────────────────────────────────────
