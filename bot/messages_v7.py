@@ -3079,13 +3079,37 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception as _e_smp:
                 print(f"spot macro pattern engine warning: {_e_smp}")
 
-        # Law G1: Do not force artificial second edges on patterns that only have one genuine side
         if not _draw_pats:
             try:
                 from analysis.render_kit import detect_patterns as _dp_live
                 _draw_pats = _dp_live(frame, direction=getattr(candidate, "direction", ""))
             except Exception as _e_live:
                 pass
+
+        # Viva Both-Edges Integrity Law: Patterns (Triangles, Wedges, Channels) MUST paint BOTH upper and lower trendlines!
+        try:
+            _two_line_types = {"TRIANGLE", "TRIANGLE_SYMMETRICAL", "TRIANGLE_ASCENDING", "TRIANGLE_DESCENDING",
+                               "WEDGE_RISING", "WEDGE_FALLING", "CHANNEL", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING"}
+            for _pat_item in _draw_pats or []:
+                _ptype = str(_pat_item.get("type") or "").upper()
+                if any(t in _ptype for t in _two_line_types):
+                    _existing_lines = _pat_item.get("lines") or []
+                    _sides = {str(l.get("side") or "").upper() for l in _existing_lines}
+                    if "HIGH" not in _sides or "LOW" not in _sides:
+                        # Missing one of the edges: fit the complementary edge from frame pivots
+                        from analysis.viva_tlbreak import fit_validated_line, load_config
+                        _mcfg = load_config()
+                        if "HIGH" not in _sides:
+                            _up_line = fit_validated_line(frame, "HIGH", _mcfg)
+                            if _up_line is not None:
+                                _existing_lines.append(_up_line.to_dict() if hasattr(_up_line, "to_dict") else vars(_up_line))
+                        if "LOW" not in _sides:
+                            _lo_line = fit_validated_line(frame, "LOW", _mcfg)
+                            if _lo_line is not None:
+                                _existing_lines.append(_lo_line.to_dict() if hasattr(_lo_line, "to_dict") else vars(_lo_line))
+                        _pat_item["lines"] = _existing_lines
+        except Exception as _e_both:
+            print(f"Both edges guarantee error: {_e_both}")
 
         # R66 DEDUPLICATION OF OVERLAPPING TRENDLINES (Viva 10-03: «حذف ترندلاین‌های
         # همپوشان تکراری»): if two trendlines on the same side (HIGH/LOW) are nearly
@@ -3305,8 +3329,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _brk8 = []
             for _ln in _lns:
                 _sl, _ic = float(_ln["slope"]), float(_ln["intercept"])
-                # Steep-slope guard: lines with slope > 1.15 ATR/bar are vertical spikes, not trendlines
-                if _atr9 > 0 and abs(_sl) > 1.15 * _atr9:
+                # Steep-slope guard: allow rescaled multi-TF trendlines up to 2.5 ATR/bar
+                if _atr9 > 0 and abs(_sl) > 2.50 * _atr9:
                     continue
                 _pts_x = []
                 for q in (_ln.get("points") or []):

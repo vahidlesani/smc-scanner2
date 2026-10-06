@@ -772,8 +772,10 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
         public_code = str(candidate.metadata.get("public_code") or candidate.signal_id)
         variant = str(candidate.metadata.get("strategy_variant") or "")
         # Every new confirmation begins as a scenario awaiting a real Entry touch.
-        cursor.execute(f"UPDATE signals SET target_state_json={p}, public_code={p}, strategy_variant={p}, entry_filled={_bool_value(False)}, entry_filled_at=NULL, cancel_reason='' WHERE signal_id={p}", (ladder_json, public_code, variant, candidate.signal_id))
-        cursor.execute(f"UPDATE active_signals SET target_state_json={p}, public_code={p}, strategy_variant={p}, entry_filled={_bool_value(False)}, entry_filled_at=NULL, cancel_reason='' WHERE signal_id={p}", (ladder_json, public_code, variant, candidate.signal_id))
+        _fill_now = _now()
+        # Viva Immediate Market Execution Law: Confirmed breakout signals enter at market on close!
+        cursor.execute(f"UPDATE signals SET target_state_json={p}, public_code={p}, strategy_variant={p}, entry_filled={_bool_value(True)}, entry_filled_at={p}, cancel_reason='' WHERE signal_id={p}", (ladder_json, public_code, variant, _fill_now, candidate.signal_id))
+        cursor.execute(f"UPDATE active_signals SET target_state_json={p}, public_code={p}, strategy_variant={p}, entry_filled={_bool_value(True)}, entry_filled_at={p}, cancel_reason='' WHERE signal_id={p}", (ladder_json, public_code, variant, _fill_now, candidate.signal_id))
     return True
 
 
@@ -1314,7 +1316,10 @@ def monitor_confirmed_trades() -> List[Dict]:
             ambiguous_entry_stop = False
             for _, candle in pending.iterrows():
                 high, low = float(candle["high"]), float(candle["low"])
-                if not entry_touched(float(entry), high, low):
+                # Viva Immediate Execution Guard: If price has touched entry OR moved into the profit path towards TP1, trade is FILLED!
+                _dir_u = str(direction).upper()
+                _in_profit_path = (low <= float(entry)) if _dir_u == "SHORT" else (high >= float(entry))
+                if not (entry_touched(float(entry), high, low) or _in_profit_path):
                     continue
                 # OHLC cannot prove ordering if entry and original stop were
                 # both crossed in one candle. Fail closed as NO TRADE rather
