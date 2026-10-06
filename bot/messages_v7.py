@@ -3079,7 +3079,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 print(f"spot macro pattern engine warning: {_e_smp}")
 
         # Law G1: Do not force artificial second edges on patterns that only have one genuine side
-        pass
+        if not _draw_pats:
+            try:
+                from analysis.render_kit import detect_patterns as _dp_live
+                _draw_pats = _dp_live(frame, direction=getattr(candidate, "direction", ""))
+            except Exception as _e_live:
+                pass
 
         # R66 DEDUPLICATION OF OVERLAPPING TRENDLINES (Viva 10-03: «حذف ترندلاین‌های
         # همپوشان تکراری»): if two trendlines on the same side (HIGH/LOW) are nearly
@@ -3395,7 +3400,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _ln["x1"] = float(count)      # r59.2: paint THROUGH live
                 # Viva Anti-Vertical & Mini-Pattern Guard:
                 _is_mini_flag = str(_pat.get("type") or "").upper().startswith(("FLAG", "PENNANT"))
-                _is_too_steep = (_atr9 > 0 and abs(_sl) > 0.80 * _atr9)
+                # Relax slope limit to 2.2 ATR per bar to allow authentic momentum breakout lines
+                _is_too_steep = (_atr9 > 0 and abs(_sl) > 2.2 * _atr9)
                 _is_too_short = (_xend8 - _xa < 12 and not _ln.get("points"))
 
                 if _is_mini_flag or _is_too_steep or _is_too_short:

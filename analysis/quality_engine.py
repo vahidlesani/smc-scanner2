@@ -1357,10 +1357,16 @@ def evaluate_confirmation(
             return reject("PIN_NEEDS_LEVEL_CLOSE", (
                 "پین‌بار فقط با اولین کلوزِ فراتر از سطحِ خودِ پین (یا موتور توهم) "
                 "تأیید می‌شود؛ شکستِ میکروساختارِ تایمِ پایین‌تر تأییدِ ورود نیست."))
+    # Viva First-Close Breakout Law: A closed bar beyond the broken trendline/edge in the trade direction IS THE TRIGGER!
+    # It does NOT require a rare candlestick pattern (engulfing/pinbar) to confirm a valid breakout!
+    _is_break_trigger = bool(fast_lane or (candidate.metadata or {}).get("tl_fast_break"))
     trigger_valid = (
-        directional
-        and (structure_trigger or engulfing or pinbar)
-        and displacement["body_atr"] >= SETTINGS.confirm_body_min_atr
+        _is_break_trigger
+        or (
+            directional
+            and (structure_trigger or engulfing or pinbar)
+            and displacement["body_atr"] >= SETTINGS.confirm_body_min_atr
+        )
     )
     alt_only = False
     if not trigger_valid and str(candidate.metadata.get("viva_state") or "") == "S6_CONFIRMED" \
@@ -1469,8 +1475,8 @@ def evaluate_confirmation(
         max_chase = float(getattr(SETTINGS, "confirm_max_chase_atr", 0.80))
         # the fast-break lane may confirm a little beyond the zone, never from
         # a runaway price (his VVV case: 12.88 ATR away and still «in progress»).
-        _fb_max = float(getattr(SETTINGS, "fast_break_max_chase_atr", 1.5))
-        _fast_ok = bool(candidate.metadata.get("tl_fast_break")) and chase_atr <= _fb_max
+        _fb_max = float(getattr(SETTINGS, "fast_break_max_chase_atr", 3.2))
+        _fast_ok = bool(fast_lane or candidate.metadata.get("tl_fast_break")) and chase_atr <= _fb_max
         if chase_atr > max_chase and not _fast_ok:
             return reject("ENTRY_TOO_FAR", f"کلوز تأیید {chase_atr:.2f} ATR از زون دور شده؛ Chase مجاز نیست.")
         if chase_atr > max_chase:
