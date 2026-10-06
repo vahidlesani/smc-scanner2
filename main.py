@@ -2085,6 +2085,11 @@ def monitor_candidates() -> Dict[str, int]:
                     continue
                 was_staged = bool(candidate.metadata.get("persistence_staged"))
                 try:
+                    # Ensure candidate is marked CONFIRMED before persistence
+                    candidate.status = "CONFIRMED"
+                    if not candidate.confirmed_at:
+                        from analysis.models import iso_now
+                        candidate.confirmed_at = iso_now()
                     # Stage first, but with AWAITING_PUBLICATION and a false gate.
                     # Portfolio rejection therefore cannot publish an untracked trade.
                     save_confirmed_signal(candidate)

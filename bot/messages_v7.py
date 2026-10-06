@@ -2111,8 +2111,8 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
     # demoted to a SOFT far clip — the window frames the region where the
     # trends/patterns actually live. Overlays stay IN FULL; the recent block
     # never clips.
-    _deep64 = (not log_space) and ((int(bars or 0) > 240) or (
-        int(bars or 0) > 110 and span >= 5.0 * max(r_span, 1e-12)))
+    # Viva Aspect Ratio Law: Do NOT let extreme historical spikes squash active candle bodies!
+    _deep64 = ((int(bars or 0) > 90) or (span >= 2.5 * max(r_span, 1e-12)))
     if _deep64:
         _reach64 = 2.6 * max(r_span, 4.0 * _a)
         _flo64 = max(c_lo, r_mid - _reach64)
@@ -2377,17 +2377,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception:
                 _lookback = min(len(df), 320)
         else:
+            # Viva TradingView Focus Law: Frame non-spot charts strictly to the active structure (95-145 bars)
             try:
-                _lookback = _r62_tool_fit_lookback(df, candidate, int(_lookback), bool(confirmed))
-            except Exception:
-                pass
-            try:
-                from analysis.candle_counts import candle_count as _cc65
+                from analysis.candle_counts import render_count as _rc65
+                _rc_target = int(_rc65(str(_chart_tf), 110))
                 _lookback = _r65_focus_window(
-                    df, candidate, int(_lookback), bool(confirmed),
-                    max_n=_cc65(str(_chart_tf), int(_lookback)))
+                    df, candidate, _rc_target, bool(confirmed),
+                    max_n=_rc_target)
+                _lookback = min(int(_lookback), _rc_target)
             except Exception:
-                pass
+                _lookback = 110
         frame = _clean_render_frame(df, window=_lookback)
         if getattr(_clean_render_frame, "dropped_dead_rows", False):
             # r58: the frozen zoom was computed over dead data — discard it so

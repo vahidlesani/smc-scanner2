@@ -334,6 +334,9 @@ def evaluate_tohom_confirmation(
     md["tohom_vol_ratio"] = round(vol_ratio, 2)
     md["tohom_pattern"] = pattern
     md["technical_confirmation_complete"] = True
+    candidate.status = "CONFIRMED"
+    from analysis.models import iso_now
+    candidate.confirmed_at = candidate.confirmed_at or iso_now()
     reason = (f"⚡ تأیید زودهنگام توهم{' در First Time Back (FTB)' if _ftb60 else ''}: "
               f"{need} کلوزِ پیوستهٔ تایم {sub_tf.upper()} در جهت "
               f"{'صعودی' if direction > 0 else 'نزولی'} با رشد حجم {vol_ratio:.1f}× و الگوی {pattern}، "
