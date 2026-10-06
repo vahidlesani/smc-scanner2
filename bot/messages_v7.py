@@ -2136,9 +2136,11 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
     # کندلهای کوتاه‌تر بشن و رسم ترندها و الگوها قشنگ‌تر دیده بشه»): a tall
     # candle block gets a TIGHT pad (less dead headroom → bigger pattern);
     # quiet tapes keep the roomy pad.
-    if r_span >= 3.0 * _a:
-        return ylo - 0.015 * yr, yhi + 0.025 * yr
-    return ylo - 0.05 * yr, yhi + 0.05 * yr
+    # Viva TradingView Y-Axis Scroll Law:
+    # Adding generous 20% headroom and footroom flattens steep trendline slopes,
+    # prevents tall needle candles, and allows patterns to be read comfortably.
+    pad_y = 0.20 * yr
+    return ylo - pad_y, yhi + pad_y
 
 
 def _infer_chart_tf(frame, candidate) -> str:
@@ -4394,7 +4396,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _ylo = float(frame["low"].min())
                 _yhi = float(frame["high"].max())
                 _yr = max(_yhi - _ylo, 1e-9)
-                ax.set_ylim(_ylo - 0.06 * _yr, _yhi + 0.06 * _yr)
+                ax.set_ylim(_ylo - 0.20 * _yr, _yhi + 0.20 * _yr)
 
         # ── FINAL pill materialization (Viva 09-23/24): with the y-limits now
         # FINAL, allocate the label column and draw every pill — then widen

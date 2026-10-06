@@ -861,15 +861,19 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         _max_fw = 2 if _tf_str in ("1d", "3d", "1w") else (3 if _tf_str in ("4h", "8h", "12h") else 4)
         _fw31 = min(int(getattr(cfg, "fresh_break_bars", 12) or 12), _max_fw)
         _fresh_bk31 = _bk31 is not None and 0 <= n - int(_bk31) <= _fw31
-        if _fresh_bk31:
+        # Viva Failed-Break Doctrine: A historical break candle is VOID if price has reclaimed
+        # back inside or across to the opposite edge!
+        _break_held = (last_close > line_now - 0.05 * atr_p and live > line_now - 0.05 * atr_p) if side == 'upper'             else (last_close < line_now + 0.05 * atr_p and live < line_now + 0.05 * atr_p)
+        if _fresh_bk31 and _break_held:
             state = STATE_BREAK
-        elif crossed and displacement:
+        elif crossed and displacement and _break_held:
             state = STATE_BREAK
-        elif crossed:
+        elif crossed and _break_held:
             state = STATE_READY
-        elif dist <= 0.15:
+        elif dist <= 0.15 and not _break_held:
+            # Price is inside approaching the edge
             state = STATE_READY
-        elif dist <= 1.2:
+        elif dist <= 1.2 and not _break_held:
             state = STATE_NEAR
         else:
             continue
@@ -1466,6 +1470,13 @@ def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
     if len(_dir61) > 1:
         _win61 = min(_dir61.items(), key=lambda kv: kv[1])[0]
         events = [_e61 for _e61 in events if str(_e61.get("direction") or "") == _win61]
+    # Viva Live Price Alignment Law: A pattern break direction MUST strictly match live price position!
+    # If live price is ABOVE the pattern's upper edge, direction CANNOT be SHORT.
+    # If live price is BELOW the pattern's lower edge, direction CANNOT be LONG.
+    if upper is not None and live > float(upper.price_at(n)):
+        events = [e for e in events if str(e.get("direction")).upper() == "LONG"]
+    elif lower is not None and live < float(lower.price_at(n)):
+        events = [e for e in events if str(e.get("direction")).upper() == "SHORT"]
     for ev in events:
         # ── r60.2 twin guard: the same visual pattern re-detected on ANOTHER
         # trigger/style lane (his FET case: T446848 trig-1h → T894237
