@@ -1159,6 +1159,11 @@ def evaluate_confirmation(
         # near-touch pullback lane is open again (no new break required)
         _md20.pop("deep_pullback", None)
     candidate.metadata = _md20
+    # Viva Pure Breakout Law: TLBREAK and TECHCLASSIC confirm strictly on trendline close!
+    _is_pure_break_setup = str(getattr(candidate, "setup_code", "") or "").upper() in {"TLBREAK", "TECHCLASSIC"}
+    if _is_pure_break_setup and (fast_lane or (candidate.metadata or {}).get("tl_fast_break")):
+        touched = True
+
     candidate.metadata["touched"] = touched
     if not touched:
         return reject("NO_TOUCH", "قیمت هنوز به لبهٔ ناحیه/خط نرسیده؛ با یک کلوزِ معتبرِ فراتر از لبه تأیید می‌شود.")
@@ -1477,7 +1482,8 @@ def evaluate_confirmation(
         # a runaway price (his VVV case: 12.88 ATR away and still «in progress»).
         _fb_max = float(getattr(SETTINGS, "fast_break_max_chase_atr", 3.2))
         _fast_ok = bool(fast_lane or candidate.metadata.get("tl_fast_break")) and chase_atr <= _fb_max
-        if chase_atr > max_chase and not _fast_ok:
+        # Viva Pure Breakout Law: TLBREAK and TECHCLASSIC breakouts confirm immediately on first close!
+        if chase_atr > max_chase and not _fast_ok and not _is_pure_break_setup:
             return reject("ENTRY_TOO_FAR", f"کلوز تأیید {chase_atr:.2f} ATR از زون دور شده؛ Chase مجاز نیست.")
         if chase_atr > max_chase:
             # a fresh single-close break IS far from the zone by nature —

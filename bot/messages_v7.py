@@ -2712,23 +2712,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # chip can never sit on the live candles.
         if (candidate.metadata or {}).get("update_event") or _is_spot:
             zone_start = None  # CryptoCove Law: NO POI / DEMAND / ENTRY boxes on spot!
-        _dir_key = "LONG" if candidate.direction == "LONG" else "SHORT"
+        # Viva Strict S/D Law: Never paint Demand above price or Supply below price!
+        _cl_now = float(frame["close"].iloc[-1])
+        _poi_mid = 0.5 * (float(candidate.entry_zone_bottom) + float(candidate.entry_zone_top))
+        _effective_side = "SUPPLY" if _poi_mid >= _cl_now else "DEMAND"
+        _dir_key = "SHORT" if _effective_side == "SUPPLY" else "LONG"
         _poi = str((candidate.metadata or {}).get("poi_type") or "").upper()
         _fam = _zone_family(_poi)
-        _fill, _ztxt = ZONE_PALETTE.get((_fam, _dir_key),
-                                        ZONE_PALETTE[("DEF", _dir_key)])
+        _fill, _ztxt = ZONE_PALETTE.get((_fam, _dir_key), ZONE_PALETTE[("DEF", _dir_key)])
         zone_color, zone_text_color = (None, None) if zone_start is None else (_fill, _ztxt)
-        _POI_TOKEN = {"ORDER_BLOCK": "OB", "FVG": "FVG",
-                      "OB + FVG CONFLUENCE": "OB + FVG",
-                      "INVERSE FVG / BREAKER": "IFVG",
-                      "SUPPLY/DEMAND FLIP": "FLIP ZONE",
-                      "P1234 POINT-2 FLIP": "FLIP ZONE",
-                      "BROKEN TRENDLINE": "BOS",
-                      "TRENDLINE BREAK WATCH (LINE ZONE)": "BOS",
-                      "PINVAL": "PIN BASE",
-                      "ALBROX SPIKE RECLAIM BASE": "OB"}
-        # Python 3.11-safe: no multi-line f-string expressions (PEP 701 is 3.12+)
-        _zone_tok = _POI_TOKEN.get(_poi, "DEMAND" if _dir_key == "LONG" else "SUPPLY")
+        _zone_tok = _effective_side
         zone_name = f"{_zone_tok}  ·  POI / ENTRY"
         if zone_start is None:
             zone_name = None
@@ -2843,18 +2836,19 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _h8 = abs(_hi8 - _lo8)
                 return abs(_mid8 - _live8z) - 0.9 * _h8
 
-            _by_side: dict = {}
-            for _zc in _rz_list:
-                _s8 = str(_zc.get("bias") or "").upper() or \
-                    ("DEMAND" if _dir_key == "LONG" else "SUPPLY")
-                _by_side.setdefault(_s8, []).append(_zc)
-            # Keep the long-standing two-zones-per-side source contract;
-            # clean mode trims the already-ranked result to the most actionable
-            # two overall, without changing detection.
-            _rz_list = [z8 for _zs8 in _by_side.values()
-                        for z8 in sorted(_zs8, key=_zone_importance)[:2]]
-            if _clean_zone_view and len(_rz_list) > 2:
-                _rz_list = sorted(_rz_list, key=_zone_importance)[:2]
+            # Viva Strict 2-Zone Diet: Exactly ONE supply zone above and ONE demand zone below
+            _cl_now_z = float(frame["close"].iloc[-1])
+            _above_zones = [z for z in _rz_list if float(z.get("bottom", z.get("lo", 0))) >= _cl_now_z]
+            _below_zones = [z for z in _rz_list if float(z.get("top", z.get("hi", 0))) <= _cl_now_z]
+            _rz_list = []
+            if _above_zones:
+                _best_above = min(_above_zones, key=lambda z: abs(float(z.get("bottom", 0)) - _cl_now_z))
+                _best_above["bias"] = "SUPPLY"
+                _rz_list.append(_best_above)
+            if _below_zones:
+                _best_below = min(_below_zones, key=lambda z: abs(_cl_now_z - float(z.get("top", 0))))
+                _best_below["bias"] = "DEMAND"
+                _rz_list.append(_best_below)
         # ── r60.4 THE box law (Viva 09-30, verbatim): «فقط ساپلای و دیمندِ
         # همون تایم. اگر در چارت تریگر وجود داره رسم بشه» — ONLY trigger-TF
         # (refined) boxes render. A giant 1–2-TF-higher box on a 15m chart
