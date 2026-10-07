@@ -2233,9 +2233,10 @@ def _last_resort_edges(frame, use_log: bool,
         n = int(len(frame) - 1)
         if n < 44:
             return out
-        f = frame.reset_index(drop=True)
-        if "timestamp" not in f.columns and len(f.columns):
-            f = f.rename(columns={f.columns[0]: "timestamp"})
+        f = frame.copy()
+        if "timestamp" not in f.columns:
+            f["timestamp"] = frame.index
+        f = f.reset_index(drop=True)
 
         def _g(ln, side):
             # touch points re-anchor ON THE FRAME'S OWN INDEX (tz-safe);
@@ -3080,6 +3081,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception as _e_live:
                 pass
 
+        # ALBROX_ZONE structural lane guarantee: ensure both boundaries exist
+        if not _is_spot and str((candidate.metadata or {}).get("strategy_variant") or "") == "ALBROX_ZONE":
+            _has_up61 = any(_ln.get("side") == "HIGH"
+                            for _p61 in _draw_pats for _ln in (_p61.get("lines") or []))
+            _has_lo61 = any(_ln.get("side") == "LOW"
+                            for _p61 in _draw_pats for _ln in (_p61.get("lines") or []))
+            if not (_has_up61 and _has_lo61):
+                for _fb61 in _last_resort_edges(
+                        frame, bool(use_log),
+                        need_upper=not _has_up61, need_lower=not _has_lo61):
+                    _draw_pats.append(_fb61)
+
         # Viva Both-Edges Integrity Law: Patterns (Triangles, Wedges, Channels) MUST paint BOTH upper and lower trendlines!
         try:
             _two_line_types = {"TRIANGLE", "TRIANGLE_SYMMETRICAL", "TRIANGLE_ASCENDING", "TRIANGLE_DESCENDING",
@@ -3093,12 +3106,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         # Missing one of the edges: fit the complementary edge from frame pivots
                         from analysis.viva_tlbreak import fit_validated_line, load_config
                         _mcfg = load_config()
+                        _f_both = frame.copy()
+                        if "timestamp" not in _f_both.columns:
+                            _f_both["timestamp"] = _f_both.index
                         if "HIGH" not in _sides:
-                            _up_line = fit_validated_line(frame, "HIGH", _mcfg)
+                            _up_line = fit_validated_line(_f_both, "HIGH", _mcfg)
                             if _up_line is not None:
                                 _existing_lines.append(_up_line.to_dict() if hasattr(_up_line, "to_dict") else vars(_up_line))
                         if "LOW" not in _sides:
-                            _lo_line = fit_validated_line(frame, "LOW", _mcfg)
+                            _lo_line = fit_validated_line(_f_both, "LOW", _mcfg)
                             if _lo_line is not None:
                                 _existing_lines.append(_lo_line.to_dict() if hasattr(_lo_line, "to_dict") else vars(_lo_line))
                         _pat_item["lines"] = _existing_lines
@@ -3407,10 +3423,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # spec §13: parent patterns thick & solid, children thin;
                 # r59 far-majors sit between (a thin BLUE background major)
                 # R67.1: faint far / thin child / bold parent — same hue
-                _lw8 = 1.3 if _pat.get("far_major") else (
-                    1.2 if _pat.get("child") else 2.0)
-                _al8 = 0.55 if _pat.get("far_major") else (
-                    0.60 if _pat.get("child") else 0.95)
+                _lw8 = 1.6 if _pat.get("far_major") else (
+                    1.5 if _pat.get("child") else 2.6)
+                _al8 = 0.70 if _pat.get("far_major") else (
+                    0.75 if _pat.get("child") else 1.00)
                 # R16 phase 3: draw the CALIBRATED geometry. A log-fitted line
                 # is a curve on a log axis, so it is painted as a polyline
                 # through its own fit — that is what makes it touch the pivots
@@ -3665,15 +3681,19 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             )
             notes.append((f"FIRST STOP  {_price(candidate.sl)}",
                           CHART_THEME["invalidation"]))
-        # PINWALL-specific second/risk entry: same candidate metadata and same
-        # chart coordinates used by Telegram, so WebApp mirrors the exact line.
+        # General Entry 2 (Pullback / Scale-in Entry) for all setups (07-Oct Mandate)
         try:
-            _pw_e2 = float((candidate.metadata or {}).get("pinwall_entry2") or 0.0)
-            if candidate.setup_code in {"PINVAL", "PINWALLQ"} and _pw_e2 > 0:
-                ax.hlines(_pw_e2, line_start, line_end,
-                          color=CHART_THEME["entry"], linewidth=1.05,
+            _e2_draw = float((candidate.metadata or {}).get("entry2") or (candidate.metadata or {}).get("pinwall_entry2") or 0.0)
+            if not (_e2_draw > 0) and candidate.planned_entry and candidate.sl:
+                if candidate.direction == "LONG" and candidate.planned_entry > candidate.sl:
+                    _e2_draw = float(candidate.planned_entry - 0.382 * (candidate.planned_entry - candidate.sl))
+                elif candidate.direction == "SHORT" and candidate.sl > candidate.planned_entry:
+                    _e2_draw = float(candidate.planned_entry + 0.382 * (candidate.sl - candidate.planned_entry))
+            if _e2_draw > 0:
+                ax.hlines(_e2_draw, line_start, line_end,
+                          color=CHART_THEME["entry"], linewidth=1.1,
                           linestyles=(0, (3, 2)), zorder=7)
-                notes.append((f"PINWALL ENTRY 2  {_price(_pw_e2)}", CHART_THEME["entry"]))
+                notes.append((f"ENTRY 2  {_price(_e2_draw)}", CHART_THEME["entry"]))
         except Exception:
             pass
         live_price = float(frame["close"].iloc[-1])
@@ -4111,8 +4131,40 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # fewer than TWO edges (a one-sided range break, a side lost
                 # to a degenerate fit — DOT 15M / ETHFI 1H / STX 1H). The
                 # missing side is fitted on THIS frame and drawn here.
-                # Law G1: Single-line breakouts are legitimate; do not synthesize a fake second edge
-                # through _last_resort_edges that floats in mid-air.
+                # r61.3 shell guarantee: when a shell pattern only has one side, refit the missing side
+                if len(_fits9) < 2:
+                    _up_drawn = "viva_upper_points" in _fits9
+                    _lo_drawn = "viva_lower_points" in _fits9
+                    for _fb61 in _last_resort_edges(
+                            frame, bool(use_log),
+                            need_upper=not _up_drawn, need_lower=not _lo_drawn):
+                        _fln61 = _fb61["lines"][0]
+
+                        def _fy61(_x, _l=_fln61):
+                            if _l.get("log_fit"):
+                                return 10 ** (float(_l["log_slope"]) * _x
+                                              + float(_l["log_intercept"]))
+                            return float(_l["slope"]) * _x + float(_l["intercept"])
+
+                        try:
+                            _cl61 = float(frame["close"].iloc[-1])
+                            _y61 = _fy61(float(count))
+                            _atr61 = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
+                            if _atr61 > 0 and abs(_y61 - _cl61) > 4.5 * _atr61:
+                                continue
+                        except Exception:
+                            pass
+                        _xa61 = max(0.0, float(_fln61.get("x0", 0)))
+                        ax.plot([_xa61, count], [_fy61(_xa61), _fy61(count)],
+                                color=CHART_THEME["muted"], linewidth=1.4,
+                                alpha=0.8, zorder=6, solid_capstyle="round")
+                        ax.plot([count, count + future - .5],
+                                [_fy61(count), _fy61(count + future - .5)],
+                                color=CHART_THEME["muted"], linewidth=1.1,
+                                alpha=0.7, zorder=5, linestyle=(0, (5, 3)),
+                                solid_capstyle="butt")
+                        notes.append(("VALID " + ("UPPER" if _fln61.get("side") == "HIGH" else "LOWER")
+                                      + " LINE · REFIT", CHART_THEME["muted"]))
                 line = md.get("viva_breakout_line") or md.get("viva_break_line")
                 if line:
                     ax.hlines(float(line), max(0, count-45), count+future-.5, color=CHART_THEME["structure"], linewidth=1.15, linestyles=(0,(5,3)), zorder=6)
@@ -4551,11 +4603,21 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # r34 (Viva 09-26 night): ENGLISH abbreviations — «اگر با فونت
                 # خوانا و خوش‌خط فارسی نمی‌تونی روی چارت بنویسی، گوشه پایین با
                 # entry و مخفف انگلیسی بنویس» — readable, beautiful, NOT big.
+                _e2_box = float((candidate.metadata or {}).get("entry2") or (candidate.metadata or {}).get("pinwall_entry2") or 0.0)
+                if not (_e2_box > 0) and candidate.planned_entry and _orig32:
+                    if candidate.direction == "LONG" and candidate.planned_entry > _orig32:
+                        _e2_box = float(candidate.planned_entry - 0.382 * (candidate.planned_entry - _orig32))
+                    elif candidate.direction == "SHORT" and _orig32 > candidate.planned_entry:
+                        _e2_box = float(candidate.planned_entry + 0.382 * (_orig32 - candidate.planned_entry))
                 _rows32 = [
-                    f"ENTRY  {_price(float(candidate.planned_entry))}",
+                    f"ENTRY 1  {_price(float(candidate.planned_entry))}",
+                ]
+                if _e2_box > 0:
+                    _rows32.append(f"ENTRY 2  {_price(float(_e2_box))}")
+                _rows32.extend([
                     f"INITIAL STOP  {_price(_orig32)}" + ("  ✓" if _hit32 > 0 or _trail32 > 0 else ""),
                     f"TRAILING  {_price(_trail32) if _trail32 > 0 else '—'}",
-                ]
+                ])
                 for _r32, _lv32 in enumerate(ladder_targets, start=1):
                     _rows32.append(f"TP{_r32}  {_price(float(_lv32))}"
                                    + ("  ✓" if _hit32 >= _r32 else ""))
@@ -5395,7 +5457,11 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
     if not candidate.metadata.get("education_separator_attempted"):
         send_signal_separator(target)
         candidate.metadata["education_separator_attempted"] = True
-    chart = generate_chart(chart_df, candidate, confirmed=False) if chart_df is not None else None
+    chart = (candidate.metadata.get("cached_edu_chart")
+             if (candidate.metadata or {}).get("cached_edu_chart")
+             else (generate_chart(chart_df, candidate, confirmed=False) if chart_df is not None else None))
+    if chart and candidate.metadata is not None:
+        candidate.metadata["cached_edu_chart"] = chart
     # r49 (Viva 09-27 05:43, «کپشن چارت پینوال رو برداری مثل بقیه بشه —
     # همه شبیه هم باشن»): ONE uniform caption for EVERY alert chart; the pin
     # zone/polarity/rules live in the message text, never on the photo.
@@ -6346,7 +6412,7 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         VIVA_SEP,
         f"🎯 Entry: <b>{_price(candidate.planned_entry)}</b>",
         f"🛑 First Stop: <b>{_price(candidate.sl)}</b>",
-        *([f"🎯 PinWall Entry 2: <b>{_price(float((candidate.metadata or {}).get('pinwall_entry2')))}</b>"] if candidate.setup_code in {"PINVAL","PINWALLQ"} and float((candidate.metadata or {}).get("pinwall_entry2") or 0) > 0 else []),
+        *([f"🎯 Entry 2: <b>{_price(float((candidate.metadata or {}).get('entry2') or (candidate.metadata or {}).get('pinwall_entry2')))}</b>"] if float((candidate.metadata or {}).get("entry2") or (candidate.metadata or {}).get("pinwall_entry2") or 0) > 0 else []),
         f"📈 Live Price: <b>{_price(float((candidate.metadata or {}).get('live_price') or candidate.planned_entry))}</b>",
         *[f"🏁 TP{i+1}: {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [50, 30, 20])))],
         # Viva 09-20 (third time, verbatim): «فرمول ریسک به ریوارد ... اصلا
@@ -6439,7 +6505,11 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
                 and "timestamp" in chart_df.columns:
             candidate.metadata["tool_entry_ts"] = str(chart_df["timestamp"].iloc[-1])
     if not candidate.metadata.get("confirmation_chart_sent"):
-        chart = generate_chart(chart_df, candidate, confirmed=True) if chart_df is not None else None
+        chart = (candidate.metadata.get("cached_confirmed_chart")
+                 if (candidate.metadata or {}).get("cached_confirmed_chart")
+                 else (generate_chart(chart_df, candidate, confirmed=True) if chart_df is not None else None))
+        if chart and candidate.metadata is not None:
+            candidate.metadata["cached_confirmed_chart"] = chart
         if not chart:
             print(f"Confirmed publication blocked: chart unavailable for {candidate.signal_id}")
             return False
@@ -7191,7 +7261,7 @@ def send_trade_result(event: dict) -> bool:
         f"━━━━━━━━━━━━━━━━━━\n🔰 Entry: <b>{_price(float(event.get('entry') or 0))}</b>\n"
         f"⭕️ First Stop: <b>{_price(float(event.get('original_sl') or 0))}</b>\n"
         f"📈 Live / Exit Price: <b>{_price(float(event.get('live_price') or 0))}</b>\n"
-        f"🏁 TPهای زده‌شده: <b>{int(event.get('hit_index') or 0)}/5</b>\n"
+        f"🏁 TPهای زده‌شده: <b>{min(3, int(event.get('hit_index') or 0))}/3</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n📊 <b>نتیجه نهایی</b>\n\n"
         f"• سود/ضرر نهایی: <b>${float(event.get('profit_usd', 0)):+.2f}</b>\n\n"
         f"• بازده قیمت: <b>{float(event.get('pnl', 0)):+.2f}%</b>\n\n"

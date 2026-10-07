@@ -1205,7 +1205,7 @@ def evaluate_confirmation(
             _c61 = float(row["close"])
             _bad61 = (_c61 < _bl61 - 0.10 * _atr61) if _sd61 == "UPPER" \
                 else (_c61 > _bl61 + 0.10 * _atr61)
-            if _atr61 > 0 and _bad61 and not fast_lane and not (candidate.metadata or {}).get("tl_fast_break"):
+            if _atr61 > 0 and _bad61 and not fast_lane:
                 return reject("BREAK_RECLAIMED", (
                     "شکستِ مبنا پس از هشدار پس گرفته شده — کلوز به سمتِ پیش از شکست برگشته است؛ "
                     "شکستِ نامعتبر تأیید نمی‌گیرد و سناریو باطل است."))

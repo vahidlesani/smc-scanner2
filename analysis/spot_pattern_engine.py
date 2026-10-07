@@ -204,18 +204,41 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
                     # Solid segment across pattern span
                     xs_solid = np.linspace(x_start, n - 1, 100)
                     ys_solid = 10.0 ** (slope_l * xs_solid + ic_l)
-                    ax.plot(xs_solid, ys_solid, color='#1F2328', linewidth=2.0, zorder=5)
+                    ax.plot(xs_solid, ys_solid, color='#1F2328', linewidth=2.8, zorder=5)
 
                     # Projection dashed segment into future
                     xs_proj = np.linspace(n - 1, n + future - 4, 40)
                     ys_proj = 10.0 ** (slope_l * xs_proj + ic_l)
-                    ax.plot(xs_proj, ys_proj, color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.75, zorder=5)
+                    ax.plot(xs_proj, ys_proj, color='#1F2328', linewidth=1.8, linestyle=(0, (5, 3)), alpha=0.85, zorder=5)
                     
                     # Scatter pivot touch points
                     for px, py in zip(x_pts, y_pts):
-                        ax.scatter(px, py, s=36, facecolor='#FDF49F', edgecolor='#1F2328', linewidth=1.3, zorder=6)
+                        ax.scatter(px, py, s=48, facecolor='#FDF49F', edgecolor='#1F2328', linewidth=1.6, zorder=6)
                     
                     drawn_lines.append({'slope': slope_l, 'intercept': ic_l, 'side': line_info.get('side')})
+
+    # Viva Both-Edges Law: If pattern is a triangle/channel/wedge and only 1 edge exists, fit the complementary edge!
+    _two_side_pats = ('TRIANGLE', 'WEDGE', 'CHANNEL', 'مثلث', 'کانال', 'گوه')
+    _is_two_sided = any(k in str(pat_title).upper() or k in str(pat_name_fa) for k in _two_side_pats)
+    if drawn_lines and len(drawn_lines) == 1 and _is_two_sided:
+        try:
+            _existing_side = str(drawn_lines[0].get('side') or '').upper()
+            _need_side = 'LOW' if _existing_side == 'HIGH' else 'HIGH'
+            _target_vals = lows if _need_side == 'LOW' else highs
+            # Find 2 prominent pivots across the pattern window
+            _p1 = int(np.argmin(_target_vals[:n//2])) if _need_side == 'LOW' else int(np.argmax(_target_vals[:n//2]))
+            _p2 = n//2 + (int(np.argmin(_target_vals[n//2:])) if _need_side == 'LOW' else int(np.argmax(_target_vals[n//2:])))
+            if _p2 > _p1 and _target_vals[_p1] > 0 and _target_vals[_p2] > 0:
+                _sl2 = (np.log10(_target_vals[_p2]) - np.log10(_target_vals[_p1])) / (_p2 - _p1)
+                _ic2 = np.log10(_target_vals[_p1]) - _sl2 * _p1
+                _xs2 = np.linspace(_p1, n - 1, 80)
+                ax.plot(_xs2, 10.0 ** (_sl2 * _xs2 + _ic2), color='#1F2328', linewidth=2.8, zorder=5)
+                _xs2_p = np.linspace(n - 1, n + future - 4, 30)
+                ax.plot(_xs2_p, 10.0 ** (_sl2 * _xs2_p + _ic2), color='#1F2328', linewidth=1.8, linestyle=(0, (5, 3)), alpha=0.85, zorder=5)
+                ax.scatter([_p1, _p2], [_target_vals[_p1], _target_vals[_p2]], s=48, facecolor='#FDF49F', edgecolor='#1F2328', linewidth=1.6, zorder=6)
+                drawn_lines.append({'slope': _sl2, 'intercept': _ic2, 'side': _need_side})
+        except Exception as _e_both_spot:
+            print(f'Spot both edges fit warning: {_e_both_spot}')
 
     # If no lines in metadata (fallback to adaptive fit)
     if not drawn_lines:
@@ -260,12 +283,12 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
         label_text = f'{delta_p:.4g} (+{pct_gain:.2f}%) {ticks:,}'
         ax.text(arrow_x, target_price * 1.018, label_text,
                 color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='bottom', zorder=8)
-        y_max = max(y_max_data, target_price) * 1.07
-        y_min = y_min_data * 0.96
+        y_max = max(y_max_data, target_price) * 1.20
+        y_min = y_min_data * 0.85
     else:
         # For breakdowns or warning: no fake long target box!
-        y_max = y_max_data * 1.05
-        y_min = y_min_data * 0.95
+        y_max = y_max_data * 1.18
+        y_min = y_min_data * 0.86
 
     ax.set_ylim(y_min, y_max)
     ax.set_xlim(-1.0, n + future)

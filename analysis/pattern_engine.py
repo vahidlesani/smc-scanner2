@@ -1473,10 +1473,17 @@ def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
     # Viva Live Price Alignment Law: A pattern break direction MUST strictly match live price position!
     # If live price is ABOVE the pattern's upper edge, direction CANNOT be SHORT.
     # If live price is BELOW the pattern's lower edge, direction CANNOT be LONG.
-    if upper is not None and live > float(upper.price_at(n)):
-        events = [e for e in events if str(e.get("direction")).upper() == "LONG"]
-    elif lower is not None and live < float(lower.price_at(n)):
-        events = [e for e in events if str(e.get("direction")).upper() == "SHORT"]
+    _filtered_events = []
+    for _e in events:
+        _lp = float(_e.get("line_price") or 0.0)
+        _sd = str(_e.get("side") or "").lower()
+        _dr = str(_e.get("direction") or "").upper()
+        if _sd == "upper" and live > _lp and _dr == "SHORT":
+            continue
+        if _sd == "lower" and live < _lp and _dr == "LONG":
+            continue
+        _filtered_events.append(_e)
+    events = _filtered_events
     for ev in events:
         # ── r60.2 twin guard: the same visual pattern re-detected on ANOTHER
         # trigger/style lane (his FET case: T446848 trig-1h → T894237

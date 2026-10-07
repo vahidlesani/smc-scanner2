@@ -130,9 +130,9 @@ def _fresh(d: pd.DataFrame, tf: str) -> bool:
                      "1w": 168}.get(tf, 24)
         _bucket_end = _last + pd.Timedelta(hours=_tf_hours)
         _age_h = (_now - _bucket_end).total_seconds() / 3600.0
-        # R62-ARENA (audit S3): «just-closed» = until the NEXT close of the
-        # same TF (4h → 4h, 8h → 8h, 12h → 12h, 1d → 24h); 3d/1w keep 30h.
-        _limit_h = float(_tf_hours) if tf in ("4h", "8h", "12h", "1d") else 30.0
+        # Strict HTF Freshness: allow signals throughout full bar duration
+        # (4h: 4h, 8h: 8h, 12h: 12h, 1d: 24h, 3d: 72h, 1w: 168h)
+        _limit_h = float(_tf_hours) if tf in ("4h", "8h", "12h", "1d", "3d", "1w") else float(_tf_hours)
         return _age_h <= _limit_h
     except Exception:
         return True
@@ -175,20 +175,22 @@ def spot_risk_levels(close: float, upper: float, lower_vals: list,
                       if close * 1.002 < float(v) <= close + 1.15 * path})
     except Exception:
         _hs = []
-    # r57: virgin air (no real resistance inside the window) → TP1 scales
-    # WITH THE TIMEFRAME'S path — never a one-sun first pill on a 3d break
-    tp1 = min(_hs) if _hs else close + max(0.8 * atr, 0.35 * path)
-    # r57: the «یک‌سُن» TP1 came from the TF-flat path floors (3d was 6% →
-    # 0.45×path = 2.7%). With MIN_PATH_PCT_BY_TF now proportional to the TF,
-    # the resistance anchor AND the 45%-of-path bound both scale honestly.
-    tp1 = min(max(tp1, close + 0.6 * atr), close + 0.45 * path)
-    tp1 = max(tp1, close * 1.005)
-    above = [r for r in _hs if r > tp1 * 1.005]
+    # Viva Proportional Law (07-Oct Mandate: 50%-60% target box path division across 3 TPs)
+    # Filter out insignificant micro-resistances under 30% of path
+    _valid_hs = [v for v in _hs if v >= close + 0.30 * path]
+    tp1 = min(_valid_hs) if _valid_hs else close + 0.40 * path
+    tp1 = max(tp1, close + 0.35 * path)
+    tp1 = min(tp1, close + 0.55 * path)
+
+    above = [r for r in _valid_hs if r > tp1 * 1.01]
     tp3 = max(above) if above else close + path
-    tp3 = min(max(tp3, tp1 + 0.8 * atr, close + 0.55 * path), close + 1.10 * path)
-    mids = [r for r in above if r < tp3 * 0.995]
-    tp2 = min(mids) if mids else 0.5 * (tp1 + tp3)
-    tp2 = min(max(tp2, tp1 + 0.15 * atr), tp3 - 0.01 * path)
+    tp3 = max(tp3, close + 0.85 * path)
+    tp3 = min(tp3, close + 1.15 * path)
+
+    mids = [r for r in above if r < tp3 * 0.99]
+    tp2 = min(mids) if mids else (0.5 * (tp1 + tp3))
+    tp2 = max(tp2, tp1 + 0.20 * path)
+    tp2 = min(tp2, tp3 - 0.10 * path)
     return {"sl": float(sl), "targets": [float(tp1), float(tp2), float(tp3)]}
 
 
@@ -1163,6 +1165,28 @@ def spot_alert_check(item: dict) -> bool:
     marker is written by spot_alert_commit AFTER a successful send (handoff
     law: never store a dedup marker before the send succeeded)."""
     try:
+        sym = str(item.get("symbol") or "").upper()
+        stage = str(item.get("stage") or "").upper()
+
+        # Viva Strict Post-Confirmation Dedup Law (07-Oct Mandate):
+        # Once a signal is confirmed active for this symbol, NEVER send pre-breakout TOUCH/NEAR_BREAK alerts!
+        if stage in ("TOUCH", "NEAR_BREAK"):
+            try:
+                from database.db import get_active_signals
+                _actives = get_active_signals()
+                if any(str(s.get("symbol") or "").upper() == sym for s in _actives):
+                    return False
+            except Exception:
+                pass
+            try:
+                from database.bot_kv import get_json as _g
+                _recent_sigs = _g("recent_confirmed_symbols", {}) or {}
+                import time as _t
+                if sym in _recent_sigs and (_t.time() - float(_recent_sigs[sym])) < 86400.0 * 3:
+                    return False
+            except Exception:
+                pass
+
         from database.bot_kv import get_json as _g
         import time as _t
         now = _t.time()
