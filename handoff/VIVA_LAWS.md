@@ -441,3 +441,29 @@ HIS VERBATIM: «چرا بعد از شکست ترند رو به بالا پوزی
 4. **تثبیت مسیریابی سیگنال‌های تاییدشده و رندر چارت پاکیزه (Setup-Only Routing & Clean Render):**
    - کانال‌های سه‌گانه تفکیک‌شده (`VIVA-MON-Pinval`، `VIVA-MON-AlboroxAndTLB`، `VIVA-MON-TECH`) به عنوان تابلوهای اختصاصی سیگنال‌های قطعی (`CONFIRMED`) ستاپ‌های مربوطه تثبیت شدند.
    - کاراکترهای ایموجی ناسازگار با کتابخانه فونت‌های لینوکس از رندرهای متنی چارت حذف شدند تا از بارگذاری و اخطارهای بیهوده جلوگیری شود.
+
+### ۱۰-۰۸ — ماتریس دکترین تأیید + بازگشت قوانین هندسه/زوم (Doctrine Matrix & Geometry Restore)
+**منبع:** متن‌های «ایرادها ۱۳ و ۱۴ مهر» + «اصلاحیه ۱۵ مهر» + چارت‌های حاشیه‌دار ۱۰-۰۶/۰۷ (پک کامل در `docs/references_annotated_10_08/`) + جواب‌های Q1/Q2/Q3.
+
+1. **ماتریس دکترین (front gate در `evaluate_confirmation`):** TECHCLASSIC فقط شکست + اولین کلوز معتبر (یا توهم)؛ TLBREAK هم همین (لین داخلی = نقشه پولبک پوزیشن بعدی)؛ PINVAL/ALBROX همه لین‌ها + ناحیه. لمس ناحیه بدون شکست برای TC/TLBREAK هرگز تأیید نیست (`NO_TRIGGER` + دلیل «شکستِ خالص»). قفل: `tests/test_viva1008_doctrine_matrix.py`.
+2. **قانون ماهیت الگو (restore از 43a41e0):** وج‌ها/مثلث‌های جهت‌دار/کانال‌های جهت‌دار/پرچم‌ها تک‌ماهیت‌اند؛ سمت مخالف فقط مسیر counter-doctrine با برچسب «چرا این جهت».
+3. **containment (round-9/15):** متغیر مرده `_inside_band20` سیم‌کشی شد — پاک‌شدن لبه آینه‌ای داخل الگو، شکست نیست.
+4. **زوم/تعداد کندل (restore):** عکس = نقشه RENDER (۲۱۰ intraday) با سقف قطعی؛ عمق تشخیص ۲۵۰-۳۵۰ دست‌نخورده. پد y هوشمند r57 + آستانه deep فریم برگشت.
+5. **شیب از ATR جدا شد:** گیت تشخیص/رندر ۱.۲۵× → ۲.۲× (فقط عمودی واقعی می‌میرد)؛ گارد عمودی رندر سر جاش.
+6. **لیبل ENTRY جهت‌مبنا شد:** SHORT→SUPPLY، LONG→DEMAND؛ رنگ موضعی فقط برای باکس‌های ناحیه.
+7. **هشدار فاصله ورود/لایو (Q1):** شکاف ≥۰٫۳٪ در کپشن تأیید اعلام می‌شود؛ TP1 اسپات ۳۵-۵۵٪ (Q2: keep)؛ لین داخلی TLBREAK حفظ (Q3: keep).
+8. **رفرنس‌های طلایی:** `docs/references_gold/` (UNI 4H نمره ۲۰ + ADA 1D) + `MANIFEST.md`؛ هر رفتار هندسه/تأیید/زوم بدون چک این تصاویر عوض نشود.
+9. **قفل‌های به‌جامانده از dictation جدید کاربر (تست‌ها آپدیت شدند، نه کد):** TP1 اسپات = باند ۳۵-۵۵٪ مسیر (r57/r37 «نزدیک‌ترین مقاومت» برای TP1 منسوخ)؛ رژیم ۲-زون strict؛ دفتر ENTRY 1/ENTRY 2.
+10. **تأیید شد که قبلاً درست شده بود (دست نخورد):** ترتیب persist (d5cd57e)، تریلینگ profitable (847c233 — بعد از کیس ETHFI)، سقف پنجره STX، clamp باکس هفتگی FET، `last_resort_edges` (فیت معتبر واقعی است، نه ضلع تقلبی).
+
+## 10-08 (part 2 — his 16-mehr complaint + 17 CryptoCove refs)
+- TP LAW: spot TP1/TP2/TP3 = EXACTLY 40/50/60% of the green-box path; 10% runner to the path end; weights 30/30/30/10 (supersedes r37 structural + 10-07 40/30/30 + 35–55 band). Confirm chart draws entry→runner box with TP rungs + HOLD 10%.
+- SCROLL LAW: y-scroll ONLY when spikes/fossils drag the axis (futures `_drag1008`: 240-bar+drag≥3 or 110-bar+drag≥5; spot: frame log-span ≥ 2× live log-span). Clean charts keep hard fill + tight pads (spot ×1.10, was ×1.20/×0.85).
+- LADDER LAW: fit ladder adds the FULL frame window on deep frames (no 180 cap on majors).
+- IDENTITY LAW: spot sig = frozen ANCHOR TIMESTAMPS (never sliding window x0) — kills re-alert loops.
+- TOHOM DOCTRINE (spot lane): touch≥2 on the break edge + R68 slope law + shock ≥2.0× + displacement ≥1.0 sub-ATR; flags/pennants NEVER confirm.
+- DT/DB RULES: twins ≥8 bars apart, ≤0.5 ATR level, trough ≥1.0 ATR.
+- PIVOT LAW: pivots = extreme REASONABLE base shadows (outlier wicks demote to body) — incl. the spot second-edge fit.
+- CADENCE LAW: 15-min detection-only ladder refresh (cached frames, no charts/sends) mints pins early; 30s ticker lane speaks breaks instantly; 3-min recheck confirms. (SPOT_LADDER_MINUTES, default 15.)
+- SPOT WINDOW: no hard clamp — picture spans what anchors need, up to the detection frame (250–350 HTF).
+- SPOT LW RESTORE: Oct-7 2.8/1.8/s48 fattening reverted to 2.0/1.4/s36 (the xs_u fallback 1.8 predates Oct-7 — kept).

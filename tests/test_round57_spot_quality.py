@@ -110,8 +110,13 @@ def test_tf_proportional_paths():
 def test_3d_targets_are_never_one_sun():
     """The r57 proportion law at the risk engine: a 3d-magnitude path (20%)
     can no longer print a one-sun TP1 (the DASH 2.70% case) — the 45%-of-path
-    bound alone now forces TP1 ≥ ~7% when resistance is far, and any real
-    overhead resistance still wins the anchor (r37 unchanged)."""
+    bound alone now forces TP1 ≥ ~7% when resistance is far.
+
+    Viva Law 2026-10-08 (SUPERSEDES the r57 «nearest resistance anchors»
+    half, by his 15-مهر dictation «تی‌پی ۳ سنتی» + «۵۰ تا ۶۰ درصد مسیر باکس
+    سبز» and his 10-08 Q2 answer «keep the 35–55% band»): a resistance nearer
+    than 30% of path is a MICRO-resistance and must NOT drag TP1 down to
+    1.8% — TP1 stays inside the 35–55%-of-path band."""
     from analysis.spot_engine import spot_risk_levels
     close, atr = 0.60, 0.02
     path = 0.20 * close                      # the new 3d floor path
@@ -121,13 +126,13 @@ def test_3d_targets_are_never_one_sun():
     t1, t2, t3 = (float(t) for t in far["targets"])
     assert (t1 - close) / close >= 0.055, f"TP1 {100*(t1-close)/close:.2f}% is one-sun"
     assert t1 < t2 < t3
-    # real resistance NEARER than the floor still anchors honestly (r37 law)
+    # micro-resistance (1.8% < 30% of path) is filtered: TP1 stays in band
     near = spot_risk_levels(close, close * 1.02, [close * 0.9], atr,
                             path, swing_low=close * 0.94,
                             df_highs=[close * 1.018, close * 1.08, close * 1.17])
-    # r37 unchanged: real overhead resistance anchors TP1 (here the ATR floor
-    # 0.6·ATR lifts it the one tick above the 1.8% level)
-    assert abs(float(near["targets"][0]) - close * 1.02) < 0.005
+    t1n = float(near["targets"][0])
+    assert close + 0.35 * path - 1e-9 <= t1n <= close + 0.55 * path + 1e-9
+    assert (t1n - close) / close >= 0.055, f"TP1 {100*(t1n-close)/close:.2f}% is one-sun"
 
 
 # ── 4. the reply-chain law ─────────────────────────────────────────────────

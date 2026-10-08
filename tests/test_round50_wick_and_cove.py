@@ -93,7 +93,9 @@ def test_cryptocove_lookbacks():
 def test_spot_bundle_fetches_the_depths():
     src = open(os.path.join(REPO, "main.py"), encoding="utf-8").read()
     # R64: the spot bundle reads the ONE candle-count map (+40 warm-up)
-    assert src.count('fromlist=["fetch_limits"]).fetch_limits()') == 2
+    # 10-08: 3 readers (full pass + urgent recheck + ladder refresh) — all
+    # from the SAME map, so the depths stay single-sourced.
+    assert src.count('fromlist=["fetch_limits"]).fetch_limits()') == 3
     from analysis.candle_counts import fetch_limits
     lim = fetch_limits()
     assert lim["3d"] == 340 and lim["1w"] == 290 and lim["4h"] == 340

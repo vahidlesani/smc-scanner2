@@ -36,9 +36,10 @@ CANDLE_COUNTS = {
 # The renderer may still stretch back up to the detection count when a stored
 # pattern anchor needs the older bars (r37 anchor law) — never further.
 RENDER_COUNTS = dict(CANDLE_COUNTS)
-# TradingView Calibrated Density: Low/medium TFs frame the active swing structure (85-135 bars)
-# to give candles proper body height and eliminate dead historical spikes.
-RENDER_COUNTS.update({"5m": 95, "15m": 105, "30m": 115, "1h": 125, "2h": 135, "4h": 145})
+# Viva Law 2026-10-08 (RESTORE of the R65 lock, reverted from ac1db7f
+# «TradingView Calibrated Density» 85–145 which broke the locked tests AND the
+# Oct-02 dictation «کندل ۱۹۰ تا ۲۱۰ تا کافیه»): intraday pictures are 210.
+RENDER_COUNTS.update({"5m": 210, "15m": 210, "30m": 210, "1h": 210, "2h": 210})
 
 
 # ── canonical TF → seconds (R65: the PINVAL freshness guard and the PINVAL

@@ -122,12 +122,14 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
                 # Prepend 10-15 bars for context around pattern origin
                 start_idx = max(0, first_pt_idx - 14)
 
-    # If start_idx leaves too few bars, ensure at least 45 bars; if too many, clamp to 180 max
+    # Viva Law 2026-10-08 (his «وقتی لیمیت تعداد کندل میذاری ربات چطوری
+    # باید تشخیص بده و ارسال بکنه» + «تعداد کندل هوشمند»): NO hard clamp on
+    # the spot picture — it spans what the pattern anchors need (up to the
+    # detection frame itself, 250-350 bars on HTF). Only the minimum survives:
+    # fewer than 45 bars still widen to the last 65 for context.
     n_total = len(df_clean)
     if (n_total - start_idx) < 45:
         start_idx = max(0, n_total - 65)
-    elif (n_total - start_idx) > 220:
-        start_idx = max(0, n_total - 200)
 
     frame = df_clean.iloc[start_idx:].copy().reset_index(drop=True)
     n = len(frame)
@@ -204,16 +206,16 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
                     # Solid segment across pattern span
                     xs_solid = np.linspace(x_start, n - 1, 100)
                     ys_solid = 10.0 ** (slope_l * xs_solid + ic_l)
-                    ax.plot(xs_solid, ys_solid, color='#1F2328', linewidth=2.8, zorder=5)
+                    ax.plot(xs_solid, ys_solid, color='#1F2328', linewidth=2.0, zorder=5)
 
                     # Projection dashed segment into future
                     xs_proj = np.linspace(n - 1, n + future - 4, 40)
                     ys_proj = 10.0 ** (slope_l * xs_proj + ic_l)
-                    ax.plot(xs_proj, ys_proj, color='#1F2328', linewidth=1.8, linestyle=(0, (5, 3)), alpha=0.85, zorder=5)
+                    ax.plot(xs_proj, ys_proj, color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.75, zorder=5)
                     
                     # Scatter pivot touch points
                     for px, py in zip(x_pts, y_pts):
-                        ax.scatter(px, py, s=48, facecolor='#FDF49F', edgecolor='#1F2328', linewidth=1.6, zorder=6)
+                        ax.scatter(px, py, s=36, facecolor='#FDF49F', edgecolor='#1F2328', linewidth=1.3, zorder=6)
                     
                     drawn_lines.append({'slope': slope_l, 'intercept': ic_l, 'side': line_info.get('side')})
 
@@ -225,17 +227,32 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
             _existing_side = str(drawn_lines[0].get('side') or '').upper()
             _need_side = 'LOW' if _existing_side == 'HIGH' else 'HIGH'
             _target_vals = lows if _need_side == 'LOW' else highs
+            # Viva Pivot Law 2026-10-08 (his «در کف پایین‌ترین شدو یک بیس و
+            # در سقف بالاترین شدو یک بیس بعنوان پیوت» + «به شدوهای معقول
+            # احترام بذار»): outlier liquidation wicks demote to the body
+            # first, so a mega-spike never becomes the pivot — the pivot is
+            # the extreme REASONABLE shadow of its base.
+            try:
+                _bodies = np.minimum(opens, closes) if _need_side == 'LOW' else np.maximum(opens, closes)
+                _wicks = (_bodies - _target_vals) if _need_side == 'LOW' else (_target_vals - _bodies)
+                _med_w = float(np.median(np.maximum(_wicks, 0.0)))
+                _atr_e = float(np.mean(highs - lows)) if n else 0.0
+                _cut = max(2.5 * _med_w, 0.8 * _atr_e)
+                _pick = np.where(_wicks > _cut, _bodies, _target_vals)
+            except Exception:
+                _pick = _target_vals
             # Find 2 prominent pivots across the pattern window
-            _p1 = int(np.argmin(_target_vals[:n//2])) if _need_side == 'LOW' else int(np.argmax(_target_vals[:n//2]))
-            _p2 = n//2 + (int(np.argmin(_target_vals[n//2:])) if _need_side == 'LOW' else int(np.argmax(_target_vals[n//2:])))
+            _p1 = int(np.argmin(_pick[:n//2])) if _need_side == 'LOW' else int(np.argmax(_pick[:n//2]))
+            _p2 = n//2 + (int(np.argmin(_pick[n//2:])) if _need_side == 'LOW' else int(np.argmax(_pick[n//2:])))
+            _target_vals = _pick
             if _p2 > _p1 and _target_vals[_p1] > 0 and _target_vals[_p2] > 0:
                 _sl2 = (np.log10(_target_vals[_p2]) - np.log10(_target_vals[_p1])) / (_p2 - _p1)
                 _ic2 = np.log10(_target_vals[_p1]) - _sl2 * _p1
                 _xs2 = np.linspace(_p1, n - 1, 80)
-                ax.plot(_xs2, 10.0 ** (_sl2 * _xs2 + _ic2), color='#1F2328', linewidth=2.8, zorder=5)
+                ax.plot(_xs2, 10.0 ** (_sl2 * _xs2 + _ic2), color='#1F2328', linewidth=2.0, zorder=5)
                 _xs2_p = np.linspace(n - 1, n + future - 4, 30)
-                ax.plot(_xs2_p, 10.0 ** (_sl2 * _xs2_p + _ic2), color='#1F2328', linewidth=1.8, linestyle=(0, (5, 3)), alpha=0.85, zorder=5)
-                ax.scatter([_p1, _p2], [_target_vals[_p1], _target_vals[_p2]], s=48, facecolor='#FDF49F', edgecolor='#1F2328', linewidth=1.6, zorder=6)
+                ax.plot(_xs2_p, 10.0 ** (_sl2 * _xs2_p + _ic2), color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.75, zorder=5)
+                ax.scatter([_p1, _p2], [_target_vals[_p1], _target_vals[_p2]], s=36, facecolor='#FDF49F', edgecolor='#1F2328', linewidth=1.3, zorder=6)
                 drawn_lines.append({'slope': _sl2, 'intercept': _ic2, 'side': _need_side})
         except Exception as _e_both_spot:
             print(f'Spot both edges fit warning: {_e_both_spot}')
@@ -255,40 +272,114 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     
     y_min_data = float(np.min(lows))
     y_max_data = float(np.max(highs))
-    
-    if not is_breakdown and (confirmed or 'BREAK_UP' in stage or 'TOUCH' in stage or 'NEAR_BREAK' in stage):
-        # Calculate target from upper line or pattern height
-        upper_level = live_price * 1.05
-        if drawn_lines:
-            up_cand = [ln for ln in drawn_lines if ln.get('side') == 'HIGH']
-            if up_cand:
-                upper_level = float(10.0 ** (up_cand[0]['slope'] * (n - 1) + up_cand[0]['intercept']))
-        
-        target_price = upper_level * 1.25
-        delta_p = target_price - upper_level
-        pct_gain = (delta_p / max(1e-6, upper_level)) * 100.0
 
+    _box_top = 0.0
+    _box_drawn = False
+    if not is_breakdown and (confirmed or 'BREAK_UP' in stage or 'TOUCH' in stage or 'NEAR_BREAK' in stage):
+        # Viva TP Law 2026-10-08 (his CryptoCove verdict): a CONFIRMED chart
+        # draws the REAL ladder box — entry → path end (runner), with the
+        # TP1/TP2/TP3 rungs at 40/50/60% inside. Alerts (no ladder yet) keep
+        # the measured +25% projection box.
+        _lad = (md.get('target_ladder') or {})
+        try:
+            _tps = [float(x) for x in (_lad.get('targets') or []) if float(x or 0) > 0][:3]
+        except Exception:
+            _tps = []
+        try:
+            _run = float(_lad.get('runner') or 0.0)
+        except Exception:
+            _run = 0.0
+        try:
+            _entry = float(getattr(candidate, 'planned_entry', 0.0) or 0.0) or live_price
+        except Exception:
+            _entry = live_price
         bx0 = n - 1
         bx1 = n + 20
         bw = bx1 - bx0
-        ax.hlines(upper_level, bx0, bx1, colors='#1F2328', linewidth=1.4, zorder=6)
-        rect_box = patches.Rectangle((bx0, upper_level), bw, target_price - upper_level,
-                                     facecolor='#A8D49B', edgecolor='#388E3C',
-                                     linewidth=1.2, alpha=0.60, zorder=5)
-        ax.add_patch(rect_box)
-        arrow_x = bx0 + bw * 0.5
-        ax.annotate('', xy=(arrow_x, target_price), xytext=(arrow_x, upper_level),
-                    arrowprops=dict(arrowstyle='->', color='#1F2328', lw=1.5, mutation_scale=12), zorder=7)
-        ticks = int(round(delta_p * 1000)) if delta_p < 10 else int(round(delta_p))
-        label_text = f'{delta_p:.4g} (+{pct_gain:.2f}%) {ticks:,}'
-        ax.text(arrow_x, target_price * 1.018, label_text,
-                color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='bottom', zorder=8)
-        y_max = max(y_max_data, target_price) * 1.20
-        y_min = y_min_data * 0.85
+        if confirmed and len(_tps) == 3 and _run > _entry > 0:
+            box_lo, box_hi = _entry, _run
+            ax.hlines(box_lo, bx0, bx1, colors='#1F2328', linewidth=1.4, zorder=6)
+            rect_box = patches.Rectangle((bx0, box_lo), bw, box_hi - box_lo,
+                                         facecolor='#A8D49B', edgecolor='#388E3C',
+                                         linewidth=1.2, alpha=0.60, zorder=5)
+            ax.add_patch(rect_box)
+            for _ti, _tv in enumerate(_tps, start=1):
+                ax.hlines(_tv, bx0, bx1, colors='#2E7D32', linewidth=1.1,
+                          linestyle=(0, (4, 3)), zorder=6)
+                ax.text(bx1 + 0.3, _tv, f'TP{_ti}',
+                        color='#1F2328', fontsize=8.2, fontweight='bold',
+                        ha='left', va='center', zorder=8)
+            ax.text(bx1 + 0.3, box_hi, 'HOLD 10%',
+                    color='#1F2328', fontsize=8.2, fontweight='bold',
+                    ha='left', va='center', zorder=8)
+            arrow_x = bx0 + bw * 0.5
+            ax.annotate('', xy=(arrow_x, box_hi), xytext=(arrow_x, box_lo),
+                        arrowprops=dict(arrowstyle='->', color='#1F2328', lw=1.5, mutation_scale=12), zorder=7)
+            _pct = (box_hi - box_lo) / max(1e-12, box_lo) * 100.0
+            ax.text(arrow_x, box_hi * 1.018, f'+{_pct:.1f}%',
+                    color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='bottom', zorder=8)
+            _box_top = box_hi
+            _box_drawn = True
+        else:
+            # Alert projection: measured +25% above the live edge.
+            upper_level = live_price * 1.05
+            if drawn_lines:
+                up_cand = [ln for ln in drawn_lines if ln.get('side') == 'HIGH']
+                if up_cand:
+                    upper_level = float(10.0 ** (up_cand[0]['slope'] * (n - 1) + up_cand[0]['intercept']))
+
+            target_price = upper_level * 1.25
+            delta_p = target_price - upper_level
+            pct_gain = (delta_p / max(1e-6, upper_level)) * 100.0
+
+            ax.hlines(upper_level, bx0, bx1, colors='#1F2328', linewidth=1.4, zorder=6)
+            rect_box = patches.Rectangle((bx0, upper_level), bw, target_price - upper_level,
+                                         facecolor='#A8D49B', edgecolor='#388E3C',
+                                         linewidth=1.2, alpha=0.60, zorder=5)
+            ax.add_patch(rect_box)
+            arrow_x = bx0 + bw * 0.5
+            ax.annotate('', xy=(arrow_x, target_price), xytext=(arrow_x, upper_level),
+                        arrowprops=dict(arrowstyle='->', color='#1F2328', lw=1.5, mutation_scale=12), zorder=7)
+            ax.text(arrow_x, target_price * 1.018, f'+{pct_gain:.1f}%',
+                    color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='bottom', zorder=8)
+            _box_top = target_price
+            _box_drawn = True
+
+    # Viva Law 2026-10-08 (his «اسکرول کن روی محور قیمت» + 16-mehr «اونهایی
+    # که اسپایک در چارت نیست رو هم کوتاه کردی»): the y-window frames the
+    # LIVE region (recent block + live edge values + box) ONLY when fossil
+    # extremes actually drag the axis (whole-frame log span ≥ 2× the live
+    # log span). Clean charts keep the whole frame with tight pads — the
+    # old ×1.20/×0.85 fat pads died here. Lines still project; candles stay
+    # readable; nothing overlayed ever clips.
+    _live_n = min(n, 60)
+    _r_hi = float(np.max(highs[-_live_n:]))
+    _r_lo = float(np.min(lows[-_live_n:]))
+    _edge_live = [live_price]
+    for _ln in drawn_lines:
+        try:
+            _edge_live.append(float(10.0 ** (_ln['slope'] * (n - 1) + _ln['intercept'])))
+        except Exception:
+            pass
+    if _box_top > 0:
+        _edge_live.append(_box_top)
+    _hi_live = max([_r_hi] + _edge_live)
+    _lo_live = min([_r_lo] + _edge_live)
+    try:
+        _span_all = float(np.log10(max(y_max_data, 1e-12) / max(y_min_data, 1e-12)))
+        _span_live = float(np.log10(max(_hi_live, 1e-12) / max(_lo_live, 1e-12)))
+    except Exception:
+        _span_all, _span_live = 1.0, 1.0
+    if _span_live > 0 and _span_all >= 2.0 * _span_live:
+        y_max = _hi_live * 1.08
+        y_min = _lo_live / 1.08
+    elif _box_drawn:
+        y_max = max(y_max_data, _box_top) * 1.12
+        y_min = y_min_data / 1.10
     else:
-        # For breakdowns or warning: no fake long target box!
-        y_max = y_max_data * 1.18
-        y_min = y_min_data * 0.86
+        # Breakdowns or warnings: no fake long target box, tight pads.
+        y_max = y_max_data * 1.10
+        y_min = y_min_data / 1.10
 
     ax.set_ylim(y_min, y_max)
     ax.set_xlim(-1.0, n + future)

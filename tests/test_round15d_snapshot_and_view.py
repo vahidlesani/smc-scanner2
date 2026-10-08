@@ -168,5 +168,8 @@ def test_chart_writings_and_the_green_marker_never_sit_on_the_candles():
     assert "transform=ax.transAxes" in src
     # …and the tool's own read-out left the tape as well
     assert "fig.text(\n                _posi.x0 + 0.012," in src
-    # zones are on a diet: at most two per side
-    assert "sorted(_zs8, key=_zone_importance)[:2]" in src
+    # zones are on a diet: Viva 10-07 strict law — EXACTLY one supply above
+    # and one demand below (his «فقط دو مورد یکی بالا و یکی پایین»); this
+    # supersedes the r60 [:2]-per-side form.
+    assert "Viva Strict 2-Zone Diet" in src
+    assert "_best_above" in src and "_best_below" in src

@@ -680,3 +680,12 @@ OPEN: his device review of r41 (cards/live/notifs); brief-text law for messages 
 4. **تثبیت مسیریابی سیگنال‌های تاییدشده و رندر چارت پاکیزه (Setup-Only Routing & Clean Render):**
    - کانال‌های سه‌گانه تفکیک‌شده (`VIVA-MON-Pinval`، `VIVA-MON-AlboroxAndTLB`، `VIVA-MON-TECH`) به عنوان تابلوهای اختصاصی سیگنال‌های قطعی (`CONFIRMED`) ستاپ‌های مربوطه تثبیت شدند.
    - کاراکترهای ایموجی ناسازگار با کتابخانه فونت‌های لینوکس از رندرهای متنی چارت حذف شدند تا از بارگذاری و اخطارهای بیهوده جلوگیری شود.
+
+### ۱۰-۰۸ — پک دکترین/هندسه/زوم (بعد از mandate ضدکرش)
+- سوئیت: ۳۵F/893P → **933P/0F/1S** (فایل `test_round12_outage_guard.py` از قبل syntax-broken است و از کالکشن حذف می‌شود؛ ۴ تست env با نصب پکیج سبز شدند).
+- کامیت‌های مقصر پیدا و revert هدفمند شدند (43a41e0 ماهیت، ac1db7f چگالی+بازنشستگی، e0dbf0e پد، d5cd57e deep+کرش توهم، 2d66da1 لیبل، 5451ac2 گیت/عرض‌خط، dad6e21 ستون نوت/حذف ایونت).
+- Q1=warn (هشدار شکاف)، Q2=keep (باند ۳۵-۵۵٪)، Q3=keep (لین داخلی TLBREAK).
+- پوش نشده؛ منتظر اجازه + تست کاربر.
+
+### 10-08 p2 — CryptoCove pack (16-mehr complaint answered point-by-point)
+Suite: 949P/1S/0F. Live-verified on real data (BTC/ETH/SOL/DOGE/XRP/ADA 4h–1w): sig timestamps print, bear-market silence is correct (LONG-only, chase-gated), alert+confirm charts re-rendered clean (TP box + rungs + HOLD). Railway token supplied in chat = 403 on backboard API (expired/scopeless?) — could NOT verify deploy status; user must check Railway dashboard or send a fresh token. uploads/ cleaned (46M→12K) after repo archival. Pushed to origin/main same turn (re-committed: sandbox re-clone drops commit objects, files persist).

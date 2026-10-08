@@ -1487,7 +1487,21 @@ def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool =
             continue
         _seen_notes.add(str(_nt[0]))
         _uniq.append(_nt)
-    # Viva Law: Clean, single-column unified notes stack (NO chaotic two-column splitting)
+    # Viva Law 2026-10-08 (RESTORE of the r67 round-7 lock, reverted from
+    # dad6e21's single-column cap): a crowded stack splits into TWO columns so
+    # notes never print on themselves (his INJ-30M case); short stacks keep
+    # the clean single column.
+    if len(_uniq) > 6:
+        _half = (len(_uniq) + 1) // 2
+        _cols = (_uniq[:_half], _uniq[_half:])
+        for _ci, _col in enumerate(_cols):
+            for _i, (text, color) in enumerate(_col):
+                ax.text(0.012 + _ci * 0.235, _y0 - _step * _i, text,
+                        ha="left", va="center", color=color, fontsize=6.2,
+                        fontweight="bold", zorder=25, transform=ax.transAxes,
+                        bbox={"boxstyle": "round,pad=0.25", "facecolor": "white",
+                              "edgecolor": "#D0C9BE", "linewidth": 0.6, "alpha": 0.95})
+        return
     # Filter to most critical 5 structural notes so they never sprawl or collide with candles
     _clean_stack = _uniq[:5]
     for _i, (text, color) in enumerate(_clean_stack):
@@ -2111,8 +2125,13 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
     # demoted to a SOFT far clip — the window frames the region where the
     # trends/patterns actually live. Overlays stay IN FULL; the recent block
     # never clips.
-    # Viva Aspect Ratio Law: Do NOT let extreme historical spikes squash active candle bodies!
-    _deep64 = ((int(bars or 0) > 90) or (span >= 2.5 * max(r_span, 1e-12)))
+    # Viva Law 2026-10-08 (his 16-mehr «اونهایی که اسپایک در چارت نیست رو
+    # هم کوتاه کردی»): the deep scroll fires ONLY when a spike/outlier
+    # actually drags the axis (frame span ≫ live-region span) — a deep but
+    # CLEAN frame keeps the r40 hard fill, never a forced scroll.
+    _drag1008 = span / max(r_span, 1e-12)
+    _deep64 = (not log_space) and (((int(bars or 0) > 240) and _drag1008 >= 3.0) or (
+        int(bars or 0) > 110 and _drag1008 >= 5.0))
     if _deep64:
         _reach64 = 2.6 * max(r_span, 4.0 * _a)
         _flo64 = max(c_lo, r_mid - _reach64)
@@ -2136,11 +2155,12 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
     # کندلهای کوتاه‌تر بشن و رسم ترندها و الگوها قشنگ‌تر دیده بشه»): a tall
     # candle block gets a TIGHT pad (less dead headroom → bigger pattern);
     # quiet tapes keep the roomy pad.
-    # Viva TradingView Y-Axis Scroll Law:
-    # Adding generous 20% headroom and footroom flattens steep trendline slopes,
-    # prevents tall needle candles, and allows patterns to be read comfortably.
-    pad_y = 0.20 * yr
-    return ylo - pad_y, yhi + pad_y
+    # Viva Law 2026-10-08 (RESTORE of the r57 lock, reverted from e0dbf0e's
+    # fixed 20% which broke the DASH/WLD zoom tests): a tall candle block gets
+    # a TIGHT pad, quiet tapes keep the roomy pad.
+    if r_span >= 3.0 * _a:
+        return ylo - 0.015 * yr, yhi + 0.025 * yr
+    return ylo - 0.05 * yr, yhi + 0.05 * yr
 
 
 def _infer_chart_tf(frame, candidate) -> str:
@@ -2380,7 +2400,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception:
                 _lookback = min(len(df), 320)
         else:
-            # Viva TradingView Focus Law: Frame non-spot charts strictly to the active structure (95-145 bars)
+            # Viva Law 2026-10-08: non-spot charts frame the active structure capped
+            # at the RENDER map (210 intraday, his 10-02 dictation) — never the
+            # detection depth (his STX-15M «چرا ۳۰۰ کندل؟»).
             try:
                 from analysis.candle_counts import render_count as _rc65
                 _rc_target = int(_rc65(str(_chart_tf), 110))
@@ -2718,11 +2740,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         _poi_mid = 0.5 * (float(candidate.entry_zone_bottom) + float(candidate.entry_zone_top))
         _effective_side = "SUPPLY" if _poi_mid >= _cl_now else "DEMAND"
         _dir_key = "SHORT" if _effective_side == "SUPPLY" else "LONG"
+        # ── Viva Law 2026-10-08 (his «لیبل وارونه» — a SHORT chart printed
+        # «DEMAND · POI / ENTRY»): the ENTRY band is the trade's POI, NOT a
+        # supply/demand zone — its token + tint follow the TRADE direction
+        # (SHORT → SUPPLY/red, LONG → DEMAND/green). Position-based paint
+        # stays for the zone inventory only (strict S/D law, below).
+        _entry_key = "SHORT" if str(candidate.direction or "").upper() == "SHORT" else "LONG"
         _poi = str((candidate.metadata or {}).get("poi_type") or "").upper()
         _fam = _zone_family(_poi)
-        _fill, _ztxt = ZONE_PALETTE.get((_fam, _dir_key), ZONE_PALETTE[("DEF", _dir_key)])
+        _fill, _ztxt = ZONE_PALETTE.get((_fam, _entry_key), ZONE_PALETTE[("DEF", _entry_key)])
         zone_color, zone_text_color = (None, None) if zone_start is None else (_fill, _ztxt)
-        _zone_tok = _effective_side
+        _zone_tok = "SUPPLY" if _entry_key == "SHORT" else "DEMAND"
         zone_name = f"{_zone_tok}  ·  POI / ENTRY"
         if zone_start is None:
             zone_name = None
@@ -3423,10 +3451,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # spec §13: parent patterns thick & solid, children thin;
                 # r59 far-majors sit between (a thin BLUE background major)
                 # R67.1: faint far / thin child / bold parent — same hue
-                _lw8 = 1.6 if _pat.get("far_major") else (
-                    1.5 if _pat.get("child") else 2.6)
-                _al8 = 0.70 if _pat.get("far_major") else (
-                    0.75 if _pat.get("child") else 1.00)
+                # Viva Law 2026-10-08 (RESTORE of the pre-5451ac2 hierarchy: faint
+                # far / thin child / bold parent — the Oct-07 fattening broke
+                # the lock and his «خط‌ها چاق شدن» complaint).
+                _lw8 = 1.3 if _pat.get("far_major") else (
+                    1.2 if _pat.get("child") else 2.0)
+                _al8 = 0.55 if _pat.get("far_major") else (
+                    0.60 if _pat.get("child") else 0.95)
                 # R16 phase 3: draw the CALIBRATED geometry. A log-fitted line
                 # is a curve on a log axis, so it is painted as a polyline
                 # through its own fit — that is what makes it touch the pivots
@@ -4033,8 +4064,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # Phase-3: log-space fit when the log axis is live & span>3%
                     _mode9, slope, intercept = _pivot_line_fit(ax, frame, xs, ys)
                     # Viva Steep-Slope Guard: A trendline cannot be vertical!
+                    # Viva Law 2026-10-08 (his «شیب رو از ATR جدا کن»): 1.25×
+                    # killed steep-but-VALID trends; only TRUE verticals skip
+                    # now (2.2×, the shared vertical law).
                     _atr_chk = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
-                    if _atr_chk > 0 and _mode9 != "log" and abs(slope) > 1.25 * _atr_chk:
+                    if _atr_chk > 0 and _mode9 != "log" and abs(slope) > 2.2 * _atr_chk:
                         continue  # skip vertical artifact lines
                     if _mode9 == "log" and abs(slope) > 0.025:
                         continue  # skip vertical artifact in log space
@@ -4150,7 +4184,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             _cl61 = float(frame["close"].iloc[-1])
                             _y61 = _fy61(float(count))
                             _atr61 = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
-                            if _atr61 > 0 and abs(_y61 - _cl61) > 4.5 * _atr61:
+                            # Viva Law 2026-10-08 (r67 lock restored from 5451ac2's
+                            # 4.5×): a refit partner farther than 2.5 ATR from
+                            # the close is the floating-trendline bug — dropped.
+                            if _atr61 > 0 and abs(_y61 - _cl61) > 2.5 * _atr61:
                                 continue
                         except Exception:
                             pass
@@ -5641,8 +5678,6 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     # r61.1 / R66: AT MOST ONE update between the initial alert and
     # the confirm («آپدیت فقط یکبار بین هشدار ابتدایی و پیام کانفرمد»); critical
     # single events (verdict ❌⚪, cancellation ⛔) still close the chain's slot.
-    # Viva Absolute Law: At most ONE update between initial alert and confirm
-    # Only true terminal events (⛔ cancellation / ❌ verdict) may close an already-updated chain
     _is_terminal = str(state_fa or "")[:2].lstrip("<b ").strip()[:1] in {"❌", "⚪", "⛔"}
     if (upd_n > 1 or bool((candidate.metadata or {}).get("approaching_sent"))
             or bool(getattr(candidate, "approaching_sent", False))) and not _is_terminal:
@@ -5931,6 +5966,23 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
         w = weights[i - 1] if i - 1 < len(weights) else 0
         tag = "ℹ️" if i >= 4 else f"{w:.0f}%"
         rows.append(f"• TP{i}: <b>{_price(tgt)}</b> · {dist:.2f}٪ فاصله · {tag}")
+    # Viva TP Law 2026-10-08 (his CryptoCove verdict): the spot card carries
+    # the 10% RUNNER to the path end under the three rungs (not a TP4 — a
+    # held share; the r61.3 «تا تی‌پی ۳» doctrine still caps numbered TPs).
+    try:
+        _run1008 = float((ladder or {}).get("runner") or 0.0)
+    except Exception:
+        _run1008 = 0.0
+    if _is_spot and _run1008 > 0:
+        try:
+            _rdist = abs(_run1008 - float(candidate.planned_entry)) / max(abs(float(candidate.planned_entry)), 1e-12) * 100.0
+        except Exception:
+            _rdist = 0.0
+        try:
+            _rw = float(list((ladder or {}).get("weights") or [30, 30, 30, 10])[3])
+        except Exception:
+            _rw = 10.0
+        rows.append(f"• 🏃 هولد: <b>{_price(_run1008)}</b> · {_rdist:.2f}٪ فاصله · {_rw:.0f}%")
     # r35 (Viva 09-26): the on-chain REFERENCE block on spot cards — the
     # free witness engine (CoinGecko + Fear&Greed + DefiLlama) was already
     # built and running fail-open; the card now SHOWS it, 4 lines max,
@@ -6395,6 +6447,25 @@ def _telegram_message_link(chat_id: str, message_id: int) -> str:
     return ""
 
 
+def _entry_live_gap_warn_rows(candidate) -> list:
+    """Viva Law 2026-10-08 (his 10-08 Q1: late confirms APPROVE with a visible
+    gap warning — «تأیید با هشدار فاصله»): when the confirmed entry sits
+    ≥0.3% from the live price (his RENDER case: entry 3% under live), the
+    confirm caption names the gap instead of hiding it."""
+    try:
+        _entry = float(getattr(candidate, "planned_entry", 0.0) or 0.0)
+        _live = float((candidate.metadata or {}).get("live_price") or 0.0) or _entry
+        if _entry <= 0 or _live <= 0:
+            return []
+        _gap = abs(_live - _entry) / _entry * 100.0
+        if _gap >= 0.3:
+            _side = "بالاتر" if _live > _entry else "پایین‌تر"
+            return [f"⚠️ فاصلهٔ ورود تا لایو: <b>{_gap:.2f}٪</b> (لایو {_side} از ورود — تأیید دیر)"]
+    except Exception:
+        pass
+    return []
+
+
 def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
     mm = build_money_management(candidate)
     style_fa = {"DAYTRADE": "DAYTRADE", "SWING": "SWING", "SCALP": "SCALP",
@@ -6414,6 +6485,7 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         f"🛑 First Stop: <b>{_price(candidate.sl)}</b>",
         *([f"🎯 Entry 2: <b>{_price(float((candidate.metadata or {}).get('entry2') or (candidate.metadata or {}).get('pinwall_entry2')))}</b>"] if float((candidate.metadata or {}).get("entry2") or (candidate.metadata or {}).get("pinwall_entry2") or 0) > 0 else []),
         f"📈 Live Price: <b>{_price(float((candidate.metadata or {}).get('live_price') or candidate.planned_entry))}</b>",
+        *_entry_live_gap_warn_rows(candidate),
         *[f"🏁 TP{i+1}: {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [50, 30, 20])))],
         # Viva 09-20 (third time, verbatim): «فرمول ریسک به ریوارد ... اصلا
         # اهمیت نداره» → shown as a read-out only, never as a criterion.

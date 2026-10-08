@@ -63,16 +63,36 @@ STATE_FADE = "REJECTION_FADE"
 # never be created or confirmed. Internal کف→سقف / سقف→کف candidates stay
 # legal ONLY in parallel channels (the is_parallel fade gate below) —
 # channels and rectangles, exactly as he defined.
-# Viva Law (Universal Breakout Direction): Break determines the trade direction.
-# A close above the UPPER edge is ALWAYS a LONG trade.
-# A close below the LOWER edge is ALWAYS a SHORT trade.
-# No dogmatic one-nature suppression: if price breaks the floor, the trade is SHORT!
-_EDGE_RULES = {p: {"upper": "LONG", "lower": "SHORT"} for p in (
+# Viva Law 2026-10-08 (RESTORE of round-21/round-24 nature rules, reverted from
+# 43a41e0 «universal breakout direction» which flattened every pattern to two
+# sides and broke the locked tests): one-nature patterns carry ONLY their
+# nature-side rule. The counter side is NOT silent — it runs the r54
+# counter-doctrine path in scan_edges (close-cross → confirmable counter
+# BREAK with «چرا این جهت», wick-only → warn-only). So «if price breaks the
+# floor» of a falling wedge it still becomes a SHORT — but a LABELED counter
+# SHORT, never a nature SHORT.
+_EDGE_RULES = {
+    "WEDGE_RISING": {"lower": "SHORT"},
+    "WEDGE_FALLING": {"upper": "LONG"},
+}
+_EDGE_RULES.update({p: {"upper": "LONG", "lower": "SHORT"} for p in (
     "TRIANGLE_ASCENDING", "TRIANGLE_DESCENDING", "TRIANGLE_SYMMETRICAL",
     "TRIANGLE", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING",
     "CHANNEL_FLAT", "CHANNEL", "TRENDLINE", "HORIZONTAL_SR", "BROADENING",
-    "WEDGE_RISING", "WEDGE_FALLING", "FLAG_BULL", "FLAG_BEAR"
-)}
+)})
+_EDGE_RULES.update({
+    "FLAG_BULL": {"upper": "LONG"},
+    "FLAG_BEAR": {"lower": "SHORT"},
+})
+# Viva 09-24 «در مثلث‌ها هم همین» + his sheets (مثلث صعودی → بریک بالا،
+# مثلث نزولی → بریک پایین، کانال صعودی/نزولی likewise): directional
+# triangles/channels are ONE-NATURE — the opposite side can never confirm.
+_EDGE_RULES.update({
+    "TRIANGLE_ASCENDING": {"upper": "LONG"},
+    "TRIANGLE_DESCENDING": {"lower": "SHORT"},
+    "CHANNEL_ASCENDING": {"upper": "LONG"},
+    "CHANNEL_DESCENDING": {"lower": "SHORT"},
+})
 
 _NATURAL_EDGE = {
     "WEDGE_RISING": "lower",
@@ -97,6 +117,9 @@ _DOCTRINE_DIRECTION = {
     "FLAG_BEAR": "SHORT",
     "TRIANGLE_ASCENDING": "LONG",
     "TRIANGLE_DESCENDING": "SHORT",
+    # Viva Law 2026-10-08 (r54 test lock): the descending channel is one-nature
+    # SHORT — a LONG fade on it needs explicit supporting judgment.
+    "CHANNEL_DESCENDING": "SHORT",
 }
 
 

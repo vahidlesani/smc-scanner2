@@ -161,17 +161,21 @@ def test_spot_stop_hugs_the_minor_swing_not_the_pattern_base():
 
 
 def test_spot_targets_anchor_on_real_resistance():
+    """Viva TP Law 2026-10-08 (his CryptoCove verdict — SUPERSEDES the r37
+    structural anchor AND the 10-08 35–55% band): TP1/TP2/TP3 are EXACTLY
+    40/50/60% of the green-box path, 10% held to the path end (runner).
+    Overhead resistance no longer moves the rungs."""
     from analysis.spot_engine import spot_risk_levels
     close = 100.0
     path = 6.0
-    highs = [101.8, 103.4, 105.2]           # real overhead resistance
+    highs = [101.8, 103.4, 105.2]           # real overhead resistance (ignored now)
     out = spot_risk_levels(close=close, upper=100.2, lower_vals=[97.0],
                            atr=0.9, path_abs=path, swing_low=98.4,
                            df_highs=highs)
     t1, t2, t3 = out["targets"]
-    assert abs(t1 - 101.8) < 1e-9            # TP1 = first resistance
-    assert abs(t3 - 105.2) < 1e-9            # TP3 = structural top
-    assert t1 < t2 < t3, (t1, t2, t3)
+    assert (t1, t2, t3) == (102.4, 103.0, 103.6)
+    assert out["runner"] == 106.0
+    assert t1 < t2 < t3 < out["runner"]
 
 
 def test_spot_targets_fallback_stays_monotone_and_atr_honest():

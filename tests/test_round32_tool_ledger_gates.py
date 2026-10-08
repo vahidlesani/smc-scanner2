@@ -32,8 +32,10 @@ def test_publish_score_snapshot_written_at_discovery():
 def test_tool_pills_numeric_only_and_ledger_exists():
     src = open(f"{REPO}/bot/messages_v7.py", encoding="utf-8").read()
     assert "if all(str(_lb).isdigit() for _lb, _pc, _c in _items):" in src
-    # r34: ENGLISH abbreviations in the bottom-right ledger (Viva 09-26)
-    assert "ENTRY  " in src and "INITIAL STOP  " in src and "TRAILING  " in src
+    # r34: ENGLISH abbreviations in the bottom-right ledger (Viva 09-26);
+    # 10-07: ENTRY split into ENTRY 1 / ENTRY 2 (his Entry-2 box law)
+    assert "ENTRY 1  " in src and "ENTRY 2  " in src
+    assert "INITIAL STOP  " in src and "TRAILING  " in src
     assert "LIVE  " in src and "fontsize=7.6" in src
     # LIVE pill no longer drawn on confirmed charts
     seg = src[src.index("if not confirmed:"):]

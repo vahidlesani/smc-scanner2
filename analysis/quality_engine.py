@@ -1030,6 +1030,9 @@ def evaluate_confirmation(
     # …and when the fast lane fired, containment only speaks if the level that
     # was actually cleared sits INSIDE the pattern (a mirror-zone edge, not the
     # pattern's own side). Clearing the pattern's own side is the breakout.
+    # Viva Law 2026-10-08: _inside_band20 was computed but never wired into the
+    # gate below (dead variable) — mirror-zone clears inside the band sailed
+    # through to confirmation. It is the OR-branch now.
     _lvl_used20 = float((candidate.metadata or {}).get("confirm_level_used") or 0.0)
     _inside_band20 = False
     if _fast_lane_ok and _lvl_used20 > 0 and _band_lo20 is not None and _band_hi20 is not None:
@@ -1037,7 +1040,7 @@ def evaluate_confirmation(
     # Viva First-Close Breakout Law: When fast_lane confirms the first close beyond the trendline/edge,
     # higher-TF containment bands must NOT veto the confirmation!
     if (_band_lo20 is not None and _band_hi20 is not None and not _is_internal
-            and _pattern_premise and not _fast_lane_ok):
+            and _pattern_premise and (not _fast_lane_ok or _inside_band20)):
         _dir20 = 1.0 if candidate.direction == "LONG" else -1.0
         _buf20 = 0.10 * _atr20
         _outside20 = (_close20 >= _band_hi20 + _buf20) if _dir20 > 0 \
@@ -1365,6 +1368,23 @@ def evaluate_confirmation(
     # Viva First-Close Breakout Law: A closed bar beyond the broken trendline/edge in the trade direction IS THE TRIGGER!
     # It does NOT require a rare candlestick pattern (engulfing/pinbar) to confirm a valid breakout!
     _is_break_trigger = bool(fast_lane or (candidate.metadata or {}).get("tl_fast_break"))
+    # ── Viva Law 2026-10-08 (DOCTRINE MATRIX front gate — his 13/14/15-مهر
+    # doctrine, verbatim «تکنوکلاسیک فقط شکستها رو میتونه تایید بکنه»):
+    # TECHCLASSIC confirms ONLY a break (first valid close beyond the edge —
+    # the fast lane) or a TOHOM-early; TLBREAK the same (its internal
+    # ceiling→floor lane survives as the NEXT position's pullback map, r52).
+    # A bare zone touch + candle pattern with NO break is NEVER a TC/TLBREAK
+    # confirmation (his «شکست اتفاق افتاده و ۱۵ کندل گذشته رسیده به دیمند،
+    # تازه سیگنال تایید شده» cases) — PINVAL/ALBROX keep the zone lane.
+    _tohom_ok = bool((candidate.metadata or {}).get("tohom"))
+    # S6_CONFIRMED = the one-close law already fired on an earlier tick (the
+    # break evidence exists, this tick just doesn't re-fire it) — the gate
+    # targets NEVER-broken zone touches only; downstream laws still judge S6.
+    _s6_done = str((candidate.metadata or {}).get("viva_state") or "") == "S6_CONFIRMED"
+    if _is_pure_break_setup and not _is_internal and not _is_break_trigger and not _tohom_ok and not _s6_done:
+        return reject("NO_TRIGGER", (
+            "ستاپِ شکستِ خالص (تکنوکلاسیک/تی‌ال‌بریک) فقط با شکست و کلوزِ معتبرِ "
+            "فراتر از خط/ضلع تأیید می‌شود؛ لمسِ ناحیه بدونِ شکست، تأیید نیست."))
     trigger_valid = (
         _is_break_trigger
         or (

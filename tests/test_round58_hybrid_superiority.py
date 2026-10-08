@@ -118,7 +118,11 @@ def test_urgent_watch_exists_and_is_bounded():
     # the full pass pins NEAR_BREAK/TOUCH symbols (R65 added the per-pin SHAPE
     # snapshot — the window grows with the contract, not around it);
     # R64.4: BREAK_DOWN pins too — the confirm lane must be awake at the break
-    seg2 = src.split("# the ladder rides the SAME fetched frames")[1].split("# r57:")[0]
+    # 10-08: the pin-writer lives in _spot_mint_pins (extracted verbatim —
+    # the full pass AND the 15-min ladder refresh mint through it).
+    seg2 = src.split("def _spot_mint_pins")[1].split("\ndef ")[0]
+    assert "_spot_mint_pins(symbol" in src
+    assert "_spot_ladder_refresh" in src and "SPOT_LADDER_MINUTES" in src
     assert "spot_urgent_watch" in seg2 and "NEAR_BREAK" in seg2
     assert "BREAK_DOWN" in seg2, "R64.4: the break itself pins the confirm lane"
     assert '"shape"' in seg2      # R65: the pinned shape itself, not just the symbol

@@ -54,7 +54,10 @@ SPOT_SETUP_CODE = "SPOTBREAK"
 # cannot promise a one-hour move. Bigger candle → bigger honest path.
 MIN_PATH_PCT_BY_TF = {"4h": 6.0, "8h": 8.0, "12h": 10.0,
                       "1d": 14.0, "3d": 20.0, "1w": 28.0}
-SPOT_WEIGHTS = (40.0, 30.0, 30.0)
+# Viva TP Law 2026-10-08 (his CryptoCove box verdict: TP1/TP2/TP3 =
+# 40/50/60% of the green-box path, 30/30/30 shares + 10% runner held
+# to the path end) — supersedes the 40/30/30 split of 10-07.
+SPOT_WEIGHTS = (30.0, 30.0, 30.0, 10.0)
 
 # his stop law for spot (09-22): «استاپ هم ۱۰ درصد خوبه» — the structural stop
 # never stretches beyond 10% even on the daily/3-day tape
@@ -149,10 +152,10 @@ def spot_risk_levels(close: float, upper: float, lower_vals: list,
     −10%» number (DOGE 0.08905). The 10% ceiling law is unchanged; the stop
     just stops being gratuitously far.
 
-    TARGETS — rungs anchor on REAL resistance overhead (swing highs of the
-    last 120 bars inside 1.15×path); ATR floors keep TP1 honest when the
-    tape above is virgin air; the raw 0.2/0.6/1.0 fractions are only the
-    fallback. Output is always monotone tp1 < tp2 < tp3.
+    TARGETS — Viva TP Law 2026-10-08 (his CryptoCove verdict, supersedes
+    the r37/10-07 structural rungs): TP1/TP2/TP3 are EXACTLY 40/50/60% of
+    the green-box path, and 10% of the position is HELD (runner) to the
+    path end. Output is always monotone tp1 < tp2 < tp3 < runner.
 
       close      entry (the confirming close)
       upper      the broken upper edge
@@ -169,29 +172,13 @@ def spot_risk_levels(close: float, upper: float, lower_vals: list,
     sl = float(swing_low)
     if not (sl > 0 and sl < close):
         sl = close * (1.0 - 0.02)
-    # ── targets: structural first ──
-    try:
-        _hs = sorted({float(v) for v in (df_highs or [])
-                      if close * 1.002 < float(v) <= close + 1.15 * path})
-    except Exception:
-        _hs = []
-    # Viva Proportional Law (07-Oct Mandate: 50%-60% target box path division across 3 TPs)
-    # Filter out insignificant micro-resistances under 30% of path
-    _valid_hs = [v for v in _hs if v >= close + 0.30 * path]
-    tp1 = min(_valid_hs) if _valid_hs else close + 0.40 * path
-    tp1 = max(tp1, close + 0.35 * path)
-    tp1 = min(tp1, close + 0.55 * path)
-
-    above = [r for r in _valid_hs if r > tp1 * 1.01]
-    tp3 = max(above) if above else close + path
-    tp3 = max(tp3, close + 0.85 * path)
-    tp3 = min(tp3, close + 1.15 * path)
-
-    mids = [r for r in above if r < tp3 * 0.99]
-    tp2 = min(mids) if mids else (0.5 * (tp1 + tp3))
-    tp2 = max(tp2, tp1 + 0.20 * path)
-    tp2 = min(tp2, tp3 - 0.10 * path)
-    return {"sl": float(sl), "targets": [float(tp1), float(tp2), float(tp3)]}
+    # ── targets: exact box-path fractions (his 10-08 law) ──
+    tp1 = close + 0.40 * path
+    tp2 = close + 0.50 * path
+    tp3 = close + 0.60 * path
+    runner = close + path
+    return {"sl": float(sl), "targets": [float(tp1), float(tp2), float(tp3)],
+            "runner": float(runner)}
 
 
 def _structural_weight(pat: dict) -> float:
@@ -388,6 +375,7 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                     "label": state_label(kind, str(pat.get("break_direction") or "")),
                     "rule_fa": pattern_info(kind)["rule_fa"],
                     "entry": close, "sl": float(sl), "targets": targets,
+                    "runner": float(_risk.get("runner") or 0.0),
                     "weights": list(SPOT_WEIGHTS),
                     "path_pct": round(path / close * 100.0, 3),
                     "broken_level": float(upper),
@@ -549,6 +537,10 @@ def _spot_bull_shapes(pats: list, price: float, x_index: float,
         _kind = str(pat.get("type") or "NONE").upper()
         if _kind in ("DOUBLE_TOP", "HEAD_SHOULDERS", "WEDGE_RISING", "FLAG_BEAR"):
             continue
+        # Viva Doctrine 2026-10-08 (his «الگوی فلگ هرگز علت تایید نیست»):
+        # no flag/pennant of either direction ever confirms a spot LONG.
+        if _kind.startswith("FLAG") or _kind.startswith("PENNANT"):
+            continue
         upper = _edge_at_frac_index(pat, x_index)
         if upper is None or price <= upper + eps:
             continue
@@ -632,6 +624,44 @@ def scan_spot_tohom_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
         _measured = (c_sub + (float(upper) - min(_lower))) if _lower else c_sub * 1.06
         _floor = c_sub * MIN_PATH_PCT_BY_TF.get(want_tf, 5.0) / 100.0
         _path = max(_measured - c_sub, _floor)
+        # ── Viva TOHOM Doctrine 2026-10-08 (his pre-close law): the spot
+        # smart lane confirms ONLY with (touch≥2 on the break edge) + (sane
+        # slope: the R68 vertical law) + (shock: last sub-volume ≥ 2.0× its
+        # 20-bar mean) + (displacement: last sub-body ≥ 1.0× sub-ATR).
+        # Fail-closed with a visible reason.
+        _brk1008 = next((_l for _l in _lns
+                         if str(_l.get("side") or "").upper() == "HIGH"), None)
+        if _brk1008 is not None:
+            if "points" in _brk1008 and len(list(_brk1008.get("points") or [])) < 2:
+                print(f"spot tohom block {symbol} {want_tf}: touch<2")
+                continue
+            try:
+                if _brk1008.get("log_fit"):
+                    if abs(float(_brk1008.get("log_slope") or 0.0)) > 0.025:
+                        print(f"spot tohom block {symbol} {want_tf}: slope")
+                        continue
+                elif atr > 0 and abs(float(_brk1008.get("slope") or 0.0)) > 2.2 * atr:
+                    print(f"spot tohom block {symbol} {want_tf}: slope")
+                    continue
+            except Exception:
+                pass
+        try:
+            _sv1008 = sub["volume"].astype(float).to_numpy()
+            _base1008 = float(_sv1008[-21:-1].mean()) if len(_sv1008) >= 22 else 0.0
+            _shock1008 = (float(_sv1008[-1]) / _base1008) if _base1008 > 0 else 0.0
+        except Exception:
+            _shock1008 = 0.0
+        if _shock1008 < 2.0:
+            print(f"spot tohom block {symbol} {want_tf}: shock={_shock1008:.2f}")
+            continue
+        try:
+            _sr1008 = float((sub["high"] - sub["low"]).astype(float).tail(14).mean())
+            _body1008 = abs(float(sub["close"].iloc[-1]) - float(sub["open"].iloc[-1]))
+        except Exception:
+            _sr1008, _body1008 = 0.0, 0.0
+        if not (_sr1008 > 0 and _body1008 >= 1.0 * _sr1008):
+            print(f"spot tohom block {symbol} {want_tf}: displacement")
+            continue
         base_item = {
             "symbol": symbol.upper(), "tf": want_tf, "pattern": _kind,
             "horizon": ("SHORT" if want_tf in SPOT_SHORT_TFS
@@ -674,6 +704,7 @@ def scan_spot_tohom_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
         item.update({
             "entry": entry, "sl": float(sl),
             "targets": list(_risk["targets"]),
+            "runner": float(_risk.get("runner") or 0.0),
             "path_pct": round((max(_path, entry - float(upper))) / entry * 100.0, 3),
             "break_bar_ts": str(sub["timestamp"].iloc[-1]),
             "confirm_bar_ts": str(md2.get("tohom_confirm_bar")
@@ -798,6 +829,7 @@ def scan_spot_urgent_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
             "label": state_label(_kind, "UP"),
             "rule_fa": pattern_info(_kind)["rule_fa"],
             "entry": close, "sl": float(sl), "targets": list(_risk["targets"]),
+            "runner": float(_risk.get("runner") or 0.0),
             "weights": list(SPOT_WEIGHTS),
             "path_pct": round(path / close * 100.0, 3),
             "broken_level": float(upper),
@@ -886,6 +918,7 @@ def build_spot_candidate(item: dict):
         "tool_entry_ts": str(item.get("confirm_bar_ts") or item.get("break_bar_ts") or ""),
         "spot_broken_level": float(item.get("broken_level") or 0.0),
         "target_ladder": {"targets": targets, "weights": weights,
+                          "runner": float(item.get("runner") or 0.0),
                           "path_pct": float(item.get("path_pct") or 0.0)},
         "viva_state": "S6_CONFIRMED",
         "technical_confirmation_complete": True,
@@ -1063,9 +1096,24 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                     vol_ratio = (float(d["volume"].iloc[-1]) / _v20) if _v20 > 0 else 0.0
                 except Exception:
                     vol_ratio = 0.0
+                # Viva Identity Law 2026-10-08 (his «چارت‌های تکراری»):
+                # the sig is the shape's frozen ANCHOR TIMES (never the
+                # sliding window x0 — that re-minted the identity every
+                # candle and re-spoke every alert).
+                def _anch_ts(_ln, _k="x0"):
+                    try:
+                        _pts = list(_ln.get("points") or [])
+                        if _pts and str((_pts[0] or {}).get("ts") or ""):
+                            return str(_pts[0].get("ts"))[:16]
+                    except Exception:
+                        pass
+                    try:
+                        _ix = max(0, min(int(float(_ln.get(_k, 0) or 0)), len(d) - 1))
+                        return str(d["timestamp"].iloc[_ix])[:16]
+                    except Exception:
+                        return "?"
                 sig = (f"{symbol.upper()}|{tf}|{kind}|"
-                       f"{int(float(_lns[0].get('x0', 0) or 0))}|"
-                       f"{int(float(_lns[-1].get('x0', 0) or 0))}")
+                       f"{_anch_ts(_lns[0])}|{_anch_ts(_lns[-1])}")
                 out.append({
                     "stage": hit["stage"], "side": hit["side"],
                     "symbol": symbol.upper(), "tf": tf, "pattern": kind,
