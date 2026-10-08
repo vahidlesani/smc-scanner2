@@ -2900,8 +2900,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _lbl9 = str(_z.get("kind") or "")
                 if id(_z) in _target_zone_ids:
                     # r59.2: the trade's probable final target box
-                    _lbl9 = ("🎯 TARGET · " + _lbl9) if _dir_key == "LONG" \
-                        else ("🎯 TARGET · " + _lbl9)
+                    _lbl9 = ("TARGET · " + _lbl9) if _dir_key == "LONG" \
+                        else ("TARGET · " + _lbl9)
                 ax.text(count + future * 0.45, 0.5 * (_zb9 + _zt9),
                         _lbl9, color=_t8, fontsize=6.5,
                         va="center", ha="center", fontweight="bold", zorder=12,

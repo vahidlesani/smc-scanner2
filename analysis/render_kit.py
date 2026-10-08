@@ -328,6 +328,10 @@ def _chart_will_be_log(candidate, df: pd.DataFrame) -> bool:
 
 def detect_patterns(df: pd.DataFrame, direction: str = "",
                     log_axis: Optional[bool] = None) -> List[Dict]:
+    if df is not None and not df.empty:
+        df = df.copy()
+        if "timestamp" not in df.columns:
+            df["timestamp"] = df.index
     """Validated edge geometry + honest shape classification (doctrine:
     Edwards & Magee / Brooks / E&M) as render commands; plus a trading-range
     box when the window is flat between two tested horizontals.

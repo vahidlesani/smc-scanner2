@@ -2713,9 +2713,16 @@ def main() -> None:
         # own single-flight thread; a still-running pass skips its slot
         # instead of stacking.
         if now >= next_spot:
-            if _SPOT_THREAD[0] is not None and _SPOT_THREAD[0].is_alive():
+            _spot_stalled = (
+                _SPOT_THREAD[0] is not None 
+                and _SPOT_THREAD[0].is_alive() 
+                and time.time() - float(getattr(_SPOT_THREAD[0], '_start_time', 0.0) or 0.0) > 900
+            )
+            if _SPOT_THREAD[0] is not None and _SPOT_THREAD[0].is_alive() and not _spot_stalled:
                 print("spot pass still running — slot skipped, no stacking")
             else:
+                if _spot_stalled:
+                    print("spot pass stalled for >15m; launching fresh spot pass thread")
                 _hb["spot_runs"] = _hb.get("spot_runs", 0) + 1
 
                 def _spot_pass_job():
@@ -2725,6 +2732,7 @@ def main() -> None:
                         print(f"spot pass thread failed: {_sp_exc}")
                 _SPOT_THREAD[0] = threading.Thread(
                     target=_spot_pass_job, name="viva-spot-pass", daemon=True)
+                _SPOT_THREAD[0]._start_time = time.time()
                 _SPOT_THREAD[0].start()
             next_spot = now + timedelta(
                 minutes=max(15, int(os.getenv("SPOT_SCAN_MINUTES", "60") or 60)))
