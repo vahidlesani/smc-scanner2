@@ -78,8 +78,15 @@ def test_deep_scroll_is_spike_only():
     spiky = _smart_y_window(0.0, 100.0, atr, recent_lo=48.0, recent_hi=52.0,
                             bars=300)          # deep + spike
     assert clean is not None and spiky is not None
-    assert clean[0] <= 45.0 and clean[1] >= 55.0     # r40 hard fill kept
+    # Viva 10-09 LIVE-FOCUS (SUPERSEDES r40's absolute hard fill — his
+    # «y-span too tall», fossils clip): the clean frame keeps the live block
+    # plus tape within reach (wick-tips may shave; the 16-mehr spirit — never
+    # butcher a clean chart — survives); the spike frame scrolls hard onto
+    # the live block, which is never cut.
+    assert clean[0] < 48.0 and clean[1] > 52.0
+    assert (clean[1] - clean[0]) < 2.0 * (55.0 - 45.0)
     assert spiky[0] > 0.0 or spiky[1] < 100.0        # spike frame scrolls
+    assert spiky[0] <= 48.0 and spiky[1] >= 52.0     # live never cut
 
 
 # ── 6. flags/pennants never confirm ──────────────────────────────────────

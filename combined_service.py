@@ -27,6 +27,11 @@ def _run_scanner() -> None:
     while True:
         started = time.time()
         try:
+            import main as _m  # 10-09: a stale _SHUTDOWN would exit instantly
+            _m._SHUTDOWN = False
+            import threading as _th
+            LOGGER.info("scanner (re)start — live threads: %d",
+                        len(_th.enumerate()))
             scanner_main()
             return
         except BaseException as exc:
@@ -44,8 +49,7 @@ def _lean_wsgi_app(environ, start_response):
     status = "200 OK"
     headers = [("Content-Type", "application/json")]
     start_response(status, headers)
-    return [b'{"status":"ok","service":"viva-scanner","web_mode":"lean"}
-']
+    return [b'{"status":"ok","service":"viva-scanner","web_mode":"lean"}']
 
 
 def main() -> None:

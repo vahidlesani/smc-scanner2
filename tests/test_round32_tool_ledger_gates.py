@@ -66,8 +66,10 @@ def test_smart_zoom_recent_structure_floor():
     assert win is not None
     ylo, yhi = win
     assert yhi > 84.0                      # ladder fully inside
-    assert ylo <= min(lows), f"every candle visible edge to edge, got {ylo}"
-    assert yhi >= max(highs)               # nothing sticks out above the tape
+    # Viva 10-09 (SUPERSEDES r40's absolute fill): the fossil 40→55 rise clips
+    # instead of owning the axis; live + ladder keep the panel.
+    assert ylo > min(lows), f"fossil tail must clip, got {ylo}"
+    assert ylo <= min(lows[-40:]) and yhi >= max(highs)
 
 
 # ── 4. engine gates ────────────────────────────────────────────────────────

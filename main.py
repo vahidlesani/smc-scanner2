@@ -90,6 +90,7 @@ from database.repository_v7 import (
 
 SETTINGS = get_settings()
 _SHUTDOWN = False
+_DAEMONS_STARTED = False  # 10-09: supervisor restarts must never duplicate threads
 
 
 def _request_shutdown(signum, _frame) -> None:
@@ -1008,8 +1009,38 @@ def run_spot_scan() -> Dict[str, int]:
     # Order: strongest stage first so the cap never eats a BREAK_DOWN to feed
     # a TOUCH.
     _stage_rank = {"BREAK_UP": 4, "BREAK_DOWN": 3, "NEAR_BREAK": 2, "TOUCH": 1}
-    ladder.sort(key=lambda it: _stage_rank.get(str(it.get("stage") or ""), 0),
+    # Viva 10-09 SUPERIORITY: within a stage the fresher-touched (live,
+    # engaged) pattern speaks first — the fossil shape never leads.
+    ladder.sort(key=lambda it: (_stage_rank.get(str(it.get("stage") or ""), 0),
+                                -float(it.get("touch_age_bars") or 0.0)),
                 reverse=True)
+    # Viva 10-09 SUPERIORITY (his «الگوی برتر برنده … در حد یک خط توضیح»):
+    # within a symbol the sorted-first item LEADS (strongest stage, freshest
+    # valid touch); every item carries its rivals so the alert text explains
+    # the competition in ONE line.
+    try:
+        _grp109 = {}
+        for _it in ladder:
+            _grp109.setdefault(str(_it.get("symbol") or ""), []).append(_it)
+        for _lst109 in _grp109.values():
+            if len(_lst109) < 2:
+                continue
+            _lead109 = _lst109[0]
+            for _it in _lst109:
+                _it["_rivals109"] = [
+                    {"tf": str(r.get("tf") or ""),
+                     "fa": str(r.get("pattern_fa") or r.get("pattern") or ""),
+                     "stage": str(r.get("stage") or ""),
+                     "age": int(r.get("touch_age_bars") or 0)}
+                    for r in _lst109 if r is not _it]
+                _it["_leads109"] = (_it is _lead109)
+                _it["_leader109"] = {
+                    "tf": str(_lead109.get("tf") or ""),
+                    "fa": str(_lead109.get("pattern_fa") or
+                              _lead109.get("pattern") or ""),
+                    "age": int(_lead109.get("touch_age_bars") or 0)}
+    except Exception:
+        pass
     try:
         from bot.messages_v7 import send_spot_alert as _send_spot_alert
         from analysis.spot_engine import (spot_alert_check, spot_alert_commit,
@@ -2551,7 +2582,12 @@ def run_monitor_cycle() -> None:
         pass
     try:
         with _CANDIDATE_MONITOR_LOCK:
-            stats = monitor_candidates()
+            try:  # 10-09: one bad monitor pass never kills the scheduler
+                stats = monitor_candidates()
+            except Exception as _mc_exc:
+                import traceback as _tb
+                print(f"monitor_candidates failed: {_mc_exc}\n{_tb.format_exc(limit=3)}")
+                stats = {"active": 0, "approaching": 0, "confirmed": 0, "cancelled": 0}
         if stats["active"] or trade_events:
             print(
                 f"Monitor • candidates={stats['active']} approaching={stats['approaching']} "
@@ -2729,8 +2765,13 @@ def main() -> None:
     except Exception as exc:
         print(f"Command listener error: {exc}")
 
-    threading.Thread(target=_realtime_execution_loop, name="viva-realtime-execution", daemon=True).start()
-    threading.Thread(target=_candidate_monitor_loop, name="viva-candidate-monitor", daemon=True).start()
+    global _DAEMONS_STARTED
+    if not _DAEMONS_STARTED:  # 10-09 crash law: threads start ONCE per process
+        _DAEMONS_STARTED = True
+        threading.Thread(target=_realtime_execution_loop, name="viva-realtime-execution", daemon=True).start()
+        threading.Thread(target=_candidate_monitor_loop, name="viva-candidate-monitor", daemon=True).start()
+    else:
+        print("⚠️ supervisor restart: daemon threads already alive — not duplicated")
     print(f"⚡ Realtime execution monitor active • every {SETTINGS.realtime_execution_seconds}s")
     print(f"⚡ Candidate monitor active • every {SETTINGS.candidate_monitor_seconds}s")
 
@@ -2777,104 +2818,112 @@ def main() -> None:
     # log AND to the durable KV store, so liveness is checkable from outside.
     _hb = {"next": 0.0, "loops": 0, "scans": 0, "monitors": 0,
            "last_scan": None, "last_monitor": None, "stats": {}, "mon_stats": {}}
+    _loop_fails = 0  # 10-09 crash law: the loop NEVER dies on a bad cycle
     while not _SHUTDOWN:
-        now = datetime.now(timezone.utc)
-        _hb["loops"] += 1
-        if now >= next_monitor:
-            _hb["monitors"] += 1
-            _hb["last_monitor"] = now.strftime("%H:%M")
-            _hb["mon_stats"] = dict(run_monitor_cycle() or {})
-            next_monitor = _next_aligned(
-                datetime.now(timezone.utc), SETTINGS.monitor_minutes, SETTINGS.monitor_offset_minute
-            )
-        if now >= next_scan:
-            _hb["scans"] += 1
-            _hb["last_scan"] = now.strftime("%H:%M")
-            _hb["stats"] = dict(run_discovery_scan() or {})
-            next_scan = _next_aligned_scan(datetime.now(timezone.utc))
-        # ── spot lane on its own cadence (never blocks the futures scan).
-        # r56 RAILWAY OPTIMISATION (his «بهینه‌سازی ریلوی فراموش نشه»): the
-        # pass takes ~8.5 min (24 symbols × 6 TFs) and used to run INLINE in
-        # this loop — every monitor/confirm cycle stalled for it («ستاپ‌ها
-        # کم‌کار شدند» had a second, mechanical cause). It now runs in its
-        # own single-flight thread; a still-running pass skips its slot
-        # instead of stacking.
-        if now >= next_spot:
-            _spot_stalled = (
-                _SPOT_THREAD[0] is not None 
-                and _SPOT_THREAD[0].is_alive() 
-                and time.time() - float(getattr(_SPOT_THREAD[0], '_start_time', 0.0) or 0.0) > 900
-            )
-            if _SPOT_THREAD[0] is not None and _SPOT_THREAD[0].is_alive() and not _spot_stalled:
-                print("spot pass still running — slot skipped, no stacking")
-            else:
-                if _spot_stalled:
-                    print("spot pass stalled for >15m; launching fresh spot pass thread")
-                _hb["spot_runs"] = _hb.get("spot_runs", 0) + 1
+        try:
+            now = datetime.now(timezone.utc)
+            _hb["loops"] += 1
+            _loop_fails = 0
+            if now >= next_monitor:
+                _hb["monitors"] += 1
+                _hb["last_monitor"] = now.strftime("%H:%M")
+                _hb["mon_stats"] = dict(run_monitor_cycle() or {})
+                next_monitor = _next_aligned(
+                    datetime.now(timezone.utc), SETTINGS.monitor_minutes, SETTINGS.monitor_offset_minute
+                )
+            if now >= next_scan:
+                _hb["scans"] += 1
+                _hb["last_scan"] = now.strftime("%H:%M")
+                _hb["stats"] = dict(run_discovery_scan() or {})
+                next_scan = _next_aligned_scan(datetime.now(timezone.utc))
+            # ── spot lane on its own cadence (never blocks the futures scan).
+            # r56 RAILWAY OPTIMISATION (his «بهینه‌سازی ریلوی فراموش نشه»): the
+            # pass takes ~8.5 min (24 symbols × 6 TFs) and used to run INLINE in
+            # this loop — every monitor/confirm cycle stalled for it («ستاپ‌ها
+            # کم‌کار شدند» had a second, mechanical cause). It now runs in its
+            # own single-flight thread; a still-running pass skips its slot
+            # instead of stacking.
+            if now >= next_spot:
+                _spot_stalled = (
+                    _SPOT_THREAD[0] is not None 
+                    and _SPOT_THREAD[0].is_alive() 
+                    and time.time() - float(getattr(_SPOT_THREAD[0], '_start_time', 0.0) or 0.0) > 900
+                )
+                if _SPOT_THREAD[0] is not None and _SPOT_THREAD[0].is_alive() and not _spot_stalled:
+                    print("spot pass still running — slot skipped, no stacking")
+                else:
+                    if _spot_stalled:
+                        print("spot pass stalled for >15m; launching fresh spot pass thread")
+                    _hb["spot_runs"] = _hb.get("spot_runs", 0) + 1
 
-                def _spot_pass_job():
-                    try:
-                        _hb["spot_stats"] = dict(run_spot_scan() or {})
-                    except Exception as _sp_exc:
-                        print(f"spot pass thread failed: {_sp_exc}")
-                _SPOT_THREAD[0] = threading.Thread(
-                    target=_spot_pass_job, name="viva-spot-pass", daemon=True)
-                _SPOT_THREAD[0]._start_time = time.time()
-                _SPOT_THREAD[0].start()
-            next_spot = now + timedelta(
-                minutes=max(15, int(os.getenv("SPOT_SCAN_MINUTES", "60") or 60)))
-        # ── 10-08 ladder refresh: detection-only pin minting every 15 min ──
-        if now >= next_ladder:
-            if _LADDER_THREAD[0] is not None and _LADDER_THREAD[0].is_alive():
-                print("spot ladder refresh still running — slot skipped, no stacking")
-            else:
-                def _ladder_job():
-                    try:
-                        _hb["ladder_stats"] = dict(_spot_ladder_refresh() or {})
-                    except Exception as _ld_exc:
-                        print(f"spot ladder refresh thread failed: {_ld_exc}")
-                _LADDER_THREAD[0] = threading.Thread(
-                    target=_ladder_job, name="viva-spot-ladder", daemon=True)
-                _LADDER_THREAD[0].start()
-            next_ladder = now + timedelta(
-                minutes=max(5, int(os.getenv("SPOT_LADDER_MINUTES", "15") or 15)))
-        if time.time() >= _hb["next"]:
-            _hb["next"] = time.time() + 300
-            _write_heartbeat({
-                "stage": "loop",
-                "scans": _hb["scans"], "monitors": _hb["monitors"],
-                "last_scan": _hb["last_scan"], "last_monitor": _hb["last_monitor"],
-                "scan_stats": _hb["stats"], "monitor_stats": _hb["mon_stats"],
-            })
-            try:
-                from data.fetcher import cost_counters as _cc
-                _c = _cc()
-                print(f"📉 COST · kline calls={_c['kline_calls']} "
-                      f"(cache hits={_c['kline_cache_hits']}) • "
-                      f"last scan skipped_unchanged={_hb['stats'].get('skipped_unchanged', 0)}"
-                      f"/{_hb['stats'].get('symbols', 0)}")
-            except Exception:
-                pass
-            print(f"   last discovery={_hb['last_scan']} {_hb['stats']} • "
-                  f"last monitor={_hb['last_monitor']}")
-        report_key = now.strftime("%Y-%m-%d")
-        if now.hour == 8 and now.minute < 2 and report_key != last_daily_report:
-            _daily_report()
-            last_daily_report = report_key
-        # PROP-3 (Viva 09-16): Friday 19:00 Tehran — one chic per-setup
-        # results digest into the results + journal channels.
-        teh_now = datetime.now(timezone(timedelta(hours=3, minutes=30)))
-        _iso = teh_now.isocalendar()
-        week_key = f"{_iso[0]}-W{_iso[1]:02d}"
-        if (teh_now.weekday() == 4 and teh_now.hour == 19 and teh_now.minute < 2
-                and week_key != last_weekly_digest):
-            try:
-                from bot.messages_v7 import send_weekly_results_digest
-                send_weekly_results_digest()
-            except Exception as exc:
-                print(f"Weekly digest error: {exc}")
-            last_weekly_digest = week_key
-        time.sleep(5)
+                    def _spot_pass_job():
+                        try:
+                            _hb["spot_stats"] = dict(run_spot_scan() or {})
+                        except Exception as _sp_exc:
+                            print(f"spot pass thread failed: {_sp_exc}")
+                    _SPOT_THREAD[0] = threading.Thread(
+                        target=_spot_pass_job, name="viva-spot-pass", daemon=True)
+                    _SPOT_THREAD[0]._start_time = time.time()
+                    _SPOT_THREAD[0].start()
+                next_spot = now + timedelta(
+                    minutes=max(15, int(os.getenv("SPOT_SCAN_MINUTES", "60") or 60)))
+            # ── 10-08 ladder refresh: detection-only pin minting every 15 min ──
+            if now >= next_ladder:
+                if _LADDER_THREAD[0] is not None and _LADDER_THREAD[0].is_alive():
+                    print("spot ladder refresh still running — slot skipped, no stacking")
+                else:
+                    def _ladder_job():
+                        try:
+                            _hb["ladder_stats"] = dict(_spot_ladder_refresh() or {})
+                        except Exception as _ld_exc:
+                            print(f"spot ladder refresh thread failed: {_ld_exc}")
+                    _LADDER_THREAD[0] = threading.Thread(
+                        target=_ladder_job, name="viva-spot-ladder", daemon=True)
+                    _LADDER_THREAD[0].start()
+                next_ladder = now + timedelta(
+                    minutes=max(5, int(os.getenv("SPOT_LADDER_MINUTES", "15") or 15)))
+            if time.time() >= _hb["next"]:
+                _hb["next"] = time.time() + 300
+                _write_heartbeat({
+                    "stage": "loop",
+                    "scans": _hb["scans"], "monitors": _hb["monitors"],
+                    "last_scan": _hb["last_scan"], "last_monitor": _hb["last_monitor"],
+                    "scan_stats": _hb["stats"], "monitor_stats": _hb["mon_stats"],
+                })
+                try:
+                    from data.fetcher import cost_counters as _cc
+                    _c = _cc()
+                    print(f"📉 COST · kline calls={_c['kline_calls']} "
+                          f"(cache hits={_c['kline_cache_hits']}) • "
+                          f"last scan skipped_unchanged={_hb['stats'].get('skipped_unchanged', 0)}"
+                          f"/{_hb['stats'].get('symbols', 0)}")
+                except Exception:
+                    pass
+                print(f"   last discovery={_hb['last_scan']} {_hb['stats']} • "
+                      f"last monitor={_hb['last_monitor']}")
+            report_key = now.strftime("%Y-%m-%d")
+            if now.hour == 8 and now.minute < 2 and report_key != last_daily_report:
+                _daily_report()
+                last_daily_report = report_key
+            # PROP-3 (Viva 09-16): Friday 19:00 Tehran — one chic per-setup
+            # results digest into the results + journal channels.
+            teh_now = datetime.now(timezone(timedelta(hours=3, minutes=30)))
+            _iso = teh_now.isocalendar()
+            week_key = f"{_iso[0]}-W{_iso[1]:02d}"
+            if (teh_now.weekday() == 4 and teh_now.hour == 19 and teh_now.minute < 2
+                    and week_key != last_weekly_digest):
+                try:
+                    from bot.messages_v7 import send_weekly_results_digest
+                    send_weekly_results_digest()
+                except Exception as exc:
+                    print(f"Weekly digest error: {exc}")
+                last_weekly_digest = week_key
+            time.sleep(5)
+        except Exception as _loop_exc:
+            import traceback as _tb
+            _loop_fails += 1
+            print(f"⚠️ scheduler cycle failed ({_loop_fails}×): {_loop_exc}\n{_tb.format_exc(limit=5)}")
+            time.sleep(min(60, 5 * _loop_fails))
     print("Viva Signal Bot stopped cleanly")
 
 

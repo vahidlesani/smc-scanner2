@@ -29,9 +29,12 @@ def test_deep_frame_zoom_frames_the_live_region():
                            recent_lo=48.0, recent_hi=52.0, bars=300)
     assert deep is not None
     assert deep[0] > 20.0, deep          # far history no longer drags the axis
+    # Viva 10-09: the bars-gate is DEAD (no gate, no floor) — a fossil-heavy
+    # tape focuses on the live block at ANY depth; ``bars`` is signature-only.
     shallow = _smart_y_window(0.0, 100.0, 0.8, None, None,
                               recent_lo=48.0, recent_hi=52.0, bars=0)
-    assert shallow[0] <= 0.0 + 1e-9      # r40 hard fill intact for shallow frames
+    assert shallow[0] > 20.0, shallow
+    assert shallow[0] <= 48.0 and shallow[1] >= 52.0  # live never cut
     # overlays are NEVER cut, even deep
     withtool = _smart_y_window(0.0, 100.0, 0.8, None, 95.0,
                                recent_lo=48.0, recent_hi=52.0, bars=300)

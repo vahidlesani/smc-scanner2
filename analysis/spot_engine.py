@@ -1087,6 +1087,46 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                 hit = _stage_for_pattern(pat, d, atr, n)
                 if not hit:
                     continue
+                # Viva 10-09 SUPERIORITY law (his ADA 3d year-triangle vs the
+                # live 12h channel: «الگوی برتر برنده … آخرین تاچ معتبر»): a
+                # BREAK alert needs a TOUCH-VALIDATED pattern — its most
+                # recent touch (max line x1) must sit inside 2× the live
+                # block. Breaks of fossil lines are the fakeouts he hates —
+                # they may still publish TOUCH/NEAR watches, never a BREAK.
+                # the last VALID touch: the freshest line-point time across the
+                # pattern's lines, aged in bars against the scanned frame (x1 is
+                # the fit's right edge, NOT a touch — it reads 0 on live fits).
+                _touch_age = 0
+                try:
+                    _tser = pd.to_datetime(d["timestamp"])
+                    try:
+                        _tser = _tser.dt.tz_convert("UTC").dt.tz_localize(None)
+                    except Exception:
+                        try:
+                            _tser = _tser.dt.tz_localize(None)
+                        except Exception:
+                            pass
+                    _ages = []
+                    for _ln in _lns:
+                        _pts = list(_ln.get("points") or [])
+                        if not _pts:
+                            continue
+                        _t = pd.Timestamp(str((_pts[-1] or {}).get("ts") or ""))
+                        if _t.tzinfo is not None:
+                            _t = _t.tz_convert("UTC").tz_localize(None)
+                        _ages.append(int((_tser > _t).sum()))
+                    if _ages:
+                        _touch_age = max(0, min(_ages))
+                except Exception:
+                    _touch_age = 0
+                if str(hit.get("stage") or "") in ("BREAK_UP", "BREAK_DOWN"):
+                    try:
+                        from analysis.chart_window import live_block_for_tf as _lbtf109
+                        _lim109 = 2 * max(20, int(_lbtf109(tf)))
+                    except Exception:
+                        _lim109 = 120
+                    if _touch_age > _lim109:
+                        continue  # fossil break — the live pattern wins
                 kind = str(pat.get("type") or "NONE").upper()
                 box_top = _structural_high_above(d, close)
                 if box_top:
@@ -1126,6 +1166,7 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                     "box_top": float(box_top) if box_top else 0.0,
                     "pattern_commands": [pat], "sig": sig,
                     "bar_ts": str(d["timestamp"].iloc[-1]),
+                    "touch_age_bars": int(_touch_age),
                     "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 })
         except Exception as exc:
@@ -1267,6 +1308,10 @@ def spot_alert_commit(item: dict) -> None:
             "stage": str(item.get("stage") or ""),
             "rank": STAGE_RANK.get(str(item.get("stage") or ""), 0),
             "ts": _t.time(), "bar": str(item.get("bar_ts") or "")}
+        # 10-09 crash law: the dedup ledger never grows without bound
+        if len(state) > 500:
+            for _k in sorted(state, key=lambda k: float((state[k] or {}).get("ts", 0)))[:len(state) - 500]:
+                state.pop(_k, None)
         _s("spot_alerts", state)
     except Exception:
         pass

@@ -467,3 +467,11 @@ HIS VERBATIM: «چرا بعد از شکست ترند رو به بالا پوزی
 - CADENCE LAW: 15-min detection-only ladder refresh (cached frames, no charts/sends) mints pins early; 30s ticker lane speaks breaks instantly; 3-min recheck confirms. (SPOT_LADDER_MINUTES, default 15.)
 - SPOT WINDOW: no hard clamp — picture spans what anchors need, up to the detection frame (250–350 HTF).
 - SPOT LW RESTORE: Oct-7 2.8/1.8/s48 fattening reverted to 2.0/1.4/s36 (the xs_u fallback 1.8 predates Oct-7 — kept).
+
+## 10-09 — SMART-WINDOW + SUPERIORITY + QUALITY
+- NEED-FIRST COUNT: count = first-needed anchor + live block + 14 margin (analysis/chart_window) — NO floor, NO ceiling; two-sided shapes anchor on FIRST touch, single lines on SECOND-TO-LAST (tl_b_ts); projecting lines may run off-panel.
+- LIVE-FOCUS Y (both renderers): live block owns 62% of the panel; whole tape is a SOFT bound (1.0× live reach) — fossils clip; tool/overlays IN FULL when on/near tape; DASH tape-gate (beyond 2× reach = off-canvas, pills carry it); r40 absolute fill + drag-gates SUPERSEDED.
+- GEOMETRY FROZEN: pivots/fits picked on the FULL frame before the window cut — TF/count changes never shift pivots or zoom.
+- SUPERIORITY: fossil BREAK (last valid touch older than 2× live block) is vetoed; fresher touch wins the sort; the competition is ONE ⚔️ line in the alert text.
+- QUALITY: 240 DPI everywhere (CHART_DPI); CHART_SEND_AS_FILE=1 delivers charts via sendDocument (no Telegram re-compress).
+- RENDER-HARDENING: ts-less synthetic pivots are skipped for anchors + pivot circles (a str(None) parse used to kill whole charts).

@@ -81,11 +81,13 @@ def _repo_src(*parts):
 
 
 def test_render_window_capped_at_render_count_never_detection():
-    # his STX-15M «چرا ۳۰۰ کندل؟»: the focus window is capped at the RENDER
-    # map (render_count), never the detection depth (candle_count).
+    # Viva 10-09 (his «بدون محدودیت کف و سقف» SUPERSEDES the STX-era
+    # render-cap): the focus window takes max_n=None — the count is a
+    # CONSEQUENCE of need (anchors + live + margin), never a clamped map.
     src = _repo_src("bot", "messages_v7.py")
-    assert "max_n=_rc_target" in src
-    assert "min(int(_lookback), _rc_target)" in src
+    assert "max_n=None" in src
+    assert "max_n=_rc_target" not in src
+    assert "NEED-FIRST" in src
 
 
 def test_htf_range_boxes_never_drown_the_trigger_chart():
