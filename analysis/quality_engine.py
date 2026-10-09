@@ -464,6 +464,29 @@ def _project_watch_level(watch: dict, when) -> float:
     return y1 + (y1 - y0) / dt * (t - t1).total_seconds()
 
 
+def _stale_tp_1010(direction, tp1, executable_entry, close) -> bool:
+    """Viva 10-10 ENTRY/TP LAW («تأیید بعد از عبور از ورود یا رسیدن به TP
+    باگه»): the confirm close already printed AT or PAST TP1 → the trade is
+    gone (True) — void with NO exemptions, not even the fresh-break bypass
+    (a 5% runner with TP1 behind it is not an entry). The executable entry
+    IS this close by design, so a consumed TP1 is exactly «passed entry».
+    Degenerate ladders (no TP1, or TP1 on the wrong side) fail open."""
+    try:
+        t = float(tp1 or 0)
+        e = float(executable_entry or 0)
+        c = float(close or 0)
+    except (TypeError, ValueError):
+        return False
+    if t <= 0 or e <= 0 or c <= 0:
+        return False
+    d = str(direction or "").upper()
+    if d == "LONG":
+        return bool(t > e and c >= t)
+    if d == "SHORT":
+        return bool(0 < t < e and c <= t)
+    return False
+
+
 def evaluate_confirmation(
     candidate: SignalCandidate, closed_df: pd.DataFrame,
     htf_closed_df: Optional[pd.DataFrame] = None,
@@ -849,7 +872,11 @@ def evaluate_confirmation(
             _lift = False
             if str(getattr(candidate, "setup_code", "") or "").upper() in {"PINVAL", "PINWALLQ"}:
                 _mdp = candidate.metadata or {}
-                if (fast_lane or _mdp.get("tl_fast_break")) \
+                # 10-09: a TOHOM-blessed rejection scalp routed into the pin
+                # family is a resolved premise too (sub-TF closes + pattern);
+                # the rising-orders volume proof below still applies to it.
+                if (fast_lane or _mdp.get("tl_fast_break")
+                        or (_mdp.get("rejection_scalp") and _mdp.get("tohom"))) \
                         and float(_mdp.get("pin_high") or 0) > 0 \
                         and float(_mdp.get("pin_low") or 0) > 0:
                     try:
@@ -1574,13 +1601,35 @@ def evaluate_confirmation(
         # a runaway price (his VVV case: 12.88 ATR away and still «in progress»).
         _fb_max = float(getattr(SETTINGS, "fast_break_max_chase_atr", 3.2))
         _fast_ok = bool(fast_lane or candidate.metadata.get("tl_fast_break")) and chase_atr <= _fb_max
+        # ── Viva 10-09 INSTANT-CONFIRM LAW («در لحظه باید تایید بیاد»): a
+        # violent first close beyond the edge is FAR from the zone by nature
+        # — when the fast-lane bar IS the newest closed bar (age 0, nothing
+        # chased yet) the chase gate stands down for the zone-confirming
+        # family too (ALBROX + pins; pure-break setups were already exempt).
+        # An AGED runner (fast bar older than the newest close) keeps the
+        # exact old verdict. The distance still rides the caption (chase_note
+        # below) — Viva decides the trade.
+        _fresh_break_1009 = False
+        try:
+            _fbb = str((candidate.metadata or {}).get("fast_break_bar") or "")
+            _fresh_break_1009 = bool(fast_lane) and bool(_fbb) and _fbb == str(row["timestamp"])[:19]
+        except Exception:
+            _fresh_break_1009 = False
+        _zone_fam_1009 = str(getattr(candidate, "setup_code", "") or "").upper() in {
+            "ALBROX", "PINVAL", "PINWALLQ"}
         # Viva Pure Breakout Law: TLBREAK and TECHCLASSIC breakouts confirm immediately on first close!
-        if chase_atr > max_chase and not _fast_ok and not _is_pure_break_setup:
+        if chase_atr > max_chase and not _fast_ok and not _is_pure_break_setup \
+                and not (_fresh_break_1009 and _zone_fam_1009):
             return reject("ENTRY_TOO_FAR", f"کلوز تأیید {chase_atr:.2f} ATR از زون دور شده؛ Chase مجاز نیست.")
         if chase_atr > max_chase:
             # a fresh single-close break IS far from the zone by nature —
             # annotate the distance for the caption, Viva decides the trade.
             candidate.metadata["chase_note"] = f"{chase_atr:.2f} ATR از زون"
+    # Viva 10-10: TP1 already consumed at confirm time → void, no exemptions.
+    if _stale_tp_1010(candidate.direction, getattr(candidate, "tp1", 0),
+                      executable_entry, close):
+        return reject("TP_HIT_BEFORE_CONFIRM", (
+            f"قیمت در لحظهٔ تأیید به TP1 رسیده ({float(close):.8g})؛ ورود بی‌معنی است."))
     rr1 = (
         (candidate.tp1 - executable_entry) / risk
         if candidate.direction == "LONG"
@@ -1753,14 +1802,28 @@ def evaluate_confirmation(
             # r60.6: contract-based, not setup-based — TECHCLASSIC, TLBREAK
             # and ALBROX (pattern & zone) all confirm the BREAK's direction;
             # «خلاف روند» is reserved for rejections (TLBREAK/ALBROX scalps).
+            # ── 10-09 (Viva: «این اجازه فقط مختص پینوال است»): a rejection
+            # scalp is not a break — the contract exemption is for validated
+            # BREAKS only. The pin family escapes through its own evidence
+            # instead (pin-level close + rising counter-trend orders).
             _tc_break60 = (
                 str((candidate.metadata or {}).get("break_direction") or "").upper() in ("UP", "DOWN")
+                and not (candidate.metadata or {}).get("rejection_scalp")
             )
-            if not _brk and not _tc_break60:
+            _pin_ct_1009 = False
+            try:
+                _pin_ct_1009 = bool(_pin_countertrend_lift())
+            except Exception:
+                _pin_ct_1009 = False
+            if not _brk and not _tc_break60 and not _pin_ct_1009:
                 return reject("COUNTER_TREND_TOUCH_ONLY", (
                     "سیگنال خلاف جهت ساختار است: برخورد به خط/ناحیه فقط هشدار است؛ "
                     "تأیید نیازمند کلوز معتبر فراتر از سوینگ هم‌جهت است "
                     "(سلرها/خریداران در برخورد شکار می‌شوند)."))
+            if _pin_ct_1009:
+                candidate.metadata["mtf_context_warning_pin"] = (
+                    "خلاف روند والد اما پینوال: سطح پین با کلوز معتبر رد شد و حجم "
+                    "خلاف روند بالا رفته است — طبق قانون ۱۰-۰۹ فقط پینوال این اجازه را دارد.")
             if _tc_break60:
                 candidate.metadata["mtf_context_warning_tc"] = (
                     "روند تایم والد هنوز مخالف است؛ طبق قانون تکنوکلاسیک جهت با "

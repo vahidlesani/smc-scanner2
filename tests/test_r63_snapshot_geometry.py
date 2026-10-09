@@ -87,3 +87,46 @@ def test_legacy_pre_r63_snapshot_is_cleaned_on_restore():
     assert [p["type"] for p in c.metadata["render_patterns"]] == ["RANGE"]
     assert c.metadata["render_zones"] == [{"kind": "OB"}]
     assert store[snapshot_key("OLD1")]["render_geometry_source"] == "TRADE"
+
+
+def _ns1010(**kw):
+    from types import SimpleNamespace
+    return SimpleNamespace(signal_id="T1010", metadata=dict(kw))
+
+
+def test_confirm_edges_freeze_with_the_render_1010():
+    """Viva 10-10 Hole-3: pattern_geo/break_line_geo stamp with the first
+    chart and restore on every later chart — chart and confirmation read
+    the SAME frozen edges (his «تأیید باید روی چارت باشه»)."""
+    from analysis.snapshot_lock import (lock_render_geometry, snapshot_key,
+                                          SNAPSHOT_KEYS)
+    assert "pattern_geo" in SNAPSHOT_KEYS and "break_line_geo" in SNAPSHOT_KEYS
+    kv = {}
+    edge = {"upper": {"a": 1.0}, "lower": {"a": 0.5}}
+    line = {"p0": [0, 1.0], "slope": 0.01}
+    c = _ns1010(render_patterns=[{"type": "TRIANGLE"}], pattern_geo=dict(edge),
+                break_line_geo=dict(line))
+    assert lock_render_geometry(c, kv.get, kv.__setitem__) == "STAMPED"
+    c.metadata["pattern_geo"] = {"upper": {"a": 9.0}, "lower": {"a": 8.0}}
+    c.metadata["break_line_geo"] = {"p0": [0, 9.0], "slope": 0.5}
+    assert lock_render_geometry(c, kv.get, kv.__setitem__) == "RESTORED"
+    assert c.metadata["pattern_geo"] == edge
+    assert c.metadata["break_line_geo"] == line
+    assert kv[snapshot_key("T1010")]["pattern_geo"] == edge
+
+
+def test_legacy_snapshot_upgrades_confirm_edges_once_1010():
+    """R64.1b for the new keys: a snapshot stamped before 10-10 (no edges)
+    freezes the current chart's edges ONCE, then holds them."""
+    from types import SimpleNamespace
+    from analysis.snapshot_lock import lock_render_geometry, snapshot_key
+    kv = {snapshot_key("T1010B"): {"render_patterns": [{"type": "TL"}],
+                                   "render_zones": []}}
+    c = SimpleNamespace(signal_id="T1010B", metadata={
+        "render_patterns": [{"type": "TL"}],
+        "pattern_geo": {"upper": {"a": 2.0}}, "break_line_geo": {"p0": [1, 2.0]}})
+    assert lock_render_geometry(c, kv.get, kv.__setitem__) == "RESTORED"
+    assert kv[snapshot_key("T1010B")]["pattern_geo"] == {"upper": {"a": 2.0}}
+    c.metadata["pattern_geo"] = {"upper": {"a": 7.0}}
+    assert lock_render_geometry(c, kv.get, kv.__setitem__) == "RESTORED"
+    assert c.metadata["pattern_geo"] == {"upper": {"a": 2.0}}

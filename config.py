@@ -291,7 +291,9 @@ class Settings:
             chain_slot_gate_enabled=_bool("CHAIN_SLOT_GATE_ENABLED", cls.chain_slot_gate_enabled),
             monitor_minutes=_int("MONITOR_MINUTES", cls.monitor_minutes),
             live_styles=os.getenv("LIVE_STYLES", cls.live_styles),
-            monitor_offset_minute=_int("MONITOR_OFFSET_MINUTE", cls.monitor_offset_minute),
+            # Viva 10-10: accept both spellings — Railway Variables show a
+            # truncated MONITOR_OFFSET_MI…; singular is canonical, plural falls back.
+            monitor_offset_minute=_int("MONITOR_OFFSET_MINUTE", _int("MONITOR_OFFSET_MINUTES", cls.monitor_offset_minute)),
             realtime_execution_seconds=_int("REALTIME_EXECUTION_SECONDS", cls.realtime_execution_seconds),
             candidate_monitor_seconds=_int("CANDIDATE_MONITOR_SECONDS", cls.candidate_monitor_seconds),
             core_v7_setups_enabled=_bool("CORE_V7_SETUPS_ENABLED", cls.core_v7_setups_enabled),

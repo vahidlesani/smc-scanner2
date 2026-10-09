@@ -60,6 +60,31 @@ def ids():
     d, e = gql("query { projectToken { projectId environmentId } }")
     if d and d.get("projectToken"):
         return d["projectToken"]["projectId"], d["projectToken"]["environmentId"]
+    # Viva 10-10: account-token-only mode. Under a Bearer account token the
+    # projectToken field resolves to null, so the project is resolved by
+    # listing account projects (RAILWAY_PROJECT_NAME picks one, else first)
+    # and the production environment instead of failing.
+    at = os.getenv("RAILWAY_API_TOKEN", "").strip()
+    pt = os.getenv("RAILWAY_TOKEN", "").strip()
+    if at and not pt:
+        dp, ep = gql("query { projects(first: 10) { edges { node { id name "
+                     "environments { edges { node { id name } } } } } } }",
+                     account=True)
+        projs = _edges((dp or {}).get("projects"))
+        if projs:
+            want = os.getenv("RAILWAY_PROJECT_NAME", "").strip().lower()
+            pick = next((p for p in projs
+                         if want and str(p.get("name", "")).lower() == want),
+                        projs[0])
+            envs = _edges(pick.get("environments"))
+            env = next((n for n in envs
+                        if str(n.get("name", "")).lower() == "production"),
+                       envs[0] if envs else None)
+            if pick.get("id") and env and env.get("id"):
+                print(f"(account mode: project={pick.get('name')})")
+                return pick["id"], env["id"]
+        print("account project lookup failed:", ep)
+        return None, None
     print("projectToken lookup failed:", e)
     return None, None
 

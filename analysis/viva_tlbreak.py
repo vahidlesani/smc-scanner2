@@ -226,6 +226,23 @@ def _pivot_prominence(df: pd.DataFrame, pts: list, side: str, use_log: bool = Fa
     return out
 
 
+def _mid_wiggle_filter(mid, pidx, prom):
+    """Viva 10-10 (his «path-changing pivot gets no respect»): drop mid-span
+    crossings by mere wiggles (swing size under 2 ruler units — a 2-candle
+    wiggle scores ~1-2). The line passes THROUGH them to the next on-path
+    pivot; MAJOR crossings — and unknowns (fail-safe 4.0) — still veto."""
+    try:
+        keep = [_k for _k in list(mid)
+                if float((prom or {}).get(int(pidx[int(_k)]), 4.0)) >= 2.0]
+    except Exception:
+        return mid
+    try:
+        import numpy as _np
+        return _np.asarray(keep, dtype=int)
+    except Exception:
+        return mid
+
+
 def fit_validated_line(
     df: pd.DataFrame,
     side: Literal["HIGH", "LOW"],
@@ -422,6 +439,8 @@ def fit_validated_line(
                     return None
 
         _mid = np.nonzero(over_mask & (_pidx > fx) & (_pidx < x1))[0]
+        if _w64 and _prom:
+            _mid = _mid_wiggle_filter(_mid, _pidx, _prom)
         pierces = int(len(_mid))
         if cfg.require_alive:
             # first close that crosses the extended line = the bar where the

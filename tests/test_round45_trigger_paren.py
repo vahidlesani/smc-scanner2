@@ -14,7 +14,11 @@ def test_escape_note_carries_trigger_parenthetical():
     assert "۱ ساعته" in out
 
 def test_span_note_carries_trigger_parenthetical():
+    """Viva 10-10: the span-based step-up is RETIRED (only a tool escape may
+    step the view up) — but the escape note keeps speaking Persian with the
+    trigger-TF parenthetical."""
     src = open(os.path.join(REPO, "bot", "messages_v7.py"), encoding="utf-8").read()
-    part = src.split("def _lifecycle_view_plan")[1].split("def _lifecycle_chart_frame")[0]
-    assert "روی تایم {_TF_FA.get(_view8" in part
-    assert "(تایم تریگر: {_TF_FA.get(base, base.upper())})." in part
+    plan = src.split("def _lifecycle_view_plan")[1].split("def _lifecycle_chart_frame")[0]
+    assert "کش می‌آمد" not in plan
+    esc = src.split("def _escape_note")[1].split("def _lifecycle_view_plan")[0]
+    assert "تایم تریگر" in esc

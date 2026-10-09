@@ -531,6 +531,29 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
                                     upper, lower, trigger_df, trigger_tf)
 
 
+_PARENT_TF_1009 = {"5m": "15m", "15m": "1h", "30m": "1h", "1h": "4h",
+                  "2h": "4h", "4h": "1d"}
+
+
+def _parent_countertrend_1009(bundle, trigger_tf, direction) -> bool:
+    """10-09 PINWALL ROUTING: the MTF gate's own counter-trend definition
+    (parent-TF 30-bar slope vs the trade direction — quality_engine law (a))
+    evaluated at DETECTION time. Fail-closed False (unknown → old class)."""
+    try:
+        _ptf = _PARENT_TF_1009.get(str(trigger_tf or "").lower())
+        if not _ptf:
+            return False
+        _pdf = bundle.get(_ptf)
+        if _pdf is None or len(_pdf) < 40:
+            return False
+        _pc = float(_pdf["close"].iloc[-1])
+        _pc0 = float(_pdf["close"].iloc[-30])
+        _d = str(direction or "").upper()
+        return (_d == "LONG" and _pc < _pc0) or (_d == "SHORT" and _pc > _pc0)
+    except Exception:
+        return False
+
+
 def _tlbreak_rejection_scalp(bundle, style, refine_df, refine_tf,
                              upper, lower, trigger_df, trigger_tf):
     """r60 rejection lane (Viva 09-29 §6, verbatim): price taps the trendline,
@@ -606,11 +629,24 @@ def _tlbreak_rejection_scalp(bundle, style, refine_df, refine_tf,
             continue
         tp1 = entry - min(1.2 * risk, path) if direction == "SHORT" else entry + min(1.2 * risk, path)
         tp2 = entry - min(1.8 * risk, path) if direction == "SHORT" else entry + min(1.8 * risk, path)
+        # ── 10-09 PINWALL ROUTING (Viva: «این اجازه فقط مختص پینوال است»): a
+        # COUNTER-TREND line tap mints as PINVAL — the pin family owns the
+        # counter-trend permission. Same anatomy, same geometry; only the
+        # class/lineage/fa move. With-trend taps keep the exact TLBREAK mint.
+        # The TOHOM-only promise (rejection_scalp) is kept either way.
+        _ct1009 = _parent_countertrend_1009(bundle, trigger_tf, direction)
+        _code1009 = "PINVAL" if _ct1009 else "TLBREAK"
+        _shape1009 = "PINBAR" if pin else ("ENGULF" if engulf else "POWER")
+        _noun1009 = "پین‌بار" if pin else ("انگالف" if engulf else "کندل دفع")
+        _side1009 = "کف خط روند" if direction == "LONG" else "زیر خط روند"
         cand = SignalCandidate(
-            signal_id=f"viva-tlscalp-{bundle.symbol}-{trigger_tf}-{str(row['timestamp'])[:16]}",
-            symbol=str(bundle.symbol), style=str(style).upper(), setup_code="TLBREAK",
-            setup_name=SETUP_NAMES["TLBREAK"],
-            strategy_fa="VIVA-TLBREAK | اسکلپ ریجکت خط — فقط با تأیید موتور توهم",
+            signal_id=f"viva-{'pinv' if _ct1009 else 'tlscalp'}-{bundle.symbol}-{trigger_tf}-{str(row['timestamp'])[:16]}",
+            symbol=str(bundle.symbol), style=str(style).upper(), setup_code=_code1009,
+            setup_name=SETUP_NAMES[_code1009],
+            strategy_fa=(f"پینوال | {_noun1009} {'صعودی 🟢' if direction == 'LONG' else 'نزولی 🔴'} "
+                         f"در {_side1009} — فقط با تأیید موتور توهم"
+                         if _ct1009 else
+                         "VIVA-TLBREAK | اسکلپ ریجکت خط — فقط با تأیید موتور توهم"),
             direction=direction, score=6, status="EDUCATIONAL",
             entry_zone_bottom=min(entry, lvl) - 0.10 * atr_t,
             entry_zone_top=max(entry, lvl) + 0.10 * atr_t,
@@ -633,7 +669,7 @@ def _tlbreak_rejection_scalp(bundle, style, refine_df, refine_tf,
             ],
             mandatory_gates={"viva_tlbreak_rejection": True},
         )
-        _lk = alert_lineage_key("TLBREAK", str(bundle.symbol), str(trigger_tf),
+        _lk = alert_lineage_key(_code1009, str(bundle.symbol), str(trigger_tf),
                                 str(refine_tf), "rejection", direction,
                                 [dict(p) for p in (line.points or ())], is_break=False)
         cand.metadata.update({
@@ -641,8 +677,17 @@ def _tlbreak_rejection_scalp(bundle, style, refine_df, refine_tf,
             "tohom_required": True, "scalp": True,
             "viva_break_line": lvl, "viva_breakout_line": lvl,
             "tl_rejection_line": lvl, "atr": atr_t, "touched": True,
-            "public_code": generate_viva_public_code("TLBREAK", style),
+            "public_code": generate_viva_public_code(_code1009, style),
         })
+        if _ct1009:
+            # the pin premise the confirm side needs (pin level + volume lift)
+            cand.metadata.update({
+                "pinv": 1, "pin_tf": str(trigger_tf),
+                "pin_high": float(row["high"]), "pin_low": float(row["low"]),
+                "pin_ts": str(row["timestamp"]),
+                "pin_zone_kind": ("TL_SUPPORT" if direction == "LONG" else "TL_RESIST"),
+                "pin_shape": _shape1009, "pin_routed_from": "TLBREAK_REJECTION",
+            })
         if _lk:
             cand.metadata["alert_lineage_key"] = _lk
         return cand
@@ -932,7 +977,8 @@ def _channel_zone_position(df: pd.DataFrame) -> tuple:
         return None, "", 0.0, 0.0
 
 
-def _pin_channel_top_blocked(df: pd.DataFrame, direction: str, probe: float) -> tuple:
+def _pin_channel_top_blocked(df: pd.DataFrame, direction: str, probe: float,
+                              _czp=None) -> tuple:
     """(blocked, note) — True when the pin contradicts its own half of the
     drawn channel/box.
 
@@ -942,9 +988,12 @@ def _pin_channel_top_blocked(df: pd.DataFrame, direction: str, probe: float) -> 
     * SHORT pin mirrored at the bottom third.
     * A probe BEYOND an edge (price broke out and is retesting from outside)
       is not a rejection — the guard stands down; break flows own that case.
+    10-09: `_czp` accepts the precomputed `_channel_zone_position` tuple so
+    the detector fits the two validated lines ONCE per TF (guard + the new
+    line/edge locations share it).
     """
     try:
-        height, kind, hi, low = _channel_zone_position(df)
+        height, kind, hi, low = _czp if _czp is not None else _channel_zone_position(df)
         if not height or height <= 0:
             return False, ""
         pos = (float(probe) - low) / height
@@ -1003,6 +1052,26 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                    and upper >= 1.6 * max(lower, 1e-9)
                    and body <= getattr(settings, "pinv_max_body_frac", 0.35) * rng
                    and c <= h - rng * 0.45)
+        # ── 10-09 PINWALL ENGULF VOCABULARY (Viva: «پینبار یا انگالف میبینه
+        # میتونه لانگ بده»): a full engulf with a real body (≥0.30 ATR, the
+        # r60 rejection-lane floor) is the same rejection event as a pinbar.
+        # Shape mirrors the engine's own TOHOM definition (opposite prev
+        # body + full engulf); the location catalog below gates engulfs and
+        # pinbars equally. R66 asymmetry stays pin-only by construction.
+        _is_engulf1009 = False
+        try:
+            _prow = df.iloc[-2]
+            _po, _pc = float(_prow["open"]), float(_prow["close"])
+            _engulf_bull = (_pc < _po and c > o and c >= _po and o <= _pc)
+            _engulf_bear = (_pc > _po and c < o and c <= _po and o >= _pc)
+            if (_engulf_bull or _engulf_bear) and body >= 0.30 * atr_v:
+                _is_engulf1009 = True
+                if _engulf_bull and not is_bear:
+                    is_bull = True
+                elif _engulf_bear and not is_bull:
+                    is_bear = True
+        except Exception:
+            pass
         if not (is_bull or is_bear) or (is_bull and is_bear):
             continue
         direction = "LONG" if is_bull else "SHORT"
@@ -1014,7 +1083,13 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         # third) is a reversal against itself — refused here, recorded in the
         # metadata so the funnel stays visible. Probe beyond an edge stands the
         # guard down (that is a post-break retest, not a rejection).
-        _chan_blocked, _chan_note = _pin_channel_top_blocked(df, direction, probe)
+        # 10-09: one validated-line fit per TF — shared by the R65 guard and
+        # the line/edge locations below.
+        try:
+            _czp1009 = _channel_zone_position(df)
+        except Exception:
+            _czp1009 = None
+        _chan_blocked, _chan_note = _pin_channel_top_blocked(df, direction, probe, _czp1009)
         if _chan_blocked and str(os.getenv("PINVAL_CHANNEL_TOP_GATE", "1") or "1").strip() \
                 not in ("0", "false", "no", "off"):
             try:
@@ -1026,6 +1101,27 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
 
         fvg = _unmitigated_fvg_edge(df, direction, atr_v)
         in_fvg = bool(fvg) and fvg["bottom"] - 0.35 * atr_v <= probe <= fvg["top"] + 0.35 * atr_v
+        # ── 10-09 PINWALL LINE/EDGE LOCATIONS (Viva: «روی کف یک ترندلاین یا
+        # … ضلع پایین پترنها» / «زیر یک ترندلاین یا ضلع بالای پترن»): the
+        # validated upper/lower lines the CHART draws (same fitter, fitted
+        # once above) are important areas too — the pin/engulf EXTREME
+        # touching the direction-consistent edge mints. Tolerance mirrors
+        # the FVG rule (0.35 ATR). Precedence stays FVG-first below.
+        in_line = False
+        line_kind = ""
+        line_shape = ""
+        try:
+            _lh, _lk, _hi, _lo = _czp1009 or (None, "", 0.0, 0.0)
+            if _lh and _lh > 0 and _hi > _lo:
+                line_shape = str(_lk or "")
+                if direction == "LONG":
+                    in_line = abs(probe - _lo) <= 0.35 * atr_v
+                    line_kind = "TL_SUPPORT"
+                else:
+                    in_line = abs(probe - _hi) <= 0.35 * atr_v
+                    line_kind = "TL_RESIST"
+        except Exception:
+            in_line = False
 
         polarity_on = bool(getattr(settings, "pinv_polarity_gate_enabled", False))
         polarity = None
@@ -1049,7 +1145,7 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             )
             if not polarity.allowed:
                 wall_block = str(getattr(polarity, "reason", "") or "") in {"UNDER_SUPPLY", "ABOVE_DEMAND"}
-                if not wall_block and (in_fvg or legacy_in_zone):
+                if not wall_block and (in_fvg or legacy_in_zone or in_line):
                     # Recovery (funnel audit 2026-09-09): the gate rejected with
                     # "no key zone in its catalog", yet the pin sits on an
                     # unmitigated FVG / legacy ctx zone that the pre-gate rules
@@ -1061,7 +1157,7 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                         POLARITY_RECOVERS[key] = int(POLARITY_RECOVERS.get(key, 0)) + 1
                     except Exception:
                         pass
-                    zone_kind = "FVG" if in_fvg else str((legacy_zone or {}).get("kind") or "CONTEXT")
+                    zone_kind = "FVG" if in_fvg else (line_kind if in_line else str((legacy_zone or {}).get("kind") or "CONTEXT"))
                     polarity_recovered = True
                 else:
                     # Counter-polarity pin at a real wall: a bullish pin under
@@ -1078,9 +1174,9 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
         else:
             zone = legacy_zone
             in_zone = legacy_in_zone
-            if not (in_fvg or in_zone):
+            if not (in_fvg or in_zone or in_line):
                 continue  # Viva's rule: pinbar matters only inside an important area
-            zone_kind = "FVG" if in_fvg else (zone["kind"] if in_zone else "NONE")
+            zone_kind = "FVG" if in_fvg else (line_kind if in_line else (zone["kind"] if in_zone else "NONE"))
 
         # adjacent doji confluence (previous two candles)
         has_doji = False
@@ -1220,12 +1316,22 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
                 continue
             if allowed_zones and zone_kind.upper() not in allowed_zones:
                 continue
+        # 10-09: the line/edge location names the drawn shape (his «ضلع پایین/
+        # بالای پترنها») — a lone validated line reads as trendline.
+        _shape_fa = {"TRENDLINE": "خط روند", "CHANNEL_ASCENDING": "کانال صعودی",
+                     "CHANNEL_DESCENDING": "کانال نزولی", "CHANNEL_FLAT": "کانال خنثی",
+                     "TRIANGLE_ASCENDING": "مثلث صعودی", "TRIANGLE_DESCENDING": "مثلث نزولی",
+                     "TRIANGLE": "مثلث", "TRIANGLE_SYMMETRICAL": "مثلث متقارن",
+                     "WEDGE_FALLING": "وج نزولی", "WEDGE_RISING": "وج صعودی",
+                     "BROADENING": "الگوی پهن‌شونده"}.get(line_shape, "الگو")
         zone_fa = {
             "FVG": "لبهٔ FVG «فلگ‌لیمیت»",
             "FLIP": "فلیپ‌زون مهم (پس از شکست معتبر)",
             "DEMAND": "تقاضای کلیدی تایم بالاتر",
             "SUPPLY": "عرضهٔ کلیدی تایم بالاتر",
             "SD_FRESH": "زون تازهٔ عرضه/تقاضای تایم بالاتر",
+            "TL_SUPPORT": f"کف {_shape_fa} (ضلع پایین/حمایت)",
+            "TL_RESIST": f"زیر سقف {_shape_fa} (ضلع بالا/مقاومت)",
             "NONE": "ناحیهٔ مرتبط",
         }.get(zone_kind, "ناحیهٔ مهم")
         last_ts = df["timestamp"].iloc[-1]
@@ -1271,7 +1377,7 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             style=style_name,
             setup_code="PINVAL",
             setup_name=SETUP_NAMES["PINVAL"],
-            strategy_fa=f"پین‌بار {'صعودی 🟢' if is_bull else 'نزولی 🔴'} در {zone_fa}",
+            strategy_fa=f"{'انگالف' if _is_engulf1009 else 'پین‌بار'} {'صعودی 🟢' if is_bull else 'نزولی 🔴'} در {zone_fa}",
             direction=direction,
             score=8 + (1 if has_doji else 0),
             status="EDUCATIONAL",
@@ -1298,6 +1404,8 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             "pin_zone_fa": zone_fa,
             "pin_ctx_tf": ctx_tf,
             "pin_has_doji": bool(has_doji),
+            "pin_shape": ("ENGULF" if _is_engulf1009 else "PINBAR"),
+            "pin_line_shape": line_shape,
             "pin_verdict_candles": int(getattr(settings, "alert_verdict_candles", 3)),
             "context_tf": ctx_tf,
             "confirm_tf": confirm_timeframe_for_pattern(ctx_tf, style, tf),
@@ -1656,12 +1764,20 @@ def _albrox_zone_lane(bundle, style):
         tp1 = entry + (tp2 - entry) / 5.0 if direction == "LONG" else entry - (entry - tp2) / 5.0
         _kind = str(z["kind"])
         _ts = str(z.get("ts") or str(row["timestamp"])[:16])
+        # ── 10-09 PINWALL ROUTING (Viva: «این اجازه فقط مختص پینوال است»):
+        # a COUNTER-TREND zone-rejection scalp (Lane C, pin anatomy) mints as
+        # PINVAL. Lane-B zone BREAKS always keep ALBROX + the break contract.
+        _ct1009 = bool(scalp) and _parent_countertrend_1009(bundle, trigger_tf, direction)
+        _code1009 = "PINVAL" if _ct1009 else "ALBROX"
         cand = SignalCandidate(
-            signal_id=f"viva-albroxz-{bundle.symbol}-{trigger_tf}-{str(row['timestamp'])[:16]}-{_kind}-{direction}",
-            symbol=str(bundle.symbol), style=str(style).upper(), setup_code="ALBROX",
-            setup_name=SETUP_NAMES["ALBROX"],
-            strategy_fa=("آلبروکس | اسکلپ ریجکت ناحیه — فقط با تأیید موتور توهم" if scalp
-                         else f"آلبروکس | شکست ناحیهٔ {_kind} — اولین کلوز یا موتور توهم"),
+            signal_id=f"viva-{'pinv' if _ct1009 else 'albroxz'}-{bundle.symbol}-{trigger_tf}-{str(row['timestamp'])[:16]}-{_kind}-{direction}",
+            symbol=str(bundle.symbol), style=str(style).upper(), setup_code=_code1009,
+            setup_name=SETUP_NAMES[_code1009],
+            strategy_fa=(f"پینوال | پین‌بار {'صعودی 🟢' if direction == 'LONG' else 'نزولی 🔴'} "
+                         f"در ناحیهٔ {_kind} — فقط با تأیید موتور توهم"
+                         if _ct1009 else
+                         ("آلبروکس | اسکلپ ریجکت ناحیه — فقط با تأیید موتور توهم" if scalp
+                          else f"آلبروکس | شکست ناحیهٔ {_kind} — اولین کلوز یا موتور توهم")),
             direction=direction, score=min(10, 7 + int(z.get("score") or 0)),
             status="EDUCATIONAL",
             entry_zone_bottom=zlo, entry_zone_top=zhi,
@@ -1685,7 +1801,7 @@ def _albrox_zone_lane(bundle, style):
             ],
             mandatory_gates={"albrox_zone_rejection" if scalp else "albrox_zone_break": True},
         )
-        _lk = alert_lineage_key("ALBROX", str(bundle.symbol), str(trigger_tf),
+        _lk = alert_lineage_key(_code1009, str(bundle.symbol), str(trigger_tf),
                                 str(structure_tf), _kind, direction,
                                 [{"timestamp": _ts, "price": edge},
                                  {"timestamp": str(row["timestamp"]), "price": entry}],
@@ -1695,11 +1811,21 @@ def _albrox_zone_lane(bundle, style):
             "viva_break_line": edge, "viva_breakout_line": edge,
             "break_direction": "UP" if direction == "LONG" else "DOWN",
             "atr": atr_t, "touched": True, "scalp": bool(scalp),
-            "public_code": generate_viva_public_code("ALBROX", style),
+            "public_code": generate_viva_public_code(_code1009, style),
         })
         if scalp:
             cand.metadata["rejection_scalp"] = True
             cand.metadata["tohom_required"] = True
+        if _ct1009:
+            # a scalp is not a break: no contract. Pin premise for the lift.
+            cand.metadata.pop("break_direction", None)
+            cand.metadata.update({
+                "pinv": 1, "pin_tf": str(trigger_tf),
+                "pin_high": float(row["high"]), "pin_low": float(row["low"]),
+                "pin_ts": str(row["timestamp"]),
+                "pin_zone_kind": _kind, "pin_shape": "PINBAR",
+                "pin_routed_from": "ALBROX_LANEC",
+            })
         if _lk:
             cand.metadata["alert_lineage_key"] = _lk
         try:  # r41 parity: zone-lane charts paint zones/HTF context like every setup

@@ -131,20 +131,19 @@ def test_a_days_old_tool_is_never_shown_stretched_on_the_trigger_tf():
     assert escaped >= 1 and note
 
 
-def test_a_tool_wider_than_its_own_tape_steps_up_even_without_escape(monkeypatch):
-    """Safety net for the no-tape path: when escape cannot be measured but the
-    tool already spans more than its own 42-bar tape, the same one-TF step up
-    fires with the ordered «کش می‌آمد» note."""
+def test_a_wide_tool_without_escape_never_steps_up(monkeypatch):
+    """Viva 10-10 (RETIRES the 09-22 span rule): ONLY a candle leaving the
+    long/short tool may step the render one TF up. A wide-but-inside tool —
+    even far beyond the old 42-bar tape — stays on the trigger TF with no
+    note; the snapshot lock keeps the warned pattern on every render."""
     import bot.messages_v7 as M
     monkeypatch.setattr(M, "_tool_escape", lambda *a, **k: 0)
     cand = _view_candidate(tool_entry_ts="2026-09-17T05:00:00+00:00")
     frame = _quiet_frame(pd.Timestamp("2026-09-21 11:00"), bars=60)
     view, escaped, note = M._lifecycle_view_plan(
         cand, now=pd.Timestamp("2026-09-21 12:00"), frame=frame)
-    assert view == "1h" and escaped == 0
-    # r45: the span note speaks Persian («۱ ساعته») and carries the trigger
-    # TF parenthetical, mirroring the r44 chart-title stamp.
-    assert "کش" in note and "۱ ساعته" in note and "تایم تریگر: ۱۵ دقیقه" in note
+    assert view == str(cand.trigger_timeframe or "15m").lower() and escaped == 0
+    assert note == ""
 
 
 def test_inside_the_designed_tape_the_view_stays_on_the_trigger_tf():

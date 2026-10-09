@@ -45,6 +45,11 @@ SNAPSHOT_KEYS = (
     # and the chain's geometry drifted (HYPE T318773: two different charts).
     "viva_upper_points", "viva_lower_points", "viva_retest_zone",
     "tc_projection", "tc_base", "tl_line", "tl_touches",
+    # Viva 10-10 Hole-3 (his «تأیید باید روی چارت باشه»): the CONFIRM edges
+    # (pattern_geo / break_line_geo — read by quality_engine containment +
+    # veto and by the live-edge core) freeze with the render. Before this the
+    # chart stayed locked while the confirmation kept re-reading fresh edges.
+    "pattern_geo", "break_line_geo",
 )
 
 _PREFIX = "render_identity:"
@@ -140,7 +145,8 @@ def lock_render_geometry(candidate, kv_get=None, kv_set=None, frame=None) -> str
         # just fitted is upgraded ONCE: the fresh fit is frozen into the
         # stored snapshot (from this update on the chain is immutable).
         for _k64 in ("viva_upper_points", "viva_lower_points",
-                     "viva_retest_zone", "tc_projection", "tc_base"):
+                     "viva_retest_zone", "tc_projection", "tc_base",
+                     "pattern_geo", "break_line_geo"):
             if _k64 not in stored and md.get(_k64):
                 stored[_k64] = md[_k64]
         # R63.1 (Viva 10-01: «یه چیزایی قدیمی»): chains opened BEFORE the R63

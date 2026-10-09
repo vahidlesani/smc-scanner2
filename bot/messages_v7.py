@@ -6901,42 +6901,12 @@ def _lifecycle_view_plan(candidate: SignalCandidate,
         escaped = int(_tool_escape(candidate, frame, now=now))
     except Exception:
         escaped = 0
-    # Viva 09-22: the tool itself must not come out STRETCHED («مثل چارت لینک
-    # کش اومده»). Besides a candle leaving the tool, a tool that already spans
-    # more bars than a clean canvas allows is rendered ONE TF UP — his words:
-    # «به جاش یه تایم بالاتر بره یا دو تایم بالاتر … اگر باز کندل‌ها خارج می‌شد
-    # ۲ ساعته». Shape and place stay the tool's own; only the tape steps up.
-    _span_bars = 0
-    try:
-        _m8 = float(TF_MINUTES.get(base, 0) or 0)
-        _e8 = _event_ts((candidate.metadata or {}).get("tool_entry_ts")) \
-            or _event_ts(getattr(candidate, "confirmed_at", "")) \
-            or _event_ts(getattr(candidate, "created_at", ""))
-        _now8 = now if now is not None else pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
-        if _m8 > 0 and _e8 is not None:
-            _span_bars = int(max(0.0, (pd.Timestamp(_now8) - _e8).total_seconds() / 60.0 / _m8))
-    except Exception:
-        _span_bars = 0
-    # …the trigger TF is only left when the tool is wider than the tool's OWN
-    # designed span (TOOL_FORWARD_BARS = the 42 forward bars the confirmed
-    # chart paints); anything inside that is the normal tape, not a stretch.
-    # …plus two bars of slack: the forming candle and the boundary rounding
-    # (the 09-20 ruling «the 42-bar tape is still the trigger TF» stays true).
-    _wide_limit = max(int(TOOL_FORWARD_BARS) + 2,
-                      int(os.getenv("TOOL_MAX_VIEW_BARS", TOOL_FORWARD_BARS + 2)
-                          or TOOL_FORWARD_BARS + 2))
-    if escaped < 1 and _span_bars <= _wide_limit:
+    # Viva 10-10 (his refined law — RETIRES the 09-22 span-based step-up):
+    # ONLY a candle leaving the long/short tool may step the render one TF
+    # up. A wide-but-inside tool is the normal tape, never a reason to change
+    # TF — the snapshot lock keeps the warned pattern on every render.
+    if escaped < 1:
         return base, 0, ""
-    if escaped < 1 and _span_bars > _wide_limit:
-        _ladder8 = LIFECYCLE_VIEW_LADDER.get(base) or []
-        _view8 = _ladder8[0] if _ladder8 else base
-        if _view8 == base:
-            return base, 0, ""
-        return _view8, 0, (
-            f"ابزار لانگ/شورت روی تایم {base.upper()} کش می‌آمد "
-            f"(حدود {_span_bars} کندل) — همان ابزار با همان شکل، "
-            f"روی تایم {_TF_FA.get(_view8, _view8.upper())} نمایش داده شده است "
-            f"(تایم تریگر: {_TF_FA.get(base, base.upper())}).")
     view = _pick_view_tf(candidate, now=now)
     if view == base:
         return base, escaped, ""
