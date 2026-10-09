@@ -281,6 +281,19 @@ def evaluate_tohom_confirmation(
         return reject("TOHOM_DIR", "کندل‌های تایم پایین‌تر جهتِ یکنواخت ندارند.")
 
     edge, _src = _break_edge_src(candidate)
+    # ── Viva 10-09 PURE-BREAK LAW: TECHCLASSIC/TLBREAK confirm only on a
+    # LINE break (single trendline / pattern edge) — «تایید نواحی فقط در
+    # آلبروکس و پینوال». INTERNAL entries are range trades, exempt. (TOHOM's
+    # own charter: it may only ADD what the close law would grant anyway.)
+    try:
+        _setup_t = str(getattr(candidate, "setup_code", "") or "").upper()
+        _int_t = str((md or {}).get("viva_entry_type") or "").upper() == "INTERNAL"
+    except Exception:
+        _setup_t, _int_t = "", False
+    if _src == "ZONE" and _setup_t in {"TECHCLASSIC", "TLBREAK"} and not _int_t:
+        return reject("TOHOM_ZONE_EDGE", (
+            "تکنوکلاسیک/تی‌ال‌بریک فقط با شکستِ خط تأیید می‌گیرند؛ لبهٔ ناحیه "
+            "برای این ستاپ‌ها معتبر نیست (قانون ۱۰-۰۹)."))
     if _src == "LINE":
         # R62-ARENA (audit TH4): the SAME sloped edge the close law judges
         try:

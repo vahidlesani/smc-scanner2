@@ -580,6 +580,15 @@ def evaluate_confirmation(
                 candidate.metadata["confirm_edge_source"] = "MAJOR_TL"
     except Exception:
         pass
+    # ── Viva 10-09 PURE-BREAK LAW (surgical confirm fix): TECHCLASSIC and
+    # TLBREAK confirm ONLY on the first valid close beyond the broken LINE
+    # (single trendline / pattern upper-lower trend, projected on its own
+    # slope) in the break direction. A zone edge may NEVER confirm them —
+    # «تایید نواحی فقط در آلبروکس و پینوال». INTERNAL TLBREAK (ceiling↔floor
+    # range trades) is exempt: it is not a breakout.
+    _pure_break_setup = str(getattr(candidate, "setup_code", "") or "").upper() in {
+        "TECHCLASSIC", "TLBREAK"}
+    _pre_internal = str((candidate.metadata or {}).get("viva_entry_type") or "").upper() == "INTERNAL"
     _zone_edge = float(candidate.entry_zone_top if candidate.direction == "LONG"
                        else candidate.entry_zone_bottom)
     _atr = float(candidate.metadata.get("atr", 0) or 0) or _frame_atr(closed_df)
@@ -682,6 +691,11 @@ def evaluate_confirmation(
                 except Exception:
                     _bar_close_ts = None
                 _edge_t = _edge_at(_bar_close_ts, _edge if _edge > 0 else _zone_edge)
+                if _pure_break_setup and not _pre_internal and not (_edge > 0):
+                    # 10-09 pure-break law: no LINE on the chain → no fast
+                    # lane (a pure-break setup never confirms on a zone edge)
+                    _prev_row = _r
+                    continue
                 if _pin_line67 is not None and not _major_src:
                     try:
                         _lv67 = float(_project_watch_level(
@@ -814,6 +828,47 @@ def evaluate_confirmation(
     #     resistance was broken up → the short premise is gone.
     # Closing THROUGH a line in the trade's own direction stays allowed (that
     # is the break/retest lane), and INTERNAL/fade lanes are exempt by design.
+    # ── Viva 10-09 PINWALL COUNTER-TREND PERMISSION (pin family ONLY — «این
+    # اجازه فقط مختص پینوال است»): when the detector-validated pinbar/engulf
+    # premise (pin_high/pin_low present) has ALREADY resolved with the first
+    # valid close beyond the pin extreme in the trade direction (fast lane)
+    # AND the confirming tape shows rising counter-trend orders (last-bar
+    # volume ≥ 1.3× the mean of the previous twenty AND above the previous
+    # bar — the engine's own TOHOM definition of «حجم بالا رفته محسوس»),
+    # the counter-break vetoes below are lifted FOR THIS TICK. The lift only
+    # removes the veto — the confirmation itself still comes from the normal
+    # lanes (fast lane / trigger-TF close / TOHOM). Computed lazily: veto
+    # branches call it only when they are about to fire, so a chain with no
+    # veto sees ZERO behavior change. Fail-closed on any doubt (no volume
+    # column, no pin premise, no fast lane → False, old behavior).
+    _pin_lift_cache = {}
+    def _pin_countertrend_lift() -> bool:
+        try:
+            if "v" in _pin_lift_cache:
+                return _pin_lift_cache["v"]
+            _lift = False
+            if str(getattr(candidate, "setup_code", "") or "").upper() in {"PINVAL", "PINWALLQ"}:
+                _mdp = candidate.metadata or {}
+                if (fast_lane or _mdp.get("tl_fast_break")) \
+                        and float(_mdp.get("pin_high") or 0) > 0 \
+                        and float(_mdp.get("pin_low") or 0) > 0:
+                    try:
+                        _vol = pd.to_numeric(closed_df["volume"], errors="coerce")
+                        if len(_vol) >= 3 and bool(_vol.notna().iloc[-2:].all()):
+                            _last_v = float(_vol.iloc[-1])
+                            _prev_v = float(_vol.iloc[-2])
+                            _base_v = float(_vol.iloc[:-1].tail(20).mean())
+                            if _base_v > 0 and _prev_v > 0 and _last_v > _prev_v \
+                                    and _last_v >= 1.3 * _base_v:
+                                _lift = True
+                                _mdp["countertrend_pin_lift"] = (
+                                    f"vol {_last_v / _base_v:.2f}x + pin-level close")
+                    except Exception:
+                        _lift = False
+            _pin_lift_cache["v"] = _lift
+            return _lift
+        except Exception:
+            return False
     if not _is_internal and candidate.direction in ("LONG", "SHORT"):
         _watch = (candidate.metadata or {}).get("render_line_watch") or []
         # R62-ARENA (audit C3/G1): when the detector stored the pattern's OWN
@@ -853,13 +908,15 @@ def evaluate_confirmation(
                         _bcl = float(_brow["close"])
                         _bs6 = str(_ln.get("side") or "").upper()
                         if _atr20 > 0 and candidate.direction == "LONG" and _bs6 == "LOW" \
-                                and _bcl < _blvl - 0.10 * _atr20:
+                                and _bcl < _blvl - 0.10 * _atr20 \
+                                and not _pin_countertrend_lift():
                             return reject("BREAK_SIDE_MISMATCH", (
                                 f"ترند/خط حمایتی {_blvl:.8g} در ۶ کندل اخیر رو به پایین "
                                 f"با کلوز {_bcl:.8g} شکسته شده؛ طبق قانون، لانگ روی "
                                 "ساختارِ شکسته‌شده به پایین تأیید نمی‌شود."))
                         if _atr20 > 0 and candidate.direction == "SHORT" and _bs6 == "HIGH" \
-                                and _bcl > _blvl + 0.10 * _atr20:
+                                and _bcl > _blvl + 0.10 * _atr20 \
+                                and not _pin_countertrend_lift():
                             return reject("BREAK_SIDE_MISMATCH", (
                                 f"ترند/خط مقاومتی {_blvl:.8g} در ۶ کندل اخیر رو به بالا "
                                 f"با کلوز {_bcl:.8g} شکسته شده؛ طبق قانون، شورت روی "
@@ -885,7 +942,7 @@ def evaluate_confirmation(
                 # a silent skip here once disabled the whole law in production
                 print(f"break-side watch skip {getattr(candidate, 'signal_id', '?')}: {_exc}")
                 continue
-        if _side_wrong:
+        if _side_wrong and not _pin_countertrend_lift():
             return reject("BREAK_SIDE_MISMATCH", (
                 f"جهت سیگنال با جهت شکست ناهمسو است: بازار {_side_wrong} را "
                 f"در جهت مخالف سناریو با کلوز شکسته است (کلوز {_close20:.8g}). "
@@ -925,8 +982,11 @@ def evaluate_confirmation(
     # breakout — only the pin family (PINVAL/PINWALLQ legacy) and ALBROX may
     # take it. TECHCLASSIC/TLBREAK inside a range fall through to the
     # containment gate and are rejected (INSIDE_PATTERN_NO_BREAK).
+    # 10-09 OVERRIDE (Viva: «داخلی سقف به کف و کف به سقف در تی ال بریک»):
+    # TLBREAK JOINS this lane (ceiling↔floor inner trades). ALBROX + the pin
+    # family keep their rights; TECHCLASSIC stays breakout-only.
     _internal_setup_ok = str(getattr(candidate, "setup_code", "") or "").upper() in {
-        "ALBROX", "PINVAL", "PINWALLQ"}
+        "ALBROX", "PINVAL", "PINWALLQ", "TLBREAK"}
     if (_band_lo20 is not None and _band_hi20 is not None
             and _internal_allowed20 and _internal_setup_ok
             and str(_md20.get("viva_entry_type") or "").upper() != "INTERNAL"):
@@ -995,6 +1055,10 @@ def evaluate_confirmation(
             _internal_plan = None
     if _internal_plan:
         _md20["viva_entry_type"] = "INTERNAL"
+        # 10-09: the plan's own validated edge candle is the trigger event
+        # (sticky across ticks like tl_fast_break — a downstream RR/chase
+        # reject must not erase the fact that the edge candle printed).
+        _md20["internal_trigger"] = True
         _md20["internal_entry"] = {k: (round(v, 10) if isinstance(v, float) else v)
                                    for k, v in _internal_plan.items()}
         _md20["internal_wall"] = float(_internal_plan.get("wall") or 0.0)
@@ -1104,7 +1168,7 @@ def evaluate_confirmation(
                 if not _has_contract:
                     _mdg["break_edge"] = "LOWER"
                     _mdg["break_direction"] = "DOWN"
-            if _brk_up and not _brk_dn and _dir_g == "SHORT":
+            if _brk_up and not _brk_dn and _dir_g == "SHORT" and not _pin_countertrend_lift():
                 return reject("BREAK_SIDE_MISMATCH", (
                     f"جهت شکست با جهت سناریو ناهمسو است: کلوز {_close20:.8g} از ضلع "
                     f"بالای {_mdg['pattern_type']} (بالای {float(_band_hi20):.8g}) "
@@ -1112,7 +1176,7 @@ def evaluate_confirmation(
                     "«جهت معامله = جهت ضلع شکسته»، این سناریو تأیید نمی‌شود؛ اگر "
                     "شرایط لانگ کامل است، باید کاندیدای لانگِ تازه با شناسهٔ تازه "
                     "ساخته شود، نه تبدیل همین شورت."))
-            if _brk_dn and not _brk_up and _dir_g == "LONG":
+            if _brk_dn and not _brk_up and _dir_g == "LONG" and not _pin_countertrend_lift():
                 return reject("BREAK_SIDE_MISMATCH", (
                     f"جهت شکست با جهت سناریو ناهمسو است: کلوز {_close20:.8g} از ضلع "
                     f"پایین {_mdg['pattern_type']} (زیر {float(_band_lo20):.8g}) "
@@ -1269,7 +1333,13 @@ def evaluate_confirmation(
             candidate.metadata["alt_trigger_error"] = str(_alt_exc)[:120]
     # Isolated Viva-TLBREAK state machine: retest, then rejection, then a
     # later closed micro-BOS. Other strategies keep their existing behavior.
-    if candidate.metadata.get("strategy_variant") == "VIVA_TLBREAK":
+    # 10-09 (Viva: «داخلی سقف به کف و کف به سقف در تی ال بریک»): a TLBREAK
+    # INTERNAL chain is a range trade, not a breakout — it skips the break
+    # state machine and confirms on its candle plan. Scoped to TLBREAK only:
+    # ALBROX lane-A (same variant) keeps its exact old path.
+    _tlbreak_inner = _is_internal and str(
+        getattr(candidate, "setup_code", "") or "").upper() == "TLBREAK"
+    if candidate.metadata.get("strategy_variant") == "VIVA_TLBREAK" and not _tlbreak_inner:
         from analysis.viva_tlbreak import advance_live_state
         atr_state = float(candidate.metadata.get("atr", 0) or 0)
         if atr_state <= 0:
@@ -1365,6 +1435,18 @@ def evaluate_confirmation(
     # Viva First-Close Breakout Law: A closed bar beyond the broken trendline/edge in the trade direction IS THE TRIGGER!
     # It does NOT require a rare candlestick pattern (engulfing/pinbar) to confirm a valid breakout!
     _is_break_trigger = bool(fast_lane or (candidate.metadata or {}).get("tl_fast_break"))
+    # ── Viva 10-09 PURE-BREAK LAW (second half): without the first valid
+    # close beyond the broken line (or S6/TOHOM blessing), a pure-break chain
+    # may NOT confirm on candle vocabulary or a zone base — those lanes are
+    # ALBROX's and the pin family's («تایید نواحی فقط در آلبروکس و پینوال»).
+    # VIVA_TLBREAK-variant chains never reach here unready (early return
+    # above); this gate bites legacy/unvarianted TC/TLBREAK chains.
+    if (_pure_break_setup and not _is_internal and not _is_break_trigger
+            and str((candidate.metadata or {}).get("viva_state") or "") != "S6_CONFIRMED"
+            and not (candidate.metadata or {}).get("tohom")):
+        return reject("WAIT_FIRST_CLOSE_BREAK", (
+            "تکنوکلاسیک/تی‌ال‌بریک فقط با اولین کلوزِ معتبرِ فراتر از خطِ شکسته "
+            "(در جهت بریک) یا تأیید توهم تأیید می‌شوند؛ تأیید ناحیه‌ای ندارند (قانون ۱۰-۰۹)."))
     trigger_valid = (
         _is_break_trigger
         or (
@@ -1380,6 +1462,16 @@ def evaluate_confirmation(
     if not trigger_valid and candidate.metadata.get("tl_fast_break"):
         trigger_valid = True
         candidate.metadata["trigger_note"] = "اولین کلوزِ معتبر پشت خط/لبه (بدون پولبک)"
+    if (not trigger_valid
+            and str(getattr(candidate, "setup_code", "") or "").upper() == "TLBREAK"
+            and _is_internal
+            and bool((candidate.metadata or {}).get("internal_trigger"))):
+        # 10-09 (Viva: inner ceiling↔floor is TLBREAK's): the internal plan's
+        # own edge candle (pin/engulf/close validated when the plan was
+        # built) IS the confirmation event — a range trade has no break
+        # close by definition. Other setups keep their exact trigger paths.
+        trigger_valid = True
+        candidate.metadata["trigger_note"] = "کندل تأیید داخلی از لبهٔ رنج/کانال (قانون ۱۰-۰۹)"
     if not trigger_valid and alt is not None:
         trigger_valid = True
         alt_only = True

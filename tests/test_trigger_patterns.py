@@ -158,9 +158,15 @@ def test_confirmation_accepts_cluster_trigger_when_single_candle_fails():
 
 
 def test_viva_tlbreak_fast_lane_through_alt_trigger():
+    # 10-09 pure-break law: production TLBREAK always carries its validated
+    # break line — the fixture now does too (100.05 = the old zone edge, so
+    # the S6 fire bar is unchanged; the alt cluster is still recorded as
+    # next-position entry data, never as the confirmation itself).
     cand = _candidate(setup_code="TLBREAK",
                       metadata={"atr": 1.0, "touched": True,
                                 "strategy_variant": "VIVA_TLBREAK",
+                                "viva_break_line": 100.05,
+                                "viva_breakout_line": 100.05,
                                 "viva_state": "S3_RETEST"})
     ok, cand, reason = evaluate_confirmation(cand, _df20())
     assert ok, reason

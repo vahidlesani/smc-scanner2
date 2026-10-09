@@ -712,7 +712,11 @@ def test_one_close_law_confirms_first_break_for_every_setup():
     cand.tp1, cand.tp2 = 105.0, 108.0
     cand.created_at = (t0 + timedelta(minutes=5 * 29)).isoformat()
     cand.metadata.pop("strategy_variant", None)
-    cand.metadata.update({"atr": 0.8, "confirm_tf": "5m", "touched": False})
+    # 10-09 pure-break law: production TC always carries its validated break
+    # line — the fixture now does too (same edge value the zone fallback
+    # used to supply, so the fire bar is unchanged).
+    cand.metadata.update({"atr": 0.8, "confirm_tf": "5m", "touched": False,
+                          "viva_break_line": 100.4, "viva_breakout_line": 100.4})
     cand.mandatory_gates = {"liquidity": True, "displacement": True, "location": True}
     ok, out, why = evaluate_confirmation(cand, df)
     assert ok is True, f"clean first break must confirm without any pullback: {why}"
@@ -984,7 +988,11 @@ def test_break_close_scans_all_bars_not_only_latest():
     cand.planned_entry, cand.sl = 101.0, 98.0
     cand.tp1, cand.tp2 = 112.0, 118.0
     cand.created_at = (t0 + timedelta(hours=10)).isoformat()
-    cand.metadata.update({"atr": 1.0, "confirm_tf": "1h", "touched": False})
+    # 10-09 pure-break law: the validated line travels on the chain (same
+    # 101.5 edge the zone fallback supplied — the settled bar-21 fire is
+    # unchanged, only the edge source is now lawful).
+    cand.metadata.update({"atr": 1.0, "confirm_tf": "1h", "touched": False,
+                          "viva_break_line": 101.5, "viva_breakout_line": 101.5})
     ok, cand2, reason = evaluate_confirmation(cand, df)
     assert ok is True, f"a settled break bar must still confirm: {reason}"
     lane = str(cand2.metadata.get("tl_fast_break") or "")

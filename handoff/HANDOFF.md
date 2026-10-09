@@ -1,3 +1,4 @@
+> ## 🟥 10-09 — جراحی تأیید (uncommitted): quality_engine.py +106/−7 · tohom.py +13 · تست جدید `test_viva1009_confirm_surgery.py` (۹/۹ سبز) · ۴ فیکسچر قدیمی خط‌دار شد (همان fire-bar، سورس لبه قانونی) · سوئیت 901P/36F، دیف با بیس‌لاین ۶ اکتبر = فقط ۱ فیکس (round15 mirror-zone) و صفر خرابی جدید · بدون پوش (منتظر اجازه).
 > ## 🟩 R65-ARENA — راند ۱۰-۰۲ (NIGHTUSDT · TECH · زوم · ترند/الگو)
 > شاخه `arena/01a0fd5e-smc-scanner2` روی `66dc43c`. جزئیات کامل: بخش `R65-ARENA` در `WORKLOG.md`.
 > ۱) اسپات: نردبان تایید یک‌پله‌ای (`scan_spot_urgent_confirms`) — کلوز معتبر تایم پایین‌تر

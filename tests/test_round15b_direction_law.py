@@ -68,9 +68,13 @@ def test_pattern_bias_table_speaks_his_language():
 
 def test_falling_wedge_broken_up_confirms_as_long_with_full_metadata():
     from analysis.quality_engine import evaluate_confirmation
+    # 10-09 pure-break law: production TLBREAK always carries its validated
+    # break line — the fixture now does too (102.0 = the broken wedge edge,
+    # same value the zone fallback supplied, so the fire bar is unchanged).
     cand = _cand("LONG", entry_zone_bottom=101.4, entry_zone_top=102.0,
                  sl=100.0, tp1=103.5, tp2=105.0,
                  metadata={"atr": 1.0, "touched": True,
+                           "viva_break_line": 102.0, "viva_breakout_line": 102.0,
                            "pattern_band": _band("WEDGE_FALLING")})
     ok, c2, reason = evaluate_confirmation(cand, _frame([101.9, 102.4]))
     assert ok is True, reason

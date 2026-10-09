@@ -1181,7 +1181,11 @@ def spot_alert_check(item: dict) -> bool:
         return (cd > 0.0
                 and (now - float(prev.get("ts", 0))) >= cd
                 and str(prev.get("bar") or "") != str(item.get("bar_ts") or ""))
-    except Exception:
+    except Exception as _exc67:
+        # 10-09: NEVER die silently — a dedup-read failure used to mute the
+        # whole ladder with zero trace. Still fail-closed (no spam), but LOUD
+        # so the Railway log names the cause.
+        print(f"spot_alert_check KV/read failed ({type(_exc67).__name__}): {_exc67}")
         return False
 
 
