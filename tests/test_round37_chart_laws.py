@@ -47,10 +47,8 @@ def test_spot_case_tool_fully_inside_and_candles_centered():
     assert win is not None
     ylo, yhi = win
     assert ylo <= 0.0890 and yhi >= 0.1050, "the tool may never be clipped again"
-    # Viva 10-09 (SUPERSEDES r40's absolute fill — his «y-span too tall»): the
-    # 0.075 fossil low clips instead of squashing the live block; tool + live
-    # stay whole and centered.
-    assert ylo > 0.075 and yhi >= 0.105, (ylo, yhi)
+    # r40 CHART-FILL: the whole tape is a hard bound — nothing renders invisible
+    assert ylo <= 0.075 and yhi >= 0.105, "every candle visible, nothing sticks out"
     r_mid = 0.5 * (0.0900 + 0.0990)
     w_mid = 0.5 * (ylo + yhi)
     assert abs(r_mid - w_mid) <= 0.25 * (yhi - ylo), "recent block drifts off-center"
@@ -163,21 +161,17 @@ def test_spot_stop_hugs_the_minor_swing_not_the_pattern_base():
 
 
 def test_spot_targets_anchor_on_real_resistance():
-    """Viva TP Law 2026-10-08 (his CryptoCove verdict — SUPERSEDES the r37
-    structural anchor AND the 10-08 35–55% band): TP1/TP2/TP3 are EXACTLY
-    40/50/60% of the green-box path, 10% held to the path end (runner).
-    Overhead resistance no longer moves the rungs."""
     from analysis.spot_engine import spot_risk_levels
     close = 100.0
     path = 6.0
-    highs = [101.8, 103.4, 105.2]           # real overhead resistance (ignored now)
+    highs = [101.8, 103.4, 105.2]           # real overhead resistance
     out = spot_risk_levels(close=close, upper=100.2, lower_vals=[97.0],
                            atr=0.9, path_abs=path, swing_low=98.4,
                            df_highs=highs)
     t1, t2, t3 = out["targets"]
-    assert (t1, t2, t3) == (102.4, 103.0, 103.6)
-    assert out["runner"] == 106.0
-    assert t1 < t2 < t3 < out["runner"]
+    assert abs(t1 - 101.8) < 1e-9            # TP1 = first resistance
+    assert abs(t3 - 105.2) < 1e-9            # TP3 = structural top
+    assert t1 < t2 < t3, (t1, t2, t3)
 
 
 def test_spot_targets_fallback_stays_monotone_and_atr_honest():

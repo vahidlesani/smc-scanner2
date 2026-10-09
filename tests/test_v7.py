@@ -472,10 +472,10 @@ class V7PersistenceTests(unittest.TestCase):
         original = repository_v7.get_klines
         repository_v7.get_klines = lambda *args, **kwargs: frame
         try:
-            # Under R67 immediate market fill law, confirmation enters immediately
+            # First cycle records only the fill; later candles are managed in
+            # the next cycle, never retroactively credited before Entry.
+            self.assertEqual(repository_v7.monitor_confirmed_trades(), [])
             events = repository_v7.monitor_confirmed_trades()
-            if not events:
-                events = repository_v7.monitor_confirmed_trades()
         finally:
             repository_v7.get_klines = original
         # Ladder v3 under the 09-20 TF ceiling («مدیریت ویوا» §4): entry 100

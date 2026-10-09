@@ -228,12 +228,9 @@ def _recently_broken(line, n: int) -> bool:
         # r33 LAW (Viva 09-26): after the break the line stays dotted/faint
         # for AT LEAST 50 candles so retest touches stay visible — unless a
         # better-ranked valid line replaces it (the fitter's best-score pick).
-        # Viva Law 2026-10-08 (r33 RESTORED + fossil cap): the broken line stays
-        # dotted/faint for max(50, half-frame) so retest touches stay visible
-        # (his «کمرنگ بمونه»), but NEVER past 100 bars — older than that it is
-        # a fossil (his NIGHT 30M «خط‌های فسیل») and must retire so the fresh
-        # post-base trend takes the frame.
-        return 0 <= age <= min(max(50, int(0.5 * max(n, 1))), 100)
+        # Viva Post-Break Retirement Law: A broken line only stays relevant for the immediate retest (<=48 bars).
+        # Once price moves on past ~48 bars and forms a new base, the old line retires so the fresh price-action trend is detected!
+        return 0 <= age <= min(48, max(20, int(0.28 * max(n, 1))))
     except Exception:
         return False
 
@@ -331,10 +328,6 @@ def _chart_will_be_log(candidate, df: pd.DataFrame) -> bool:
 
 def detect_patterns(df: pd.DataFrame, direction: str = "",
                     log_axis: Optional[bool] = None) -> List[Dict]:
-    if df is not None and not df.empty:
-        df = df.copy()
-        if "timestamp" not in df.columns:
-            df["timestamp"] = df.index
     """Validated edge geometry + honest shape classification (doctrine:
     Edwards & Magee / Brooks / E&M) as render commands; plus a trading-range
     box when the window is flat between two tested horizontals.
@@ -435,14 +428,7 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
             # levels» — the score (touches²·fit·√span·proximity) keeps the
             # most valid line near price; a spike that only fits a small
             # window cannot outrank a major that holds across the big one.
-            # Viva Law 2026-10-08 (his «وقتی لیمیت تعداد کندل میذاری ربات
-            # چطوری باید تشخیص بده»): on a deep frame the ladder fits the
-            # FULL frame too — a major that only holds across 250-300 bars
-            # must compete, not be cut at 180.
-            _ws1008 = [60, 90, 120, 180]
-            if len(df) > 180:
-                _ws1008.append(len(df))
-            for w in dict.fromkeys(min(_x, len(df)) for _x in _ws1008):
+            for w in (60, 90, 120, min(180, len(df))):
                 if w < 45:
                     continue
                 off = max(0, len(df) - w)

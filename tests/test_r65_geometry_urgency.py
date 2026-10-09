@@ -206,11 +206,7 @@ def _crushed(n=300):
                          "turnover": np.full(n, 5e4)})
 
 
-def test_focus_window_is_need_first_no_limits():
-    # Viva 10-09 NEED-FIRST (SUPERSEDES the 65%-share crush loop + the max_n
-    # hard clamp): the count is a CONSEQUENCE of the geometry — first-needed
-    # anchor + live block + margin. Anchorless windows keep base_n (the y-law
-    # frames crushed blocks now, not the count); max_n is IGNORED.
+def test_focus_window_shortens_a_crushed_recent_block():
     from bot.messages_v7 import _r65_focus_window
     from analysis.models import SignalCandidate
     d = _crushed()
@@ -222,16 +218,14 @@ def test_focus_window_is_need_first_no_limits():
                            rr_tp1=2.0, rr_tp2=4.0, bias="BULLISH",
                            trigger_timeframe="30m")
     cand.metadata = {}
-    assert _r65_focus_window(d, cand, 300, True, max_n=300) == 300
-    # anchored single line (first touch at -200): need ≈ 200 + live + margin
-    anchor_ts = str(d["timestamp"].iloc[-200])
-    cand.metadata = {"break_line_geo": {"a_ts": anchor_ts}}
     n = _r65_focus_window(d, cand, 300, True, max_n=300)
-    assert 200 <= n <= 300
-    assert str(d.tail(n)["timestamp"].iloc[0]) <= anchor_ts
-    # no-limits: a max_n BELOW the need must NOT cut the anchor
-    n2 = _r65_focus_window(d, cand, 300, True, max_n=120)
-    assert n2 == n and str(d.tail(n2)["timestamp"].iloc[0]) <= anchor_ts
+    assert n < 300, "a crushed recent block must shorten the frame"
+    assert n >= 60
+    window = d.tail(n)
+    recent = window.tail(60)
+    box = float(window["high"].max()) - float(window["low"].min())
+    share = (float(recent["high"].max()) - float(recent["low"].min())) / box
+    assert share >= 0.60
 
 
 def test_focus_window_never_cuts_the_pattern_anchors():

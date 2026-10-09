@@ -432,12 +432,8 @@ def detect_pivot_patterns(df, atr: float) -> List[Dict]:
             return out
         n = len(df) - 1
         highs, lows = _swings(df)
-        # Viva Pivot Law 2026-10-08 (his 16-mehr «دبل تاپ و دبل باتم یه
-        # اصولی و قواعدی داره»): twins must stand APART (≥8 bars), sit LEVEL
-        # (≤0.5 ATR apart) and tower over a real trough (≥1.0 ATR) — adjacent
-        # ripples and shallow noise never qualify.
-        tol = 0.50 * atr          # «هم‌سطح» = within 0.5 ATR (Bulkowski tight)
-        min_gap = 8               # bars between the two tops/bottoms
+        tol = 0.60 * atr          # «هم‌سطح» = within 0.6 ATR (Bulkowski ~tight)
+        min_gap = 4               # bars between the two tops/bottoms
 
         def _line(idx0: int, idx1: int, price: float, side: str = "HIGH") -> Dict:
             # side is the STAGING role (spot lane): a bear-pattern neckline is
@@ -455,7 +451,7 @@ def detect_pivot_patterns(df, atr: float) -> List[Dict]:
                 if mids:
                     neck = min(mids, key=lambda p: p["price"])
                     height = float(a["price"]) - float(neck["price"])
-                    if height > 1.0 * atr:
+                    if height > 0.8 * atr:
                         # R62-ARENA (audit P5): a double TOP's neckline is the
                         # SUPPORT under it (break DOWN confirms) → LOW side.
                         neck_line = _line(int(neck["index"]), n, float(neck["price"]), "LOW")
@@ -494,7 +490,7 @@ def detect_pivot_patterns(df, atr: float) -> List[Dict]:
                 if mids:
                     neck = max(mids, key=lambda p: p["price"])
                     height = float(neck["price"]) - float(a["price"])
-                    if height > 1.0 * atr:
+                    if height > 0.8 * atr:
                         item = {"type": "DOUBLE_BOTTOM", "shape": "single",
                                 "lines": [_line(int(neck["index"]), n, float(neck["price"]), "HIGH")],
                                 "pivots": [a, neck, b],

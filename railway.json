@@ -6,7 +6,8 @@
   },
   "deploy": {
     "startCommand": "python combined_service.py",
-    "restartPolicyType": "ALWAYS",
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10,
     "healthcheckPath": "/health",
     "healthcheckTimeout": 120
   }

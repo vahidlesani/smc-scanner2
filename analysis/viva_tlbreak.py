@@ -336,16 +336,12 @@ def fit_validated_line(
         intercept = y0 - slope * x0
         _u = _unit_log if log_space else _unit_lin
 
-        # R68 Slope Sanity Guard (Kills steep 80-deg lines like QNT 1H/1D).
-        # Viva Law 2026-10-08 (his «شیب ترندلاین‌ها رو از ATR جدا کن — ترند
-        # باید کشیده بشه»): the linear gate was 1.25×ATR and killed steep-but-
-        # VALID trends («رسم نمیکنه»). Only TRUE verticals die now (2.2×, the
-        # same vertical law the renderer enforces) — steep-valid lines live.
+        # R68 Slope Sanity Guard (Kills steep 80-deg lines like QNT 1H/1D):
         if log_space:
             if abs(ls) > 0.025:
                 return None
         else:
-            if atr > 0 and abs(slope) > 2.2 * atr:
+            if atr > 0 and abs(slope) > 1.25 * atr:
                 return None
 
         # R68 Start Pivot Cluster Rule:

@@ -33,10 +33,8 @@ def test_smart_window_keeps_whole_tape_inside():
                           recent_lo=0.072, recent_hi=0.079)
     assert out is not None
     ylo, yhi = out
-    # Viva 10-09 (SUPERSEDES r40's absolute fill): the fossil 0.060 tail clips
-    # instead of owning the axis; the live block + tool keep the panel.
-    assert ylo > 0.060, (ylo, yhi)
-    assert ylo <= 0.072 and yhi >= 0.080, (ylo, yhi)
+    assert ylo <= 0.060, (ylo, yhi)
+    assert yhi >= 0.080, (ylo, yhi)
 
 
 def test_smart_window_far_overlay_still_fights_the_basement():

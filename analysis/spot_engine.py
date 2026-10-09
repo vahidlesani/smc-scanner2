@@ -54,10 +54,7 @@ SPOT_SETUP_CODE = "SPOTBREAK"
 # cannot promise a one-hour move. Bigger candle → bigger honest path.
 MIN_PATH_PCT_BY_TF = {"4h": 6.0, "8h": 8.0, "12h": 10.0,
                       "1d": 14.0, "3d": 20.0, "1w": 28.0}
-# Viva TP Law 2026-10-08 (his CryptoCove box verdict: TP1/TP2/TP3 =
-# 40/50/60% of the green-box path, 30/30/30 shares + 10% runner held
-# to the path end) — supersedes the 40/30/30 split of 10-07.
-SPOT_WEIGHTS = (30.0, 30.0, 30.0, 10.0)
+SPOT_WEIGHTS = (40.0, 30.0, 30.0)
 
 # his stop law for spot (09-22): «استاپ هم ۱۰ درصد خوبه» — the structural stop
 # never stretches beyond 10% even on the daily/3-day tape
@@ -133,9 +130,9 @@ def _fresh(d: pd.DataFrame, tf: str) -> bool:
                      "1w": 168}.get(tf, 24)
         _bucket_end = _last + pd.Timedelta(hours=_tf_hours)
         _age_h = (_now - _bucket_end).total_seconds() / 3600.0
-        # Strict HTF Freshness: allow signals throughout full bar duration
-        # (4h: 4h, 8h: 8h, 12h: 12h, 1d: 24h, 3d: 72h, 1w: 168h)
-        _limit_h = float(_tf_hours) if tf in ("4h", "8h", "12h", "1d", "3d", "1w") else float(_tf_hours)
+        # R62-ARENA (audit S3): «just-closed» = until the NEXT close of the
+        # same TF (4h → 4h, 8h → 8h, 12h → 12h, 1d → 24h); 3d/1w keep 30h.
+        _limit_h = float(_tf_hours) if tf in ("4h", "8h", "12h", "1d") else 30.0
         return _age_h <= _limit_h
     except Exception:
         return True
@@ -152,10 +149,10 @@ def spot_risk_levels(close: float, upper: float, lower_vals: list,
     −10%» number (DOGE 0.08905). The 10% ceiling law is unchanged; the stop
     just stops being gratuitously far.
 
-    TARGETS — Viva TP Law 2026-10-08 (his CryptoCove verdict, supersedes
-    the r37/10-07 structural rungs): TP1/TP2/TP3 are EXACTLY 40/50/60% of
-    the green-box path, and 10% of the position is HELD (runner) to the
-    path end. Output is always monotone tp1 < tp2 < tp3 < runner.
+    TARGETS — rungs anchor on REAL resistance overhead (swing highs of the
+    last 120 bars inside 1.15×path); ATR floors keep TP1 honest when the
+    tape above is virgin air; the raw 0.2/0.6/1.0 fractions are only the
+    fallback. Output is always monotone tp1 < tp2 < tp3.
 
       close      entry (the confirming close)
       upper      the broken upper edge
@@ -172,13 +169,27 @@ def spot_risk_levels(close: float, upper: float, lower_vals: list,
     sl = float(swing_low)
     if not (sl > 0 and sl < close):
         sl = close * (1.0 - 0.02)
-    # ── targets: exact box-path fractions (his 10-08 law) ──
-    tp1 = close + 0.40 * path
-    tp2 = close + 0.50 * path
-    tp3 = close + 0.60 * path
-    runner = close + path
-    return {"sl": float(sl), "targets": [float(tp1), float(tp2), float(tp3)],
-            "runner": float(runner)}
+    # ── targets: structural first ──
+    try:
+        _hs = sorted({float(v) for v in (df_highs or [])
+                      if close * 1.002 < float(v) <= close + 1.15 * path})
+    except Exception:
+        _hs = []
+    # r57: virgin air (no real resistance inside the window) → TP1 scales
+    # WITH THE TIMEFRAME'S path — never a one-sun first pill on a 3d break
+    tp1 = min(_hs) if _hs else close + max(0.8 * atr, 0.35 * path)
+    # r57: the «یک‌سُن» TP1 came from the TF-flat path floors (3d was 6% →
+    # 0.45×path = 2.7%). With MIN_PATH_PCT_BY_TF now proportional to the TF,
+    # the resistance anchor AND the 45%-of-path bound both scale honestly.
+    tp1 = min(max(tp1, close + 0.6 * atr), close + 0.45 * path)
+    tp1 = max(tp1, close * 1.005)
+    above = [r for r in _hs if r > tp1 * 1.005]
+    tp3 = max(above) if above else close + path
+    tp3 = min(max(tp3, tp1 + 0.8 * atr, close + 0.55 * path), close + 1.10 * path)
+    mids = [r for r in above if r < tp3 * 0.995]
+    tp2 = min(mids) if mids else 0.5 * (tp1 + tp3)
+    tp2 = min(max(tp2, tp1 + 0.15 * atr), tp3 - 0.01 * path)
+    return {"sl": float(sl), "targets": [float(tp1), float(tp2), float(tp3)]}
 
 
 def _structural_weight(pat: dict) -> float:
@@ -375,7 +386,6 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                     "label": state_label(kind, str(pat.get("break_direction") or "")),
                     "rule_fa": pattern_info(kind)["rule_fa"],
                     "entry": close, "sl": float(sl), "targets": targets,
-                    "runner": float(_risk.get("runner") or 0.0),
                     "weights": list(SPOT_WEIGHTS),
                     "path_pct": round(path / close * 100.0, 3),
                     "broken_level": float(upper),
@@ -537,10 +547,6 @@ def _spot_bull_shapes(pats: list, price: float, x_index: float,
         _kind = str(pat.get("type") or "NONE").upper()
         if _kind in ("DOUBLE_TOP", "HEAD_SHOULDERS", "WEDGE_RISING", "FLAG_BEAR"):
             continue
-        # Viva Doctrine 2026-10-08 (his «الگوی فلگ هرگز علت تایید نیست»):
-        # no flag/pennant of either direction ever confirms a spot LONG.
-        if _kind.startswith("FLAG") or _kind.startswith("PENNANT"):
-            continue
         upper = _edge_at_frac_index(pat, x_index)
         if upper is None or price <= upper + eps:
             continue
@@ -624,44 +630,6 @@ def scan_spot_tohom_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
         _measured = (c_sub + (float(upper) - min(_lower))) if _lower else c_sub * 1.06
         _floor = c_sub * MIN_PATH_PCT_BY_TF.get(want_tf, 5.0) / 100.0
         _path = max(_measured - c_sub, _floor)
-        # ── Viva TOHOM Doctrine 2026-10-08 (his pre-close law): the spot
-        # smart lane confirms ONLY with (touch≥2 on the break edge) + (sane
-        # slope: the R68 vertical law) + (shock: last sub-volume ≥ 2.0× its
-        # 20-bar mean) + (displacement: last sub-body ≥ 1.0× sub-ATR).
-        # Fail-closed with a visible reason.
-        _brk1008 = next((_l for _l in _lns
-                         if str(_l.get("side") or "").upper() == "HIGH"), None)
-        if _brk1008 is not None:
-            if "points" in _brk1008 and len(list(_brk1008.get("points") or [])) < 2:
-                print(f"spot tohom block {symbol} {want_tf}: touch<2")
-                continue
-            try:
-                if _brk1008.get("log_fit"):
-                    if abs(float(_brk1008.get("log_slope") or 0.0)) > 0.025:
-                        print(f"spot tohom block {symbol} {want_tf}: slope")
-                        continue
-                elif atr > 0 and abs(float(_brk1008.get("slope") or 0.0)) > 2.2 * atr:
-                    print(f"spot tohom block {symbol} {want_tf}: slope")
-                    continue
-            except Exception:
-                pass
-        try:
-            _sv1008 = sub["volume"].astype(float).to_numpy()
-            _base1008 = float(_sv1008[-21:-1].mean()) if len(_sv1008) >= 22 else 0.0
-            _shock1008 = (float(_sv1008[-1]) / _base1008) if _base1008 > 0 else 0.0
-        except Exception:
-            _shock1008 = 0.0
-        if _shock1008 < 2.0:
-            print(f"spot tohom block {symbol} {want_tf}: shock={_shock1008:.2f}")
-            continue
-        try:
-            _sr1008 = float((sub["high"] - sub["low"]).astype(float).tail(14).mean())
-            _body1008 = abs(float(sub["close"].iloc[-1]) - float(sub["open"].iloc[-1]))
-        except Exception:
-            _sr1008, _body1008 = 0.0, 0.0
-        if not (_sr1008 > 0 and _body1008 >= 1.0 * _sr1008):
-            print(f"spot tohom block {symbol} {want_tf}: displacement")
-            continue
         base_item = {
             "symbol": symbol.upper(), "tf": want_tf, "pattern": _kind,
             "horizon": ("SHORT" if want_tf in SPOT_SHORT_TFS
@@ -704,7 +672,6 @@ def scan_spot_tohom_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
         item.update({
             "entry": entry, "sl": float(sl),
             "targets": list(_risk["targets"]),
-            "runner": float(_risk.get("runner") or 0.0),
             "path_pct": round((max(_path, entry - float(upper))) / entry * 100.0, 3),
             "break_bar_ts": str(sub["timestamp"].iloc[-1]),
             "confirm_bar_ts": str(md2.get("tohom_confirm_bar")
@@ -829,7 +796,6 @@ def scan_spot_urgent_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
             "label": state_label(_kind, "UP"),
             "rule_fa": pattern_info(_kind)["rule_fa"],
             "entry": close, "sl": float(sl), "targets": list(_risk["targets"]),
-            "runner": float(_risk.get("runner") or 0.0),
             "weights": list(SPOT_WEIGHTS),
             "path_pct": round(path / close * 100.0, 3),
             "broken_level": float(upper),
@@ -918,7 +884,6 @@ def build_spot_candidate(item: dict):
         "tool_entry_ts": str(item.get("confirm_bar_ts") or item.get("break_bar_ts") or ""),
         "spot_broken_level": float(item.get("broken_level") or 0.0),
         "target_ladder": {"targets": targets, "weights": weights,
-                          "runner": float(item.get("runner") or 0.0),
                           "path_pct": float(item.get("path_pct") or 0.0)},
         "viva_state": "S6_CONFIRMED",
         "technical_confirmation_complete": True,
@@ -1087,46 +1052,6 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                 hit = _stage_for_pattern(pat, d, atr, n)
                 if not hit:
                     continue
-                # Viva 10-09 SUPERIORITY law (his ADA 3d year-triangle vs the
-                # live 12h channel: «الگوی برتر برنده … آخرین تاچ معتبر»): a
-                # BREAK alert needs a TOUCH-VALIDATED pattern — its most
-                # recent touch (max line x1) must sit inside 2× the live
-                # block. Breaks of fossil lines are the fakeouts he hates —
-                # they may still publish TOUCH/NEAR watches, never a BREAK.
-                # the last VALID touch: the freshest line-point time across the
-                # pattern's lines, aged in bars against the scanned frame (x1 is
-                # the fit's right edge, NOT a touch — it reads 0 on live fits).
-                _touch_age = 0
-                try:
-                    _tser = pd.to_datetime(d["timestamp"])
-                    try:
-                        _tser = _tser.dt.tz_convert("UTC").dt.tz_localize(None)
-                    except Exception:
-                        try:
-                            _tser = _tser.dt.tz_localize(None)
-                        except Exception:
-                            pass
-                    _ages = []
-                    for _ln in _lns:
-                        _pts = list(_ln.get("points") or [])
-                        if not _pts:
-                            continue
-                        _t = pd.Timestamp(str((_pts[-1] or {}).get("ts") or ""))
-                        if _t.tzinfo is not None:
-                            _t = _t.tz_convert("UTC").tz_localize(None)
-                        _ages.append(int((_tser > _t).sum()))
-                    if _ages:
-                        _touch_age = max(0, min(_ages))
-                except Exception:
-                    _touch_age = 0
-                if str(hit.get("stage") or "") in ("BREAK_UP", "BREAK_DOWN"):
-                    try:
-                        from analysis.chart_window import live_block_for_tf as _lbtf109
-                        _lim109 = 2 * max(20, int(_lbtf109(tf)))
-                    except Exception:
-                        _lim109 = 120
-                    if _touch_age > _lim109:
-                        continue  # fossil break — the live pattern wins
                 kind = str(pat.get("type") or "NONE").upper()
                 box_top = _structural_high_above(d, close)
                 if box_top:
@@ -1136,24 +1061,9 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                     vol_ratio = (float(d["volume"].iloc[-1]) / _v20) if _v20 > 0 else 0.0
                 except Exception:
                     vol_ratio = 0.0
-                # Viva Identity Law 2026-10-08 (his «چارت‌های تکراری»):
-                # the sig is the shape's frozen ANCHOR TIMES (never the
-                # sliding window x0 — that re-minted the identity every
-                # candle and re-spoke every alert).
-                def _anch_ts(_ln, _k="x0"):
-                    try:
-                        _pts = list(_ln.get("points") or [])
-                        if _pts and str((_pts[0] or {}).get("ts") or ""):
-                            return str(_pts[0].get("ts"))[:16]
-                    except Exception:
-                        pass
-                    try:
-                        _ix = max(0, min(int(float(_ln.get(_k, 0) or 0)), len(d) - 1))
-                        return str(d["timestamp"].iloc[_ix])[:16]
-                    except Exception:
-                        return "?"
                 sig = (f"{symbol.upper()}|{tf}|{kind}|"
-                       f"{_anch_ts(_lns[0])}|{_anch_ts(_lns[-1])}")
+                       f"{int(float(_lns[0].get('x0', 0) or 0))}|"
+                       f"{int(float(_lns[-1].get('x0', 0) or 0))}")
                 out.append({
                     "stage": hit["stage"], "side": hit["side"],
                     "symbol": symbol.upper(), "tf": tf, "pattern": kind,
@@ -1166,7 +1076,6 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                     "box_top": float(box_top) if box_top else 0.0,
                     "pattern_commands": [pat], "sig": sig,
                     "bar_ts": str(d["timestamp"].iloc[-1]),
-                    "touch_age_bars": int(_touch_age),
                     "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 })
         except Exception as exc:
@@ -1254,28 +1163,6 @@ def spot_alert_check(item: dict) -> bool:
     marker is written by spot_alert_commit AFTER a successful send (handoff
     law: never store a dedup marker before the send succeeded)."""
     try:
-        sym = str(item.get("symbol") or "").upper()
-        stage = str(item.get("stage") or "").upper()
-
-        # Viva Strict Post-Confirmation Dedup Law (07-Oct Mandate):
-        # Once a signal is confirmed active for this symbol, NEVER send pre-breakout TOUCH/NEAR_BREAK alerts!
-        if stage in ("TOUCH", "NEAR_BREAK"):
-            try:
-                from database.db import get_active_signals
-                _actives = get_active_signals()
-                if any(str(s.get("symbol") or "").upper() == sym for s in _actives):
-                    return False
-            except Exception:
-                pass
-            try:
-                from database.bot_kv import get_json as _g
-                _recent_sigs = _g("recent_confirmed_symbols", {}) or {}
-                import time as _t
-                if sym in _recent_sigs and (_t.time() - float(_recent_sigs[sym])) < 86400.0 * 3:
-                    return False
-            except Exception:
-                pass
-
         from database.bot_kv import get_json as _g
         import time as _t
         now = _t.time()
@@ -1308,10 +1195,6 @@ def spot_alert_commit(item: dict) -> None:
             "stage": str(item.get("stage") or ""),
             "rank": STAGE_RANK.get(str(item.get("stage") or ""), 0),
             "ts": _t.time(), "bar": str(item.get("bar_ts") or "")}
-        # 10-09 crash law: the dedup ledger never grows without bound
-        if len(state) > 500:
-            for _k in sorted(state, key=lambda k: float((state[k] or {}).get("ts", 0)))[:len(state) - 500]:
-                state.pop(_k, None)
         _s("spot_alerts", state)
     except Exception:
         pass
