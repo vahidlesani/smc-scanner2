@@ -19,6 +19,7 @@ Fail-open everywhere: any KV/network problem only skips a cycle.
 
 from __future__ import annotations
 
+import os
 from typing import Dict, Optional, Tuple
 
 _KV_KEY = "line_watch"
@@ -29,8 +30,60 @@ _DEDUP_SEC = 6 * 3600.0            # one alert per kind per 6h
 _LAST_RUN = {"ts": 0.0}
 
 
+def _lw_edge_slot(edge: dict, slot: str, now: float):
+    """10-12 journey (edge side, kindless): may this edge claim slot s1/s2?
+    Pending claims older than 10 min are stale. Pure (unit-tested)."""
+    try:
+        if slot == "s1":
+            if float((edge or {}).get("j1") or 0.0):
+                return None
+            if float((edge or {}).get("j1p") or 0.0) and now - float(edge.get("j1p")) <= 600.0:
+                return None
+            return "s1"
+        if slot == "s2":
+            if float((edge or {}).get("j2") or 0.0):
+                return None
+            if float((edge or {}).get("j2p") or 0.0) and now - float(edge.get("j2p")) <= 600.0:
+                return None
+            return "s2"
+        return None
+    except Exception:
+        return None
+
+
+def _lw_touch_item(entry: dict, price: float, pattern: str, shape) -> dict:
+    """10-12 journey: the ticker's warning as a ladder-grade item so it rides
+    the SAME chain/numbering/replace machinery."""
+    try:
+        lvl = float((entry or {}).get("level") or 0.0)
+        px = float(price or 0.0)
+    except Exception:
+        lvl, px = 0.0, 0.0
+    dist = abs(px - lvl) / lvl * 100.0 if lvl > 0 else 0.0
+    fa, rule = "", ""
+    try:
+        from analysis.patterns import pattern_info as _pi73
+        _info73 = _pi73(str(pattern or "")) or {}
+        fa = str(_info73.get("fa") or "")
+        rule = str(_info73.get("rule_fa") or "")
+    except Exception:
+        pass
+    import time as _t73
+    return {
+        "symbol": str((entry or {}).get("symbol") or "").upper(),
+        "tf": str((entry or {}).get("tf") or ""),
+        "stage": "TOUCH", "side": str((entry or {}).get("side") or "HIGH"),
+        "pattern": str(pattern or ""), "pattern_fa": fa, "rule_fa": rule,
+        "distance_pct": dist, "vol_ratio": 0.0,
+        "close": px, "edge": lvl,
+        "pattern_commands": [shape] if shape else [],
+        "detected_at": _t73.strftime("%Y-%m-%dT%H:%M:%S", _t73.gmtime()),
+        "_journey_slot": "s1",
+    }
+
+
 def upsert(symbol: str, tf: str, level: float, side: str = "HIGH",
-           stage: str = "", market: str = "SPOT") -> None:
+           stage: str = "", market: str = "SPOT", pattern: str = "") -> None:
     """Register/refresh one watched edge (reads+writes its own KV entry)."""
     if not symbol or not tf or not level or level <= 0:
         return
@@ -40,14 +93,21 @@ def upsert(symbol: str, tf: str, level: float, side: str = "HIGH",
         state = _g(_KV_KEY, {}) or {}
         key = f"{str(symbol).upper()}|{str(tf).lower()}|{str(side).upper()}"
         prev = state.get(key) or {}
+        _pl73 = float(prev.get("level") or 0.0)
+        _reset73 = (_pl73 > 0 and abs(float(level) - _pl73) / _pl73 > 0.005)
         state[key] = {
             "symbol": str(symbol).upper(), "tf": str(tf).lower(),
             "market": str(market or "SPOT").upper(),
             "level": float(level), "side": str(side or "HIGH").upper(),
             "stage": str(stage or ""), "ts": _t.time(),
+            "pattern": str(pattern or prev.get("pattern") or ""),
             "last_state": str(prev.get("last_state") or ""),
             "last_alert_ts": float(prev.get("last_alert_ts") or 0.0),
             "last_alert_kind": str(prev.get("last_alert_kind") or ""),
+            "j1": 0.0 if _reset73 else float(prev.get("j1") or 0.0),
+            "j1p": 0.0 if _reset73 else float(prev.get("j1p") or 0.0),
+            "j2": 0.0 if _reset73 else float(prev.get("j2") or 0.0),
+            "j2p": 0.0 if _reset73 else float(prev.get("j2p") or 0.0),
         }
         # keep the registry small: drop stale siblings while writing
         state = {k: v for k, v in state.items()
@@ -135,6 +195,10 @@ def run_once(force: bool = False) -> int:
     """Evaluate every watched edge against the live ticker. Returns alerts sent."""
     import time as _t
     now = _t.time()
+    # 10-12: the ticker IS the spot lane's real-time — it respects the spot
+    # flag (no ghost-edge flood while spot is off).
+    if str(os.getenv("SPOT_ENGINE_ENABLED", "1")).strip().lower() not in {"1", "true", "on", "yes"}:
+        return 0
     if not force and now - float(_LAST_RUN.get("ts") or 0.0) < _MIN_INTERVAL:
         return 0
     _LAST_RUN["ts"] = now
@@ -150,6 +214,8 @@ def run_once(force: bool = False) -> int:
     prices: Dict[str, Dict[str, float]] = {}
     changed = False
     sent = 0
+    _sent73 = 0
+    _muted73 = 0
     for key, entry in sorted(state.items()):
         market = str((entry or {}).get("market") or "SPOT").upper()
         if market not in prices:
@@ -174,9 +240,87 @@ def run_once(force: bool = False) -> int:
         sent += 1
         print(f"LINE_WATCH | {entry.get('symbol')} | {entry.get('tf')} | "
               f"{event['kind']} | px={price:.6g} lvl={float(entry['level']):.6g}")
+        # ── 10-12 journey: the ticker is detection-hot but notification-
+        # capped — s1 (first touch, WITH CHART, instant) + s2 (break heads-up
+        # text, upgraded to chart by the closed candle). Pins/recheck/confirm
+        # laws are untouched; only the 2000/day flood dies here.
         try:
-            from bot.messages_v7 import send_line_watch_alert
-            send_line_watch_alert(entry, event, price)
+            _kind73 = str(event.get("kind") or "")
+            _patt73 = str(entry.get("pattern") or "")
+            if not _patt73:
+                try:
+                    from database.bot_kv import get_json as _g73p
+                    _pins73 = _g73p("spot_urgent_watch", {}) or {}
+                    _pk73 = f"{str(entry.get('symbol') or '').upper()}|{str(entry.get('tf') or '')}"
+                    _pin73 = _pins73.get(_pk73) or _pins73.get(_pk73.upper()) or {}
+                    _patt73 = str((_pin73.get("shape") or {}).get("type") or "")
+                except Exception:
+                    _patt73 = ""
+            from bot.messages_v7 import _spot_ladder_chain_key as _ck73
+            from analysis.spot_engine import _spot_journey_slot as _js73
+            from database.bot_kv import get_json as _g73j, set_json as _s73j
+            _ckey73 = _ck73(str(entry.get("symbol") or ""), str(entry.get("tf") or ""), _patt73 or "EDGE")
+            _jm73 = _g73j(_ckey73, {}) or {}
+            _slot73 = None
+            if _kind73 == "TOUCH":
+                if _js73(_jm73, "s1", now) == "s1" and _lw_edge_slot(entry, "s1", now) == "s1":
+                    _slot73 = "s1"
+            elif _kind73 in ("BREAK_UP", "BREAK_DOWN"):
+                if not int(_jm73.get("s1") or 0) and not float(_jm73.get("s1p") or 0.0):
+                    _slot73 = None   # break-before-warn: the ladder owns it
+                elif _js73(_jm73, "s2", now) == "s2" and _lw_edge_slot(entry, "s2", now) == "s2":
+                    _slot73 = "s2"
+            if _slot73 is None:
+                _muted73 += 1
+            elif _slot73 == "s1":
+                _jm73["s1p"] = now
+                _s73j(_ckey73, _jm73)
+                entry["j1p"] = now
+                _shape73 = None
+                try:
+                    from database.bot_kv import get_json as _g73s
+                    _pins73b = _g73s("spot_urgent_watch", {}) or {}
+                    _pk73b = f"{str(entry.get('symbol') or '').upper()}|{str(entry.get('tf') or '')}"
+                    _pin73b = _pins73b.get(_pk73b) or _pins73b.get(_pk73b.upper()) or {}
+                    _shape73 = (_pin73b.get("shape") or None)
+                except Exception:
+                    _shape73 = None
+                _titem73 = _lw_touch_item(entry, price, _patt73 or "EDGE", _shape73)
+                _tchart73 = None
+                if _shape73:
+                    try:
+                        from data.fetcher import get_market_bundle as _gmb73
+                        from analysis.candle_counts import fetch_limits as _fl73
+                        from analysis.spot_engine import build_spot_alert_candidate as _bsac73
+                        from bot.messages_v7 import generate_chart as _gc73
+                        _bun73 = _gmb73(str(entry.get("symbol") or "").upper(), (str(entry.get("tf") or "").lower(),), limits=_fl73())
+                        _frm73 = (_bun73.get(str(entry.get("tf") or "").lower()) if _bun73 else None)
+                        if _frm73 is not None:
+                            _tcand73 = _bsac73(_titem73)
+                            _tchart73 = _gc73(_frm73, _tcand73, confirmed=False)
+                    except Exception as _r73exc:
+                        print(f"line watch s1 render skipped: {_r73exc}")
+                        _tchart73 = None
+                from bot.messages_v7 import send_spot_alert as _ssa73
+                if _ssa73(_titem73, _tchart73):
+                    entry["j1"] = now
+                    _sent73 += 1
+                    print(f"LINE_WATCH s1 {'chart' if _tchart73 else 'text'} {entry.get('symbol')}|{entry.get('tf')}")
+                else:
+                    print("line watch s1 send failed (pending expires in 10 min)")
+            elif _slot73 == "s2":
+                _jm73["s2p"] = now
+                _s73j(_ckey73, _jm73)
+                entry["j2p"] = now
+                _bitem73 = _lw_touch_item(entry, price, _patt73 or "EDGE", None)
+                _bitem73.update({"stage": _kind73, "_journey_slot": "s2"})
+                from bot.messages_v7 import send_spot_alert as _ssa73b
+                if _ssa73b(_bitem73, None):
+                    entry["j2"] = now
+                    _sent73 += 1
+                    print(f"LINE_WATCH s2 text {entry.get('symbol')}|{entry.get('tf')}|{_kind73}")
+                else:
+                    print("line watch s2 send failed (pending expires in 10 min)")
         except Exception as exc:
             print(f"line watch send warning: {exc}")
     if changed:
@@ -184,4 +328,6 @@ def run_once(force: bool = False) -> int:
             _s(_KV_KEY, state)
         except Exception:
             pass
+    if sent or _muted73:
+        print(f"LINE_WATCH pass: events={sent} sent={_sent73} muted={_muted73}")
     return sent

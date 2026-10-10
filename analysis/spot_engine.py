@@ -1307,6 +1307,23 @@ def spot_break_lock_commit(item: dict) -> None:
         pass
 
 
+def _spot_journey_slot(chain_meta: dict, slot: str, now: float):
+    """10-12 journey (chain side): may this chain claim slot s1/s2? Pending
+    claims older than 10 min are stale (crashed claimer) and reusable.
+    Pure (unit-tested)."""
+    try:
+        if slot not in ("s1", "s2"):
+            return None
+        m = chain_meta or {}
+        if int(m.get(slot) or 0):
+            return None
+        if float(m.get(f"{slot}p") or 0.0) and now - float(m.get(f"{slot}p")) <= 600.0:
+            return None
+        return slot
+    except Exception:
+        return None
+
+
 def build_spot_alert_candidate(item: dict):
     """A render-only candidate for a ladder warning (NEVER a trade signal):
     the same SPOT chart language from the FIRST warning — log axis, the green

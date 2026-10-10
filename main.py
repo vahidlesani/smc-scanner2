@@ -961,7 +961,8 @@ def run_spot_scan() -> Dict[str, int]:
                                 _lwu(_sym58, _tf58,
                                      level=float(_v58["level"]),
                                      side=str(_v58.get("side") or "HIGH"),
-                                     stage=str(_v58.get("stage") or ""))
+                                     stage=str(_v58.get("stage") or ""),
+                                     pattern=str((_v58.get("shape") or {}).get("type") or ""))
                     except Exception as _lw58:
                         print(f"line watch pin warning {symbol}: {_lw58}")
             except Exception as exc:
@@ -1068,26 +1069,44 @@ def run_spot_scan() -> Dict[str, int]:
                 if not spot_alert_check(aitem):
                     continue
                 cand = build_spot_alert_candidate(aitem)
-                # ── Viva 10-05 Law: Chart ONLY at breakout! (TOUCH is text-only without chart)
-                # ── 10-10: + the FIRST touch of a chain carries its chart
-                # (touch = 1 chart, break = 1 chart, then chartless updates).
-                _stage_str = str(aitem.get('stage') or '').upper()
-                _is_breakout_stage = _stage_str in ('BREAK_UP', 'BREAK_DOWN')
-                _first_touch73 = False
-                if _stage_str == 'TOUCH':
-                    try:
-                        from database.bot_kv import get_json as _g73
-                        _m73 = _g73(f"spot_chain|{str(aitem.get('symbol') or '')}|{str(aitem.get('tf') or '').upper()}|{str(aitem.get('pattern') or '').upper()}") or {}
-                        _first_touch73 = not int(_m73.get("mid") or 0)
-                    except Exception:
-                        _first_touch73 = True
+                # ── 10-12 journey: each chain charts at most twice — s1 the
+                # first warning (TOUCH/NEAR/BREAK alike), s2 the first break
+                # after it. Every other ladder send is SKIPPED (no per-scan
+                # chartless texts — his final law).
+                _slot73 = None
+                try:
+                    from database.bot_kv import get_json as _gj73, set_json as _sj73
+                    from bot.messages_v7 import _spot_ladder_chain_key as _ck73
+                    from analysis.spot_engine import _spot_journey_slot as _js73f
+                    import time as _t73
+                    _ckey73 = _ck73(str(aitem.get('symbol') or ''), str(aitem.get('tf') or ''), str(aitem.get('pattern') or ''))
+                    _jm73 = _gj73(_ckey73, {}) or {}
+                    _now73 = _t73.time()
+                    _slot73 = _js73f(_jm73, "s1", _now73)
+                    if _slot73 is None and _stage73s in ('BREAK_UP', 'BREAK_DOWN'):
+                        _slot73 = _js73f(_jm73, "s2", _now73)
+                    if _slot73 is not None:
+                        _jm73[f"{_slot73}p"] = _now73
+                        _sj73(_ckey73, _jm73)
+                        aitem["_journey_slot"] = _slot73
+                except Exception as _je73:
+                    print(f"spot journey claim skipped ({_je73})")
+                    _slot73 = None
+                if _slot73 is None:
+                    stats["journey_skip"] = stats.get("journey_skip", 0) + 1
+                    continue
                 chart = None
-                if _is_breakout_stage or _first_touch73:
+                if _slot73 is not None:
                     _bundle_for_alert = bundles.get(cand.symbol.upper())
                     frame = (_bundle_for_alert.get(cand.trigger_timeframe)
                              if _bundle_for_alert is not None else None)
                     chart = (generate_chart(frame, cand, confirmed=False)
                              if frame is not None else None)
+                if chart is None:
+                    # journey slots are charted — a failed render burns
+                    # nothing (the pending claim expires in 10 min).
+                    stats["chart_fail"] = stats.get("chart_fail", 0) + 1
+                    continue
                 if _send_spot_alert(aitem, chart):
                     spot_alert_commit(aitem)      # marker only AFTER the send
                     spot_break_lock_commit(aitem)  # 10-10: kindless BREAK lock
@@ -1109,6 +1128,7 @@ def run_spot_scan() -> Dict[str, int]:
           f"published={stats['published']} stamp_skip={stats.get('stamp_skip', 0)} "
           f"break_lock_skip={stats.get('break_lock_skip', 0)} "
           f"up_dup_skip={stats.get('up_dup_skip', 0)} "
+          f"journey_skip={stats.get('journey_skip', 0)} "
           f"send_fail={stats.get('send_fail', 0)} chart_fail={stats.get('chart_fail', 0)} "
           f"errors={stats['errors']}")
     return stats

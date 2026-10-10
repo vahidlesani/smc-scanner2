@@ -5993,48 +5993,14 @@ _SPOT_ALERT_TITLE = {
 }
 
 
-def send_line_watch_alert(entry: dict, event: dict, price: float) -> bool:
-    """R64.4 (his 10-03: «در لحظه شکست‌ها یا برخوردها هشدار بده») — the ticker
-    line-watch speaks as a compact TEXT REPLY (spot chart economy: no chart,
-    never a trade signal). Chained to the lane's newest message."""
-    try:
-        sym = str(entry.get("symbol") or "")
-        tf = str(entry.get("tf") or "").upper()
-        kind = str(event.get("kind") or "")
-        icon = {"TOUCH": "🖐", "BREAK_UP": "💥⬆", "BREAK_DOWN": "💥⬇"}.get(kind, "⚡")
-        side_fa = "بالا" if str(entry.get("side") or "").upper() == "HIGH" else "پایین"
-        text = "\n".join([
-            f"🪙 <b>VIVA-SPOT-MON</b> · رصد لحظه‌ای خط",
-            f"{icon} <b>{_e(str(event.get('fa') or 'رویداد خط'))}</b>",
-            f"<code>{_e(sym)}/USDT · {_e(tf)}</code>",
-            "",
-            _e(f"• ضلع {'سقف' if side_fa == 'بالا' else 'کف'} ساختاری: {_price(float(entry.get('level') or 0))}"),
-            _e(f"• قیمت لحظه‌ای: {_price(float(price or 0))}"),
-            _e(f"• وضعیت پین: {str(entry.get('stage') or 'WATCH')}"),
-            "",
-            "⚠️ هشدار لحظه‌ای تحلیلی است — تأیید فقط با کلوز معتبر همان قانونِ همیشگی.",
-            "📌 <b>VIVAMON-Labs-Pro</b>",
-        ])
-        chat = str(CHAT_ID_SPOT or "")
-        if not chat:
-            return False
-        _reply = 0
-        try:
-            from database.bot_kv import get_json as _gj
-            _reply = int((_gj(f"spot_event_chain|{sym}|{tf}", {}) or {}).get("last") or 0)
-        except Exception:
-            _reply = 0
-        mid = int(send_message(text, chat, reply_to_message_id=_reply or None) or 0)
-        if mid:
-            try:
-                from database.bot_kv import set_json as _sj
-                _sj(f"spot_event_chain|{sym}|{tf}", {"last": mid})
-            except Exception:
-                pass
-        return bool(mid)
-    except Exception as exc:
-        print(f"line watch alert error: {exc}")
-        return False
+_SPOT_DIV73 = "💲✳️✳️✳️✳️✳️✳️✳️💲"
+
+
+def _spot_ladder_chain_key(sym: str, tf: str, pattern: str) -> str:
+    """10-12 journey: THE chain-key builder — ladder sender, ladder gate and
+    ticker gate share it so all three always address the same journey."""
+    return (f"spot_chain|{str(sym or '')}|{str(tf or '').upper()}|"
+            f"{str(pattern or '').upper()}")
 
 
 def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
@@ -6062,7 +6028,7 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
     _last_text64 = 0
     try:
         from database.bot_kv import get_json as _gj64, set_json as _sj64
-        _ck64 = f"spot_chain|{sym}|{tf}|{str(item.get('pattern') or '').upper()}"
+        _ck64 = _spot_ladder_chain_key(sym, tf, str(item.get('pattern') or ''))
         _meta64 = _gj64(_ck64) or {}
         if not _meta64.get("code") or (time.time() - float(_meta64.get("ts") or 0)) > 5 * 86400:
             from analysis.models import generate_viva_public_code as _gpc64
@@ -6116,6 +6082,7 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
         analysis_line = (f"برخورد اولیه به ضلع {'بالا' if side == 'HIGH' else 'پایین'} الگو (≈ {dist:.2f}%) — "
                          "نشان‌دهندهٔ حرکت صعودی بالقوه؛ فشردگی به سمت ضلع رصد می‌شود.")
     lines = [
+        _SPOT_DIV73,
         f"🪙 <b>VIVA-SPOT-MON</b>",
         f"<b>{_e(_SPOT_ALERT_TITLE.get(stage, '🪙 هشدار اسپات'))}</b> <code>#{_n64}</code>",
         f"<code>{_e(sym)}/USDT · {_e(tf)} · {_e(fa)}</code>",
@@ -6151,6 +6118,13 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
                 _kw64 = {"reply_to_message_id": _rt64}
         mid = 0
         if chart:
+            # 10-12: a charted upgrade REPLACES a pending text update —
+            # only the last update remains (his journey law).
+            if _last_text64:
+                try:
+                    delete_message(chat, _last_text64)
+                except Exception as _del73c:
+                    print(f"SPOT chart-upgrade delete skipped: {_del73c}")
             mid = int(send_photo(chart, text, chat, **_kw64) or 0)
         else:
             # ── 10-10: chartless updates REPLACE the previous text. A dead
@@ -6170,13 +6144,17 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
                     pass
                 # keep the chain's reply target at its NEWEST message
                 from database.bot_kv import get_json as _gj64b, set_json as _sj64b
-                _ck64b = f"spot_chain|{sym}|{tf}|{str(item.get('pattern') or '').upper()}"
+                _ck64b = _spot_ladder_chain_key(sym, tf, str(item.get('pattern') or ''))
                 _m64b = _gj64b(_ck64b) or {}
                 if _m64b.get("code"):
                     _m64b.update({"mid": mid, "ts": time.time(), "n": _n64,
                                   "head": int(_m64b.get("head") or 0) or mid})
+                    _js73 = str(item.get("_journey_slot") or "")
+                    if _js73 in ("s1", "s2"):
+                        _m64b[_js73] = mid
                     if chart:
                         _m64b["first"] = int(_m64b.get("first") or 0) or mid
+                        _m64b["last_text"] = 0   # consumed by the chart upgrade
                         _cs73 = list(_m64b.get("chart_stages") or [])
                         _st73 = str(stage).upper()
                         if _st73 and _st73 not in _cs73:
