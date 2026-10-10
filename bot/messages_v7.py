@@ -6439,9 +6439,14 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
                 and "timestamp" in chart_df.columns:
             candidate.metadata["tool_entry_ts"] = str(chart_df["timestamp"].iloc[-1])
     if not candidate.metadata.get("confirmation_chart_sent"):
+        _chart_why72 = "chart_df None (venue fetch failed)"
+        if chart_df is not None:
+            _chart_why72 = "ok"
         chart = generate_chart(chart_df, candidate, confirmed=True) if chart_df is not None else None
         if not chart:
-            print(f"Confirmed publication blocked: chart unavailable for {candidate.signal_id}")
+            if _chart_why72 == "ok":
+                _chart_why72 = "generate_chart returned None (chart_enabled=%s)" % bool(getattr(SETTINGS, "chart_enabled", True))
+            print(f"Confirmed publication blocked: {_chart_why72} for {candidate.signal_id}")
             return False
         source_chat = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
         source_mid = candidate.metadata.get("education_chart_message_id") or candidate.metadata.get("education_message_id")

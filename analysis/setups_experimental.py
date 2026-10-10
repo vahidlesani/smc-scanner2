@@ -15,7 +15,7 @@ liquidity-protected logic, which anchors beyond Point 3 when nearby.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 
 import os
 
