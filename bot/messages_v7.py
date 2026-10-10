@@ -6439,6 +6439,24 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
                 and "timestamp" in chart_df.columns:
             candidate.metadata["tool_entry_ts"] = str(chart_df["timestamp"].iloc[-1])
     if not candidate.metadata.get("confirmation_chart_sent"):
+        # 10-10 PUBLISH-BYPASS: the monitor's frames dict is window-gated (a 4h
+        # frame exists ~20min/4h; a TOHOM early-confirm may arrive with NO
+        # frames at all). A decided confirm must NEVER starve on the cost
+        # window — fetch its trigger frame HERE, uncached, once per attempt.
+        if chart_df is None:
+            try:
+                from data.fetcher import get_klines as _gk72
+                _trig72 = str(candidate.trigger_timeframe or "").lower() or "15m"
+                _force72 = _gk72(str(candidate.symbol), _trig72,
+                                 _chart_fetch_size(_trig72),
+                                 closed_only=False, use_cache=False)
+                if _force72 is not None and not getattr(_force72, "empty", True):
+                    chart_df = _force72
+                    print(f"Confirmed publish bypass-fetch ok {candidate.signal_id} {_trig72}")
+                else:
+                    print(f"Confirmed publish bypass-fetch empty {candidate.signal_id} {_trig72}")
+            except Exception as _bf72_exc:
+                print(f"Confirmed publish bypass-fetch failed {candidate.signal_id}: {_bf72_exc}")
         _chart_why72 = "chart_df None (venue fetch failed)"
         if chart_df is not None:
             _chart_why72 = "ok"
@@ -6446,8 +6464,47 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
         if not chart:
             if _chart_why72 == "ok":
                 _chart_why72 = "generate_chart returned None (chart_enabled=%s)" % bool(getattr(SETTINGS, "chart_enabled", True))
-            print(f"Confirmed publication blocked: {_chart_why72} for {candidate.signal_id}")
-            return False
+            try:
+                _att72 = int(candidate.metadata.get("chart_fail_attempts") or 0) + 1
+            except Exception:
+                _att72 = 1
+            candidate.metadata["chart_fail_attempts"] = _att72
+            print(f"Confirmed publication blocked: {_chart_why72} for {candidate.signal_id} (attempt {_att72})")
+            if _att72 < 3:
+                return False
+            # 10-10 TEXT-FIRST LAW (his «حل کن، پاک نکن»): a decided confirm is
+            # NEVER erased by a chart failure. After 3 failed attempts the TEXT
+            # publishes NOW (results arm on it); the photo follows as a reply
+            # as soon as a render succeeds (send_confirmed_photo_followup).
+            if candidate.metadata.get("confirmation_message_sent"):
+                return False  # text is out; photo still pending
+            _cap72 = _confirmed_chart_caption(candidate)
+            _chain72 = _setup_chain_get(candidate)
+            _parent72 = (int(_chain72.get("approach") or candidate.metadata.get("approaching_message_id") or 0)
+                         or int(_chain72.get("slot") or 0)
+                         or int(_chain72.get("anchor_pro") or _chain72.get("edu_short") or 0)) or None
+            _src72 = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
+            _smid72 = candidate.metadata.get("education_chart_message_id") or candidate.metadata.get("education_message_id")
+            _lnk72 = _telegram_message_link(_src72, int(_smid72)) if _smid72 else ""
+            _kb72 = {"inline_keyboard": [[{"text": "📚 چارت و توضیحات هشدار اولیه", "url": _lnk72}]]} if _lnk72 else None
+            _ph72, _mid72 = _post_chart_then_text(
+                None, _cap72, target, reply_to=_parent72, reply_markup=_kb72,
+                label=_chart_label(symbol=candidate.symbol, code=_public_code(candidate),
+                                   title_fa="تأیید سیگنال"))
+            if not _mid72:
+                print(f"Confirmed text-fallback post failed {candidate.signal_id}")
+                return False
+            _chain72["confirmed"] = int(_mid72)
+            _setup_chain_set(candidate, _chain72)
+            candidate.metadata["confirmation_chart_message_id"] = int(_mid72)
+            candidate.metadata["confirmation_photo_pending"] = True
+            candidate.metadata["confirmation_message_sent"] = True
+            try:
+                _sig_mirror(_public_code(candidate), "confirmed", _cap72, None,
+                            reply_kind="approach", link="", link_text="")
+            except Exception:
+                pass
+            return True
         source_chat = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
         source_mid = candidate.metadata.get("education_chart_message_id") or candidate.metadata.get("education_message_id")
         link = _telegram_message_link(source_chat, int(source_mid)) if source_mid else ""
@@ -6496,6 +6553,48 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
     # Deliberately no second verbose message in VivaMon Labs Pro.
     candidate.metadata["confirmation_message_sent"] = True
     return True
+
+
+def send_confirmed_photo_followup(candidate: SignalCandidate) -> bool:
+    """10-10: post the pending Confirmed photo under an already-published
+    text (text-first fallback). Fetches its own trigger frame (bypasses the
+    monitor cost window), renders, and replies the photo to the text message.
+    Returns True once the photo is up (flag cleared)."""
+    try:
+        if candidate.metadata.get("confirmation_chart_sent"):
+            candidate.metadata.pop("confirmation_photo_pending", None)
+            return True
+        if not candidate.metadata.get("confirmation_message_sent"):
+            return False
+        from data.fetcher import get_klines as _gk72f
+        _trig = str(candidate.trigger_timeframe or "").lower() or "15m"
+        _df = _gk72f(str(candidate.symbol), _trig, _chart_fetch_size(_trig),
+                     closed_only=False, use_cache=False)
+        if _df is None or getattr(_df, "empty", True):
+            return False
+        _chart = generate_chart(_df, candidate, confirmed=True)
+        if not _chart:
+            return False
+        _chain = _setup_chain_get(candidate)
+        _txt = (int(_chain.get("confirmed") or 0)
+                or int(candidate.metadata.get("confirmation_chart_message_id") or 0)) or None
+        _target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+        _ph = send_photo(
+            _chart,
+            _chart_label(symbol=candidate.symbol, code=_public_code(candidate),
+                         title_fa="تأیید سیگنال"),
+            _target, reply_to_message_id=_txt)
+        if not _ph:
+            return False
+        _chain["confirmed_photo"] = int(_ph)
+        _setup_chain_set(candidate, _chain)
+        candidate.metadata["confirmation_chart_sent"] = True
+        candidate.metadata.pop("confirmation_photo_pending", None)
+        print(f"Confirmed photo followup posted {candidate.signal_id}")
+        return True
+    except Exception as _exc72:
+        print(f"Confirmed photo followup skipped {getattr(candidate, 'signal_id', '?')}: {_exc72}")
+        return False
 
 
 def send_candidate_cancelled(candidate: SignalCandidate, reason: str) -> bool:

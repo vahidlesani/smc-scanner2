@@ -262,7 +262,14 @@ def approaching_entry(candidate: SignalCandidate, current_price: float) -> Tuple
         return True, 0.0
     distance = bottom - current_price if current_price < bottom else current_price - top
     distance_atr = distance / atr_value if atr_value > 0 else 999.0
-    return distance_atr <= 0.30, distance_atr
+    # 10-10 EARLY-WATCH (his 0.5% law): the 0.30-ATR band sits ~0.1% from the
+    # zone on fast frames — the final watch arrived AT the touch, not before
+    # it. Either gate fires; the ATR gate keeps slow/high-TF behavior.
+    try:
+        _pct72 = distance / float(current_price) if current_price else 999.0
+    except Exception:
+        _pct72 = 999.0
+    return (distance_atr <= 0.30) or (_pct72 <= 0.005), distance_atr
 
 
 def _bars_since_candidate(candidate: SignalCandidate, closed_df: pd.DataFrame) -> pd.DataFrame:

@@ -2118,6 +2118,16 @@ def monitor_candidates() -> Dict[str, int]:
                         candidate.status = "CONFIRMED"
                         candidate.metadata["confirmation_sent"] = True
                         candidate.metadata.pop("publication_pending", None)
+                        # 10-10 PHOTO-FOLLOWUP: text-first fallback published the
+                        # text; post the pending photo as soon as a render works.
+                        if candidate.metadata.get("confirmation_photo_pending") \
+                                and not candidate.metadata.get("confirmation_chart_sent"):
+                            try:
+                                from bot.messages_v7 import send_confirmed_photo_followup as _ph72
+                                if _ph72(candidate):
+                                    update_candidate(candidate)
+                            except Exception as _ph72_exc:
+                                print(f"Confirmed photo followup hook skipped {candidate.signal_id}: {_ph72_exc}")
                     elif not gate_lookup_ok:
                         pass  # Fail closed; never republish while DB state is unknown.
                     elif send_confirmed(candidate, (frames.get((candidate.symbol, candidate.trigger_timeframe)) or (None, closed, None))[1]):
