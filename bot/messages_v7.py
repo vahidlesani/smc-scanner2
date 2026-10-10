@@ -953,8 +953,10 @@ def _log_axis_decorate(ax) -> None:
             # locator ONE label (0.1); every subs tick falls outside the
             # view. Fixed GEOMETRIC ticks inside the view keep the log scale
             # AND a readable axis.
+            # 10-12 (his axis law: MORE price labels, spot AND perp) — 8-10
+            # explicit ticks (FixedLocator = identical on every mpl version).
             _t52 = np.geomspace(max(_lo52, 1e-12), _hi52,
-                                6 if _dec52 < 0.3 else 4)
+                                10 if _dec52 < 0.3 else 8)
             ax.yaxis.set_major_locator(_mt52.FixedLocator(_t52))
             ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
             ax.yaxis.set_minor_formatter(_mt52.NullFormatter())

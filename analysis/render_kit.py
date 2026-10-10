@@ -326,6 +326,123 @@ def _chart_will_be_log(candidate, df: pd.DataFrame) -> bool:
     return str(getattr(candidate, "trigger_timeframe", "") or "").lower() == "1h" and ratio > 1.35
 
 
+def extend_line_to_new_base(line: dict, df: pd.DataFrame, side: str):
+    """10-12 (his JUP/ZEC law: when price crosses a trend and builds a NEW
+    base, the trend extends to the new base): a line cutting through a fresh
+    base is rewritten through (first pivot -> new extreme pivot) so it
+    respects the base it used to cut. A wick-only pierce (fake breakout —
+    bodies stay inside, his ZEC lower) is IGNORED. Self-contained (no new
+    module imports). Returns a NEW dict or the ORIGINAL."""
+    try:
+        ln = dict(line or {})
+        s = str(side or (ln.get("side") or "")).upper()
+        if s not in ("HIGH", "LOW"):
+            return line
+        if df is None or len(df) < 10:
+            return line
+        try:
+            import numpy as _np73
+        except Exception:
+            return line
+        dd = df.reset_index(drop=True)
+        n = len(dd)
+        try:
+            x0 = int(ln.get("x0", 0))
+        except Exception:
+            return line
+        if x0 < 0 or x0 >= n - 5:
+            return line
+        try:
+            closes = dd["close"].astype(float).to_numpy()
+            series = (dd["high"] if s == "HIGH" else dd["low"]).astype(float).to_numpy()
+        except Exception:
+            return line
+        try:
+            _ys = _np73.array([line_y(ln, float(x)) for x in range(x0, n)], dtype=float)
+        except Exception:
+            return line
+        if s == "HIGH":
+            beyond = closes[x0:] > _ys * 1.0005
+        else:
+            beyond = closes[x0:] < _ys * 0.9995
+        # a BASE needs conviction: 3+ closes beyond (a lone pierce = noise)
+        if int(_np73.sum(beyond)) < 3:
+            return line
+        rng = _np73.arange(x0 + 2, n - 2)
+        if len(rng) == 0:
+            return line
+        seg = series[x0 + 2:n - 2]
+        if s == "HIGH":
+            is_sw = (seg >= series[x0 + 1:n - 3]) & (seg >= series[x0 + 3:n - 1]) \
+                & (seg >= series[x0:n - 4]) & (seg >= series[x0 + 4:n])
+            cands = [int(x) for x, f in zip(rng, is_sw)
+                     if f and closes[x] > float(line_y(ln, float(x))) * 1.0005]
+        else:
+            is_sw = (seg <= series[x0 + 1:n - 3]) & (seg <= series[x0 + 3:n - 1]) \
+                & (seg <= series[x0:n - 4]) & (seg <= series[x0 + 4:n])
+            cands = [int(x) for x, f in zip(rng, is_sw)
+                     if f and closes[x] < float(line_y(ln, float(x))) * 0.9995]
+        if not cands:
+            return line
+        # the new base = the LAST extreme swing beyond (freshest base wins)
+        xp = max(cands)
+        if xp <= x0 + 2:
+            return line
+        # anchor = the line's FIRST pivot (respected, never moved)
+        pts = list(ln.get("points") or [])
+        try:
+            yp0 = float(pts[0].get("price")) if pts else float(line_y(ln, float(x0)))
+        except Exception:
+            return line
+        yp = float(series[xp])
+        if xp <= x0 or yp <= 0 or yp0 <= 0:
+            return line
+        # the extension preserves the trend's CHARACTER: a slope sign-flip
+        # (descending -> ascending) is a different move (R67 pole vs drift),
+        # not an extension — the fitter finds that new trend fresh.
+        if ln.get("log_fit"):
+            try:
+                l0, l1 = float(_np73.log10(yp0)), float(_np73.log10(yp))
+                sl = (l1 - l0) / float(xp - x0)
+                _old = float(ln.get("log_slope") or 0.0)
+            except Exception:
+                return line
+            if _old * sl < 0:
+                return line
+            out = dict(ln)
+            out["log_slope"] = float(sl)
+            out["log_intercept"] = float(l0 - sl * x0)
+            try:
+                out["slope"] = float((yp - yp0) / float(xp - x0))
+                out["intercept"] = float(yp0 - out["slope"] * x0)
+            except Exception:
+                pass
+        else:
+            sl = (yp - yp0) / float(xp - x0)
+            try:
+                _old = float(ln.get("slope") or 0.0)
+            except Exception:
+                _old = 0.0
+            if _old * sl < 0:
+                return line
+            out = dict(ln)
+            out["slope"] = float(sl)
+            out["intercept"] = float(yp0 - sl * x0)
+        try:
+            _ts = dd["timestamp"].iloc[xp] if "timestamp" in dd.columns else None
+            out["points"] = pts + [{"ts": str(_ts), "price": float(yp)}]
+        except Exception:
+            out["points"] = pts
+        try:
+            out["x1"] = int(n - 1)
+        except Exception:
+            pass
+        out["extended73"] = True
+        return out
+    except Exception:
+        return line
+
+
 def detect_patterns(df: pd.DataFrame, direction: str = "",
                     log_axis: Optional[bool] = None) -> List[Dict]:
     """Validated edge geometry + honest shape classification (doctrine:
@@ -809,6 +926,27 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                     continue                       # same line already drawn
                 out.append(_pp)
                 break                              # one pivot pattern per chart
+    except Exception:
+        pass
+    # 10-12 (his JUP/ZEC law — POST-classification BY DESIGN): the extension
+    # reshapes only EMITTED trend-family lines (scan edges, spot + setup
+    # charts). Classification, diet and vocabulary see pristine lines, so no
+    # manufactured shape can outrank real ones (R67 FLAG stays). Dead-far
+    # lines were already diet-cut — only LIVE lines extend. Necklines
+    # (H&S/DT/DB), ranges and minis are NOT trends: untouched.
+    try:
+        _EXT73 = {"TRENDLINE", "TRIANGLE", "TRIANGLE_ASCENDING",
+                  "TRIANGLE_DESCENDING", "TRIANGLE_SYMMETRICAL",
+                  "WEDGE", "WEDGE_FALLING", "WEDGE_RISING",
+                  "CHANNEL", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING"}
+        for _p73 in out:
+            if str(_p73.get("type") or "").upper() not in _EXT73:
+                continue
+            _lns73 = list(_p73.get("lines") or [])
+            if not _lns73:
+                continue
+            _p73["lines"] = [extend_line_to_new_base(_ln, df, str((_ln or {}).get("side") or ""))
+                             for _ln in _lns73]
     except Exception:
         pass
     return out[:4]

@@ -1000,13 +1000,21 @@ def _stage_for_pattern(pat: dict, d: pd.DataFrame, atr: float, n: int) -> Option
 
 
 def _structural_high_above(d: pd.DataFrame, close: float,
-                           lookback: int = 90) -> Optional[float]:
+                           lookback: int = 90,
+                           floor_idx: int = 0) -> Optional[float]:
     """The most recent MAJOR swing high above the price — the CryptoCove box's
-    «سقف بعدی ساختاری». None when no such pivot exists in the window."""
+    «سقف بعدی ساختاری». None when no such pivot exists in the window.
+    10-12 (his GEO law): floor_idx bounds the search to the pattern's own
+    window (pattern start minus 14 context bars, exactly the chart's window)
+    — a months-old high from a dead regime is NOT this TF's ceiling."""
     try:
         highs = d["high"].astype(float).to_numpy()
         n = len(highs)
-        start = max(3, n - lookback)
+        try:
+            _flr = max(0, int(floor_idx or 0))
+        except Exception:
+            _flr = 0
+        start = max(3, n - lookback, _flr)
         for i in range(n - 3, start - 1, -1):
             if (highs[i] >= highs[i - 1] and highs[i] >= highs[i + 1]
                     and highs[i] >= highs[i - 2] and highs[i] >= highs[i + 2]
@@ -1056,7 +1064,13 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                 if not hit:
                     continue
                 kind = str(pat.get("type") or "NONE").upper()
-                box_top = _structural_high_above(d, close)
+                # 10-12: the ceiling lives in the pattern's own window —
+                # pattern start minus 14 context bars (the chart's window).
+                try:
+                    _px0 = min(int(ln.get("x0", 0)) for ln in _lns)
+                except Exception:
+                    _px0 = 0
+                box_top = _structural_high_above(d, close, floor_idx=max(0, _px0 - 14))
                 if box_top:
                     box_top = box_top * 1.01  # «کمی بالاترش»
                 try:

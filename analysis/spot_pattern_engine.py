@@ -32,7 +32,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.image as mpimg
-from matplotlib.ticker import FuncFormatter, LogLocator
+from matplotlib.ticker import FuncFormatter, LogLocator, MaxNLocator, FixedLocator
 
 
 def _map_pattern_title(pat_type: str, pat_name_fa: str = "") -> str:
@@ -192,6 +192,19 @@ def _spot_earliest_inframe(point_tses, frame_start, frame_end, bar_sec: float):
         return min(good) if good else None
     except Exception:
         return None
+
+
+def _spot_is_breakdown(stage: str, direction: str = "LONG") -> bool:
+    """10-12 (his ONDO chart: the target box MUST be drawn): a bearish-NAMED
+    shape (descending channel, falling wedge) still breaks UP for a LONG —
+    the box is skipped ONLY on a real BREAK_DOWN stage (or a SHORT
+    direction). Pure (unit-tested)."""
+    try:
+        if "BREAK_DOWN" in str(stage or "").upper():
+            return True
+        return str(direction or "LONG").upper() == "SHORT"
+    except Exception:
+        return False
 
 
 def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = False) -> bytes:
@@ -357,7 +370,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
 
     # 7. Measured Move Box or Breakdown Marker
     # Only draw bullish target box if it is actually a bullish setup or confirmation!
-    is_breakdown = 'BREAK_DOWN' in stage or 'نزولی' in pat_name_fa or 'BEAR' in pat_type_str
+    is_breakdown = _spot_is_breakdown(stage, getattr(candidate, "direction", "LONG"))
     
     y_min_data = float(np.min(lows))
     y_max_data = float(np.max(highs))
@@ -401,9 +414,17 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
                     arrowprops=dict(arrowstyle='->', color='#1F2328', lw=1.5, mutation_scale=12), zorder=7)
         ticks = int(round(delta_p * 1000)) if delta_p < 10 else int(round(delta_p))
         label_text = f'{delta_p:.4g} (+{pct_gain:.2f}%) {ticks:,}'
-        ax.text(arrow_x, target_price * 1.018, label_text,
-                color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='bottom', zorder=8)
-        y_max = max(y_max_data, target_price) * 1.07
+        # 10-12 (his GEO rule: candles must NEVER squash): near boxes
+        # (top within 1.35x data top) still fit whole (refs unchanged);
+        # far boxes run off-canvas (auto-clipped) with the % label pinned
+        # at the top edge.
+        _clip73b = bool(target_price > y_max_data * 1.35)
+        _cap73b = y_max_data * 1.07 * 1.28
+        _ly73b = _cap73b * 0.995 if _clip73b else target_price * 1.018
+        ax.text(arrow_x, _ly73b, label_text,
+                color='#1F2328', fontsize=9.2, fontweight='bold', ha='center',
+                va='top' if _clip73b else 'bottom', zorder=8)
+        y_max = _cap73b if _clip73b else max(y_max_data, target_price) * 1.07
         y_min = y_min_data * 0.96
     else:
         # For breakdowns or warning: no fake long target box!
@@ -463,7 +484,42 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     ax.set_xticks(pos_list)
     ax.set_xticklabels(labels, fontsize=9.5, color='#4A4640')
 
-    ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 1.5, 2.0, 3.0, 5.0, 7.0)))
+    # 10-12 (his axis law: MORE price labels on EVERY spot chart, every TF):
+    # LogLocator(subs) density depends on the matplotlib VERSION (proven:
+    # sparse {10} on old-mpl, dense on new-mpl for the SAME code) — so
+    # sub-1.5-decade views now take EXPLICIT linear-nice ticks (his beloved
+    # ONDO density; FixedLocator = identical on every mpl); wider views
+    # keep log subs='all'.
+    try:
+        _lo73a = float(ax.get_ylim()[0])
+        _hi73a = float(ax.get_ylim()[1])
+        _dec73a = math.log10(_hi73a) - math.log10(_lo73a)
+        # version-proof subs census (tick_values itself delegates on
+        # new-mpl): pure arithmetic over subs x decades inside the view.
+        _in73a = []
+        _e073a = int(math.floor(math.log10(_lo73a)))
+        _e173a = int(math.ceil(math.log10(_hi73a)))
+        for _e73a in range(_e073a - 1, _e173a + 2):
+            for _s73a in (1.0, 1.5, 2.0, 3.0, 5.0, 7.0):
+                _t73a = _s73a * (10.0 ** _e73a)
+                if _lo73a <= _t73a <= _hi73a:
+                    _in73a.append(_t73a)
+    except Exception:
+        _dec73a, _in73a = 99.0, []
+    if _dec73a >= 1.5 or len(_in73a) >= 7:
+        ax.yaxis.set_major_locator(LogLocator(base=10.0, subs="all", numticks=20))
+    else:
+        try:
+            _lin73a = [t for t in MaxNLocator(nbins=9, min_n_ticks=7).tick_values(_lo73a, _hi73a)
+                       if _lo73a <= t <= _hi73a]
+        except Exception:
+            _lin73a = []
+        if len(_lin73a) >= 2:
+            ax.yaxis.set_major_locator(FixedLocator(_lin73a))
+        elif _in73a:
+            ax.yaxis.set_major_locator(FixedLocator(_in73a))
+        else:
+            ax.yaxis.set_major_locator(LogLocator(base=10.0, subs="all", numticks=20))
     def price_fmt(x, _):
         if x <= 0: return ''
         if abs(x - live_price) / live_price < 0.035:
