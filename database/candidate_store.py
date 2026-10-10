@@ -354,6 +354,15 @@ def absorb_update_into_chain(holder: SignalCandidate, fresh: SignalCandidate) ->
         if holder.approaching_sent:
             holder.approaching_sent = False
             holder.status = "EDUCATIONAL"
+            # 10-10 STAGED WATCH: a moved zone invalidates the frozen B-plan —
+            # drop the B chart state + snapshot so A/B refire fresh.
+            for _k73 in ("stage_a_sent", "stage_b_sent", "stage_b_at",
+                         "stage_b_chart_mid", "stage_b_text_mid", "stage_b_file_id",
+                         "confirmed_snapshot", "activation_price"):
+                try:
+                    (holder.metadata or {}).pop(_k73, None)
+                except Exception:
+                    pass
     if not _published:
         holder.entry_zone_bottom = fresh.entry_zone_bottom
         holder.entry_zone_top = fresh.entry_zone_top

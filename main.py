@@ -21,7 +21,7 @@ import pandas as pd
 
 from analysis.models import SignalCandidate
 from analysis.quality_engine import (
-    approaching_entry,
+    approach_stage,
     evaluate_confirmation,
     is_expired,
     is_invalidated,
@@ -30,7 +30,8 @@ from analysis.quality_engine import (
 from bot.commands import start_command_listener
 from bot.messages_v7 import (
     CHAT_ID_EXECUTION,
-    send_approaching,
+    send_stage_a_watch,
+    send_stage_b_ready,
     send_candidate_cancelled,
     send_confirmed,
     send_educational_setup,
@@ -1886,9 +1887,17 @@ def monitor_candidates() -> Dict[str, int]:
 
             if not candidate.metadata.get("technical_confirmation_complete"):
                 _heal_zone_stop(candidate, current_price)
-                is_near, distance_atr = approaching_entry(candidate, current_price)
-                if is_near and not candidate.approaching_sent:
-                    if send_approaching(candidate, current_price, distance_atr):
+                _st73, _datr73, _dpct73 = approach_stage(candidate, current_price)
+                if _st73 == "A" and not candidate.metadata.get("stage_a_sent"):
+                    if send_stage_a_watch(candidate, current_price, _datr73, _dpct73):
+                        candidate.metadata["stage_a_sent"] = True
+                        candidate.approaching_sent = True
+                        candidate.status = "APPROACHING"
+                        stats["watch_a"] = stats.get("watch_a", 0) + 1
+                if _st73 == "B" and not candidate.metadata.get("stage_b_sent"):
+                    _bdf73 = (frames.get((candidate.symbol, candidate.trigger_timeframe)) or (None, closed, None))[1]
+                    if send_stage_b_ready(candidate, _bdf73, current_price, _datr73):
+                        candidate.metadata["stage_b_sent"] = True
                         candidate.approaching_sent = True
                         candidate.status = "APPROACHING"
                         stats["approaching"] += 1
@@ -1958,6 +1967,11 @@ def monitor_candidates() -> Dict[str, int]:
                     freeze_confirmed_snapshot(candidate)
                 except Exception as _snap_exc:
                     print(f"snapshot freeze skipped: {_snap_exc}")
+                try:
+                    if current_price:
+                        candidate.metadata["activation_price"] = float(current_price)
+                except Exception:
+                    pass
             if (not confirmed and have_frames
                     and str(candidate.metadata.get("last_reject_code") or "") == "BREAK_RECLAIMED"
                     and not candidate.metadata.get("technical_confirmation_complete")):

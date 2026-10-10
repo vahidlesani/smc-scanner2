@@ -1766,7 +1766,7 @@ def _frame_with_live_candle(df: pd.DataFrame, candidate: SignalCandidate) -> tup
         return df, None
 
 
-def _chart_cache_key(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool) -> tuple:
+def _chart_cache_key(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool, mode: str = "") -> tuple:
     """Cache identity of a render — the LIVE close is part of it.
 
     Round 13 (his report): the key used to stop at the newest TIMESTAMP, and the
@@ -1779,7 +1779,7 @@ def _chart_cache_key(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bo
         _last_px = round(float(df["close"].iloc[-1]), 10)
     except Exception:
         _last_px = 0.0
-    return (str(getattr(candidate, "signal_id", "")), bool(confirmed),
+    return (str(getattr(candidate, "signal_id", "")), (str(mode) or bool(confirmed)),
             str(df["timestamp"].iloc[-1]), len(df),
             str((candidate.metadata or {}).get("chart_view_tf") or ""), _last_px)
 
@@ -2286,7 +2286,7 @@ def _last_resort_edges(frame, use_log: bool,
     return out
 
 
-def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool = False) -> Optional[bytes]:
+def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool = False, preconfirm_tool: bool = False) -> Optional[bytes]:
     # r61 CHART-DIET LAW (Viva 09-30: «چارت رو از اپلیکیشن فعلا حذف بکن ببینم
     # مصرف ریلوی پایینتر میاد»): one gate for every render in the product.
     # Off = every lane posts text-only; nothing upstream changes.
@@ -2295,6 +2295,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     """Render a branded TradingView-inspired 1440×900 chart."""
     if df is None or df.empty:
         return None
+    _cfm73 = bool(confirmed or preconfirm_tool)  # 10-10 READY-mode: a pre-confirm chart draws confirm-grade tools
     candidate = _final_stop_guard(candidate)
     # Persian labels (setup notes, spot charts) must shape correctly; the font
     # is bundled in assets/fonts and registered once per process.
@@ -2318,7 +2319,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     # Viva 09-17 cost ruling: one render per (alert, frame, state) — retries,
     # mirrors and cross-channel posts reuse the bytes from this cache. Round 13:
     # the state now includes the live price (see _chart_cache_key).
-    _ck = _chart_cache_key(df, candidate, confirmed)
+    _ck = _chart_cache_key(df, candidate, confirmed, "READY" if preconfirm_tool else "")
     _hit = _chart_cache_get(_ck)
     if _hit is not None:
         return _hit
@@ -2649,7 +2650,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # future margin read as «یک سوم خالی» — HALVE it and let real
         # candles fill the reclaimed width (his reference charts keep
         # only a slim right margin for the pills).
-        future = 45 if _is_spot else (28 if confirmed else 26)
+        future = 45 if _is_spot else (28 if _cfm73 else 26)
         for chart_ax in axes:
             chart_ax.set_xlim(-1, count + future)
         if _is_spot:
@@ -3650,7 +3651,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 print(f"TLB chart line warning: {exc}")
 
         line_start = max(0, count - 34)
-        line_end = count + (5 if confirmed else 1)
+        line_end = count + (5 if _cfm73 else 1)
         # r58: an UPDATE chart is pure structure analysis — the synthetic
         # stop of the render stub («سیگنال ورود نیست») draws no line/label.
         if not (candidate.metadata or {}).get("update_event") and not _is_spot:
@@ -3727,7 +3728,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # a TP line is a rumor painted over someone's plan. (This also removes
         # the TP1-vs-entry-label collision he flagged on ATOM/XLM/BCH.)
 
-        if confirmed and not _is_spot:
+        if _cfm73 and not _is_spot:
             # Viva 09-20 time-axis law: the LONG/SHORT position tool starts at
             # the REAL fill candle (fallback: the confirmation candle) and
             # extends to the live edge. It is never re-anchored to «the last
@@ -4283,7 +4284,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # frozen box (the tool-exit path — which itself bumps the view TF and
         # notes it), the window is recomputed and re-frozen.
         _froz28 = None
-        if confirmed:
+        if _cfm73:
             try:
                 _fz = (candidate.metadata or {}).get("chart_zoom_frozen")
                 if not _fz:
@@ -4316,7 +4317,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         else:
             _ovs28 = [float(candidate.entry_zone_bottom), float(candidate.entry_zone_top),
                       float(candidate.sl)]
-            if confirmed:
+            if _cfm73:
                 ladder_targets = list(((candidate.metadata or {}).get("target_ladder") or {}).get("targets") or [candidate.tp1, candidate.tp2])
                 _ovs28 += [float(v) for v in ladder_targets]
                 # r37: the spot green box tops out at spot_box_top — zoom must
@@ -4395,7 +4396,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     bars=len(frame))
             if _win28:
                 ax.set_ylim(*_win28)
-                if confirmed:
+                if _cfm73:
                     try:
                         _md29 = candidate.metadata if isinstance(candidate.metadata, dict) else {}
                         _md29["chart_zoom_frozen"] = [float(_win28[0]), float(_win28[1])]
@@ -4540,7 +4541,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # «آقا پایین چارت سمت راست معمولا همیشه خالیه — اینتری و استاپ اولیه
         # رو بنویس و تریلینگ استاپ اول خالی و تی پی ها و قیمت لایو رو هم بنویس»
         # On hits the TOOL keeps its original face; the ledger row ticks.
-        if confirmed and not _is_spot:
+        if _cfm73 and not _is_spot:
             try:
                 _pl32 = ax.get_position()
                 _hit32 = int(ladder.get("hit_index") or (candidate.metadata or {}).get("hit_index") or 0)
@@ -4594,7 +4595,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             f"{candidate.setup_code}  ·  {_chart_market_label(candidate)}  ·  TRIG {candidate.trigger_timeframe.upper()}"
             f"{' · PAT ' + str(md.get('tl_context_tf')).upper() if md.get('tl_context_tf') else ''}"
             f"  ·  {_setup_identity(candidate)['brand']} ✦ "
-            f"{'CONFIRMED' if confirmed else 'ANALYSIS'}",
+            f"{'CONFIRMED' if confirmed else ('READY' if preconfirm_tool else 'ANALYSIS')}",
             color=CHART_THEME["muted"],
             fontsize=8,
             va="center",
@@ -6384,10 +6385,238 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
     return "\n".join(rows)
 
 
+def _bypass_trigger_frame(candidate) -> Optional[pd.DataFrame]:
+    """10-10: fetch the trigger-TF frame directly, bypassing the monitor's
+    cost-window frames dict (a decided confirm / stage-B chart must never
+    starve on the window). Uncached, trigger TF, chart depth. Logs outcome."""
+    try:
+        from data.fetcher import get_klines as _gk73
+        _trig73 = str(candidate.trigger_timeframe or "").lower() or "15m"
+        _force73 = _gk73(str(candidate.symbol), _trig73,
+                         _chart_fetch_size(_trig73),
+                         closed_only=False, use_cache=False)
+        if _force73 is not None and not getattr(_force73, "empty", True):
+            print(f"Publish bypass-fetch ok {candidate.signal_id} {_trig73}")
+            return _force73
+        print(f"Publish bypass-fetch empty {candidate.signal_id} {_trig73}")
+        return None
+    except Exception as _bf73_exc:
+        print(f"Publish bypass-fetch failed {candidate.signal_id}: {_bf73_exc}")
+        return None
+
+
+def _send_activation_reply(candidate: SignalCandidate) -> bool:
+    """10-10 STAGE-C (his A/B/C design): the stage-B chart (frozen tools) is
+    ALREADY in the channel — activation is a zero-fetch, zero-render REPLY to
+    it, reading levels from the frozen snapshot. Returns True once posted."""
+    try:
+        _md73 = candidate.metadata or {}
+        _snap73 = dict(_md73.get("confirmed_snapshot") or {})
+        _b_txt73 = int(_md73.get("stage_b_text_mid") or 0) or None
+        _b_age73 = ""
+        try:
+            from datetime import datetime as _dt73, timezone as _tz73
+            _b_at73 = str(_md73.get("stage_b_at") or "")
+            if _b_at73:
+                _dd73 = _dt73.now(_tz73.utc) - _dt73.fromisoformat(_b_at73)
+                _mm73 = int(_dd73.total_seconds() // 60)
+                _b_age73 = f"{_mm73} دقیقه" if _mm73 < 90 else f"{_mm73 // 60} ساعت"
+        except Exception:
+            _b_age73 = ""
+        _fill73 = _md73.get("activation_price") or _md73.get("live_price") or candidate.planned_entry
+        try:
+            if float(_fill73 or 0) > 0:
+                candidate.metadata["live_price"] = float(_fill73)
+        except Exception:
+            pass
+        if _snap73:
+            try:
+                from analysis.quality_engine import apply_confirmed_snapshot as _apply73
+                _apply73(candidate)  # belt-and-braces: levels EXACTLY as frozen
+            except Exception:
+                pass
+        _cap73 = (f"✅ <b>پوزیشن فعال شد</b>\n"
+                  f"💰 قیمت فعال‌سازی: <b>{_price(float(_fill73 or 0))}</b>"
+                  + (f" • 🕓 سن چارت: {_b_age73}" if _b_age73 else "") + "\n"
+                  + _confirmed_chart_caption(candidate))
+        _target73 = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+        _mid73 = send_message(_cap73, _target73, reply_to_message_id=_b_txt73)
+        if not _mid73:
+            print(f"Activation reply post failed {candidate.signal_id}")
+            return False
+        _chain73 = _setup_chain_get(candidate)
+        _chain73["confirmed"] = int(_mid73)
+        _b_ph73 = int(_md73.get("stage_b_chart_mid") or _chain73.get("approach_photo") or 0)
+        if _b_ph73:
+            _chain73["confirmed_photo"] = _b_ph73
+        _setup_chain_set(candidate, _chain73)
+        candidate.metadata["confirmation_chart_message_id"] = int(_mid73)
+        candidate.metadata["confirmation_chart_sent"] = True
+        candidate.metadata["confirmation_message_sent"] = True
+        try:
+            _lnk73 = _telegram_message_link(_target73, int(_mid73))
+            _sig_mirror(_public_code(candidate), "confirmed", _cap73, None,
+                        reply_kind="approach", link=_lnk73,
+                        link_text="🔗 پیام فعال‌سازی در کانال اصلی")
+        except Exception:
+            pass
+        print(f"Activation reply posted {candidate.signal_id} (B-age {_b_age73 or 'n/a'})")
+        return True
+    except Exception as _exc73:
+        print(f"Activation reply skipped {getattr(candidate, 'signal_id', '?')}: {_exc73}")
+        return False
+
+
+def send_stage_a_watch(candidate: SignalCandidate, current_price: float,
+                       distance_atr: float, distance_pct: float) -> bool:
+    """10-10 STAGE-A (his 0.5% law): text-only final watch. Zero fetch, zero
+    render — a pure Telegram send. One-shot per chain (metadata flag)."""
+    try:
+        _target73 = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+        _cap73 = _approaching_caption(candidate, current_price, distance_atr)
+        _chain73 = _setup_chain_get(candidate)
+        _parent73 = (int(_chain73.get("slot") or 0)
+                     or int(_chain73.get("anchor_pro") or _chain73.get("edu_short") or 0)) or None
+        _src73 = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
+        _smid73 = (candidate.metadata.get("education_chart_message_id")
+                   or candidate.metadata.get("education_message_id")
+                   or _chain73.get("edu") or 0)
+        _lnk73 = _telegram_message_link(_src73, int(_smid73)) if _smid73 else ""
+        _kb73 = {"inline_keyboard": [[{"text": "📚 تحلیل و چارت هشدار اولیه", "url": _lnk73}]]} if _lnk73 else None
+        _mid73 = send_message(_cap73, _target73, reply_to_message_id=_parent73, reply_markup=_kb73)
+        if not _mid73:
+            return False
+        _chain73["watch_a"] = int(_mid73)
+        _setup_chain_set(candidate, _chain73)
+        try:
+            _store_alert_message_id(candidate, "stage_a_message_id", int(_mid73))
+        except Exception:
+            pass
+        return True
+    except Exception as _exc73:
+        print(f"Stage-A watch skipped {getattr(candidate, 'signal_id', '?')}: {_exc73}")
+        return False
+
+
+def send_stage_b_ready(candidate: SignalCandidate, chart_df, current_price: float,
+                       distance_atr: float) -> bool:
+    """10-10 STAGE-B (his 0.3% law): the pre-confirm chart WITH frozen tools.
+    Own trigger frame (bypass when the window dict has none), ladder build,
+    snapshot FREEZE, READY-mode render, photo+text into the approach chain
+    slots. One-shot per chain (metadata flag)."""
+    try:
+        _df73 = chart_df
+        try:
+            _base73 = str(candidate.trigger_timeframe or "").lower()
+            _seen73 = str(_infer_chart_tf(_df73, candidate) or "").lower() if _df73 is not None else ""
+            if _df73 is None or getattr(_df73, "empty", True) or (_base73 and _seen73 and _seen73 != _base73):
+                _bf73b = _bypass_trigger_frame(candidate)
+                if _bf73b is not None:
+                    _df73 = _bf73b
+        except Exception:
+            pass
+        if _df73 is None or getattr(_df73, "empty", True):
+            print(f"Stage-B without frame {candidate.signal_id}")
+            return False
+        # Ladder build — KEEP IN SYNC with send_confirmed (10-10 B-freeze:
+        # the ladder MUST exist before the snapshot freeze below).
+        _ltf73 = None
+        try:
+            from analysis.trade_management import ltf_for_trigger as _ltf_for73, TP1_CAP_BY_TF as _capT73
+            from data.fetcher import get_klines as _gk73b
+            _ltf73 = _gk73b(str(candidate.symbol),
+                            _ltf_for73(str(candidate.trigger_timeframe or "15m")),
+                            60, closed_only=False, use_cache=True)
+        except Exception:
+            _ltf73 = None
+        candidate.metadata["target_ladder"] = build_ladder(
+            candidate.planned_entry, candidate.sl, candidate.direction, candidate.market,
+            candidate.tp2, structural_tp1=candidate.tp1,
+            fee_pct=(SETTINGS.fee_rate_percent + SETTINGS.slippage_percent) * 2.0 / 100.0,
+            trigger_tf=str(candidate.trigger_timeframe or "15m"),
+            wall_level=float((candidate.metadata or {}).get("internal_wall") or 0.0),
+            ltf_df=_ltf73,
+            ltf_cap_pct=float(_capT73.get(str(candidate.trigger_timeframe or "15m"), 2.0))
+            if _ltf73 is not None else 0.0,
+        )
+        try:
+            if "close" in _df73.columns:
+                candidate.metadata["live_price"] = float(_df73["close"].iloc[-1])
+                if not candidate.metadata.get("tool_entry_ts") and "timestamp" in _df73.columns:
+                    candidate.metadata["tool_entry_ts"] = str(_df73["timestamp"].iloc[-1])
+        except Exception:
+            pass
+        try:
+            from analysis.quality_engine import freeze_confirmed_snapshot as _frz73
+            _frz73(candidate)
+        except Exception as _frz73_exc:
+            print(f"Stage-B freeze skipped {candidate.signal_id}: {_frz73_exc}")
+        _png73 = generate_chart(_df73, candidate, confirmed=False, preconfirm_tool=True)
+        if not _png73:
+            print(f"Stage-B render failed {candidate.signal_id}")
+            return False
+        _cap73b = _approaching_caption(candidate, current_price, distance_atr) + \
+            "\n📌 چارت با ابزار فریز شد؛ در صورت بریک، فعال‌سازی همین‌جا ریپلای می‌شود."
+        _target73 = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+        _chain73 = _setup_chain_get(candidate)
+        _parent73 = (int(_chain73.get("watch_a") or 0)
+                     or int(_chain73.get("slot") or 0)
+                     or int(_chain73.get("anchor_pro") or _chain73.get("edu_short") or 0)) or None
+        _src73 = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
+        _smid73 = (candidate.metadata.get("education_chart_message_id")
+                   or candidate.metadata.get("education_message_id")
+                   or _chain73.get("edu") or 0)
+        _lnk73 = _telegram_message_link(_src73, int(_smid73)) if _smid73 else ""
+        _kb73 = {"inline_keyboard": [[{"text": "📚 تحلیل و چارت هشدار اولیه", "url": _lnk73}]]} if _lnk73 else None
+        _ph73, _mid73 = _post_chart_then_text(
+            _png73, _cap73b, _target73, reply_to=_parent73, reply_markup=_kb73,
+            label=_chart_label(symbol=candidate.symbol, code=_public_code(candidate),
+                               title_fa="آماده ورود"))
+        if not _mid73:
+            print(f"Stage-B post failed {candidate.signal_id}")
+            return False
+        _chain73["approach"] = int(_mid73)
+        _chain73["approach_photo"] = int(_ph73 or 0)
+        _setup_chain_set(candidate, _chain73)
+        try:
+            from analysis.models import iso_now as _iso73
+            candidate.metadata["stage_b_at"] = _iso73()
+        except Exception:
+            candidate.metadata["stage_b_at"] = ""
+        candidate.metadata["stage_b_sent"] = True
+        candidate.metadata["stage_b_chart_mid"] = int(_ph73 or 0)
+        candidate.metadata["stage_b_text_mid"] = int(_mid73)
+        try:
+            _fid73 = _LAST_PHOTO_FILE.get(int(_ph73 or 0)) or ""
+            if _fid73:
+                candidate.metadata["stage_b_file_id"] = _fid73
+        except Exception:
+            pass
+        try:
+            _store_alert_message_id(candidate, "approaching_message_id", int(_mid73))
+        except Exception:
+            pass
+        try:
+            _mlnk73 = _telegram_message_link(_target73, int(_mid73)) if _mid73 else ""
+            _sig_mirror(_public_code(candidate), "approach", _cap73b, _png73,
+                        link=_mlnk73, link_text="🔗 پیام مختصر در کانال اصلی")
+        except Exception:
+            pass
+        return True
+    except Exception as _exc73:
+        print(f"Stage-B ready skipped {getattr(candidate, 'signal_id', '?')}: {_exc73}")
+        return False
+
+
 def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame]) -> bool:
     """Execution channel is intentionally chart-first: confirmed trade numbers
     plus a one-click link back to its educational alert/chart."""
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
+    # ── 10-10 STAGE-C ACTIVATION (his A/B/C design): the stage-B chart (with
+    # frozen tools) is ALREADY in the channel — activation is a zero-fetch,
+    # zero-render REPLY to it, reading levels from the frozen snapshot.
+    if (candidate.metadata or {}).get("stage_b_sent") and not candidate.metadata.get("confirmation_message_sent"):
+        return _send_activation_reply(candidate)
     # ── Viva 09-23 (round 20): the confirmed ladder's FIRST pill also obeys
     # the lower-TF law — snap it to the nearest LTF swing (the touch a member
     # actually watches) instead of a pure 20%-of-path step. Fail-open.
@@ -6444,19 +6673,9 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
         # frames at all). A decided confirm must NEVER starve on the cost
         # window — fetch its trigger frame HERE, uncached, once per attempt.
         if chart_df is None:
-            try:
-                from data.fetcher import get_klines as _gk72
-                _trig72 = str(candidate.trigger_timeframe or "").lower() or "15m"
-                _force72 = _gk72(str(candidate.symbol), _trig72,
-                                 _chart_fetch_size(_trig72),
-                                 closed_only=False, use_cache=False)
-                if _force72 is not None and not getattr(_force72, "empty", True):
-                    chart_df = _force72
-                    print(f"Confirmed publish bypass-fetch ok {candidate.signal_id} {_trig72}")
-                else:
-                    print(f"Confirmed publish bypass-fetch empty {candidate.signal_id} {_trig72}")
-            except Exception as _bf72_exc:
-                print(f"Confirmed publish bypass-fetch failed {candidate.signal_id}: {_bf72_exc}")
+            _bf73 = _bypass_trigger_frame(candidate)
+            if _bf73 is not None:
+                chart_df = _bf73
         _chart_why72 = "chart_df None (venue fetch failed)"
         if chart_df is not None:
             _chart_why72 = "ok"

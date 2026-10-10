@@ -255,21 +255,44 @@ def is_invalidated(candidate: SignalCandidate, current_price: float) -> bool:
         return False
 
 
-def approaching_entry(candidate: SignalCandidate, current_price: float) -> Tuple[bool, float]:
-    bottom, top = candidate.entry_zone_bottom, candidate.entry_zone_top
-    atr_value = float(candidate.metadata.get("atr", 0) or abs(top - bottom) or current_price * 0.002)
-    if bottom <= current_price <= top:
-        return True, 0.0
-    distance = bottom - current_price if current_price < bottom else current_price - top
-    distance_atr = distance / atr_value if atr_value > 0 else 999.0
-    # 10-10 EARLY-WATCH (his 0.5% law): the 0.30-ATR band sits ~0.1% from the
-    # zone on fast frames — the final watch arrived AT the touch, not before
-    # it. Either gate fires; the ATR gate keeps slow/high-TF behavior.
+def _approach_gaps(candidate, current_price):
+    """Shared distance math for the staged watch (A/B). Returns
+    (inside_zone, distance, distance_atr, distance_pct). Fail-safe: garbage
+    in -> FAR out, never an exception."""
     try:
-        _pct72 = distance / float(current_price) if current_price else 999.0
+        bottom, top = float(candidate.entry_zone_bottom), float(candidate.entry_zone_top)
+        px = float(current_price or 0.0)
+        if px <= 0 or not (top > bottom):
+            return False, 0.0, 999.0, 999.0
+        if bottom <= px <= top:
+            return True, 0.0, 0.0, 0.0
+        distance = bottom - px if px < bottom else px - top
+        atr_value = float((candidate.metadata or {}).get("atr", 0) or abs(top - bottom) or px * 0.002)
+        distance_atr = distance / atr_value if atr_value > 0 else 999.0
+        return False, distance, distance_atr, distance / px
     except Exception:
-        _pct72 = 999.0
-    return (distance_atr <= 0.30) or (_pct72 <= 0.005), distance_atr
+        return False, 0.0, 999.0, 999.0
+
+
+def approaching_entry(candidate: SignalCandidate, current_price: float) -> Tuple[bool, float]:
+    _inside, _d, distance_atr, _pct = _approach_gaps(candidate, current_price)
+    if _inside:
+        return True, 0.0
+    # 10-10 EARLY-WATCH (his 0.5% law): either gate fires.
+    return (distance_atr <= 0.30) or (_pct <= 0.005), distance_atr
+
+
+def approach_stage(candidate, current_price: float) -> Tuple[str, float, float]:
+    """10-10 STAGED WATCH (his A/B/C design): A = final-watch text at 0.5%,
+    B = chart+tools+freeze at 0.3%. Inside the zone is B (at entry: chart
+    NOW). ATR legs preserve slow/high-TF behavior (B's is half of A's).
+    Returns (stage, distance_atr, distance_pct); stage in FAR/A/B."""
+    _inside, _d, distance_atr, distance_pct = _approach_gaps(candidate, current_price)
+    if _inside or distance_pct <= 0.003 or distance_atr <= 0.15:
+        return "B", distance_atr, distance_pct
+    if distance_pct <= 0.005 or distance_atr <= 0.30:
+        return "A", distance_atr, distance_pct
+    return "FAR", distance_atr, distance_pct
 
 
 def _bars_since_candidate(candidate: SignalCandidate, closed_df: pd.DataFrame) -> pd.DataFrame:
