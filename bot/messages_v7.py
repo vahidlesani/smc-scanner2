@@ -6058,22 +6058,40 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
     # chart; EVERY other update REPLIES to the chain's newest message with NO
     # new chart («چیزی بهم نمیریزه ... اما چارت اضافی هم رندر نمیشه»).
     _reply64 = 0
+    _n64 = 1
+    _last_text64 = 0
     try:
         from database.bot_kv import get_json as _gj64, set_json as _sj64
         _ck64 = f"spot_chain|{sym}|{tf}|{str(item.get('pattern') or '').upper()}"
         _meta64 = _gj64(_ck64) or {}
         if not _meta64.get("code") or (time.time() - float(_meta64.get("ts") or 0)) > 5 * 86400:
             from analysis.models import generate_viva_public_code as _gpc64
-            _meta64 = {"code": _gpc64("SPOT"), "ts": time.time(), "mid": 0}
+            _meta64 = {"code": _gpc64("SPOT"), "ts": time.time(), "mid": 0,
+                       "first": 0, "head": 0, "last_text": 0, "n": 0,
+                       "chart_stages": []}
         _key_stage64 = str(stage).upper() in {"TOUCH", "NEAR_BREAK", "BREAK_UP",
                                               "BREAK_DOWN", "CONFIRM", "FINAL"}
-        _first64 = not int(_meta64.get("mid") or 0)
-        _reply64 = 0 if _first64 else int(_meta64.get("mid") or 0)
+        # ── 10-10 (his chain law): updates quote the FIRST charted alert
+        # (fallback: chain head); each stage charts ONCE per chain; every
+        # post is numbered; chartless updates REPLACE the previous text.
+        _firstmid64 = int(_meta64.get("first") or 0)
+        _head64 = int(_meta64.get("head") or 0)
+        _last_text64 = int(_meta64.get("last_text") or 0)
+        _n64 = int(_meta64.get("n") or 0) + 1
+        _charted64 = list(_meta64.get("chart_stages") or [])
+        _first64 = not _head64
+        _reply64 = 0 if _first64 else (_firstmid64 or _head64)
         if not (_first64 or _key_stage64):
             chart = None                    # reply-only update: no new chart
+        if chart and str(stage).upper() in _charted64:
+            print(f"SPOT chart-once: {sym}|{tf} {stage} already charted → text-only")
+            chart = None
         item["chain_code"] = str(_meta64.get("code") or "")
         _sj64(_ck64, {"code": _meta64["code"], "ts": time.time(),
-                      "mid": int(_meta64.get("mid") or 0)})
+                      "mid": int(_meta64.get("mid") or 0),
+                      "first": _firstmid64, "head": _head64,
+                      "last_text": _last_text64, "n": int(_meta64.get("n") or 0),
+                      "chart_stages": _charted64})
     except Exception:
         item.setdefault("chain_code", "")
 
@@ -6099,7 +6117,7 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
                          "نشان‌دهندهٔ حرکت صعودی بالقوه؛ فشردگی به سمت ضلع رصد می‌شود.")
     lines = [
         f"🪙 <b>VIVA-SPOT-MON</b>",
-        f"<b>{_e(_SPOT_ALERT_TITLE.get(stage, '🪙 هشدار اسپات'))}</b>",
+        f"<b>{_e(_SPOT_ALERT_TITLE.get(stage, '🪙 هشدار اسپات'))}</b> <code>#{_n64}</code>",
         f"<code>{_e(sym)}/USDT · {_e(tf)} · {_e(fa)}</code>",
         "",
         _e(analysis_line),
@@ -6135,6 +6153,13 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
         if chart:
             mid = int(send_photo(chart, text, chat, **_kw64) or 0)
         else:
+            # ── 10-10: chartless updates REPLACE the previous text. A dead
+            # delete never blocks the new post (48h Telegram limit).
+            if _last_text64:
+                try:
+                    delete_message(chat, _last_text64)
+                except Exception as _del73:
+                    print(f"SPOT text-replace delete skipped: {_del73}")
             mid = int(send_message(text, chat, **_kw64) or 0)
         if mid:
             try:
@@ -6148,7 +6173,17 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
                 _ck64b = f"spot_chain|{sym}|{tf}|{str(item.get('pattern') or '').upper()}"
                 _m64b = _gj64b(_ck64b) or {}
                 if _m64b.get("code"):
-                    _m64b.update({"mid": mid, "ts": time.time()})
+                    _m64b.update({"mid": mid, "ts": time.time(), "n": _n64,
+                                  "head": int(_m64b.get("head") or 0) or mid})
+                    if chart:
+                        _m64b["first"] = int(_m64b.get("first") or 0) or mid
+                        _cs73 = list(_m64b.get("chart_stages") or [])
+                        _st73 = str(stage).upper()
+                        if _st73 and _st73 not in _cs73:
+                            _cs73.append(_st73)
+                        _m64b["chart_stages"] = _cs73
+                    else:
+                        _m64b["last_text"] = mid
                     _sj64b(_ck64b, _m64b)
             except Exception:
                 pass

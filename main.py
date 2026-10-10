@@ -803,6 +803,25 @@ def _spot_stamp(key: str, window_hours: float, commit: bool = True) -> bool:
         return False
 
 
+def _spot_sym_tf_stamped(symbol: str, tf: str) -> bool:
+    """10-10: True when ANY pattern of this (symbol, tf) holds a fresh spot
+    confirm stamp — the ladder's BREAK_UP is then a dup of a published
+    CONFIRM chart (kindless + case-proof on purpose)."""
+    try:
+        from database.bot_kv import get_json as _g
+        import time as _t
+        window_h = 72.0 if str(tf or "") == "3d" else 36.0
+        now = _t.time()
+        want = f"spot|{str(symbol or '').upper()}|{str(tf or '').upper()}|"
+        data = _g("spot_published", {}) or {}
+        for k, v in data.items():
+            if str(k).upper().startswith(want) and now - float(v) < window_h * 3600.0:
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _spot_status_write(reason: str, stats: Optional[Dict[str, int]] = None) -> None:
     """Viva 09-23/24 («چرا اسپات رو فعال نمیکنی؟؟»): the lane's liveness is
     VISIBLE — reason + last-pass counters in KV, surfaced in the app."""
@@ -1027,17 +1046,43 @@ def run_spot_scan() -> Dict[str, int]:
     try:
         from bot.messages_v7 import send_spot_alert as _send_spot_alert
         from analysis.spot_engine import (spot_alert_check, spot_alert_commit,
-                                          build_spot_alert_candidate)
+                                          build_spot_alert_candidate,
+                                          spot_break_lock_check,
+                                          spot_break_lock_commit)
         for aitem in ladder:   # r56: no budget — cooldown stamps are the layer
             try:
+                _stage73s = str(aitem.get('stage') or '').upper()
+                # ── 10-10 (ii): BREAK_UP is a dup when the confirm lane
+                # already published this (symbol, tf) — the CONFIRM chart
+                # owns the event (DOWN has no confirm lane: never skipped).
+                if _stage73s == 'BREAK_UP' and _spot_sym_tf_stamped(
+                        str(aitem.get('symbol') or ''),
+                        str(aitem.get('tf') or '')):
+                    stats["up_dup_skip"] = stats.get("up_dup_skip", 0) + 1
+                    continue
+                # ── 10-10 (i): kindless BREAK lock — KIND/bucket flip-flops
+                # collapse to one warning per sym|tf|side per 1xTF.
+                if not spot_break_lock_check(aitem):
+                    stats["break_lock_skip"] = stats.get("break_lock_skip", 0) + 1
+                    continue
                 if not spot_alert_check(aitem):
                     continue
                 cand = build_spot_alert_candidate(aitem)
                 # ── Viva 10-05 Law: Chart ONLY at breakout! (TOUCH is text-only without chart)
+                # ── 10-10: + the FIRST touch of a chain carries its chart
+                # (touch = 1 chart, break = 1 chart, then chartless updates).
                 _stage_str = str(aitem.get('stage') or '').upper()
                 _is_breakout_stage = _stage_str in ('BREAK_UP', 'BREAK_DOWN')
+                _first_touch73 = False
+                if _stage_str == 'TOUCH':
+                    try:
+                        from database.bot_kv import get_json as _g73
+                        _m73 = _g73(f"spot_chain|{str(aitem.get('symbol') or '')}|{str(aitem.get('tf') or '').upper()}|{str(aitem.get('pattern') or '').upper()}") or {}
+                        _first_touch73 = not int(_m73.get("mid") or 0)
+                    except Exception:
+                        _first_touch73 = True
                 chart = None
-                if _is_breakout_stage:
+                if _is_breakout_stage or _first_touch73:
                     _bundle_for_alert = bundles.get(cand.symbol.upper())
                     frame = (_bundle_for_alert.get(cand.trigger_timeframe)
                              if _bundle_for_alert is not None else None)
@@ -1045,6 +1090,7 @@ def run_spot_scan() -> Dict[str, int]:
                              if frame is not None else None)
                 if _send_spot_alert(aitem, chart):
                     spot_alert_commit(aitem)      # marker only AFTER the send
+                    spot_break_lock_commit(aitem)  # 10-10: kindless BREAK lock
                     stats["alerts"] = stats.get("alerts", 0) + 1
             except Exception as exc:
                 stats["errors"] += 1
@@ -1061,6 +1107,8 @@ def run_spot_scan() -> Dict[str, int]:
     print(f"🪙 SPOT pass finished in {stats['dur_s']}s • "
           f"symbols={stats['symbols']} found={stats['found']} "
           f"published={stats['published']} stamp_skip={stats.get('stamp_skip', 0)} "
+          f"break_lock_skip={stats.get('break_lock_skip', 0)} "
+          f"up_dup_skip={stats.get('up_dup_skip', 0)} "
           f"send_fail={stats.get('send_fail', 0)} chart_fail={stats.get('chart_fail', 0)} "
           f"errors={stats['errors']}")
     return stats

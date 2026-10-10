@@ -76,6 +76,28 @@ def _map_pattern_title(pat_type: str, pat_name_fa: str = "") -> str:
     return pat_upper.replace("_", " ").title() or "Macro Structure"
 
 
+_SPOT_BOX_TF_MULT = {"4h": 1.25, "8h": 1.35, "12h": 1.50,
+                     "1d": 1.75, "3d": 2.50, "1w": 3.00}
+
+
+def _spot_box_target(upper_level: float, tf: str, ceiling=None) -> float:
+    """10-10 (his spot-box law): the green box rides to the NEXT STRUCTURAL
+    ceiling; only in virgin ATH air (no ceiling) does the TF-sized fallback
+    apply — never a flat 25% for every timeframe. Pure (unit-tested)."""
+    try:
+        up = float(upper_level)
+    except Exception:
+        up = 0.0
+    try:
+        ce = float(ceiling or 0.0)
+    except Exception:
+        ce = 0.0
+    if ce > up * 1.005:
+        return ce
+    mult = _SPOT_BOX_TF_MULT.get(str(tf or "").lower(), 1.25)
+    return up * mult
+
+
 def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = False) -> bytes:
     """
     Render the definitive VIVA SIGNALS PRO Spot Chart obedient to Law G1:
@@ -241,7 +263,21 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
             if up_cand:
                 upper_level = float(10.0 ** (up_cand[0]['slope'] * (n - 1) + up_cand[0]['intercept']))
         
-        target_price = upper_level * 1.25
+        # 10-10: ceiling-first box (the alert builder's md value wins;
+        # confirms recompute from the visible frame; virgin air → TF size).
+        try:
+            _ceil73s = float(md.get("spot_box_top") or 0.0)
+        except Exception:
+            _ceil73s = 0.0
+        if not (_ceil73s > upper_level * 1.005):
+            try:
+                from analysis.spot_engine import _structural_high_above as _sha73
+                _rc73s = _sha73(frame, float(frame["close"].iloc[-1])) or 0.0
+                if float(_rc73s) > upper_level * 1.005:
+                    _ceil73s = float(_rc73s) * 1.01  # «کمی بالاترش»
+            except Exception:
+                pass
+        target_price = _spot_box_target(upper_level, tf, _ceil73s)
         delta_p = target_price - upper_level
         pct_gain = (delta_p / max(1e-6, upper_level)) * 100.0
 

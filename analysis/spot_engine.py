@@ -933,7 +933,10 @@ def spot_signals_for(symbol: str, bundle) -> List:
 
 STAGE_RANK = {"TOUCH": 1, "NEAR_BREAK": 2, "BREAK_DOWN": 3, "BREAK_UP": 4, "CONFIRM": 5}
 _ALERT_TTL_H = 24 * 10                      # ladder state lives ten days
-_STAGE_COOLDOWN_H = {"TOUCH": 24.0, "NEAR_BREAK": 12.0, "BREAK_DOWN": 0.0, "BREAK_UP": 0.0}
+# 10-10: DOWN refires max 1/day per sig (genuine re-breaks warn again — DOWN
+# has no confirm lane). UP stays never-refire: the confirm lane owns every UP
+# event, the ladder must not echo it.
+_STAGE_COOLDOWN_H = {"TOUCH": 24.0, "NEAR_BREAK": 12.0, "BREAK_DOWN": 24.0, "BREAK_UP": 0.0}
 
 
 def _edges_at(pat: dict, n: int) -> tuple:
@@ -1086,7 +1089,28 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
         cur = best.get(item["sig"])
         if cur is None or STAGE_RANK[item["stage"]] > STAGE_RANK[cur["stage"]]:
             best[item["sig"]] = item
-    return list(best.values())
+    items = list(best.values())
+    # 10-10 (his ENA «20 chart repeats»): one BREAK per tf per pass — the
+    # most VALID structure wins (r58 superiority, the same law as confirms).
+    # TOUCH/NEAR stay unfiltered (cheap analysis texts); BREAKs carry charts.
+    return _best_break_per_tf(items)
+
+
+def _best_break_per_tf(items: List[dict]) -> List[dict]:
+    """Keep every non-BREAK item; per tf keep only the strongest BREAK."""
+    breaks: Dict[str, dict] = {}
+    rest: List[dict] = []
+    for it in items or []:
+        if str(it.get("stage") or "") not in ("BREAK_UP", "BREAK_DOWN"):
+            rest.append(it)
+            continue
+        tf = str(it.get("tf") or "")
+        _w = _structural_weight((it.get("pattern_commands") or [{}])[0])
+        _r = STAGE_RANK.get(str(it.get("stage") or ""), 0)
+        cur = breaks.get(tf)
+        if cur is None or (_w, _r) > (cur["_w73"], cur["_r73"]):
+            breaks[tf] = {"it": it, "_w73": _w, "_r73": _r}
+    return rest + [v["it"] for v in breaks.values()]
 
 
 def scan_spot_update_events(symbol: str, frames: Dict[str, pd.DataFrame],
@@ -1228,6 +1252,57 @@ def spot_alert_mark_confirmed(sig: str) -> None:
                                  "rank": STAGE_RANK["CONFIRM"],
                                  "ts": _t.time(), "bar": ""}
         _s("spot_alerts", state)
+    except Exception:
+        pass
+
+
+_SPOT_BREAK_LOCK_H = {"4h": 4.0, "8h": 8.0, "12h": 12.0,
+                      "1d": 24.0, "3d": 72.0, "1w": 168.0}
+
+
+def _spot_break_lock_key(item: dict) -> str:
+    sym = str(item.get("symbol") or "").upper()
+    tf = str(item.get("tf") or "")
+    side = "UP" if str(item.get("stage") or "") == "BREAK_UP" else "DOWN"
+    return f"spot_break_lock|{sym}|{tf}|{side}"
+
+
+def spot_break_lock_check(item: dict) -> bool:
+    """10-10 KINDLESS BREAK gate (his ENA 20x/day): one BREAK warning per
+    (symbol, tf, side) per 1xTF (min 4h) — no matter which KIND name or
+    anchor bucket the detector prints this pass. Non-BREAK stages pass
+    through untouched. Fail-open (a KV outage must not mute warnings)."""
+    try:
+        if str(item.get("stage") or "") not in ("BREAK_UP", "BREAK_DOWN"):
+            return True
+        from database.bot_kv import get_json as _g
+        import time as _t
+        key = _spot_break_lock_key(item)
+        mark = (_g(key, {}) or {})
+        win_h = max(4.0, float(_SPOT_BREAK_LOCK_H.get(
+            str(item.get("tf") or ""), 4.0)))
+        if mark and (_t.time() - float(mark.get("ts", 0))) < win_h * 3600.0:
+            print(f"SPOT BREAK-LOCK suppress "
+                  f"{item.get('symbol')}|{item.get('tf')}|{item.get('stage')} "
+                  f"kind={item.get('pattern')} "
+                  f"(locked by {mark.get('kind')} "
+                  f"{(_t.time() - float(mark.get('ts', 0))) / 3600.0:.1f}h ago)")
+            return False
+        return True
+    except Exception as _exc73:
+        print(f"spot_break_lock_check failed open ({_exc73})")
+        return True
+
+
+def spot_break_lock_commit(item: dict) -> None:
+    """Stamp the kindless BREAK lock — call ONLY after a successful send."""
+    try:
+        if str(item.get("stage") or "") not in ("BREAK_UP", "BREAK_DOWN"):
+            return
+        from database.bot_kv import set_json as _s
+        import time as _t
+        _s(_spot_break_lock_key(item),
+           {"ts": _t.time(), "kind": str(item.get("pattern") or "")})
     except Exception:
         pass
 
