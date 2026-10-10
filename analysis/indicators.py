@@ -56,9 +56,9 @@ def rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
 # never lose their legitimate wick pivots. Structural consumers (sweeps,
 # stops, BOS) keep the raw wick: a sweep IS the wick. Only the line-fit
 # call sites opt in.
-WICK_NOISE_OUTLIER_MULT = 2.0
-WICK_NOISE_BODY_MULT = 1.0
-WICK_NOISE_ATR_FRAC = 0.50
+WICK_NOISE_OUTLIER_MULT = 3.0
+WICK_NOISE_BODY_MULT = 2.0
+WICK_NOISE_ATR_FRAC = 1.50
 WICK_NOISE_LOOKBACK = 20
 
 # r58 (Viva, the hybrid shadow law — verbatim: «گفتم پینبارها کوچک گرفته بشه
@@ -68,8 +68,10 @@ WICK_NOISE_LOOKBACK = 20
 # a pivot wick anchors AT THE WICK unless it is EXTREME (≥ WICK_EXTREME_MED_MULT
 # × the recent median wick AND ≥ WICK_EXTREME_ATR_FRAC × ATR) — extreme wicks
 # (liquidation spikes) anchor on the body; reasonable wicks stay wicks.
-WICK_EXTREME_MED_MULT = 2.0
-WICK_EXTREME_ATR_FRAC = 1.0
+WICK_EXTREME_MED_MULT = 3.0
+# Viva 10-10 shadow law (his «به شدوهای معقول احترام»): a shadow under 1.5
+# ATR is ALWAYS reasonable — only very-very-long liquidation spikes demote.
+WICK_EXTREME_ATR_FRAC = 1.5
 
 
 def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
@@ -121,7 +123,7 @@ def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
                 if ((_wick >= WICK_NOISE_OUTLIER_MULT * _med_wick
                         and _wick >= WICK_NOISE_BODY_MULT * _body
                         and _wick >= WICK_NOISE_ATR_FRAC * atr14)
-                        or (_wick >= 2.5 * _med_wick and _wick >= 0.8 * atr14)):
+                        or (_wick >= 4.0 * _med_wick and _wick >= 1.5 * atr14)):
                     _price = float(max(o[i], c[i]))
                     _anchor = "body"
             highs.append({"index": i, "price": _price, "raw_price": float(h[i]),
@@ -143,7 +145,7 @@ def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
                 if ((_wick >= WICK_NOISE_OUTLIER_MULT * _med_wick
                         and _wick >= WICK_NOISE_BODY_MULT * _body
                         and _wick >= WICK_NOISE_ATR_FRAC * atr14)
-                        or (_wick >= 2.5 * _med_wick and _wick >= 0.8 * atr14)):
+                        or (_wick >= 4.0 * _med_wick and _wick >= 1.5 * atr14)):
                     _price = float(min(o[i], c[i]))
                     _anchor = "body"
             lows.append({"index": i, "price": _price, "raw_price": float(l[i]),

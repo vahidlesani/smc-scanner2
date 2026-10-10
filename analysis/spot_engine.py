@@ -1061,9 +1061,8 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                     vol_ratio = (float(d["volume"].iloc[-1]) / _v20) if _v20 > 0 else 0.0
                 except Exception:
                     vol_ratio = 0.0
-                sig = (f"{symbol.upper()}|{tf}|{kind}|"
-                       f"{int(float(_lns[0].get('x0', 0) or 0))}|"
-                       f"{int(float(_lns[-1].get('x0', 0) or 0))}")
+                sig = _spot_sig(symbol, tf, kind, hit.get("side"),
+                                  _lns[0].get("x0", 0), _lns[-1].get("x0", 0))
                 out.append({
                     "stage": hit["stage"], "side": hit["side"],
                     "symbol": symbol.upper(), "tf": tf, "pattern": kind,
@@ -1155,6 +1154,20 @@ def commit_spot_update_events(events) -> None:
     for e in events or []:
         state[str(e.get("event_key") or "")] = {"ts": now}
     _s("spot_update_events", state)
+
+
+def _spot_sig(symbol, tf, kind, side, x0a, x0b) -> str:
+    """Viva 10-10 (his «3 updates, 3 claims»): the ladder key must survive
+    refits — bucket the pattern centre by 10 bars instead of exact anchor
+    indices (a few-bar refit keeps the ladder; a genuinely new location,
+    shape or side opens a new one)."""
+    try:
+        mid = (float(x0a or 0) + float(x0b or 0)) / 2.0
+        bucket = int(mid // 10)
+    except (TypeError, ValueError):
+        bucket = 0
+    return (f"{str(symbol or '').upper()}|{tf}|{str(kind or '').upper()}|"
+            f"{str(side or '').upper()}|{bucket}")
 
 
 def spot_alert_check(item: dict) -> bool:
