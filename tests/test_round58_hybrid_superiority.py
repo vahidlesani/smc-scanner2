@@ -207,6 +207,9 @@ def test_main_renders_update_chart_from_same_bundle():
     مصرف بشدت بالا بردن») — the r57 generic update events are TEXT-ONLY
     replies; charts render only at a chain's key stages."""
     src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
-    seg = src.split("R64.4 THE SPOT CHART ECONOMY")[1][:900]
+    # 10-11: window widened past the env-gate lines (block is OFF by
+    # default now); the text-only law itself still holds.
+    seg = src.split("R64.4 THE SPOT CHART ECONOMY")[1][:1300]
+    assert "_spot_update_events_enabled" in seg
     assert "send_spot_event(_ev57)" in seg
     assert "generate_chart" not in seg and "_chart57" not in seg

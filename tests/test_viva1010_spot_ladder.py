@@ -134,7 +134,7 @@ def test_chain_text_updates_replace_reply_first_numbered():
         assert calls["msgs"][1]["reply"] == m1  # quotes the FIRST post
         assert "#1" in calls["msgs"][0]["text"]
         assert "#2" in calls["msgs"][1]["text"]
-        meta = KV.get_json(f"spot_chain|{sym}|4H|TRIANGLE", {})
+        meta = KV.get_json(f"spot_chain|{sym}|4H", {})  # 10-11: TF-wide journey
         assert meta.get("n") == 2 and meta.get("last_text") == m2
         assert meta.get("head") == m1 and meta.get("first") == 0
     finally:
@@ -154,7 +154,7 @@ def test_chain_stage_charts_once_repeat_goes_text():
         assert len(calls["msgs"]) == 1
         assert calls["msgs"][0]["reply"] == m1  # quotes the first chart
         assert calls["dels"] == []              # no pure-text to replace yet
-        meta = KV.get_json(f"spot_chain|{sym}|4H|TRIANGLE", {})
+        meta = KV.get_json(f"spot_chain|{sym}|4H", {})  # 10-11: TF-wide journey
         assert meta.get("chart_stages") == ["BREAK_DOWN"]
         assert meta.get("first") == m1 and meta.get("n") == 2
     finally:

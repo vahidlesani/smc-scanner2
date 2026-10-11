@@ -43,7 +43,11 @@ class Settings:
     # NEW detailed alerts may be published — the rest defer to the next scan.
     education_max_per_scan: int = 16
     # One setup may open at most this many alert-chains per symbol per 24h…
-    chains_per_symbol_setup_24h: int = 3
+    # 10-11 spam surgery (his «نوبت دوم و سوم سیگنال به ستاپها رو فعلا
+    # ببند … هر تایم تریگر اجازه صدور یک پوزیشن»): ONE alert per
+    # (symbol, setup, trigger-TF) per 24h. Railway override stays:
+    # CHAINS_PER_SYMBOL_SETUP_24H=3 restores the old rotating licence.
+    chains_per_symbol_setup_24h: int = 1
     # …and never two at once: while one chain of the same symbol+setup is
     # still unresolved, new detections feed its UPDATE slot instead.
     chain_slot_gate_enabled: bool = True

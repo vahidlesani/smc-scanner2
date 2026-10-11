@@ -6138,11 +6138,17 @@ _SPOT_ALERT_TITLE = {
 _SPOT_DIV73 = "💲✳️✳️✳️✳️✳️✳️✳️💲"
 
 
-def _spot_ladder_chain_key(sym: str, tf: str, pattern: str) -> str:
-    """10-12 journey: THE chain-key builder — ladder sender, ladder gate and
-    ticker gate share it so all three always address the same journey."""
-    return (f"spot_chain|{str(sym or '')}|{str(tf or '').upper()}|"
-            f"{str(pattern or '').upper()}")
+def _spot_ladder_chain_key(sym: str, tf: str, pattern: str = "") -> str:
+    """10-11 spam surgery (his «هر تایم تریگر اجازه صدور یک پوزیشن»): THE
+    journey is per (symbol, trigger-TF) — pattern/kind flip-flops
+    (TRIANGLE→CHANNEL→RANGE→EDGE…) used to mint FRESH s1/s2 slots per name
+    and the 2000/day flood survived the 10-12 journey law. `pattern` stays
+    in the signature (every caller passes it) but no longer splits the
+    journey: one code, one reply-chain, one s1+s2 per (symbol, TF) per
+    5-day chain. Ladder sender, chain law and ticker gate still share this
+    one builder, so all three always address the same journey."""
+    _ = pattern  # kept for caller compatibility; the journey is TF-wide
+    return f"spot_chain|{str(sym or '')}|{str(tf or '').upper()}"
 
 
 def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:

@@ -117,7 +117,9 @@ def test_chain_key_unity_divider_and_slot_persist():
         m1 = M.send_spot_alert(_item(sym, "TOUCH", "s1"), chart=b"png-1")
         assert m1
         want = M._spot_ladder_chain_key(sym, "4h", "TRIANGLE")
-        assert want == f"spot_chain|{sym}|4H|TRIANGLE"
+        # 10-11 law: the journey is per (symbol, TF) — kind flip-flops no
+        # longer mint fresh slots (his «هر تایم تریگر یک پوزیشن»).
+        assert want == f"spot_chain|{sym}|4H"
         meta = KV.get_json(want, {})
         assert meta.get("s1") == m1 and meta.get("n") == 1
         assert calls["photos"][0]["text"].split("\n")[0] == M._SPOT_DIV73

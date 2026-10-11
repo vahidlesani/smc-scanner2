@@ -813,6 +813,51 @@ def _spot_stamp(key: str, window_hours: float, commit: bool = True) -> bool:
         return False
 
 
+def _spot_tf_position_hours() -> float:
+    try:
+        return max(1.0, float(os.getenv("SPOT_ONE_POSITION_HOURS", "24") or 24))
+    except Exception:
+        return 24.0
+
+
+def _spot_tf_position_open(symbol: str, tf: str) -> bool:
+    """10-11 spam surgery (his one-position-per-trigger-TF law): True when
+    this (symbol, trigger-TF) already published a spot POSITION inside the
+    window -- a second confirm (ANY pattern) is then a dup. Read-only;
+    the marker is written by _spot_tf_position_commit AFTER success."""
+    try:
+        from database.bot_kv import get_json as _g
+        import time as _t
+        data = _g("spot_tf_position", {}) or {}
+        ts = float(data.get(
+            f"{str(symbol or '').upper()}|{str(tf or '').upper()}") or 0)
+        return bool(ts and _t.time() - ts < _spot_tf_position_hours() * 3600.0)
+    except Exception:
+        return False
+
+
+def _spot_tf_position_commit(symbol: str, tf: str) -> None:
+    """Stamp the (symbol, TF) position -- call ONLY after a successful
+    publish (handoff law: never store a dedup marker before success)."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        import time as _t
+        data = {k: v for k, v in (_g("spot_tf_position", {}) or {}).items()
+                if _t.time() - float(v or 0) < 10 * 24 * 3600.0}
+        data[f"{str(symbol or '').upper()}|{str(tf or '').upper()}"] = _t.time()
+        _s("spot_tf_position", data)
+    except Exception:
+        pass
+
+
+def _spot_update_events_enabled() -> bool:
+    """10-11 (his kill-useless-updates law): the r57 update events
+    (vol/disp/touch) violate his r51 update-event law -- updates ONLY on
+    confirm/cancel/live-cross/final-readiness. OFF unless the Railway
+    dashboard explicitly opts back in (no redeploy needed)."""
+    return str(os.getenv("SPOT_UPDATE_EVENTS_ENABLED", "0") or "0").strip() == "1"
+
+
 def _spot_sym_tf_stamped(symbol: str, tf: str) -> bool:
     """10-10: True when ANY pattern of this (symbol, tf) holds a fresh spot
     confirm stamp — the ladder's BREAK_UP is then a dup of a published
@@ -986,12 +1031,15 @@ def run_spot_scan() -> Dict[str, int]:
     # strongest path first — the daily budget only ever spends on the best
     pending.sort(key=lambda c: float(((c.metadata or {}).get("target_ladder") or {})
                                      .get("path_pct") or 0.0), reverse=True)
-    for cand in pending:   # r56: no budget — every fresh (symbol,tf,shape) publishes
+    for cand in pending:   # 10-11: ONE position per (symbol, trigger-TF)
         key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"
                f"{(cand.metadata or {}).get('pattern_type')}")
         window = 72.0 if str(cand.trigger_timeframe) == "3d" else 36.0
         if _spot_stamp(key, window, commit=False):
             stats["stamp_skip"] = stats.get("stamp_skip", 0) + 1
+            continue
+        if _spot_tf_position_open(cand.symbol, cand.trigger_timeframe):
+            stats["tf_position_skip"] = stats.get("tf_position_skip", 0) + 1
             continue
         # R65 SNAPSHOT AT DETECTION (spot): the shape/trend is frozen the
         # moment its chain is born, so the confirmation or the rejection is
@@ -1023,6 +1071,7 @@ def run_spot_scan() -> Dict[str, int]:
                 if _pub_mid:
                     stats["published"] += 1
                     _spot_stamp(key, window)      # marker ONLY after success
+                    _spot_tf_position_commit(cand.symbol, cand.trigger_timeframe)
                     try:
                         from bot.messages_v7 import (_public_code as _pc57,
                                                      _spot_chain_get as _scg57,
@@ -2489,6 +2538,8 @@ def _spot_urgent_recheck() -> int:
                     window = 72.0 if str(_uc58.trigger_timeframe) == "3d" else 36.0
                     if _spot_stamp(key, window, commit=False):
                         continue
+                    if _spot_tf_position_open(_uc58.symbol, _uc58.trigger_timeframe):
+                        continue   # 10-11: one position per (symbol, TF)
                     _frame58 = bundle.get(_uc58.trigger_timeframe)
                     chart = (generate_chart(_frame58, _uc58, confirmed=True)
                              if _frame58 is not None else None)
@@ -2502,6 +2553,7 @@ def _spot_urgent_recheck() -> int:
                         reply_to=int(_alert_kv.get("mid") or 0))
                     if mid:
                         _spot_stamp(key, window)
+                        _spot_tf_position_commit(_uc58.symbol, _uc58.trigger_timeframe)
                         published += 1
                         print(f"🪙 spot urgent confirm published {_uc58.symbol} "
                               f"{_uc58.trigger_timeframe} (confirm "
@@ -2521,13 +2573,19 @@ def _spot_urgent_recheck() -> int:
                 # events are TEXT-ONLY replies; charts render only at the
                 # chain's key stages (alert / confirm / TP / stop / result).
                 try:
-                    from analysis.spot_engine import (
-                        scan_spot_update_events as _scan57,
-                        commit_spot_update_events as _commit57)
-                    from bot.messages_v7 import send_spot_event
-                    for _ev57 in _scan57(symbol, bundle):
-                        if send_spot_event(_ev57):
-                            _commit57([_ev57])
+                    # 10-11: OFF by default (his kill-useless-updates law +
+                    # r51 update-event law) -- Railway may opt back in via
+                    # SPOT_UPDATE_EVENTS_ENABLED=1, no redeploy needed.
+                    if not _spot_update_events_enabled():
+                        pass
+                    else:
+                        from analysis.spot_engine import (
+                            scan_spot_update_events as _scan57,
+                                commit_spot_update_events as _commit57)
+                        from bot.messages_v7 import send_spot_event
+                        for _ev57 in _scan57(symbol, bundle):
+                            if send_spot_event(_ev57):
+                                _commit57([_ev57])
                 except Exception as _e57:
                     print(f"spot update events warning {symbol}: {_e57}")
                 for cand in spot_signals_for(symbol, bundle):
@@ -2536,6 +2594,8 @@ def _spot_urgent_recheck() -> int:
                     window = 72.0 if str(cand.trigger_timeframe) == "3d" else 36.0
                     if _spot_stamp(key, window, commit=False):
                         continue
+                    if _spot_tf_position_open(cand.symbol, cand.trigger_timeframe):
+                        continue   # 10-11: one position per (symbol, TF)
                     frame = bundle.get(cand.trigger_timeframe)
                     chart = (generate_chart(frame, cand, confirmed=True)
                              if frame is not None else None)
@@ -2549,6 +2609,7 @@ def _spot_urgent_recheck() -> int:
                         reply_to=int(_alert_kv.get("mid") or 0))
                     if mid:
                         _spot_stamp(key, window)
+                        _spot_tf_position_commit(cand.symbol, cand.trigger_timeframe)
                         published += 1
                         try:
                             from bot.messages_v7 import (_public_code as _pc,

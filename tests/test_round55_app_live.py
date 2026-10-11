@@ -235,10 +235,13 @@ def test_spot_pass_runs_offloop_single_flight():
     assert src.count("_SPOT_THREAD = [None]") == 1
 
 
-def test_multi_tf_breaks_all_publish_no_cap():
-    """«شاید یک نماد در چند تایم فریم در یک روز ناحیه الگو یا ترند مهمی رو
-    بشکنه و تایید بشه» — the stamp key is (symbol, tf, pattern), so the same
-    symbol publishes per-TF breaks, and there is NO daily counter anywhere."""
+def test_multi_tf_breaks_publish_per_tf_one_position():
+    """10-11 EVOLVED (his «هر تایم تریگر اجازه صدور یک پوزیشن» — the r56
+    no-budget law is superseded for now): the stamp key is still
+    (symbol, tf, pattern) so the same symbol publishes per-TF breaks — but
+    each (symbol, trigger-TF) now holds ONE position per 24h (the TF gate
+    below the stamp check; 2nd/3rd signals closed)."""
     src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
     assert 'key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"' in src
-    assert "for cand in pending:   # r56: no budget" in src
+    assert "for cand in pending:   # 10-11: ONE position per (symbol, trigger-TF)" in src
+    assert "_spot_tf_position_open(cand.symbol, cand.trigger_timeframe)" in src
