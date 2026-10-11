@@ -1,3 +1,18 @@
+> ## 🟧 R68-ARENA-2 — تشخیص هزینه Railway (۱۰-۱۱)
+> مصرف ۱٫۲$/۹ساعت ≈ سه برابر یک سرویس ۱vCPU/۱GB. داده واقعی از سندباکس خوانده نمی‌شود؛
+> چک‌لیست و جدول تصمیم: `docs/RAILWAY_COST_DIAGNOSIS_2026-10-11.md`. منتظر: تعداد سرویس‌ها،
+> host دیتابیس، و خروجی run `38148023423` (railway-ops usage). تغییر منطق انجام نشد.
+> ⚠️ `scan_spot_update_events` (r57) در همین سشن زنده شد؛ قبلاً فراخوانی نمی‌شد. نیاز به تأیید Viva.
+
+> ## 🟥 R68-ARENA — ممیزی کلان ۱۰-۱۱ (شاخه `arena/c9b1d373-smc-scanner2`)
+> سوئیت: **32F/991P → 0 failed / 1023 passed / 1 skipped** ✅. گزارش کامل: `docs/AUDIT_2026-10-11.md`،
+> جزئیات راند: بخش `R68-ARENA` در `WORKLOG.md`. خلاصهٔ ۱۶ اصلاح: چگالی ۱۹۰–۲۱۰،
+> `_smart_y_window` (r57/r28/r64)، one-nature `_EDGE_RULES` + doctrine کانال، توهم getattr،
+> containment fast-lane، گیت ری‌کلیم (استثنا حذف + سنجش روی کندل تأیید)، بازنشستگی ۵۰ کندل،
+> یادداشت‌های R67، رژیم نواحی r15d، تضمین shell/zone-lane + گیت 2.5×ATR، R64.4 اقتصاد
+> اسپات، گیت r61.1، ledger r37، و حذف پیش‌ست `entry_filled` در `save_confirmed_signal`.
+> باز: یک‌کاسه‌سازی دیپلوی (دو بوت)، فشرده‌سازی index (گپ STX)، کاهش except-pass.
+
 > ## 🟥 10-09 — جراحی تأیید (uncommitted): quality_engine.py +106/−7 · tohom.py +13 · تست جدید `test_viva1009_confirm_surgery.py` (۹/۹ سبز) · ۴ فیکسچر قدیمی خط‌دار شد (همان fire-bar، سورس لبه قانونی) · سوئیت 901P/36F، دیف با بیس‌لاین ۶ اکتبر = فقط ۱ فیکس (round15 mirror-zone) و صفر خرابی جدید · بدون پوش (منتظر اجازه).
 > ## 🟩 R65-ARENA — راند ۱۰-۰۲ (NIGHTUSDT · TECH · زوم · ترند/الگو)
 > شاخه `arena/01a0fd5e-smc-scanner2` روی `66dc43c`. جزئیات کامل: بخش `R65-ARENA` در `WORKLOG.md`.

@@ -228,9 +228,9 @@ def _recently_broken(line, n: int) -> bool:
         # r33 LAW (Viva 09-26): after the break the line stays dotted/faint
         # for AT LEAST 50 candles so retest touches stay visible — unless a
         # better-ranked valid line replaces it (the fitter's best-score pick).
-        # Viva Post-Break Retirement Law: A broken line only stays relevant for the immediate retest (<=48 bars).
-        # Once price moves on past ~48 bars and forms a new base, the old line retires so the fresh price-action trend is detected!
-        return 0 <= age <= min(48, max(20, int(0.28 * max(n, 1))))
+        # (The «retire at 48 bars» override of 10-06..10-11 violated this law
+        # and deleted the retest story from the charts — retired.)
+        return 0 <= age <= max(50, int(0.5 * max(n, 1)))
     except Exception:
         return False
 

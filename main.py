@@ -2516,6 +2516,20 @@ def _spot_urgent_recheck() -> int:
                             _scs(_pc(_uc58), _chain)
                         except Exception:
                             pass
+                # R64.4 THE SPOT CHART ECONOMY (Viva 10-03: «آپدیت‌ها هنوز همگی
+                # با چارت لایو میان و مصرف بشدت بالا بردن»): generic r57 update
+                # events are TEXT-ONLY replies; charts render only at the
+                # chain's key stages (alert / confirm / TP / stop / result).
+                try:
+                    from analysis.spot_engine import (
+                        scan_spot_update_events as _scan57,
+                        commit_spot_update_events as _commit57)
+                    from bot.messages_v7 import send_spot_event
+                    for _ev57 in _scan57(symbol, bundle):
+                        if send_spot_event(_ev57):
+                            _commit57([_ev57])
+                except Exception as _e57:
+                    print(f"spot update events warning {symbol}: {_e57}")
                 for cand in spot_signals_for(symbol, bundle):
                     key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"
                            f"{(cand.metadata or {}).get('pattern_type')}")
