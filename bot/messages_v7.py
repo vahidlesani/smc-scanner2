@@ -2289,6 +2289,50 @@ def _last_resort_edges(frame, use_log: bool,
     return out
 
 
+def _count_incanvas_sloped_lines(fig) -> int:
+    """Viva 10-11 honesty veto: how many VISIBLE sloped Line2D artists sit
+    inside their own axes' canvas (figure-wide)? Horizontals (entry/stop/TP/
+    necklines), verticals (wicks), dots and patches never count. Returns -1
+    when the count itself errors (fail-open: never veto on doubt)."""
+    try:
+        import math
+        n = 0
+        for _ax in getattr(fig, "axes", []) or []:
+            try:
+                _xa, _xb = _ax.get_xlim()
+                _ya, _yb = _ax.get_ylim()
+            except Exception:
+                continue
+            _lox, _hix = (min(_xa, _xb), max(_xa, _xb))
+            _loy, _hiy = (min(_ya, _yb), max(_ya, _yb))
+            for _ln in getattr(_ax, "lines", []) or []:
+                try:
+                    if not _ln.get_visible():
+                        continue
+                    _xd = list(_ln.get_xdata())
+                    _yd = list(_ln.get_ydata())
+                    if len(_xd) < 2 or len(_yd) < 2:
+                        continue
+                    _x0, _x1 = float(_xd[0]), float(_xd[-1])
+                    _y0, _y1 = float(_yd[0]), float(_yd[-1])
+                    if not all(math.isfinite(v) for v in (_x0, _x1, _y0, _y1)):
+                        continue
+                    if abs(_x1 - _x0) < 1e-9:
+                        continue                       # vertical: wicks
+                    if abs((_y1 - _y0) / (_x1 - _x0)) < 1e-9:
+                        continue                       # horizontal: tools
+                    if max(_x0, _x1) < _lox or min(_x0, _x1) > _hix:
+                        continue                       # off-canvas x
+                    if max(_y0, _y1) < _loy or min(_y0, _y1) > _hiy:
+                        continue                       # off-canvas y
+                    n += 1
+                except Exception:
+                    continue
+        return n
+    except Exception:
+        return -1
+
+
 def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool = False, preconfirm_tool: bool = False) -> Optional[bytes]:
     # r61 CHART-DIET LAW (Viva 09-30: «چارت رو از اپلیکیشن فعلا حذف بکن ببینم
     # مصرف ریلوی پایینتر میاد»): one gate for every render in the product.
@@ -3274,11 +3318,30 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # edge through LIVE, dashed to the canvas edge, hollow circles on
             # every touch pivot.
             _lns = []
+            # Viva 10-11 MTF RESCALE (AERO class: a 4H slope painted per 1H
+            # bar = 4× too steep, and the pivot re-anchor multiplies the
+            # error by the pivot's (huge, negative) x — old-pattern lines
+            # flew to the sky): a LOCKED (stored) slope speaks per
+            # PATTERN-TF bar, so the effective scale also divides by
+            # pattern_tf/trigger_tf. Fresh chart-native refits (unlocked)
+            # already speak per chart bar and keep _tfscale untouched.
+            _pscale8 = _tfscale
+            try:
+                _ptf8 = str((candidate.metadata or {}).get("tl_context_tf") or "").lower()
+                _ttf8 = str(getattr(candidate, "trigger_timeframe", "") or "").lower()
+                if _ptf8 and _ttf8 and _ptf8 != _ttf8 \
+                        and (candidate.metadata or {}).get("snapshot_locked"):
+                    _mp8 = float(_tf_minutes(_ptf8) or 0)
+                    _mt8 = float(_tf_minutes(_ttf8) or 0)
+                    if _mp8 > 0 and _mt8 > 0:
+                        _pscale8 = _tfscale * (_mp8 / _mt8)
+            except Exception:
+                _pscale8 = _tfscale
             for _ln0 in (_pat.get("lines") or []):
                 # the stored slope is price per TRIGGER-TF bar; on a stepped-up
                 # display TF a bar spans more time, so the slope rescales by
                 # 1/scale (15m→1h: ×4) — the line keeps its true angle.
-                _sl8 = float(_ln0["slope"]) / _tfscale
+                _sl8 = float(_ln0["slope"]) / _pscale8
                 _pt8 = _ln0.get("points") or []
                 if _pt8:
                     # R63: TIME projection (a pre-window pivot extrapolates to
@@ -3298,7 +3361,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         _x0f = max(0.0, float(_ln0.get("x0", 0)))
                     else:
                         _x0f = max(0.0, (float(_ln0.get("x0", 0))
-                                         - max(0, len(df) - len(frame))) * _tfscale)
+                                         - max(0, len(df) - len(frame))) * _pscale8)
                     _ic8 = float(_ln0["intercept"])
                 _ln8 = {**_ln0, "slope": _sl8, "intercept": _ic8, "x0": _x0f}
                 # R16 phase 3: a log-calibrated line rescales in LOG space
@@ -3307,7 +3370,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 if _ln0.get("log_fit"):
                     try:
                         import math as _m8
-                        _ls8 = float(_ln0.get("log_slope") or 0.0) / _tfscale
+                        _ls8 = float(_ln0.get("log_slope") or 0.0) / _pscale8
                         _anch = ((_pt8[0].get("price") if _pt8 else None)
                                  or 10.0 ** (float(_ln0.get("log_slope") or 0.0)
                                              * float(_ln0.get("x0") or 0.0)
@@ -4696,6 +4759,29 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                            "edgecolor": "none"})
         except Exception as _exc:
             print(f"Chart live-stamp warning: {_exc}")
+
+        # ── Viva 10-11 HONESTY VETO (AERO class: the PAT pill cited a
+        # sloped pattern the chart never drew — «never send ugly/wrong
+        # patterns»): a chain CITING a sloped family must show ≥1 in-canvas
+        # sloped line. Zero → the photo is vetoed (None → the 10-10
+        # text-first law still publishes the TEXT; the photo follows when
+        # a render succeeds). Zones-only/pin setups cite no sloped family
+        # and are never touched by this gate.
+        try:
+            from analysis.snapshot_lock import _cited_pattern_family as _cit74
+            _fam74 = _cit74(candidate.metadata or {})
+            if _fam74 in ("TRIANGLE", "WEDGE", "CHANNEL", "TRENDLINE", "TL"):
+                _nsl74 = _count_incanvas_sloped_lines(fig)
+                if _nsl74 == 0:
+                    print(f"VIVA-HONESTY-VETO {candidate.signal_id}: cites {_fam74} "
+                          f"but 0 in-canvas sloped lines — photo vetoed, text-first fallback")
+                    try:
+                        plt.close(fig)
+                    except Exception:
+                        pass
+                    return None
+        except Exception as _exc74:
+            print(f"honesty-veto check skipped: {_exc74}")
 
         buffer = io.BytesIO()
 
