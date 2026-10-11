@@ -98,15 +98,14 @@ def access():
     print(f"project_id={pid}\nenvironment_id={eid}")
     if not pid:
         return 1
+    # 10-11 v2: minimal field set (the v1 query 400s on the current
+    # schema — one of startCommand/numReplicas/region/sleepApplication/
+    # cronSchedule/volumeInstances no longer exists there).
     q = """query($id:String!){ project(id:$id){ name createdAt
           environments{ edges{ node{ id name } } }
           services{ edges{ node{ id name
-              serviceInstances{ edges{ node{ environmentId startCommand numReplicas region
-                  sleepApplication cronSchedule
-                  latestDeployment{ id status createdAt } } } } } } }
-          volumes{ edges{ node{ name
-              volumeInstances{ edges{ node{ mountPath currentSizeMB sizeMB environmentId
-                  serviceInstance{ serviceName } } } } } } } } }"""
+              serviceInstances{ edges{ node{ environmentId
+                  latestDeployment{ id status createdAt } } } } } } } } }"""
     d, e = gql(q, {"id": pid})
     for m in e:
         print("  gql:", m)
@@ -116,19 +115,16 @@ def access():
     print("environments:", ", ".join(f"{v}" + (" *" if k == eid else "") for k, v in envs.items()))
     print("\n== services")
     for s in _edges(p.get("services")):
+        _shown = False
         for si in _edges(s.get("serviceInstances")):
             if eid and si.get("environmentId") != eid:
                 continue
             ld = si.get("latestDeployment") or {}
-            print(f"- {s['name']}  id={s['id']}  replicas={si.get('numReplicas')} "
-                  f"region={si.get('region')} sleep={si.get('sleepApplication')} "
-                  f"cron={si.get('cronSchedule')}\n    start={si.get('startCommand')!r}\n"
+            print(f"- {s['name']}  id={s['id']}\n"
                   f"    last deploy: {ld.get('status')} @ {ld.get('createdAt')}")
-    print("\n== volumes")
-    for v in _edges(p.get("volumes")):
-        for vi in _edges(v.get("volumeInstances")):
-            print(f"- {v['name']}: {vi.get('mountPath')}  {vi.get('currentSizeMB')}/{vi.get('sizeMB')} MB "
-                  f"svc={((vi.get('serviceInstance') or {}).get('serviceName'))}")
+            _shown = True
+        if not _shown:
+            print(f"- {s['name']}  id={s['id']}  (no instance in this env)")
     return 0
 
 

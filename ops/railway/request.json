@@ -1,6 +1,6 @@
 {
   "action": "access",
   "service": "",
-  "nonce": 6,
-  "note": "10-11: name the '?' service + replicas/regions/deploys (usage run 38148023423 showed web CPU 3x since 10-10). Edit action and bump nonce, then push."
+  "nonce": 7,
+  "note": "10-11: access query v2 (minimal fields; v1 400s on current schema)."
 }
