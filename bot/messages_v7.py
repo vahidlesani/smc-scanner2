@@ -2308,6 +2308,26 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _mpl.rcParams["font.family"] = [_fam, "DejaVu Sans"]
     except Exception:
         pass
+    # ── 10-11 hotfix (his missing-lines charts: QNT/UNI/DOGE/AAVE/ONDO drew
+    # pivots but NO lines): spot DETECTION runs on tail(_spot_count) (300
+    # bars for 4H) while the chart rendered the FULL bundle frame (340) —
+    # G1 evaluated engine lines ~40 bars off, so steep lines flew off-chart
+    # and shallow ones floated beside their pivots (probed + photographed).
+    # R64's own law, enforced: chart ≡ scan window, BEFORE the live row
+    # joins (appending first would shift every index by one).
+    _is_spot = (str((candidate.metadata or {}).get("market")
+                    or getattr(candidate, "market", "") or "").upper() == "SPOT"
+                or bool((candidate.metadata or {}).get("is_spot")))
+    if _is_spot and df is not None and not df.empty:
+        try:
+            from analysis.spot_engine import _spot_count as _sc73w
+            _tf73w = str((candidate.metadata or {}).get("chart_view_tf")
+                         or getattr(candidate, "trigger_timeframe", "") or "").lower()
+            _n73w = int(_sc73w(_tf73w)) if _tf73w else 300
+            if _n73w > 0 and len(df) > _n73w:
+                df = df.tail(_n73w).reset_index(drop=True)
+        except Exception:
+            pass
     # ── the forming candle joins the tape as one more NORMAL candle (round 13)
     df, _live_row = _frame_with_live_candle(df, candidate)
     # r37 (Viva 09-26, «اسپات ابزار لانگ و شورت نداره»): ONE early flag — the
@@ -2315,9 +2335,6 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     # tags, INFO box, bottom ledger) is skipped on spot; the chart keeps the
     # CryptoCave signature instead: clean tape + shape lines + ONE green box
     # above the shape's upper edge (no arrow).
-    _is_spot = (str((candidate.metadata or {}).get("market")
-                    or getattr(candidate, "market", "") or "").upper() == "SPOT"
-                or bool((candidate.metadata or {}).get("is_spot")))
     # Viva 09-17 cost ruling: one render per (alert, frame, state) — retries,
     # mirrors and cross-channel posts reuse the bytes from this cache. Round 13:
     # the state now includes the live price (see _chart_cache_key).
