@@ -1157,8 +1157,12 @@ def evaluate_confirmation(
         _inside_band20 = (float(_band_lo20) + 1e-12) < _lvl_used20 < (float(_band_hi20) - 1e-12)
     # Viva First-Close Breakout Law: When fast_lane confirms the first close beyond the trendline/edge,
     # higher-TF containment bands must NOT veto the confirmation!
+    # round-9 law + its r15 refinement: a fast-lane close that cleared a level
+    # INSIDE the pattern band (a mirror-zone edge, not the pattern's own side)
+    # is NOT a breakout — containment must still veto it. Clearing the
+    # pattern's OWN edge stays the breakout (gate stands down).
     if (_band_lo20 is not None and _band_hi20 is not None and not _is_internal
-            and _pattern_premise and not _fast_lane_ok):
+            and _pattern_premise and (not _fast_lane_ok or _inside_band20)):
         _dir20 = 1.0 if candidate.direction == "LONG" else -1.0
         _buf20 = 0.10 * _atr20
         _outside20 = (_close20 >= _band_hi20 + _buf20) if _dir20 > 0 \
@@ -1311,8 +1315,26 @@ def evaluate_confirmation(
         if _bl61 > 0 and not _r62_be(candidate.metadata or {}):
             _bl61 = 0.0
         if _bl61 > 0:
+            # The reclaim is judged ON THE CONFIRMING BAR (the bar the fast
+            # lane fired on), NOT on the newest tape row: a settled break bar
+            # keeps its confirmation even when later bars pull back inside
+            # (Viva 09-13 «شکست میاد ولی تأیید نمیده»), while a close that is
+            # back through the line AT the confirm moment is a failed break
+            # (BNB). No stored fast bar → the newest closed bar is the
+            # confirming bar.
+            _row61 = row
+            _fbb61 = str((candidate.metadata or {}).get("fast_break_bar") or "") \
+                if fast_lane else ""
+            if _fbb61:
+                try:
+                    _hit61 = [i for i in range(len(closed_df))
+                              if str(closed_df.iloc[i]["timestamp"])[:19] == _fbb61]
+                    if _hit61:
+                        _row61 = closed_df.iloc[_hit61[-1]]
+                except Exception:
+                    _row61 = row
             try:
-                _t61 = pd.Timestamp(row["timestamp"]) + pd.Timedelta(
+                _t61 = pd.Timestamp(_row61["timestamp"]) + pd.Timedelta(
                     minutes=float(frame_tf_minutes or 0.0) or _r62_fm61(closed_df))
                 _p61 = _r62_e61(candidate, _t61)
                 if _p61 > 0:
@@ -1323,10 +1345,15 @@ def evaluate_confirmation(
                 or float((closed_df["high"] - closed_df["low"]).tail(14).mean() or 0.0)
             _sd61 = str((candidate.metadata or {}).get("break_edge")
                         or ("UPPER" if str(candidate.direction).upper() == "LONG" else "LOWER"))
-            _c61 = float(row["close"])
+            _c61 = float(_row61["close"])
             _bad61 = (_c61 < _bl61 - 0.10 * _atr61) if _sd61 == "UPPER" \
                 else (_c61 > _bl61 + 0.10 * _atr61)
-            if _atr61 > 0 and _bad61 and not fast_lane and not (candidate.metadata or {}).get("tl_fast_break"):
+            # r61.2 + 10-09 law («ری‌کلیم = مرگ شکست»): the reclaim veto applies
+            # to EVERY confirmation path — a fast-lane stamp set hours earlier
+            # must not confirm after the close walked back through the broken
+            # line (the BNB case). FTB wick touches stay safe: the test is a
+            # CLOSE beyond 0.10·ATR, not a wick.
+            if _atr61 > 0 and _bad61:
                 return reject("BREAK_RECLAIMED", (
                     "شکستِ مبنا پس از هشدار پس گرفته شده — کلوز به سمتِ پیش از شکست برگشته است؛ "
                     "شکستِ نامعتبر تأیید نمی‌گیرد و سناریو باطل است."))

@@ -772,10 +772,15 @@ def save_confirmed_signal(candidate: SignalCandidate) -> bool:
         public_code = str(candidate.metadata.get("public_code") or candidate.signal_id)
         variant = str(candidate.metadata.get("strategy_variant") or "")
         # Every new confirmation begins as a scenario awaiting a real Entry touch.
-        _fill_now = _now()
-        # Viva Immediate Market Execution Law: Confirmed breakout signals enter at market on close!
-        cursor.execute(f"UPDATE signals SET target_state_json={p}, public_code={p}, strategy_variant={p}, entry_filled={_bool_value(True)}, entry_filled_at={p}, cancel_reason='' WHERE signal_id={p}", (ladder_json, public_code, variant, _fill_now, candidate.signal_id))
-        cursor.execute(f"UPDATE active_signals SET target_state_json={p}, public_code={p}, strategy_variant={p}, entry_filled={_bool_value(True)}, entry_filled_at={p}, cancel_reason='' WHERE signal_id={p}", (ladder_json, public_code, variant, _fill_now, candidate.signal_id))
+        # HOT-R68: the old "immediate market execution" pre-fill set
+        # entry_filled=TRUE here and silently disabled the Entry Fill Gate for
+        # EVERY setup — retroactively crediting targets crossed before the
+        # entry was touched (test_v7 chronological-monitor law). Breakout
+        # market entries are still immediate: the fill gate's Immediate
+        # Execution Guard fills them on the first monitor cycle the close is
+        # through the entry.
+        cursor.execute(f"UPDATE signals SET target_state_json={p}, public_code={p}, strategy_variant={p}, entry_filled={_bool_value(False)}, cancel_reason='' WHERE signal_id={p}", (ladder_json, public_code, variant, candidate.signal_id))
+        cursor.execute(f"UPDATE active_signals SET target_state_json={p}, public_code={p}, strategy_variant={p}, entry_filled={_bool_value(False)}, cancel_reason='' WHERE signal_id={p}", (ladder_json, public_code, variant, candidate.signal_id))
     return True
 
 

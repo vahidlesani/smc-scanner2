@@ -1491,9 +1491,12 @@ def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool =
         _uniq.append(_nt)
     # Viva Law: Clean, single-column unified notes stack (NO chaotic two-column splitting)
     # Filter to most critical 5 structural notes so they never sprawl or collide with candles
-    _clean_stack = _uniq[:5]
-    for _i, (text, color) in enumerate(_clean_stack):
-        ax.text(0.015, _y0 - _step * _i, text,
+    # R67 (Viva 10-03, INJ): a crowded ledger (>6 items) splits into TWO
+    # columns so the stack never crawls down onto the tape.
+    _cols = 2 if len(_uniq) > 6 else 1
+    for _i, (text, color) in enumerate(_uniq):
+        _ci, _ri = (_i % _cols, _i // _cols) if _cols == 2 else (0, _i)
+        ax.text(0.012 + _ci * 0.235, _y0 - _step * _ri, text,
                 ha="left", va="center", color=color, fontsize=6.2,
                 fontweight="bold", zorder=25, transform=ax.transAxes,
                 bbox={"boxstyle": "round,pad=0.25", "facecolor": "white",
@@ -2106,15 +2109,23 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
         yhi = float(ov_hi)
     if ov_lo is not None and math.isfinite(float(ov_lo)) and float(ov_lo) < ylo:
         ylo = float(ov_lo)
-    # r40 CHART-FILL: the whole tape is a hard bound — an early candle may
-    # never fall outside the window (the invisible-left-half bug).
-    # R64.1 (his 10-03 gallery: AVAX/WLD/NEAR «زوم بی منطق», «محور قیمت جمع
-    # شده»): on DEEP frames (the 250–350-candle map) the whole-tape bound is
-    # demoted to a SOFT far clip — the window frames the region where the
-    # trends/patterns actually live. Overlays stay IN FULL; the recent block
-    # never clips.
-    # Viva Aspect Ratio Law: Do NOT let extreme historical spikes squash active candle bodies!
-    _deep64 = ((int(bars or 0) > 90) or (span >= 2.5 * max(r_span, 1e-12)))
+    # r28 GROWTH CAP: a pathological far overlay (DASH 13.3 vs candles 55–65)
+    # may NOT drag the axis to the basement — the window recenters on the
+    # candle block and the far level is clipped. Nearby overlays (inside the
+    # cap) stay included IN FULL (the r37 «tool never half-drawn» law).
+    cap = max(base, 2.2 * span)
+    if (yhi - ylo) > cap:
+        ylo, yhi = r_mid - 0.5 * cap, r_mid + 0.5 * cap
+    # the recent block itself may never be cut by the growth cap
+    ylo = min(ylo, r_lo)
+    yhi = max(yhi, r_hi)
+    # r40 CHART-FILL: on the PICTURE frames (bars ≤ 220 = the dictated render
+    # map) the whole tape is a HARD bound — an early candle may never fall
+    # outside the window (the invisible-left-half bug). R64.1 (his 10-03
+    # gallery «زوم بی منطق»): only on DEEP detection frames (bars > 220) the
+    # tape bound is demoted to a SOFT far clip so dead history never drags
+    # the axis; overlays stay IN FULL and the recent block never clips.
+    _deep64 = int(bars or 0) > 220
     if _deep64:
         _reach64 = 2.6 * max(r_span, 4.0 * _a)
         _flo64 = max(c_lo, r_mid - _reach64)
@@ -2124,25 +2135,15 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
         _flo64, _fhi64 = c_lo, c_hi
     ylo = min(ylo, _flo64)
     yhi = max(yhi, _fhi64)
-    cap = max(base, 2.2 * span)
-    if (yhi - ylo) > cap:
-        ylo, yhi = r_mid - 0.5 * cap, r_mid + 0.5 * cap
-        # the cap shrinks the OVERLAY stretch only — candles stay hard bounds
-        ylo = min(ylo, _flo64)
-        yhi = max(yhi, _fhi64)
-    # the recent block itself may never be cut by the growth cap
-    ylo = min(ylo, r_lo - 0.05 * cap)
-    yhi = max(yhi, r_hi + 0.05 * cap)
     yr = max(yhi - ylo, 1e-12)
     # r57 (Viva: «اگر ارتفاع کندلها بالاست در چارت کمی محور قیمت جمع بشه که
     # کندلهای کوتاه‌تر بشن و رسم ترندها و الگوها قشنگ‌تر دیده بشه»): a tall
     # candle block gets a TIGHT pad (less dead headroom → bigger pattern);
-    # quiet tapes keep the roomy pad.
-    # Viva TradingView Y-Axis Scroll Law:
-    # Adding generous 20% headroom and footroom flattens steep trendline slopes,
-    # prevents tall needle candles, and allows patterns to be read comfortably.
-    pad_y = 0.20 * yr
-    return ylo - pad_y, yhi + pad_y
+    # quiet tapes keep the roomy pad. (The 20% «scroll» pad of 10-06..10-11
+    # violated this law and flattened every chart — retired.)
+    if r_span >= 3.0 * _a:
+        return ylo - 0.015 * yr, yhi + 0.025 * yr
+    return ylo - 0.05 * yr, yhi + 0.06 * yr
 
 
 def _infer_chart_tf(frame, candidate) -> str:
@@ -2856,19 +2857,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _h8 = abs(_hi8 - _lo8)
                 return abs(_mid8 - _live8z) - 0.9 * _h8
 
-            # Viva Strict 2-Zone Diet: Exactly ONE supply zone above and ONE demand zone below
+            # r15d (Viva 09-21, «معتبرترین نواحی رسم شوند»): zones are on a
+            # diet — at most two per side, picked by IMPORTANCE (nearest to
+            # live price, size-adjusted), never by arrival order.
+            _zs8 = list(_rz_list)
+            _rz_list = sorted(_zs8, key=_zone_importance)[:2]
             _cl_now_z = float(frame["close"].iloc[-1])
-            _above_zones = [z for z in _rz_list if float(z.get("bottom", z.get("lo", 0))) >= _cl_now_z]
-            _below_zones = [z for z in _rz_list if float(z.get("top", z.get("hi", 0))) <= _cl_now_z]
-            _rz_list = []
-            if _above_zones:
-                _best_above = min(_above_zones, key=lambda z: abs(float(z.get("bottom", 0)) - _cl_now_z))
-                _best_above["bias"] = "SUPPLY"
-                _rz_list.append(_best_above)
-            if _below_zones:
-                _best_below = min(_below_zones, key=lambda z: abs(_cl_now_z - float(z.get("top", 0))))
-                _best_below["bias"] = "DEMAND"
-                _rz_list.append(_best_below)
+            for _z8 in _rz_list:
+                _z8["bias"] = "SUPPLY" if float(
+                    _z8.get("bottom", _z8.get("lo", 0))) >= _cl_now_z else "DEMAND"
         # ── r60.4 THE box law (Viva 09-30, verbatim): «فقط ساپلای و دیمندِ
         # همون تایم. اگر در چارت تریگر وجود داره رسم بشه» — ONLY trigger-TF
         # (refined) boxes render. A giant 1–2-TF-higher box on a 15m chart
@@ -3970,7 +3967,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 print(f"Range overlay warning: {exc}")
 
         # ── VIVA-TLBREAK validated geometry overlay ─────────────────────
-        if md.get("strategy_variant") == "VIVA_TLBREAK":
+        # r613: the ALBROX zone lane carries the same two-edge guarantee —
+        # «یک ترند میکشه بالایی رو نمیکشه» applies to every break lane.
+        if md.get("strategy_variant") in ("VIVA_TLBREAK", "ALBROX_ZONE"):
             try:
                 _up0 = md.get("viva_upper_points") or []
                 _lo0 = md.get("viva_lower_points") or []
@@ -4039,6 +4038,51 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     if _mode9 == "log" and abs(slope) > 0.025:
                         continue  # skip vertical artifact in log space
                     _fits9[key] = (xs, ys, _mode9, slope, intercept, color, label)
+                # r613 ZONE-LANE GUARANTEE: a zone-lane chain with NO stored
+                # edges fits BOTH sides on this frame as real family-colored
+                # edges («یک ترند میکشه بالایی رو نمیکشه»).
+                if str(md.get("strategy_variant")) == "ALBROX_ZONE" and not _fits9:
+                    for _sd9, _ky9, _cl9c, _lb9 in (
+                            ("HIGH", "viva_upper_points", CHART_THEME["supply"], "VALID UPPER LINE"),
+                            ("LOW", "viva_lower_points", CHART_THEME["demand"], "VALID LOWER LINE")):
+                        _pt9 = _refit_viva_points(frame, _sd9)
+                        if len(_pt9) < 2:
+                            continue
+                        _ys9 = [float(p["price"]) for p in _pt9]
+                        _xs9 = _viva_points_xs(_pt9, frame)
+                        if len(_xs9) < 2 or not all(math.isfinite(v) for v in _xs9 + _ys9) \
+                                or max(_xs9) - min(_xs9) < 1e-9:
+                            continue
+                        _m9, _s9, _b9 = _pivot_line_fit(ax, frame, _xs9, _ys9)
+                        _fits9[_ky9] = (_xs9, _ys9, _m9, _s9, _b9, _cl9c, _lb9)
+                # r613 SHELL GUARANTEE: a one-sided stored set gains the
+                # missing side as a MUTED refit (DOT/LTC/ETHFI one-sided).
+                if len(_fits9) < 2:
+                    for _sd9, _ky9, _cl9c, _lb9 in (
+                            ("HIGH", "viva_upper_points", CHART_THEME["supply"], "VALID UPPER LINE"),
+                            ("LOW", "viva_lower_points", CHART_THEME["demand"], "VALID LOWER LINE")):
+                        if _ky9 in _fits9:
+                            continue
+                        _pt9 = _refit_viva_points(frame, _sd9)
+                        if len(_pt9) < 2:
+                            continue
+                        _ys9 = [float(p["price"]) for p in _pt9]
+                        _xs9 = _viva_points_xs(_pt9, frame)
+                        if len(_xs9) < 2 or not all(math.isfinite(v) for v in _xs9 + _ys9) \
+                                or max(_xs9) - min(_xs9) < 1e-9:
+                            continue
+                        _m9, _s9, _b9 = _pivot_line_fit(ax, frame, _xs9, _ys9)
+                        _atr61 = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
+                        _cl61 = float(frame["close"].iloc[-1])
+                        _y61 = (10 ** (_s9 * count + _b9)) if _m9 == "log" \
+                            else (_s9 * count + _b9)
+                        # a far refit is exactly
+                        # the floating-trendline bug (FIL-2H round-7): the
+                        # partner is drawn only when price trades near it.
+                        if _atr61 > 0 and abs(_y61 - _cl61) > 2.5 * _atr61:
+                            continue
+                        _fits9[_ky9] = (_xs9, _ys9, _m9, _s9, _b9,
+                                        CHART_THEME.get("muted", _cl9c), _lb9)
                 # r54 (his «ترند بالا و پایین دو تا روی هم افتاده»): a converging
                 # pair must END AT ITS APEX — projecting both dashed edges to
                 # the canvas edge paints collapsed overlapping lines across the
@@ -4560,7 +4604,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # «آقا پایین چارت سمت راست معمولا همیشه خالیه — اینتری و استاپ اولیه
         # رو بنویس و تریلینگ استاپ اول خالی و تی پی ها و قیمت لایو رو هم بنویس»
         # On hits the TOOL keeps its original face; the ledger row ticks.
-        if _cfm73 and not _is_spot:
+        if confirmed and not _is_spot:
             try:
                 _pl32 = ax.get_position()
                 _hit32 = int(ladder.get("hit_index") or (candidate.metadata or {}).get("hit_index") or 0)
@@ -5588,15 +5632,8 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     if chain.get("upd_sig") == sig:
         return False
     upd_n = int(chain.get("upd_n") or 0) + 1
-    # r46 (Viva 09-27, «آپدیت‌های زیاد … هنوز داره آپدیت میاد واسشون» + the
-    # 09-14 UPDATE-SPAM(3) law): a chain posts at most THREE numbered updates;
-    # past that it goes quiet — the chain still lives and can confirm, but the
-    # channel is no longer flooded with «آپدیت ۳۰».
-    # r61.1 / R66: AT MOST ONE update between the initial alert and
-    # the confirm («آپدیت فقط یکبار بین هشدار ابتدایی و پیام کانفرمد»); critical
-    # single events (verdict ❌⚪, cancellation ⛔) still close the chain's slot.
-    # Viva Absolute Law: At most ONE update between initial alert and confirm
-    # Only true terminal events (⛔ cancellation / ❌ verdict) may close an already-updated chain
+    # r46/r61.1 law: at most ONE non-critical update between the initial alert
+    # and the confirm («آپدیت فقط یکبار بین هشدار ابتدایی و پیام کانفرمد»).
     _is_terminal = str(state_fa or "")[:2].lstrip("<b ").strip()[:1] in {"❌", "⚪", "⛔"}
     if (upd_n > 1 or bool((candidate.metadata or {}).get("approaching_sent"))
             or bool(getattr(candidate, "approaching_sent", False))) and not _is_terminal:

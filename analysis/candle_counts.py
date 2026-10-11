@@ -36,9 +36,12 @@ CANDLE_COUNTS = {
 # The renderer may still stretch back up to the detection count when a stored
 # pattern anchor needs the older bars (r37 anchor law) — never further.
 RENDER_COUNTS = dict(CANDLE_COUNTS)
-# TradingView Calibrated Density: Low/medium TFs frame the active swing structure (85-135 bars)
-# to give candles proper body height and eliminate dead historical spikes.
-RENDER_COUNTS.update({"5m": 95, "15m": 105, "30m": 115, "1h": 125, "2h": 135, "4h": 145})
+# R65 PICTURE DENSITY (Viva 10-02 verbatim: «کندل ۱۹۰ تا ۲۱۰ تا کافیه … فقط
+# شلوغ‌تر شد»): the intraday PICTURE sits inside 190–210 candles; higher frames
+# keep the dictated detection counts (the shapes need the history). This is a
+# LAW — do not re-calibrate silently (the 95–145 «TradingView density» override
+# of 10-06..10-11 violated it and produced the rejected fossil-anchor charts).
+RENDER_COUNTS.update({"5m": 190, "15m": 195, "30m": 200, "1h": 205, "2h": 210})
 
 
 # ── canonical TF → seconds (R65: the PINVAL freshness guard and the PINVAL

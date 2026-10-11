@@ -63,16 +63,28 @@ STATE_FADE = "REJECTION_FADE"
 # never be created or confirmed. Internal کف→سقف / سقف→کف candidates stay
 # legal ONLY in parallel channels (the is_parallel fade gate below) —
 # channels and rectangles, exactly as he defined.
-# Viva Law (Universal Breakout Direction): Break determines the trade direction.
-# A close above the UPPER edge is ALWAYS a LONG trade.
-# A close below the LOWER edge is ALWAYS a SHORT trade.
-# No dogmatic one-nature suppression: if price breaks the floor, the trade is SHORT!
+# Viva Law (rounds 21/24/25 + r54, verbatim «رایزینگ وج ماهیت نزولی داره …»):
+# ONE-NATURE shapes trade their NATURE ONLY — the opposite edge carries NO
+# rule (a wrong-side close is a VIOLATION warn, or a counter-doctrine trade
+# through the r54 gates, never a bare signal). Continuation shapes
+# (symmetrical triangle, flat channels, range, trendline, HORIZONTAL_SR,
+# broadening) stay two-sided («از هر طرف بشکنه و کلوز بده سیگنال تایید میشه»).
+# The 10-06 «Universal Breakout Direction» override that made every shape
+# two-sided is RETIRED — it re-created the ADA/LIT counter-nature signals.
 _EDGE_RULES = {p: {"upper": "LONG", "lower": "SHORT"} for p in (
-    "TRIANGLE_ASCENDING", "TRIANGLE_DESCENDING", "TRIANGLE_SYMMETRICAL",
-    "TRIANGLE", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING",
-    "CHANNEL_FLAT", "CHANNEL", "TRENDLINE", "HORIZONTAL_SR", "BROADENING",
-    "WEDGE_RISING", "WEDGE_FALLING", "FLAG_BULL", "FLAG_BEAR"
+    "TRIANGLE_SYMMETRICAL", "TRIANGLE", "CHANNEL_FLAT", "CHANNEL",
+    "TRENDLINE", "HORIZONTAL_SR", "BROADENING", "RECTANGLE", "RANGE",
 )}
+_EDGE_RULES.update({
+    "WEDGE_RISING": {"lower": "SHORT"},
+    "WEDGE_FALLING": {"upper": "LONG"},
+    "TRIANGLE_ASCENDING": {"upper": "LONG"},
+    "TRIANGLE_DESCENDING": {"lower": "SHORT"},
+    "CHANNEL_ASCENDING": {"upper": "LONG"},
+    "CHANNEL_DESCENDING": {"lower": "SHORT"},
+    "FLAG_BULL": {"upper": "LONG"},
+    "FLAG_BEAR": {"lower": "SHORT"},
+})
 
 _NATURAL_EDGE = {
     "WEDGE_RISING": "lower",
@@ -97,6 +109,8 @@ _DOCTRINE_DIRECTION = {
     "FLAG_BEAR": "SHORT",
     "TRIANGLE_ASCENDING": "LONG",
     "TRIANGLE_DESCENDING": "SHORT",
+    "CHANNEL_ASCENDING": "LONG",
+    "CHANNEL_DESCENDING": "SHORT",
 }
 
 

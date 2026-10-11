@@ -349,7 +349,8 @@ def evaluate_tohom_confirmation(
     md["technical_confirmation_complete"] = True
     candidate.status = "CONFIRMED"
     from analysis.models import iso_now
-    candidate.confirmed_at = candidate.confirmed_at or iso_now()
+    if not getattr(candidate, "confirmed_at", None):
+        candidate.confirmed_at = iso_now()
     reason = (f"⚡ تأیید زودهنگام توهم{' در First Time Back (FTB)' if _ftb60 else ''}: "
               f"{need} کلوزِ پیوستهٔ تایم {sub_tf.upper()} در جهت "
               f"{'صعودی' if direction > 0 else 'نزولی'} با رشد حجم {vol_ratio:.1f}× و الگوی {pattern}، "
