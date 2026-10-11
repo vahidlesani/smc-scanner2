@@ -763,6 +763,16 @@ def run_discovery_scan() -> Dict[str, int]:
             print("  polarity-recovers: " + ", ".join(f"{k}:{n}" for k, n in sorted(rec.items())))
     except Exception as _e:
         print(f"polarity-rejects diagnostic unavailable: {_e}")
+    try:   # round-68 TAPE: one cost line per pass — Railway-log proof of savings
+        from data.fetcher import cost_counters as _cc68
+        _c68 = _cc68()
+        print(f"  tape-cost venue_req={_c68.get('kline_calls',0)} "
+              f"route_hits={_c68.get('kline_cache_hits',0)} "
+              f"tape_serves={_c68.get('tape_serves',0)} "
+              f"tape_syncs={_c68.get('tape_syncs',0)} "
+              f"candles_dl={_c68.get('candles_downloaded',0)}")
+    except Exception:
+        pass
     return stats
 
 

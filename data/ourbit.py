@@ -188,6 +188,7 @@ def get_ourbit_klines(
     limit: int = 200,
     closed_only: bool = True,
     end_s: Optional[int] = None,
+    use_cache: bool = True,
 ) -> Optional[pd.DataFrame]:
     ob_symbol = to_ourbit_symbol(symbol)
     if not ob_symbol or interval not in TF_MAP:
@@ -199,7 +200,7 @@ def get_ourbit_klines(
         params["end"] = int(end_s)
         params["start"] = int(end_s) - fetch * TF_SECONDS[interval]
     key = ("ob_kline", ob_symbol, interval, requested, closed_only, end_s)
-    if end_s is None:
+    if end_s is None and use_cache:
         cached = _cache_get(key)
         if cached is not None:
             return cached
@@ -211,7 +212,7 @@ def get_ourbit_klines(
         df = df.iloc[:-1].reset_index(drop=True)
     if len(df) > requested:
         df = df.iloc[-requested:].reset_index(drop=True)
-    if end_s is None:
+    if end_s is None and use_cache:
         # Round 15: a closed candle is immutable until its own TF closes.
         _cache_set(key, df, _closed_ttl(interval) if closed_only else 45)
     return df

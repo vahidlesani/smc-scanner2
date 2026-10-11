@@ -123,7 +123,253 @@ def _aggregate_daily(frame: pd.DataFrame, k: int) -> Optional[pd.DataFrame]:
         print(f"aggregate warning: {exc}")
         return None
 
-_COST = {"kline_calls": 0, "kline_cache_hits": 0}
+_COST = {"kline_calls": 0, "kline_cache_hits": 0, "tape_serves": 0,
+         "tape_syncs": 0, "candles_downloaded": 0}
+
+
+# ── Round-68 TAPE CACHE (Viva 10-11, verbatim: «اول ۳۰۰ تا بگیر نگه‌دار …
+# هر سایکل فقط کندل زنده رو سینک کن … وقتی کندل جدید اومد قدیمی‌ترین حذف»):
+# one canonical CLOSED tape per (venue-route, symbol, TF) is held in memory.
+# A cold tape costs ONE full fetch (≥300 bars); every later call syncs ≤3
+# bars (newly closed + forming) and slices whatever limit the caller asked.
+# All lanes (spot, futures discovery, candidate monitor, trade monitor,
+# pre-break, charts) call get_klines, so all of them inherit this
+# transparently — no caller changes. Freshness law: use_cache=False (the
+# monitor lanes) ALWAYS syncs; use_cache=True syncs at most once per
+# _TAPE_SYNC_MIN_SECONDS. Merge law: first-write-wins per timestamp, so
+# geometry the detector already read can never shift under it, even when a
+# sync falls back to the other venue.
+_TAPE_LOCK = threading.Lock()
+_TAPE: Dict[Tuple[str, str, str], pd.DataFrame] = {}
+_TAPE_LIVE: Dict[Tuple[str, str, str], pd.DataFrame] = {}   # last forming row
+_TAPE_SYNCED_AT: Dict[Tuple[str, str, str], float] = {}
+_TAPE_TOUCHED_AT: Dict[Tuple[str, str, str], float] = {}
+_TAPE_MAX_BARS = 1000
+_TAPE_MAX_TAPES = 500
+_TAPE_COLD_MIN_BARS = 300
+_TAPE_SYNC_BARS = 3
+_TAPE_SYNC_MIN_SECONDS = 10.0
+
+
+def _tape_route(symbol: str) -> str:
+    # Same venue precedence as the old inline path (Ourbit first, Bybit
+    # fallback) — imported locally so tests patching data.ourbit keep working.
+    provider = os.getenv("DATA_PROVIDER", "ourbit").strip().lower()
+    if provider != "bybit":
+        try:
+            from data.ourbit import ourbit_listed
+            if ourbit_listed(symbol):
+                return "ourbit"
+        except Exception:
+            pass
+    return "bybit"
+
+
+def _venue_tail(symbol: str, interval: str, limit: int, closed_only: bool,
+                end_ms: Optional[int] = None) -> Optional[pd.DataFrame]:
+    """ONE fresh venue fetch, bypassing every TTL cache (the tape owns
+    freshness). Ourbit first, Bybit fallback — the old precedence, kept."""
+    global _COST
+    route = _tape_route(symbol)
+    venues = (route,) if route == "bybit" else (route, "bybit")
+    for venue in venues:
+        try:
+            if venue == "ourbit":
+                from data.ourbit import get_ourbit_klines
+                _COST["kline_calls"] += 1
+                frame = get_ourbit_klines(
+                    symbol, interval, limit=limit, closed_only=closed_only,
+                    end_s=int(end_ms / 1000) if end_ms else None,
+                    use_cache=False)
+            else:
+                _COST["kline_calls"] += 1
+                frame = _get_klines_bybit(symbol, interval, limit,
+                                          closed_only, False, end_ms)
+            if frame is not None and not frame.empty:
+                try:
+                    _COST["candles_downloaded"] += int(len(frame))
+                except Exception:
+                    pass
+                return frame
+        except Exception as exc:
+            _log_error_once(f"tape-route:{symbol}:{interval}:{venue}",
+                            f"Tape route failed {symbol} {interval} {venue}: {exc}")
+    return None
+
+
+def _tape_merge(tape: Optional[pd.DataFrame],
+                fetched_closed: pd.DataFrame) -> pd.DataFrame:
+    """Union of tape + newly fetched CLOSED bars. Overlap is discarded
+    (first-write-wins: geometry never shifts); beyond 1000 bars the oldest
+    drop. A still-disjoint fetch (gap > window, e.g. hours without any call
+    on a fast TF) replaces the tape — honest newest-1000, like a refetch."""
+    try:
+        new = fetched_closed.reset_index(drop=True)
+        if tape is None or tape.empty:
+            return new.tail(_TAPE_MAX_BARS).reset_index(drop=True)
+        old = tape.reset_index(drop=True)
+        t_oldest = pd.Timestamp(old["timestamp"].iloc[0])
+        t_newest = pd.Timestamp(old["timestamp"].iloc[-1])
+        _nts = pd.to_datetime(new["timestamp"])
+        older = new[_nts < t_oldest]
+        newer = new[_nts > t_newest]
+        if older.empty and not newer.empty and len(old) >= 2:
+            # Fetched window sits entirely ABOVE the tape: contiguous only
+            # if it starts at the very next bar, else the middle is unknown
+            # (hours without any call) → cold restart, never a gapped tape.
+            step = (t_newest - t_oldest) / max(1, len(old) - 1)
+            try:
+                if (pd.Timestamp(newer["timestamp"].iloc[0]) - t_newest
+                        > step * 1.5):
+                    return new.tail(_TAPE_MAX_BARS).reset_index(drop=True)
+            except Exception:
+                pass
+        merged = pd.concat([older, old, newer], ignore_index=True)
+        merged = merged.drop_duplicates("timestamp").sort_values(
+            "timestamp").reset_index(drop=True)
+        return merged.tail(_TAPE_MAX_BARS).reset_index(drop=True)
+    except Exception as exc:
+        print(f"tape merge warning: {exc}")
+        return tape if tape is not None else fetched_closed
+
+
+def _tape_touch(key: Tuple[str, str, str]) -> None:
+    with _TAPE_LOCK:
+        _TAPE_TOUCHED_AT[key] = time.monotonic()
+        if len(_TAPE) > _TAPE_MAX_TAPES:
+            for _k in sorted(_TAPE_TOUCHED_AT,
+                             key=lambda k: _TAPE_TOUCHED_AT.get(k, 0)
+                             )[:len(_TAPE) - _TAPE_MAX_TAPES]:
+                _TAPE.pop(_k, None)
+                _TAPE_LIVE.pop(_k, None)
+                _TAPE_SYNCED_AT.pop(_k, None)
+                _TAPE_TOUCHED_AT.pop(_k, None)
+
+
+def _tape_serve(symbol: str, interval: str, limit: int, closed_only: bool,
+                fresh: bool) -> Optional[pd.DataFrame]:
+    """Serve `limit` bars from the canonical tape (syncing first).
+
+    fresh=True (use_cache=False callers: the monitor lanes) always syncs;
+    otherwise a sync runs at most once per _TAPE_SYNC_MIN_SECONDS."""
+    global _COST
+    sym = str(symbol).upper()
+    iv = str(interval).lower()
+    want = max(1, int(limit))
+    route = _tape_route(sym)
+    key = (route, sym, iv)
+    now = time.monotonic()
+    with _TAPE_LOCK:
+        tape = _TAPE.get(key)
+        last_sync = _TAPE_SYNCED_AT.get(key, 0.0)
+    have = 0 if tape is None or tape.empty else len(tape)
+    need_full = have <= 0 or (have < min(want, _TAPE_MAX_BARS))
+    do_sync = fresh or need_full or (now - last_sync >= _TAPE_SYNC_MIN_SECONDS)
+    live_row = None
+
+    def _sync_small():
+        # One ≤3-bar sync: merge newly closed, capture the forming bar,
+        # backfill anything missed while no lane called. Returns True when
+        # the venue answered.
+        global _COST
+        _ok = False
+        fetched = _venue_tail(sym, iv, _TAPE_SYNC_BARS, False)
+        if fetched is None or fetched.empty:
+            return False
+        f = fetched.reset_index(drop=True)
+        if len(f) > 1:
+            try:
+                with _TAPE_LOCK:
+                    _cur = _TAPE.get(key)
+                _prev_new = pd.Timestamp(_cur["timestamp"].iloc[-1])
+            except Exception:
+                _prev_new = None
+            # Backfill FIRST (a 15-min discovery gap is 3× 5m bars): bridging
+            # the hole before merging the sync rows keeps the disjoint-rule
+            # (cold restart) for genuinely unbridgeable (>1000-bar) gaps.
+            try:
+                if _prev_new is not None:
+                    _tf_sec = float(_TF_SECONDS.get(iv, 300)) or 300.0
+                    _s_old = pd.Timestamp(f["timestamp"].iloc[0])
+                    _missing = int(round((_s_old - _prev_new).total_seconds()
+                                         / _tf_sec)) - 1
+                    if _missing > 0:
+                        _bf = _venue_tail(
+                            sym, iv, min(_TAPE_MAX_BARS, _missing + 3), True)
+                        if _bf is not None and not _bf.empty:
+                            with _TAPE_LOCK:
+                                _TAPE[key] = _tape_merge(_TAPE.get(key), _bf)
+            except Exception:
+                pass
+            with _TAPE_LOCK:
+                _TAPE[key] = _tape_merge(_TAPE.get(key), f.iloc[:-1])
+            _ok = True
+        with _TAPE_LOCK:
+            _TAPE_LIVE[key] = f.iloc[[-1]].reset_index(drop=True)
+        return _ok
+
+    def _fetch_full(n):
+        fetched = _venue_tail(sym, iv, min(_TAPE_MAX_BARS, max(1, int(n))), True)
+        if fetched is not None and not fetched.empty:
+            with _TAPE_LOCK:
+                _TAPE[key] = _tape_merge(_TAPE.get(key), fetched)
+            return True
+        return False
+
+    if do_sync:
+        with _TAPE_LOCK:
+            _TAPE_SYNCED_AT[key] = now   # claim: concurrent lanes skip us
+        try:
+            if have <= 0:
+                # Cold: ONE full fetch (≥300 bars, his «اول ۳۰۰ تا بگیر»).
+                _fetch_full(max(want, _TAPE_COLD_MIN_BARS))
+                if not closed_only:
+                    _sync_small()   # capture the forming bar too
+            elif have < min(want, _TAPE_MAX_BARS):
+                # Growth: one full-window fetch brings the older bars
+                # (overlap discarded by the merge); live follows if needed.
+                _fetch_full(want)
+                if not closed_only:
+                    _sync_small()
+            else:
+                _sync_small()
+            with _TAPE_LOCK:
+                tape = _TAPE.get(key)
+            _COST["tape_syncs"] += 1
+        except Exception as exc:
+            print(f"tape sync warning {sym} {iv}: {exc}")
+            with _TAPE_LOCK:
+                _TAPE_SYNCED_AT[key] = last_sync   # failed: next lane retries
+                tape = _TAPE.get(key)
+    with _TAPE_LOCK:
+        tape = _TAPE.get(key)
+        if live_row is None:
+            live_row = _TAPE_LIVE.get(key)
+    if tape is None or tape.empty:
+        return None
+    _tape_touch(key)
+    _COST["tape_serves"] += 1
+    try:
+        closed_all = tape.tail(want).reset_index(drop=True).copy(deep=True)
+        if closed_only or live_row is None or live_row.empty:
+            return closed_all
+        live = live_row.reset_index(drop=True).copy(deep=True)
+        if pd.Timestamp(live["timestamp"].iloc[0]) <= pd.Timestamp(closed_all["timestamp"].iloc[-1]):
+            return closed_all   # forming bar already closed & merged — no dup
+        # Live contract (same as the old path): len INCLUDES the forming bar.
+        keep = (closed_all.iloc[-(want - 1):].reset_index(drop=True) if want > 1
+                else closed_all.iloc[0:0])
+        return pd.concat([keep, live], ignore_index=True)
+    except Exception as exc:
+        print(f"tape serve warning {sym} {iv}: {exc}")
+        return None
+
+
+def _venue_history(symbol: str, interval: str, limit: int, closed_only: bool,
+                   end_ms: int) -> Optional[pd.DataFrame]:
+    """Historical pages (end_ms): direct venue fetch, ourbit-then-bybit,
+    never cached — the old path for backfills/pagination."""
+    return _venue_tail(symbol, interval, limit, closed_only, end_ms=end_ms)
 
 
 def closed_candle_ttl(interval: str, cap: Optional[int] = None) -> int:
@@ -182,6 +428,11 @@ def _cache_set(key: Tuple, value, ttl: int) -> None:
 def clear_market_cache() -> None:
     with _CACHE_LOCK:
         _CACHE.clear()
+    with _TAPE_LOCK:   # round-68: the tapes are cache too (test determinism)
+        _TAPE.clear()
+        _TAPE_LIVE.clear()
+        _TAPE_SYNCED_AT.clear()
+        _TAPE_TOUCHED_AT.clear()
 
 
 _BYBIT_BLOCKED_UNTIL: float = 0.0
@@ -244,8 +495,15 @@ def get_klines(
     use_cache: bool = True,
     end_ms: Optional[int] = None,
 ) -> Optional[pd.DataFrame]:
+    """Fetch candles for `symbol` — Ourbit first (execution venue), Bybit
+    fallback for symbols Ourbit doesn't list (env DATA_PROVIDER).
+
+    Round-68: the live path is served from the canonical per-symbol/TF tape
+    (cold-fetch once, then ≤3-bar syncs); historical end_ms pages still go
+    direct to the venue, exactly as before."""
     global _COST
-    # ── 3d / 1w exist only as AGGREGATES of the daily tape (round 15 spot)
+    # ── 3d / 1w exist only as AGGREGATES of the daily tape (round 15 spot).
+    # The 1d leg now rides the tape too: no more 900-bar downloads.
     _iv = str(interval).lower()
     if _iv in _AGG_FROM_DAILY:
         _k = int(_AGG_FROM_DAILY[_iv])
@@ -255,44 +513,19 @@ def get_klines(
         if _agg is not None and int(limit) > 0:
             _agg = _agg.tail(int(limit)).reset_index(drop=True)
         return _agg
+    if end_ms is not None:
+        # Historical/backfill page — direct venue fetch, never cached.
+        return _venue_history(symbol, interval, limit, closed_only, end_ms)
     _route_key = ("route", str(symbol).upper(), str(interval).lower(),
                   int(limit), bool(closed_only))
-    if use_cache and end_ms is None:
+    if use_cache:
         cached = _cache_get(_route_key)
         if cached is not None and not cached.empty:
             _COST["kline_cache_hits"] += 1
             return cached
-    _COST["kline_calls"] += 1
-    """Fetch candles for `symbol` — Ourbit first (Viva's execution venue),
-    Bybit as fallback for symbols Ourbit doesn't list.
-
-    Data provider precedence is env-driven:
-    DATA_PROVIDER=ourbit  -> ourbit-then-bybit (default)
-    DATA_PROVIDER=bybit   -> bybit only
-    """
-    provider = os.getenv("DATA_PROVIDER", "ourbit").strip().lower()
-    if provider != "bybit":
-        try:
-            from data.ourbit import get_ourbit_klines, ourbit_listed
-
-            if ourbit_listed(symbol):
-                frame = get_ourbit_klines(
-                    symbol,
-                    interval,
-                    limit=limit,
-                    closed_only=closed_only,
-                    end_s=int(end_ms / 1000) if end_ms else None,
-                )
-                if frame is not None and not frame.empty:
-                    if use_cache and end_ms is None:
-                        _cache_set(_route_key, frame,
-                                   closed_candle_ttl(interval) if closed_only
-                                   else _SETTINGS.bybit_cache_seconds)
-                    return frame
-        except Exception as exc:  # never let a venue hiccup kill a scan
-            _log_error_once(f"ourbit-route:{symbol}:{interval}", f"Ourbit route failed {symbol} {interval}: {exc}")
-    frame = _get_klines_bybit(symbol, interval, limit, closed_only, use_cache, end_ms)
-    if frame is not None and not frame.empty and use_cache and end_ms is None:
+    frame = _tape_serve(symbol, interval, limit, closed_only=closed_only,
+                        fresh=not use_cache)
+    if frame is not None and not frame.empty and use_cache:
         _cache_set(_route_key, frame,
                    closed_candle_ttl(interval) if closed_only
                    else _SETTINGS.bybit_cache_seconds)
