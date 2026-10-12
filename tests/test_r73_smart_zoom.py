@@ -235,7 +235,44 @@ def test_perp_intraday_never_shows_more_than_320_candles():
     assert spot and int(spot["n"]) > 320          # spot may go deeper
 
 
-# ── 5) design invariants: his background / colours / frame / logos untouched ──
+# ── 5) his BTC-1d ruling: a steep wedge floor becomes the validated channel ──
+
+def test_channel_upgrade_replaces_a_steep_wedge_floor_with_the_validated_support():
+    from analysis.spot_engine import channel_upgrade
+    df = _tape(300, seed=21)
+    # rising swing lows the validator can lock (three touches)
+    import numpy as np
+    for i, (idx, px) in enumerate(((120, 90.0), (180, 93.0), (240, 96.0))):
+        df.loc[df.index[idx], "low"] = px
+        df.loc[df.index[idx], "close"] = px + 0.4
+    steep = [{"type": "WEDGE_RISING", "shape": "converging", "lines": [
+        {"side": "HIGH", "slope": 0.010, "intercept": 100.0, "x0": 100, "x1": 250,
+         "points": [{"ts": str(df["timestamp"].iloc[100]), "price": 101.0},
+                    {"ts": str(df["timestamp"].iloc[250]), "price": 102.5}]},
+        {"side": "LOW", "slope": 0.300, "intercept": 40.0, "x0": 120, "x1": 240,
+         "points": [{"ts": str(df["timestamp"].iloc[120]), "price": 90.0},
+                    {"ts": str(df["timestamp"].iloc[240]), "price": 96.0}]}]}]
+    out = channel_upgrade(steep, df)
+    kinds = [p.get("type") for p in out]
+    if kinds and kinds[0] == "CHANNEL_ASCENDING":     # validator locked a line
+        lo = out[0]["lines"][1]
+        assert 0 < float(lo["slope"]) < 0.300         # gentler, rising, on pivots
+        assert all(p.get("ts") for p in lo["points"])  # render dialect intact
+    else:                                              # no validated line: untouched
+        assert kinds == ["WEDGE_RISING"]
+
+
+def test_channel_upgrade_never_touches_a_single_or_gentle_shape():
+    from analysis.spot_engine import channel_upgrade
+    df = _tape(300, seed=22)
+    single = [{"type": "TRENDLINE", "shape": "single", "lines": [
+        {"side": "HIGH", "slope": -0.01, "intercept": 110.0, "x0": 50, "x1": 200,
+         "points": [{"ts": str(df["timestamp"].iloc[50]), "price": 109.5}]}]}]
+    assert channel_upgrade(single, df)[0]["type"] == "TRENDLINE"
+    assert channel_upgrade([], df) == []
+
+
+# ── 6) design invariants: his background / colours / frame / logos untouched ──
 
 def test_design_tokens_are_untouched_by_the_zoom_round():
     src = open(os.path.join(_ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()

@@ -2401,8 +2401,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         _sz73 = None
         try:
             from analysis.smart_zoom import solve_zoom as _solve73
+            _det73 = 0
+            try:
+                from analysis.candle_counts import candle_count as _cc73
+                _det73 = int(_cc73(str(_chart_tf), 300))
+            except Exception:
+                _det73 = 0
             _sz73 = _solve73(df, candidate, confirmed=bool(confirmed),
-                             is_spot=bool(_is_spot), chart_tf=str(_chart_tf))
+                             is_spot=bool(_is_spot), chart_tf=str(_chart_tf),
+                             det_n=_det73)
         except Exception as _z73e:
             print(f"R73 smart-zoom fallback: {_z73e}")
             _sz73 = None
@@ -3522,8 +3529,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             solid_capstyle="butt")
                 _px8, _xs8 = [], []
                 for q in (_ln.get("points") or []):
+                    # R73: points may speak «ts» or «timestamp» — never crash
+                    _qts73 = q.get("ts") or q.get("timestamp")
+                    if not _qts73:
+                        continue
                     _qx = float(np.searchsorted(
-                        frame.index, pd.Timestamp(str(q.get("ts")))))
+                        frame.index, pd.Timestamp(str(_qts73))))
                     if _qx <= _xend8 + 0.5:
                         _xs8.append(_qx); _px8.append(float(q.get("price")))
                 if _xs8:

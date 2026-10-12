@@ -63,9 +63,9 @@ def test_result_link_edit_keeps_confirm_stamp():
 def test_chart_fetch_size_map():
     from bot.messages_v7 import _chart_fetch_size, _CHART_CANDLE_COUNTS
     # R64 counts (analysis.candle_counts — 250..350 per TF, his 10-02 law)
-    assert _chart_fetch_size("1w") == 250 and _chart_fetch_size("3d") == 300
+    assert _chart_fetch_size("1w") == 250 and _chart_fetch_size("3d") == 340  # R73 map
     assert _chart_fetch_size("12h") == 260 and _chart_fetch_size("1d") == 300
-    assert _chart_fetch_size("4h") == 300 and _chart_fetch_size("8h") == 280
+    assert _chart_fetch_size("4h") == 280 and _chart_fetch_size("8h") == 280  # R73 map
     assert _chart_fetch_size("15m") == 300
     assert set(_CHART_CANDLE_COUNTS) >= {"5m", "15m", "30m", "1h", "2h", "4h",
                                          "8h", "12h", "1d", "3d", "1w"}

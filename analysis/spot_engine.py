@@ -392,7 +392,7 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                     "break_bar_ts": _bts,
                     "break_close": close,
                     "bars_since_break": _bsb,
-                    "pattern_commands": [pat],
+                    "pattern_commands": channel_upgrade([pat], d),
                     "atr": float(atr),
                     "mtf_fa": _mtf_bias_fa(frames),
                     "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -526,6 +526,73 @@ def lock_spot_snapshot(cand) -> str:
         return ""
 
 
+def channel_upgrade(pats: list, d) -> list:
+    """Viva 10-12 (BTC 1d, verbatim: «ترند پایینش اشتباهه و باید تقریبا یک کانال
+    صعودی باشه»): when the tape carries a VALIDATED ascending support (≥2 major
+    swing-low touches, render gate) and the picked bull shape is a converging
+    family whose lower side is a STEEP two-point wedge edge, the picture becomes
+    the ascending channel he draws: the shape's own upper edge plus the
+    validated rising lower line. The steep edge is exactly the «ترند پایین
+    اشتباه»; the validated line sits on real pivots (never mid-air, R73).
+    Pure: returns a new list; falls through untouched on any doubt.
+    """
+    try:
+        import dataclasses as _dc
+        from analysis.viva_tlbreak import fit_validated_line as _fvl, load_config as _lc
+        if not pats or d is None or getattr(d, "empty", True):
+            return pats
+        _ln = _fvl(d.reset_index(drop=True), "LOW",
+                   _dc.replace(_lc(), min_touches=2))
+        if _ln is None or _ln.slope <= 0 or len(_ln.points or ()) < 2:
+            return pats
+        _n = len(d)
+        _close = float(d["close"].iloc[-1])
+        _y_now = float(_ln.slope) * (_n - 1) + float(_ln.intercept)
+        if _y_now >= _close:                     # support must sit under price
+            return pats
+        out = []
+        for pat in pats:
+            q = dict(pat)
+            lns = [dict(x) for x in (q.get("lines") or [])]
+            if str(q.get("shape") or "") != "converging" or len(lns) < 2:
+                out.append(q)
+                continue
+            hi_l, lo_l = sorted(lns[:2],
+                                key=lambda L: float(L.get("slope") or 0) * (_n - 1)
+                                + float(L.get("intercept") or 0),
+                                reverse=True)
+            if float(hi_l.get("slope") or 0) < 0:
+                out.append(q)
+                continue
+            if float(lo_l.get("slope") or 0) <= 1.8 * float(_ln.slope):
+                out.append(q)
+                continue                         # lower edge already gentle
+            # render_patterns points speak the «ts» dialect (the spot box
+            # painter reads q["ts"]); the validated line's speak «timestamp»
+            _pts73 = []
+            for _x73 in (_ln.points or ()):
+                _p73 = dict(_x73)
+                _p73.setdefault("ts", str(_p73.get("timestamp")))
+                _pts73.append(_p73)
+            lo_l.update({
+                "side": "LOW", "slope": float(_ln.slope),
+                "intercept": float(_ln.intercept),
+                "x0": float(_ln.first_index), "x1": float(_ln.last_index),
+                "points": _pts73,
+            })
+            lo_l.pop("log_fit", None)
+            lo_l.pop("log_slope", None)
+            lo_l.pop("log_intercept", None)
+            q["lines"] = [hi_l, lo_l]
+            q["type"] = "CHANNEL_ASCENDING"
+            q["shape"] = "parallel"
+            out.append(q)
+        return out
+    except Exception as _cx:
+        print(f"channel-upgrade warning: {_cx}")
+        return pats
+
+
 def _spot_bull_shapes(pats: list, price: float, x_index: float,
                       eps: float = 0.0):
     """The ONE shape-filter ladder of the spot lane: yields (pattern, upper)
@@ -640,7 +707,7 @@ def scan_spot_tohom_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
             "entry": c_sub, "sl": c_sub * 0.98,
             "targets": [c_sub * 1.05, c_sub * 1.10],
             "weights": list(SPOT_WEIGHTS), "path_pct": round(_path / c_sub * 100.0, 3),
-            "broken_level": float(upper), "pattern_commands": [pat],
+            "broken_level": float(upper), "pattern_commands": channel_upgrade([pat], d),
             "atr": float(atr), "mtf_fa": _mtf_bias_fa(frames),
             "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
@@ -800,7 +867,7 @@ def scan_spot_urgent_confirms(symbol: str, frames: Dict[str, pd.DataFrame],
             "path_pct": round(path / close * 100.0, 3),
             "broken_level": float(upper),
             "break_bar_ts": str(sub["timestamp"].iloc[_bi]),
-            "pattern_commands": [pat],
+            "pattern_commands": channel_upgrade([pat], d),
             "atr": float(atr),
             "mtf_fa": _mtf_bias_fa(frames),
             "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -1076,7 +1143,7 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                                           / close * 100.0, 3),
                     "atr": float(atr), "vol_ratio": round(vol_ratio, 2),
                     "box_top": float(box_top) if box_top else 0.0,
-                    "pattern_commands": [pat], "sig": sig,
+                    "pattern_commands": channel_upgrade([pat], d), "sig": sig,
                     "bar_ts": str(d["timestamp"].iloc[-1]),
                     "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 })

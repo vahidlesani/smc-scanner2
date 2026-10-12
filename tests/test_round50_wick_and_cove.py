@@ -87,7 +87,7 @@ def test_cryptocove_lookbacks():
     # R64 — HIS 10-02 dictation supersedes r52: 250..350 candles per TF, spot
     # AND perpetual, daily included — one map in analysis.candle_counts.
     from analysis.candle_counts import CANDLE_COUNTS as C
-    assert (C["4h"], C["8h"], C["12h"], C["1d"], C["3d"], C["1w"]) == (300, 280, 260, 300, 300, 250)
+    assert (C["4h"], C["8h"], C["12h"], C["1d"], C["3d"], C["1w"]) == (280, 280, 260, 300, 340, 250)  # R73: his 10-12 zoom dictation
 
 
 def test_spot_bundle_fetches_the_depths():
@@ -96,7 +96,7 @@ def test_spot_bundle_fetches_the_depths():
     assert src.count('fromlist=["fetch_limits"]).fetch_limits()') == 2
     from analysis.candle_counts import fetch_limits
     lim = fetch_limits()
-    assert lim["3d"] == 340 and lim["1w"] == 290 and lim["4h"] == 340
+    assert lim["3d"] == 380 and lim["1w"] == 290 and lim["4h"] == 320  # R73 map
     src2 = open(os.path.join(REPO, "data", "fetcher.py"), encoding="utf-8").read()
     assert 'limits.get("4h", 200)' in src2
     assert 'limits.get("1w", 210)) * 7 + 7' in src2

@@ -54,7 +54,14 @@ def _metrics(plan, df):
 for sym, tf in CASES:
     try:
         df = get_klines(sym, tf, 400, closed_only=True, use_cache=False)
-        pats = detect_patterns(df, "LONG", log_axis=True) or []
+        # mirror production: the spot lane detects on the DICTATED tape depth
+        from analysis.candle_counts import candle_count as _cc73
+        _det73 = df.tail(int(_cc73(tf, 300))).reset_index(drop=True)
+        pats = detect_patterns(_det73, "LONG", log_axis=True) or []
+        # mirror the production spot lane: the channel upgrade runs on every
+        # item's pattern commands inside scan_spot_symbol
+        from analysis.spot_engine import channel_upgrade
+        pats = channel_upgrade(pats, _det73)
         pick = next((p for p in pats if len(p.get("lines") or []) >= 2),
                     pats[0] if pats else None)
         price = float(df["close"].iloc[-1])
@@ -73,7 +80,8 @@ for sym, tf in CASES:
                       "atr": float((df["high"] - df["low"]).tail(14).mean()),
                       "render_patterns": [pick] if pick else []})
         lock_render_geometry(cs, frame=df)
-        plan = solve_zoom(df, cs, confirmed=True, is_spot=True, chart_tf=tf)
+        plan = solve_zoom(df, cs, confirmed=True, is_spot=True, chart_tf=tf,
+                          det_n=len(_det73))
         png = M.generate_chart(df, cs, confirmed=True)
         name = f"spot_{sym}_{tf}.png"
         if png:

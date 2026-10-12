@@ -156,7 +156,7 @@ def test_candle_counts_single_source():
         assert 190 <= RENDER_COUNTS[tf] <= 210
     for tf in ("4h", "8h", "12h", "1d", "3d", "1w"):
         assert RENDER_COUNTS[tf] == CANDLE_COUNTS[tf]
-    assert candle_count("1D") == 300 and fetch_limits(["4h"]) == {"4h": 340}
+    assert candle_count("1D") == 300 and fetch_limits(["4h"]) == {"4h": 320}  # R73 map
 
 
 def test_spot_scan_window_is_the_chart_window():

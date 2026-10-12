@@ -52,7 +52,7 @@ SNAP_TOL_BARS = 2
 WIDTH_FILL_MIN = 0.75      # candles own ≥75-80% of the plot WIDTH …
 RIGHT_GAP_MAX = 0.20       # … i.e. the gap price-axis→live candle ≤20%
 HEIGHT_FILL_MAX = 0.70     # candles own ≤65-70% of the panel HEIGHT …
-HEIGHT_FILL_TARGET = 0.66
+HEIGHT_FILL_TARGET = 0.64
 TOOL_BAND_MIN = 0.25       # … and 25-30% stays the clean tool band
 PERP_INTRADAY_CAP = 320    # 15m…4h perp: never 300-350+ candles («لایو بی‌اهمیت»)
 PERP_INTRADAY_TFS = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h"}
@@ -187,7 +187,7 @@ def _pattern_edge_y(patterns, ts: pd.Timestamp) -> Optional[float]:
 
 def solve_zoom(frame: pd.DataFrame, candidate, patterns=None,
                confirmed: bool = False, is_spot: bool = False,
-               chart_tf: str = "") -> Optional[Dict[str, float]]:
+               chart_tf: str = "", det_n: int = 0) -> Optional[Dict[str, float]]:
     """Pick candle count + log-space price window. None = caller falls back.
 
     Laws (his 10-12 numbers): candles own >=75% of the WIDTH (right gap to the
@@ -200,7 +200,14 @@ def solve_zoom(frame: pd.DataFrame, candidate, patterns=None,
         return None
     md = getattr(candidate, "metadata", None) or {}
     pats = patterns if patterns is not None else (md.get("render_patterns") or [])
-    tool = _tool_levels(candidate)
+    if is_spot:
+        # r37: «اسپات ابزار لانگ و شورت نداره» — the spot picture's only
+        # tool is the green box: its top must stay inside the window with a
+        # small margin (his GoChart: box on the upper edge, candles below)
+        _bx73 = float(md.get("spot_box_top") or 0)
+        tool = [_bx73] if _bx73 > 0 else []
+    else:
+        tool = _tool_levels(candidate)
     direction = str(getattr(candidate, "direction", "") or md.get("direction") or "").upper()
     is_long = direction != "SHORT"
     try:
@@ -220,6 +227,8 @@ def solve_zoom(frame: pd.DataFrame, candidate, patterns=None,
     # never eat more than 20% of the plot width → count ≥ 4×future
     future = 45 if is_spot else (28 if confirmed else 26)
     n_min = max(MIN_N, int(math.ceil(4.0 * future)))
+    if is_spot and str(chart_tf).lower() in ("3d", "1w"):
+        n_min = max(n_min, 240)          # his «در ۳ روزه کمی بیشتر باشه»
     anchors = _pattern_anchors(pats)
     live = float(close_all[-1])
     atr = float((frame["high"].astype(float) - frame["low"].astype(float)).tail(14).mean() or 0.0)
@@ -266,9 +275,14 @@ def solve_zoom(frame: pd.DataFrame, candidate, patterns=None,
             bars = max(1.0, (min(a1, idx[-1]) - a0).total_seconds() /
                        max(1.0, (idx[-1] - idx[-n]).total_seconds() / n))
             width = bars / n
+        elif det_n:
+            # anchor-less families (flags/pennants): the picture is best when
+            # the window ≈ the tape the shape was DETECTED on (his 265-290 for
+            # BTC 4h = the detection depth, chart ≡ trade window law)
+            width = min(1.2, float(det_n) / n)
         else:
             width = 0.5
-        width_score = math.exp(-((width - 0.70) ** 2) / (2 * 0.22 ** 2))
+        width_score = math.exp(-((width - 0.95) ** 2) / (2 * 0.15 ** 2))
         edge = _pattern_edge_y(pats, idx[-1])
         if edge and atr > 0:
             reaction = math.exp(-abs(live - edge) / (3.0 * atr))
