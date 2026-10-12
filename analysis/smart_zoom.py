@@ -42,10 +42,20 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import pandas as pd
 
-# candle-count search ladder — no hard cap: 60…400 (his 90/200/300 examples)
-COUNT_LADDER = (70, 90, 110, 140, 170, 200, 240, 280, 320, 360, 400)
+# candle-count search ladder — no hard cap of its own: 70…400 (his 90/200/265/
+# 290/300 examples); per-market caps apply in solve_zoom (perp intraday ≤320)
+COUNT_LADDER = (70, 90, 110, 140, 170, 200, 240, 265, 290, 320, 350, 400)
 MIN_N, MAX_N = 60, 400
 SNAP_TOL_BARS = 2
+
+# ── his 10-12 numeric laws (verbatim quantities) ──
+WIDTH_FILL_MIN = 0.75      # candles own ≥75-80% of the plot WIDTH …
+RIGHT_GAP_MAX = 0.20       # … i.e. the gap price-axis→live candle ≤20%
+HEIGHT_FILL_MAX = 0.70     # candles own ≤65-70% of the panel HEIGHT …
+HEIGHT_FILL_TARGET = 0.66
+TOOL_BAND_MIN = 0.25       # … and 25-30% stays the clean tool band
+PERP_INTRADAY_CAP = 320    # 15m…4h perp: never 300-350+ candles («لایو بی‌اهمیت»)
+PERP_INTRADAY_TFS = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h"}
 
 
 # ────────────────────────── pivot snap ──────────────────────────
@@ -176,8 +186,16 @@ def _pattern_edge_y(patterns, ts: pd.Timestamp) -> Optional[float]:
 
 
 def solve_zoom(frame: pd.DataFrame, candidate, patterns=None,
-               confirmed: bool = False) -> Optional[Dict[str, float]]:
-    """Pick candle count + log-space price window. None = caller falls back."""
+               confirmed: bool = False, is_spot: bool = False,
+               chart_tf: str = "") -> Optional[Dict[str, float]]:
+    """Pick candle count + log-space price window. None = caller falls back.
+
+    Laws (his 10-12 numbers): candles own >=75% of the WIDTH (right gap to the
+    live candle <=20%), <=65-70% of the HEIGHT with a 25-30% clean tool band
+    on the direction's target side (LONG candles sit LOW, SHORT candles sit
+    HIGH), the whole tool inside, no candle cut, and perp intraday frames
+    never exceed 320 candles so the live market stays tangible.
+    """
     if frame is None or getattr(frame, "empty", True) or len(frame) < MIN_N:
         return None
     md = getattr(candidate, "metadata", None) or {}
@@ -194,8 +212,14 @@ def solve_zoom(frame: pd.DataFrame, candidate, patterns=None,
     except Exception:
         return None
     n_max = min(MAX_N, len(frame))
+    if not is_spot and str(chart_tf).lower() in PERP_INTRADAY_TFS:
+        n_max = min(n_max, PERP_INTRADAY_CAP)
     if n_max < MIN_N:
         return None
+    # ── WIDTH law: the right margin (future bars after the live candle) may
+    # never eat more than 20% of the plot width → count ≥ 4×future
+    future = 45 if is_spot else (28 if confirmed else 26)
+    n_min = max(MIN_N, int(math.ceil(4.0 * future)))
     anchors = _pattern_anchors(pats)
     live = float(close_all[-1])
     atr = float((frame["high"].astype(float) - frame["low"].astype(float)).tail(14).mean() or 0.0)
@@ -205,26 +229,33 @@ def solve_zoom(frame: pd.DataFrame, candidate, patterns=None,
     best: Optional[Dict[str, float]] = None
     best_score = -1e18
     for n in COUNT_LADDER:
-        if n < MIN_N or n > n_max:
+        if n < n_min or n > n_max:
             continue
         w_hi = float(hi_all[-n:].max())
         w_lo = float(lo_all[-n:].min())
-        lo = w_lo if tool_lo is None else min(w_lo, tool_lo)
-        hi = w_hi if tool_hi is None else max(w_hi, tool_hi)
-        if lo <= 0 or hi <= lo:
+        if w_lo <= 0 or w_hi <= w_lo:
             continue
-        # ── log-space window with the directional clean band ──
-        lg_lo, lg_hi = math.log10(lo), math.log10(hi)
-        span = lg_hi - lg_lo
-        base = 0.045 * span
-        band = 0.14 * span + (0.05 * span if tool else 0.0)
-        if is_long:                      # tool targets live ABOVE → headroom top
-            y_lo = 10 ** (lg_lo - base)
-            y_hi = 10 ** (lg_hi + base + band)
-        else:                            # short → clean band at the BOTTOM
-            y_lo = 10 ** (lg_lo - base - band)
-            y_hi = 10 ** (lg_hi + base)
+        lc_lo, lc_hi = math.log10(w_lo), math.log10(w_hi)
+        cr = lc_hi - lc_lo
+        if cr <= 0:
+            continue
+        # ── HEIGHT law: candles ≈66% of the panel, tool band on the side ──
+        S = cr / HEIGHT_FILL_TARGET
+        if is_long:                     # candles LOW, clean band ABOVE
+            lg_lo = lc_lo - 0.06 * S
+            lg_hi = lg_lo + S
+        else:                           # candles HIGH, clean band BELOW
+            lg_hi = lc_hi + 0.06 * S
+            lg_lo = lg_hi - S
+        if tool_hi is not None and math.log10(tool_hi) > lg_hi:
+            lg_hi = math.log10(tool_hi) + 0.02 * S
+        if tool_lo is not None and math.log10(tool_lo) < lg_lo:
+            lg_lo = math.log10(tool_lo) - 0.02 * S
+        y_lo, y_hi = 10 ** lg_lo, 10 ** lg_hi
         yspan = y_hi - y_lo
+        fill_h = cr / (lg_hi - lg_lo)    # candle share of the panel HEIGHT
+        if fill_h > HEIGHT_FILL_MAX + 0.02:
+            continue
         # ── scoring ──
         t0 = idx[-n]
         in_frac = (sum(1 for x in anchors if x >= t0) / len(anchors)) if anchors else 1.0
@@ -237,30 +268,26 @@ def solve_zoom(frame: pd.DataFrame, candidate, patterns=None,
             width = bars / n
         else:
             width = 0.5
-        width_score = math.exp(-((width - 0.45) ** 2) / (2 * 0.25 ** 2))
+        width_score = math.exp(-((width - 0.70) ** 2) / (2 * 0.22 ** 2))
         edge = _pattern_edge_y(pats, idx[-1])
         if edge and atr > 0:
             reaction = math.exp(-abs(live - edge) / (3.0 * atr))
         else:
             reaction = 0.6
-        fill = (w_hi - w_lo) / yspan                     # candles vs panel
-        # margins must breathe: a window whose candles+tool touch both edges
-        # is the squashed «له شده» picture he rejects
-        fill_score = 1.0 if fill <= 0.93 else max(0.0, 1.0 - (fill - 0.93) * 6)
-        # needle guard: the MEDIAN candle must own a visible share of the
-        # panel height (سوزنی نشه); a deep old wick drags yspan and needles
-        # every candle — that window loses here
+        # needle guard: the MEDIAN candle must stay visible (سوزنی نشه)
         needle = med_range / yspan if yspan > 0 else 0.0
-        candle_score = 0.0 if needle < 0.008 else (
-            1.0 if needle >= 0.015 else (needle - 0.008) / 0.007)
+        candle_score = 0.0 if needle < 0.006 else (
+            1.0 if needle >= 0.012 else (needle - 0.006) / 0.006)
         tool_score = 1.0
         if tool and yspan > 0:
             tshare = (tool_hi - tool_lo) / yspan
-            tool_score = 1.0 if tshare <= 0.80 else max(0.0, 1.0 - (tshare - 0.80) * 4)
+            tool_score = 1.0 if tshare <= 0.85 else max(0.0, 1.0 - (tshare - 0.85) * 4)
         score = (2.0 * in_frac + 1.5 * width_score + 1.5 * reaction
-                 + fill_score + candle_score + tool_score)
+                 + candle_score + tool_score)
         if score > best_score:
             best_score = score
             best = {"n": float(n), "y_lo": y_lo, "y_hi": y_hi,
-                    "score": score, "long": 1.0 if is_long else 0.0}
+                    "score": score, "long": 1.0 if is_long else 0.0,
+                    "height_fill": fill_h,
+                    "right_gap": future / (n + future)}
     return best

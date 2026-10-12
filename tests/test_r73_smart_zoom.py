@@ -173,7 +173,69 @@ def test_generate_chart_survives_a_boom_in_the_solver(monkeypatch):
     assert png and len(png) > 5000
 
 
-# ── 4) design invariants: his background / colours / frame / logos untouched ──
+# ── 4) his 10-12 numeric laws: width ≥75%, right gap ≤20%, height ≤70% ──
+
+def test_width_law_right_gap_never_over_20pct():
+    df = _tape(400)
+    spot = solve_zoom(df, _cand("LONG"), patterns=_pats(),
+                      confirmed=True, is_spot=True, chart_tf="4h")
+    perp = solve_zoom(df, _cand("LONG"), patterns=_pats(),
+                      confirmed=True, is_spot=False, chart_tf="1h")
+    assert spot and perp
+    assert int(spot["n"]) >= 180                 # 4×45 future bars
+    assert int(perp["n"]) >= 112                 # 4×28 future bars
+    assert spot["right_gap"] <= 0.20 and perp["right_gap"] <= 0.20
+
+
+def test_height_fill_capped_and_candles_take_their_side():
+    df = _tape(400, seed=5)
+    import math as _m
+    for direction, low_side in (("LONG", True), ("SHORT", False)):
+        # a tool INSIDE the candle range: the clean band then belongs to the
+        # tool side alone (a tool beyond the candles consumes its own side)
+        w0 = df.tail(200)
+        lo2, hi2 = float(w0["low"].min()), float(w0["high"].max())
+        mid = (lo2 + hi2) / 2
+        cand = _cand(direction)
+        cand.entry_zone_bottom, cand.entry_zone_top = mid * 0.999, mid * 1.001
+        cand.planned_entry = mid
+        if direction == "LONG":
+            cand.sl, cand.tp1, cand.tp2 = lo2 * 1.001, hi2 * 0.985, hi2 * 0.995
+        else:
+            cand.sl, cand.tp1, cand.tp2 = hi2 * 0.999, lo2 * 1.015, lo2 * 1.005
+        plan = solve_zoom(df, cand, patterns=_pats(),
+                          confirmed=True, is_spot=False, chart_tf="1h")
+        assert plan, direction
+        n = int(plan["n"])
+        w = df.tail(n)
+        lc_lo = _m.log10(float(w["low"].min()))
+        lc_hi = _m.log10(float(w["high"].max()))
+        lg_lo = _m.log10(plan["y_lo"])
+        lg_hi = _m.log10(plan["y_hi"])
+        fill_h = (lc_hi - lc_lo) / (lg_hi - lg_lo)
+        assert fill_h <= 0.70 + 1e-9, (direction, fill_h)      # ≤65-70% height
+        band = 1.0 - fill_h
+        assert band >= 0.25, (direction, band)                 # 25-30% tool band
+        if low_side:   # LONG → candles LOW: their top under 75% of the panel
+            assert (lc_hi - lg_lo) / (lg_hi - lg_lo) <= 0.75
+        else:          # SHORT → candles HIGH: their bottom above 25%
+            assert (lc_lo - lg_lo) / (lg_hi - lg_lo) >= 0.25
+
+
+def test_perp_intraday_never_shows_more_than_320_candles():
+    df = _tape(400, seed=9)
+    ts0 = str(df["timestamp"].iloc[10])
+    ts1 = str(df["timestamp"].iloc[390])
+    deep = _pats(ts0, ts1, float(df["low"].iloc[10]), float(df["high"].iloc[390]))
+    perp = solve_zoom(df, _cand("LONG"), patterns=deep, confirmed=True,
+                      is_spot=False, chart_tf="15m")
+    assert perp and int(perp["n"]) <= 320
+    spot = solve_zoom(df, _cand("LONG"), patterns=deep, confirmed=True,
+                      is_spot=True, chart_tf="4h")
+    assert spot and int(spot["n"]) > 320          # spot may go deeper
+
+
+# ── 5) design invariants: his background / colours / frame / logos untouched ──
 
 def test_design_tokens_are_untouched_by_the_zoom_round():
     src = open(os.path.join(_ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()

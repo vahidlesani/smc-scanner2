@@ -2401,7 +2401,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         _sz73 = None
         try:
             from analysis.smart_zoom import solve_zoom as _solve73
-            _sz73 = _solve73(df, candidate, confirmed=bool(confirmed))
+            _sz73 = _solve73(df, candidate, confirmed=bool(confirmed),
+                             is_spot=bool(_is_spot), chart_tf=str(_chart_tf))
         except Exception as _z73e:
             print(f"R73 smart-zoom fallback: {_z73e}")
             _sz73 = None
