@@ -3562,9 +3562,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         # CryptoCove profit percentage label at the top
                         _diff = _tp8 - _bt8
                         _pct_gain = (_tp8 / _bt8 - 1.0) * 100.0
-                        _ticks = int(round(_diff * 1000)) if _diff < 10 else int(round(_diff))
+                        # R72 cosmetic fix (his «خرابه‌هاش درست بشه»): «:.4g»
+                        # printed «2.172e+04» on the green-box label — plain
+                        # thousands-separated decimals instead; the duplicate
+                        # tick count is dropped (it repeated the same number).
+                        _diff_txt = (f"{_diff:,.4f}".rstrip("0").rstrip(".")
+                                     if _diff < 10 else f"{_diff:,.0f}")
                         ax.text(_mx8, _tp8 * 1.025,
-                                f"{_diff:.4g} ({_pct_gain:.2f}%) {_ticks:,}",
+                                f"{_diff_txt} ({_pct_gain:.2f}%)",
                                 color="#1F2328", fontsize=9.0, fontweight="bold",
                                 ha="center", va="bottom", zorder=9)
                 except Exception:

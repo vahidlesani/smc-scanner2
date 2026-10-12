@@ -257,7 +257,12 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
         ax.annotate('', xy=(arrow_x, target_price), xytext=(arrow_x, upper_level),
                     arrowprops=dict(arrowstyle='->', color='#1F2328', lw=1.5, mutation_scale=12), zorder=7)
         ticks = int(round(delta_p * 1000)) if delta_p < 10 else int(round(delta_p))
-        label_text = f'{delta_p:.4g} (+{pct_gain:.2f}%) {ticks:,}'
+        # R72 cosmetic fix (his «خرابه‌هاش درست بشه»): «:.4g» printed
+        # «2.173e+04» on the green-box label — thousands-separated decimals
+        # instead; the duplicate tick count repeated the same number.
+        delta_txt = (f'{delta_p:,.4f}'.rstrip('0').rstrip('.')
+                     if delta_p < 10 else f'{delta_p:,.0f}')
+        label_text = f'{delta_txt} (+{pct_gain:.2f}%)'
         ax.text(arrow_x, target_price * 1.018, label_text,
                 color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='bottom', zorder=8)
         y_max = max(y_max_data, target_price) * 1.07
