@@ -15,7 +15,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, Rectangle
-from matplotlib.ticker import FuncFormatter, MaxNLocator, AutoMinorLocator
+from matplotlib.ticker import FuncFormatter, MaxNLocator, AutoMinorLocator, Locator
 import matplotlib.image as mpimg
 import mplfinance as mpf
 import math
@@ -947,22 +947,18 @@ def _log_axis_decorate(ax) -> None:
         _lo52, _hi52 = ax.get_ylim()
         _dec52 = (math.log10(_hi52) - math.log10(_lo52)
                   if (_lo52 > 0 and _hi52 > 0) else 99.0)
-        if _dec52 < 1.0:
-            # R64.3 (his 10-03, HBAR 1h: «چرا روی محور قیمت فقط یک قیمت
-            # داره؟») — a sub-decade view (0.0964→0.1071) leaves the decade
-            # locator ONE label (0.1); every subs tick falls outside the
-            # view. Fixed GEOMETRIC ticks inside the view keep the log scale
-            # AND a readable axis.
-            _t52 = np.geomspace(max(_lo52, 1e-12), _hi52,
-                                6 if _dec52 < 0.3 else 4)
+        # R64.3 (his 10-03, HBAR 1h: «چرا روی محور قیمت فقط یک قیمت داره؟»)
+        # — a sub-decade view leaves a decade locator ONE label; geometric
+        # ticks inside the view keep the log scale AND a readable axis.
+        # ── Viva 10-12 chrome batch («محور قیمت کامل مثل CryptoCove»): the
+        # ladder is now CRYPTOCOVE-DENSE on EVERY span — ~34 geometric ticks
+        # (their refs print 34-44 labels on decade AND sub-decade views alike;
+        # the old 4-tick sub-decade / 18-tick decade ladders read as empty).
+        if _lo52 > 0 and _hi52 > _lo52:
+            _t52 = np.geomspace(_lo52, _hi52, 34)
             ax.yaxis.set_major_locator(_mt52.FixedLocator(_t52))
-            ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
-            ax.yaxis.set_minor_formatter(_mt52.NullFormatter())
-        else:
-            ax.yaxis.set_major_locator(
-                _mt52.LogLocator(base=10.0, subs="all", numticks=18))
-            ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
-            ax.yaxis.set_minor_formatter(_mt52.NullFormatter())
+        ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
+        ax.yaxis.set_minor_formatter(_mt52.NullFormatter())
     except Exception as exc:
         print(f"log-axis decorate warning: {exc}")
 
@@ -1793,10 +1789,16 @@ def _chart_cache_get(key: tuple):
 
 def _chart_cache_set(key: tuple, val: bytes) -> None:
     _CHART_CACHE[key] = val
-    # Railway RAM guard (Viva 09-17): PNGs are ~2MB each — keep only the last 6
-    # (instant retries/mirrors reuse them); anything bigger risks an OOM kill.
-    if len(_CHART_CACHE) > 6:
-        for _k in list(_CHART_CACHE.keys())[:len(_CHART_CACHE) - 6]:
+    # Railway RAM guard (Viva 09-17): PNGs are ~2MB each — keep only the last
+    # few (instant retries/mirrors reuse them); anything bigger risks an OOM
+    # kill. Viva 10-12 consumption law («مصرف railway نباید بالا بره؛ تأیید و
+    # بریک باید آنی برسه»): measured probe PNGs at 240dpi are 0.3-0.5MB, so
+    # 12 slots ≈ 6MB worst case — one full lifecycle (alert → confirm →
+    # break → mirror reposts) now hits BYTES instead of re-rendering, while
+    # the live-price key component still guarantees a fresh picture whenever
+    # the market on the chart actually moved.
+    if len(_CHART_CACHE) > 12:
+        for _k in list(_CHART_CACHE.keys())[:len(_CHART_CACHE) - 12]:
             _CHART_CACHE.pop(_k, None)
 
 
@@ -2325,36 +2327,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     if _hit is not None:
         return _hit
 
-    if _is_spot:
-        # STAGE-2 (تأیید ویوا ۲۰۲۶-۱۰-۱۲): انجین و رندر جدیدِ هستهٔ واحد فقط با
-        # VIVA_SPOT_V2=1 فعال می‌شود (تا کالیبراسیون با چارت‌های خودِ ویوا)؛
-        # پیش‌فرض = رندرِ قبلی. هر خطا → بازگشت به رندر قبلی.
-        try:
-            import os as _os2
-            if _os2.getenv("VIVA_SPOT_V2", "0") != "1":
-                raise RuntimeError("VIVA_SPOT_V2 off")
-            from analysis import engine_spot as _es2
-            from tools.render_spot_cryptocove import render as _rs2
-            _tf2 = str((candidate.metadata or {}).get("chart_view_tf")
-                       or getattr(candidate, "trigger_timeframe", "4h")).lower()
-            if _tf2 in _es2.SPOT_TFS:
-                _a2 = _es2.analyze(df, _tf2)
-                if _a2:
-                    _spot_png = _rs2(df, _a2, None,
-                                     symbol=str(getattr(candidate, "symbol", "")))
-                    if _spot_png and len(_spot_png) > 1000:
-                        _chart_cache_set(_ck, _spot_png)
-                        return _spot_png
-        except Exception as _spot_err:
-            print(f"stage2 spot render fallback: {_spot_err}")
-        try:
-            from analysis.spot_pattern_engine import render_cryptocove_spot_chart
-            _spot_png = render_cryptocove_spot_chart(df, candidate, confirmed=confirmed)
-            if _spot_png and len(_spot_png) > 1000:
-                _chart_cache_set(_ck, _spot_png)
-                return _spot_png
-        except Exception as _spot_err:
-            print(f"CryptoCove spot render fallback: {_spot_err}")
+    # ── Viva 10-12 («همه باید با رندر جدید بیاد»): EVERY chart — spot AND
+    # futures, every setup timeframe — renders through the ONE unified R73
+    # pass below (mplfinance + smart-zoom + full chrome). The two prototype
+    # spot renderers (analysis/spot_pattern_engine.py lemon-gradient and
+    # tools/render_spot_cryptocove.py cream) are RETIRED from dispatch: they
+    # produced the charts he rejected on 10-12 — missing header/watermark/
+    # footer chrome and solid trendlines extrapolated off-canvas («از هندسه
+    # خارج»). Their modules stay on disk for the stage-1 tests only. The
+    # unified pass keeps its own exception-only fallbacks inside (old window
+    # laws when the solver returns None), per the production-fallback law.
     # Always initialize chart-only price-axis tags before entering any render branch.
     # This is display state only and never affects setup detection or message format.
     _axis_tags: list = []
@@ -2544,6 +2526,24 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             ylabel_lower="VOLUME",
             warn_too_much_data=500,
         )
+        # ── Viva 10-12 chrome batch («بدنهٔ کندل لبهٔ ظریف + رنگ شفاف
+        # باکیفیت مثل رفرنس‌ها»): every candle body gets a SLIGHT darker edge
+        # and a whisper of transparency so the tape reads as crisp painted
+        # bodies instead of flat stickers. Bodies whose edge already differs
+        # from the fill (ink theme) keep their edge; only same-color edges
+        # are darkened. Volume bars live on axes[2] and are untouched.
+        try:
+            for _rect in list(axes[0].patches):
+                if isinstance(_rect, Rectangle) and 0.30 < _rect.get_width() < 0.95:
+                    _fc = _rect.get_facecolor()
+                    _ec = _rect.get_edgecolor()
+                    if all(abs(_fc[i] - _ec[i]) < 0.02 for i in range(3)):
+                        _rect.set_edgecolor(
+                            tuple(max(0.0, c * 0.68) for c in _fc[:3]) + (0.95,))
+                    _rect.set_linewidth(0.7)
+                    _rect.set_alpha(0.93)
+        except Exception as _cedge_exc:
+            print(f"Chart candle-edge warning: {_cedge_exc}")
         # ── SPOT charts are LOG-scale (Viva 09-22, verbatim: «اسپات لاگ‌اسکیل»).
         # The scale is applied AFTER mplfinance draws, so candles, zones, lines,
         # the ladder and the corner notes — all painted in DATA coordinates —
@@ -2651,16 +2651,28 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     pass
                 return _tk.strftime("%m-%d\n%H:%M")
             return ""
+        # ── Viva 10-12 chrome batch: an intraday frame (15m/1h) spans only
+        # 1-3 calendar days, so day-boundary ticks left the time axis with
+        # two lonely labels. Intraday TFs now get ~10 evenly spaced
+        # date+Tehran-time stamps like the CryptoCove refs; daily and macro
+        # TFs keep the day-boundary ticks.
+        _tf_min74 = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
+                     "1h": 60, "2h": 120, "4h": 240, "6h": 360,
+                     "8h": 480, "12h": 720}.get(str(_chart_tf).lower(), 1440)
         _day_ticks = []
-        _seen_days = set()
-        _min_gap = max(1, len(_times) // 9)
-        _last_i = -10 ** 9
-        for _i, _t in enumerate(_times):
-            _d = pd.Timestamp(_t).date()
-            if _d not in _seen_days and _i - _last_i >= _min_gap:
-                _day_ticks.append(_i)
-                _seen_days.add(_d)
-                _last_i = _i
+        if _tf_min74 < 1440:
+            _step74 = max(1, len(_times) // 10)
+            _day_ticks = list(range(0, len(_times), _step74))
+        else:
+            _seen_days = set()
+            _min_gap = max(1, len(_times) // 9)
+            _last_i = -10 ** 9
+            for _i, _t in enumerate(_times):
+                _d = pd.Timestamp(_t).date()
+                if _d not in _seen_days and _i - _last_i >= _min_gap:
+                    _day_ticks.append(_i)
+                    _seen_days.add(_d)
+                    _last_i = _i
         # NOTE: the youngest candle does NOT get a tick — the dark LIVE stamp
         # (figure-level, below) IS its label; two labels would overlap.
         _vol_ax.set_xticks(_day_ticks)
@@ -2683,7 +2695,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         ax.tick_params(
             axis="y",
             colors=CHART_THEME["text"],
-            labelsize=9.0,
+            # Viva 10-12: the CryptoCove-dense ladder (34 labels) needs a
+            # smaller type size than the old 8-tick ladder to stay legible.
+            labelsize=7.2,
             labelright=True,
             right=True,
             pad=12,
@@ -2692,7 +2706,32 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         )
         # TradingView-like readable price ladder: measured major intervals,
         # light minor guides, precise plain-number formatting on the right.
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=8, min_n_ticks=6))
+        # ── Viva 10-12 chrome batch («محور قیمت کامل مثل CryptoCove»): the
+        # reference ladders carry ~30-40 labels — a GEOMETRIC ladder on the
+        # log axis (equal % steps, exactly what a log eye reads) instead of
+        # the old 8-tick MaxNLocator desert. The locator recomputes from the
+        # live view interval at draw time, so zoom changes stay correct.
+        class _GeoLadderLocator(Locator):
+            """~34 geometrically spaced ticks across the current view."""
+
+            _N = 34
+
+            def tick_values(self, vmin, vmax):
+                if not (vmax > vmin > 0):
+                    return []
+                return list(np.geomspace(vmin, vmax, self._N))
+
+            def __call__(self):
+                try:
+                    vmin, vmax = self.axis.get_view_interval()
+                    return self.tick_values(float(vmin), float(vmax))
+                except Exception:
+                    return []
+
+        if ax.get_yscale() == "log":
+            ax.yaxis.set_major_locator(_GeoLadderLocator())
+        else:
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=28, min_n_ticks=12))
         if ax.get_yscale() == "linear":   # AutoMinorLocator is linear-only
             ax.yaxis.set_minor_locator(AutoMinorLocator(2))
         ax.grid(which="minor", axis="y", color=CHART_THEME["grid"], alpha=0.16, linewidth=0.45)
@@ -2713,7 +2752,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # future margin read as «یک سوم خالی» — HALVE it and let real
         # candles fill the reclaimed width (his reference charts keep
         # only a slim right margin for the pills).
-        future = 45 if _is_spot else (28 if _cfm73 else 26)
+        # ── Viva 10-12 chrome batch («محور قیمت کامل مثل CryptoCove ولی حاشیه
+        # راست باریک — الان خیلی خالیه»): the reserved band is now
+        # PROPORTIONAL — ~11% of the candle count, clamped 16–40 bars — so a
+        # 300-candle macro frame and a 140-candle intraday frame both show the
+        # same slim CryptoCove band instead of a fixed 45-bar desert. The
+        # R73 solver (analysis/smart_zoom.py) uses the SAME formula, so the
+        # fill/gap metrics it reports match what is painted here.
+        future = int(max(16, min(40, round(0.11 * count))))
         for chart_ax in axes:
             chart_ax.set_xlim(-1, count + future)
         if _is_spot:
@@ -4749,6 +4795,25 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             fontsize=8,
             va="center",
         )
+        # ── Viva 10-12 chrome batch («اطلاعات کامل بالای چارت مثل TradingView:
+        # کوین، صرافی، تایم‌فریم، OHLC»): a third header line carries the
+        # TradingView-style OHLC readout of the LIVE candle with its change
+        # and the venue. The two frozen lines above are untouched.
+        try:
+            _o73, _h73, _l73, _c73 = (float(frame[k].iloc[-1])
+                                      for k in ("open", "high", "low", "close"))
+            _chg73 = _c73 - _o73
+            _pct73 = 100.0 * _chg73 / _o73 if _o73 else 0.0
+            fig.text(
+                0.055, 0.900,
+                f"O {_price(_o73)}   H {_price(_h73)}   L {_price(_l73)}   C {_price(_c73)}"
+                f"   {_chg73:+,.6g} ({_pct73:+.2f}%)   ·   BINANCE "
+                f"{str((candidate.metadata or {}).get('market') or ('SPOT' if _is_spot else 'FUTURES')).upper()}",
+                color=("#06705E" if _chg73 >= 0 else "#B81B29"),
+                fontsize=8, fontweight="bold", va="center",
+            )
+        except Exception as _ohlc_exc:
+            print(f"Chart OHLC-line warning: {_ohlc_exc}")
         # ── Viva 09-21: «چرا چارت پینوال کیو استیکر بنام خودش نداره و بنام viva
         # setup درج میشه در جای استیکر هر ستاپ؟» — the header word is the FALLBACK
         # only. When the setup's own badge exists it is the label; when it does
@@ -4782,6 +4847,26 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                            "edgecolor": "none"})
         except Exception as _exc:
             print(f"Chart live-stamp warning: {_exc}")
+
+        # ── Viva 10-12 chrome batch («قیمت لایو روی محور قیمت روشن باشه» +
+        # «ساعت زیرش صورتی مثل CryptoCove»): a PINK cell rides the price
+        # ladder at the exact live price — price on top, Tehran HH:MM:SS
+        # under it — exactly like the reference charts (their pink cell reads
+        # «1.2051 / 17:18:52»). Drawn in figure space after the final draw so
+        # it lands ON the axis band, never over the candles.
+        try:
+            _lpx = float(frame["close"].iloc[-1])
+            _ly_fig = fig.transFigure.inverted().transform(
+                ax.transData.transform((max(0, count - 1), _lpx)))[1]
+            _lx_fig = ax.get_position().x1 + 0.0035
+            _hhmmss = datetime.now(ZoneInfo("Asia/Tehran")).strftime("%H:%M:%S")
+            fig.text(_lx_fig, _ly_fig, f" {_price(_lpx)} \n {_hhmmss} ",
+                     ha="left", va="center", fontsize=7.0, fontweight="bold",
+                     color="#7E1030", linespacing=1.15, zorder=46,
+                     bbox={"boxstyle": "square,pad=0.22",
+                           "facecolor": "#F6A9C4", "edgecolor": "none"})
+        except Exception as _exc:
+            print(f"Chart live-axis-cell warning: {_exc}")
 
         buffer = io.BytesIO()
 

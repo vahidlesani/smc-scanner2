@@ -182,9 +182,14 @@ def test_width_law_right_gap_never_over_20pct():
     perp = solve_zoom(df, _cand("LONG"), patterns=_pats(),
                       confirmed=True, is_spot=False, chart_tf="1h")
     assert spot and perp
-    assert int(spot["n"]) >= 180                 # 4×45 future bars
-    assert int(perp["n"]) >= 112                 # 4×28 future bars
+    # Viva 10-12 chrome batch superseded the fixed 45/28/26 future bars with a
+    # PROPORTIONAL band (0.11·n clamped 16–40): n_min = 4×future(n_max) →
+    # spot 4h: 4×40=160, perp 1h (320 cap): 4×35=140.
+    assert int(spot["n"]) >= 160                 # 4×40 proportional future
+    assert int(perp["n"]) >= 140                 # 4×35 proportional future
     assert spot["right_gap"] <= 0.20 and perp["right_gap"] <= 0.20
+    # the slim CryptoCove band: ~10% painted gap, far inside the 20% law
+    assert spot["right_gap"] <= 0.12 and perp["right_gap"] <= 0.12
 
 
 def test_height_fill_capped_and_candles_take_their_side():

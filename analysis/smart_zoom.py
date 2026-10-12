@@ -224,8 +224,15 @@ def solve_zoom(frame: pd.DataFrame, candidate, patterns=None,
     if n_max < MIN_N:
         return None
     # ── WIDTH law: the right margin (future bars after the live candle) may
-    # never eat more than 20% of the plot width → count ≥ 4×future
-    future = 45 if is_spot else (28 if confirmed else 26)
+    # never eat more than 20% of the plot width → count ≥ 4×future.
+    # Viva 10-12 chrome batch: the margin is PROPORTIONAL (~11% of the candle
+    # count, clamped 16–40) — the SAME formula messages_v7 paints with, so the
+    # gap metric reported here equals the band on the canvas. With 0.11·n the
+    # gap is ≈9.9% for every n, far inside the 20% law; the clamp only binds
+    # below n≈64, which MIN_N already excludes.
+    def _future_bars(nn: int) -> int:
+        return int(max(16, min(40, round(0.11 * nn))))
+    future = _future_bars(n_max)
     n_min = max(MIN_N, int(math.ceil(4.0 * future)))
     if is_spot and str(chart_tf).lower() in ("3d", "1w"):
         n_min = max(n_min, 240)          # his «در ۳ روزه کمی بیشتر باشه»
@@ -303,5 +310,5 @@ def solve_zoom(frame: pd.DataFrame, candidate, patterns=None,
             best = {"n": float(n), "y_lo": y_lo, "y_hi": y_hi,
                     "score": score, "long": 1.0 if is_long else 0.0,
                     "height_fill": fill_h,
-                    "right_gap": future / (n + future)}
+                    "right_gap": _future_bars(int(n)) / (n + _future_bars(int(n)))}
     return best
