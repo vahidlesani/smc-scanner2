@@ -2390,7 +2390,24 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # re-fit instead of stretching the zoom over a month of candles.
         except Exception:
             pass
-        if _is_spot:
+        # ── R73 SMART-ZOOM (his 10-12: «باید بهترین پیوتها رو انتخاب بکنه و
+        # بعدش کندلها رو هم از نظر ارتفاع هم از نظر تعداد در حدی انتخاب بکنه که
+        # همه جای ابزار لانگ شورت باشه هم بهترین شکل پترن یا ترندلاین رسم بشه
+        # .. نه اینکه کل ارتفاع چارت رو از سقف تا کف بیاره .. باید لگاریتمی باشه
+        # .. شاید جایی ۹۰ تا کندل .. یه جا ۲۰۰ تا .. یه جا ۳۰۰ تا پس نباید
+        # محدودیت بذاریم»): the engine searches count + log price window; on
+        # ANY doubt it returns None and the old window laws below run as the
+        # production fallback.
+        _sz73 = None
+        try:
+            from analysis.smart_zoom import solve_zoom as _solve73
+            _sz73 = _solve73(df, candidate, confirmed=bool(confirmed))
+        except Exception as _z73e:
+            print(f"R73 smart-zoom fallback: {_z73e}")
+            _sz73 = None
+        if _sz73:
+            _lookback = max(30, min(int(_sz73["n"]), len(df)))
+        elif _is_spot:
             # CryptoCove Spot Zoom Law: dynamically encompass the true macro peak (160–350 bars)
             try:
                 _highs_all = df["high"].astype(float).to_numpy()
@@ -2453,6 +2470,22 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _lock63(candidate, frame=frame)
         except Exception as _l63:
             print(f"R63 snapshot-lock warning: {_l63}")
+        # ── R73 PIVOT-SNAP (his 10-12: «زوم ترندها و ترندلاین‌های سینگل نباید
+        # روی هوا شروع بشن بلکه باید بشینه روی پیوت .. چه بادی چه شدو»): every
+        # stored line endpoint settles onto the wick (high/low) or body
+        # (open/close) of the bar at its OWN timestamp — deterministic, so a
+        # locked chain paints the same snapped geometry on every zoom/update.
+        try:
+            from analysis.smart_zoom import snap_points_to_pivots as _snap73, \
+                snap_pattern_commands as _snapp73
+            _md73 = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+            if _md73.get("render_patterns"):
+                _md73["render_patterns"] = _snapp73(_md73.get("render_patterns"), frame)
+            for _k73 in ("viva_upper_points", "viva_lower_points"):
+                if _md73.get(_k73):
+                    _md73[_k73] = _snap73(frame, _md73.get(_k73))
+        except Exception as _s73:
+            print(f"R73 pivot-snap warning: {_s73}")
         if _CANDLE_STYLE == "cryptocove":
             # r59 PREVIEW only — Viva judges before it becomes the default.
             market_colors = mpf.make_marketcolors(
@@ -3277,6 +3310,28 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # every touch pivot.
             _lns = []
             for _ln0 in (_pat.get("lines") or []):
+                # R73 heal (root cause of empty charts): a points-only line
+                # (pivot families) carried no slope/intercept and the hard
+                # subscript below killed the WHOLE chart. Derive the line's
+                # own two-point fit instead — same angle the pivots define.
+                if isinstance(_ln0, dict) and "slope" not in _ln0:
+                    _pp0 = [p for p in (_ln0.get("points") or [])
+                            if isinstance(p, dict) and p.get("price") is not None]
+                    if len(_pp0) >= 2:
+                        try:
+                            _t0p = pd.Timestamp(str(_pp0[0].get("ts") or _pp0[0].get("timestamp")))
+                            _t1p = pd.Timestamp(str(_pp0[-1].get("ts") or _pp0[-1].get("timestamp")))
+                            _stp = ((frame.index[-1] - frame.index[-2]).total_seconds()
+                                    if len(frame) > 1 else 3600.0)
+                            _brs = max(1e-9, (_t1p - _t0p).total_seconds() / max(_stp, 1e-9))
+                            _ln0 = dict(_ln0)
+                            _ln0["slope"] = ((float(_pp0[-1].get("price"))
+                                              - float(_pp0[0].get("price"))) / _brs)
+                            _ln0["intercept"] = float(_pp0[0].get("price"))
+                        except Exception:
+                            continue
+                    else:
+                        continue
                 # the stored slope is price per TRIGGER-TF bar; on a stepped-up
                 # display TF a bar spans more time, so the slope rescales by
                 # 1/scale (15m→1h: ×4) — the line keeps its true angle.
@@ -3288,12 +3343,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # bent stored lines and forced the r51 per-TF re-fit).
                     try:
                         _x0f = float(_viva_points_xs(
-                            [{"timestamp": _pt8[0].get("ts")}], frame)[0])
+                            [{"timestamp": _pt8[0].get("ts")
+                              or _pt8[0].get("timestamp")}], frame)[0])
                         if not math.isfinite(_x0f):
                             raise ValueError("nan x")
                     except Exception:
                         _x0f = float(np.searchsorted(
-                            frame.index, pd.Timestamp(str(_pt8[0].get("ts")))))
+                            frame.index, pd.Timestamp(str(
+                                _pt8[0].get("ts") or _pt8[0].get("timestamp")))))
                     _ic8 = float(_pt8[0].get("price")) - _sl8 * _x0f
                 else:
                     if _is_spot:
@@ -4415,6 +4472,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _ovs28 = [v for v in _ovs28 if v is not None and math.isfinite(v) and v > 0]
             _atr28 = float((frame["high"] - frame["low"]).tail(14).mean())
             _win28 = None
+            # ── R73 SMART-ZOOM window (his 10-12): when the solver has a plan,
+            # its log-space window wins — the whole long/short tool inside, no
+            # candle of the chosen window cut or squashed, and the tool's
+            # target side keeps a clean band (LONG headroom on TOP, SHORT on
+            # the BOTTOM, like a TradingView pan). Absent → R64 law below.
+            if _sz73:
+                try:
+                    _win28 = (float(_sz73["y_lo"]), float(_sz73["y_hi"]))
+                except Exception:
+                    _win28 = None
             # ── R64 SMART LOG ZOOM (his 10-02: «چارت‌ها تا حد امکان لگاریتمی …
             # اسپایک → محور جمع شه، کندل‌های فلت → محور باز شه»): on a LOG axis
             # the window is solved in log10 space — centering/padding become
@@ -4721,7 +4788,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         _chart_cache_set(_ck, _png)
         return _png
     except Exception as exc:
+        # R73 ops: a bare message hid the failing frame for rounds; the short
+        # traceback goes to the service log so «چارت خالی» is always traceable.
+        import traceback as _tb73
         print(f"Chart generation error {candidate.signal_id}: {exc}")
+        print(_tb73.format_exc(limit=6))
         return None
 
 
