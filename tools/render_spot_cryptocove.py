@@ -45,7 +45,8 @@ def _ts_axis(ax, df, view, tf):
     ax.xaxis.set_major_formatter(FuncFormatter(fmt))
 
 
-def render(df: pd.DataFrame, a: dict, path: str, symbol: str = "") -> str:
+def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "") -> "str | bytes":
+    """اگر path None باشد، بایت‌های PNG برمی‌گرداند (برای سیم‌کشی تلگرام)."""
     v = a["view"]
     n = len(df)
     x_from, x_to = v["x_from"], min(v["x_to"], n - 1 + v["pad_right"])
@@ -121,6 +122,12 @@ def render(df: pd.DataFrame, a: dict, path: str, symbol: str = "") -> str:
     ax.tick_params(labelsize=7.5)
     for s in ("top", "left"):
         ax.spines[s].set_visible(False)
+    if path is None:
+        import io
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png")
+        plt.close(fig)
+        return buf.getvalue()
     fig.savefig(path)
     plt.close(fig)
     return path

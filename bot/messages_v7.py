@@ -2329,6 +2329,23 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         return _hit
 
     if _is_spot:
+        # STAGE-2 (تأیید ویوا ۲۰۲۶-۱۰-۱۲): انجین و رندر جدیدِ هستهٔ واحد اولویت
+        # دارد؛ هر خطا/نبودِ الگو → بازگشت به رندر قبلی (تولید هرگز نمی‌افتد).
+        try:
+            from analysis import engine_spot as _es2
+            from tools.render_spot_cryptocove import render as _rs2
+            _tf2 = str((candidate.metadata or {}).get("chart_view_tf")
+                       or getattr(candidate, "trigger_timeframe", "4h")).lower()
+            if _tf2 in _es2.SPOT_TFS:
+                _a2 = _es2.analyze(df, _tf2)
+                if _a2:
+                    _spot_png = _rs2(df, _a2, None,
+                                     symbol=str(getattr(candidate, "symbol", "")))
+                    if _spot_png and len(_spot_png) > 1000:
+                        _chart_cache_set(_ck, _spot_png)
+                        return _spot_png
+        except Exception as _spot_err:
+            print(f"stage2 spot render fallback: {_spot_err}")
         try:
             from analysis.spot_pattern_engine import render_cryptocove_spot_chart
             _spot_png = render_cryptocove_spot_chart(df, candidate, confirmed=confirmed)
