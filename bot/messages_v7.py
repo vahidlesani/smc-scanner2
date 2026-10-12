@@ -953,10 +953,8 @@ def _log_axis_decorate(ax) -> None:
             # locator ONE label (0.1); every subs tick falls outside the
             # view. Fixed GEOMETRIC ticks inside the view keep the log scale
             # AND a readable axis.
-            # 10-12 (his axis law: MORE price labels, spot AND perp) — 8-10
-            # explicit ticks (FixedLocator = identical on every mpl version).
             _t52 = np.geomspace(max(_lo52, 1e-12), _hi52,
-                                10 if _dec52 < 0.3 else 8)
+                                6 if _dec52 < 0.3 else 4)
             ax.yaxis.set_major_locator(_mt52.FixedLocator(_t52))
             ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
             ax.yaxis.set_minor_formatter(_mt52.NullFormatter())
@@ -2289,50 +2287,6 @@ def _last_resort_edges(frame, use_log: bool,
     return out
 
 
-def _count_incanvas_sloped_lines(fig) -> int:
-    """Viva 10-11 honesty veto: how many VISIBLE sloped Line2D artists sit
-    inside their own axes' canvas (figure-wide)? Horizontals (entry/stop/TP/
-    necklines), verticals (wicks), dots and patches never count. Returns -1
-    when the count itself errors (fail-open: never veto on doubt)."""
-    try:
-        import math
-        n = 0
-        for _ax in getattr(fig, "axes", []) or []:
-            try:
-                _xa, _xb = _ax.get_xlim()
-                _ya, _yb = _ax.get_ylim()
-            except Exception:
-                continue
-            _lox, _hix = (min(_xa, _xb), max(_xa, _xb))
-            _loy, _hiy = (min(_ya, _yb), max(_ya, _yb))
-            for _ln in getattr(_ax, "lines", []) or []:
-                try:
-                    if not _ln.get_visible():
-                        continue
-                    _xd = list(_ln.get_xdata())
-                    _yd = list(_ln.get_ydata())
-                    if len(_xd) < 2 or len(_yd) < 2:
-                        continue
-                    _x0, _x1 = float(_xd[0]), float(_xd[-1])
-                    _y0, _y1 = float(_yd[0]), float(_yd[-1])
-                    if not all(math.isfinite(v) for v in (_x0, _x1, _y0, _y1)):
-                        continue
-                    if abs(_x1 - _x0) < 1e-9:
-                        continue                       # vertical: wicks
-                    if abs((_y1 - _y0) / (_x1 - _x0)) < 1e-9:
-                        continue                       # horizontal: tools
-                    if max(_x0, _x1) < _lox or min(_x0, _x1) > _hix:
-                        continue                       # off-canvas x
-                    if max(_y0, _y1) < _loy or min(_y0, _y1) > _hiy:
-                        continue                       # off-canvas y
-                    n += 1
-                except Exception:
-                    continue
-        return n
-    except Exception:
-        return -1
-
-
 def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool = False, preconfirm_tool: bool = False) -> Optional[bytes]:
     # r61 CHART-DIET LAW (Viva 09-30: «چارت رو از اپلیکیشن فعلا حذف بکن ببینم
     # مصرف ریلوی پایینتر میاد»): one gate for every render in the product.
@@ -2353,26 +2307,6 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _mpl.rcParams["font.family"] = [_fam, "DejaVu Sans"]
     except Exception:
         pass
-    # ── 10-11 hotfix (his missing-lines charts: QNT/UNI/DOGE/AAVE/ONDO drew
-    # pivots but NO lines): spot DETECTION runs on tail(_spot_count) (300
-    # bars for 4H) while the chart rendered the FULL bundle frame (340) —
-    # G1 evaluated engine lines ~40 bars off, so steep lines flew off-chart
-    # and shallow ones floated beside their pivots (probed + photographed).
-    # R64's own law, enforced: chart ≡ scan window, BEFORE the live row
-    # joins (appending first would shift every index by one).
-    _is_spot = (str((candidate.metadata or {}).get("market")
-                    or getattr(candidate, "market", "") or "").upper() == "SPOT"
-                or bool((candidate.metadata or {}).get("is_spot")))
-    if _is_spot and df is not None and not df.empty:
-        try:
-            from analysis.spot_engine import _spot_count as _sc73w
-            _tf73w = str((candidate.metadata or {}).get("chart_view_tf")
-                         or getattr(candidate, "trigger_timeframe", "") or "").lower()
-            _n73w = int(_sc73w(_tf73w)) if _tf73w else 300
-            if _n73w > 0 and len(df) > _n73w:
-                df = df.tail(_n73w).reset_index(drop=True)
-        except Exception:
-            pass
     # ── the forming candle joins the tape as one more NORMAL candle (round 13)
     df, _live_row = _frame_with_live_candle(df, candidate)
     # r37 (Viva 09-26, «اسپات ابزار لانگ و شورت نداره»): ONE early flag — the
@@ -2380,6 +2314,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     # tags, INFO box, bottom ledger) is skipped on spot; the chart keeps the
     # CryptoCave signature instead: clean tape + shape lines + ONE green box
     # above the shape's upper edge (no arrow).
+    _is_spot = (str((candidate.metadata or {}).get("market")
+                    or getattr(candidate, "market", "") or "").upper() == "SPOT"
+                or bool((candidate.metadata or {}).get("is_spot")))
     # Viva 09-17 cost ruling: one render per (alert, frame, state) — retries,
     # mirrors and cross-channel posts reuse the bytes from this cache. Round 13:
     # the state now includes the live price (see _chart_cache_key).
@@ -2389,9 +2326,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         return _hit
 
     if _is_spot:
-        # STAGE-2 (تأیید ویوا ۲۰۲۶-۱۰-۱۲): انجین و رندر جدیدِ هستهٔ واحد اولویت
-        # دارد؛ هر خطا/نبودِ الگو → بازگشت به رندر قبلی (تولید هرگز نمی‌افتد).
+        # STAGE-2 (تأیید ویوا ۲۰۲۶-۱۰-۱۲): انجین و رندر جدیدِ هستهٔ واحد فقط با
+        # VIVA_SPOT_V2=1 فعال می‌شود (تا کالیبراسیون با چارت‌های خودِ ویوا)؛
+        # پیش‌فرض = رندرِ قبلی. هر خطا → بازگشت به رندر قبلی.
         try:
+            import os as _os2
+            if _os2.getenv("VIVA_SPOT_V2", "0") != "1":
+                raise RuntimeError("VIVA_SPOT_V2 off")
             from analysis import engine_spot as _es2
             from tools.render_spot_cryptocove import render as _rs2
             _tf2 = str((candidate.metadata or {}).get("chart_view_tf")
@@ -3335,30 +3276,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # edge through LIVE, dashed to the canvas edge, hollow circles on
             # every touch pivot.
             _lns = []
-            # Viva 10-11 MTF RESCALE (AERO class: a 4H slope painted per 1H
-            # bar = 4× too steep, and the pivot re-anchor multiplies the
-            # error by the pivot's (huge, negative) x — old-pattern lines
-            # flew to the sky): a LOCKED (stored) slope speaks per
-            # PATTERN-TF bar, so the effective scale also divides by
-            # pattern_tf/trigger_tf. Fresh chart-native refits (unlocked)
-            # already speak per chart bar and keep _tfscale untouched.
-            _pscale8 = _tfscale
-            try:
-                _ptf8 = str((candidate.metadata or {}).get("tl_context_tf") or "").lower()
-                _ttf8 = str(getattr(candidate, "trigger_timeframe", "") or "").lower()
-                if _ptf8 and _ttf8 and _ptf8 != _ttf8 \
-                        and (candidate.metadata or {}).get("snapshot_locked"):
-                    _mp8 = float(_tf_minutes(_ptf8) or 0)
-                    _mt8 = float(_tf_minutes(_ttf8) or 0)
-                    if _mp8 > 0 and _mt8 > 0:
-                        _pscale8 = _tfscale * (_mp8 / _mt8)
-            except Exception:
-                _pscale8 = _tfscale
             for _ln0 in (_pat.get("lines") or []):
                 # the stored slope is price per TRIGGER-TF bar; on a stepped-up
                 # display TF a bar spans more time, so the slope rescales by
                 # 1/scale (15m→1h: ×4) — the line keeps its true angle.
-                _sl8 = float(_ln0["slope"]) / _pscale8
+                _sl8 = float(_ln0["slope"]) / _tfscale
                 _pt8 = _ln0.get("points") or []
                 if _pt8:
                     # R63: TIME projection (a pre-window pivot extrapolates to
@@ -3378,7 +3300,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         _x0f = max(0.0, float(_ln0.get("x0", 0)))
                     else:
                         _x0f = max(0.0, (float(_ln0.get("x0", 0))
-                                         - max(0, len(df) - len(frame))) * _pscale8)
+                                         - max(0, len(df) - len(frame))) * _tfscale)
                     _ic8 = float(_ln0["intercept"])
                 _ln8 = {**_ln0, "slope": _sl8, "intercept": _ic8, "x0": _x0f}
                 # R16 phase 3: a log-calibrated line rescales in LOG space
@@ -3387,7 +3309,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 if _ln0.get("log_fit"):
                     try:
                         import math as _m8
-                        _ls8 = float(_ln0.get("log_slope") or 0.0) / _pscale8
+                        _ls8 = float(_ln0.get("log_slope") or 0.0) / _tfscale
                         _anch = ((_pt8[0].get("price") if _pt8 else None)
                                  or 10.0 ** (float(_ln0.get("log_slope") or 0.0)
                                              * float(_ln0.get("x0") or 0.0)
@@ -4776,29 +4698,6 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                            "edgecolor": "none"})
         except Exception as _exc:
             print(f"Chart live-stamp warning: {_exc}")
-
-        # ── Viva 10-11 HONESTY VETO (AERO class: the PAT pill cited a
-        # sloped pattern the chart never drew — «never send ugly/wrong
-        # patterns»): a chain CITING a sloped family must show ≥1 in-canvas
-        # sloped line. Zero → the photo is vetoed (None → the 10-10
-        # text-first law still publishes the TEXT; the photo follows when
-        # a render succeeds). Zones-only/pin setups cite no sloped family
-        # and are never touched by this gate.
-        try:
-            from analysis.snapshot_lock import _cited_pattern_family as _cit74
-            _fam74 = _cit74(candidate.metadata or {})
-            if _fam74 in ("TRIANGLE", "WEDGE", "CHANNEL", "TRENDLINE", "TL"):
-                _nsl74 = _count_incanvas_sloped_lines(fig)
-                if _nsl74 == 0:
-                    print(f"VIVA-HONESTY-VETO {candidate.signal_id}: cites {_fam74} "
-                          f"but 0 in-canvas sloped lines — photo vetoed, text-first fallback")
-                    try:
-                        plt.close(fig)
-                    except Exception:
-                        pass
-                    return None
-        except Exception as _exc74:
-            print(f"honesty-veto check skipped: {_exc74}")
 
         buffer = io.BytesIO()
 

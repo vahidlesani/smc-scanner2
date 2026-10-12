@@ -72,15 +72,10 @@ def test_break_cooldowns_down_24_up_never():
 
 
 # ── T5 ────────────────────────────────────────────────────────────────
-def test_spot_box_target_ceiling_first_tf_fallback():
-    from analysis.spot_pattern_engine import _spot_box_target as box
-    assert box(100.0, "4h", 180.0) == 180.0     # structural ceiling wins
-    assert box(100.0, "1d", 100.2) == 175.0     # dust → 1d fallback 1.75x
-    assert box(100.0, "4h", 0) == 125.0
-    assert box(100.0, "8h", None) == 135.0
-    assert box(100.0, "12h", None) == 150.0
-    assert box(100.0, "3d", None) == 250.0
-    assert box(100.0, "1w", None) == 300.0
+# NOTE(test_spot_box_target_ceiling_first_tf_fallback): removed 2026-10-12 —
+# it encoded the Oct-10 "ceiling-first box" chart surgery, which was reverted
+# to the Oct-6 baseline geometry by the user's request ("خوبهاش بمونه،
+# خرابه‌هاش درست بشه"). _spot_box_target no longer exists.
 
 
 # ── T6/T7 helpers ─────────────────────────────────────────────────────

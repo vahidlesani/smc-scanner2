@@ -65,33 +65,14 @@ def _has_trade_lines(md: Dict[str, Any]) -> bool:
     return (isinstance(up, list) and len(up) >= 2) or (isinstance(lo, list) and len(lo) >= 2)
 
 
-def _cited_pattern_family(md: Dict[str, Any]) -> str:
-    """Family (TRIANGLE/WEDGE/CHANNEL/TRENDLINE/...) of the pattern the chain
-    CITES as its justification (the PAT pill reads these keys)."""
-    for k in ("tl_pattern", "viva_pattern", "pattern_type"):
-        v = str(md.get(k) or "").upper().strip()
-        if v and v != "NONE":
-            return v.split("_")[0]
-    return ""
-
-
 def unify_trade_geometry(md: Dict[str, Any]) -> bool:
-    """G1: one geometry. Returns True when render-fitter lines were removed.
-
-    Viva 10-11 (AERO class: the chart cited PAT 4H TRIANGLE but drew no
-    pattern — the label Madd while the drawing was stripped): the JUSTIFYING
-    pattern (the cited family) is NEVER removed — only FOREIGN render-fitter
-    lines (a different family than the trade, the HYPE-T318773 second
-    geometry G1 was built for) are dropped. Chains that cite nothing keep
-    the legacy behavior (legacy r33 snapshots still clean on restore).
-    """
+    """G1: one geometry. Returns True when render-fitter lines were removed."""
     if not isinstance(md, dict):
         return False
     if str(md.get("strategy_variant") or "").upper() != "VIVA_TLBREAK":
         return False
     if not _has_trade_lines(md):
         return False
-    _cited = _cited_pattern_family(md)
     pats = list(md.get("render_patterns") or [])
     kept = []
     removed = False
@@ -107,10 +88,6 @@ def unify_trade_geometry(md: Dict[str, Any]) -> bool:
             continue
         t = str(p.get("type") or "").upper()
         if p.get("trade_geometry") or t == "RANGE":
-            kept.append(p)
-        elif _cited and t.split("_")[0] == _cited:
-            # the justifying pattern stays: the PAT pill cites it, so the
-            # chart must draw it (geometry+message sync law).
             kept.append(p)
         else:
             removed = True

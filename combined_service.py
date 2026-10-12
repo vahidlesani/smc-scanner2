@@ -49,6 +49,11 @@ def _run_scanner() -> None:
 
 
 def main() -> None:
+    try:
+        from scripts.purge_render_locks import purge_once
+        purge_once()
+    except Exception as exc:
+        print(f"purge hook skipped: {exc}")
     scanner = threading.Thread(
         target=_run_scanner,
         name="viva-scanner",

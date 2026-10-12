@@ -32,7 +32,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.image as mpimg
-from matplotlib.ticker import FuncFormatter, LogLocator, MaxNLocator, FixedLocator
+from matplotlib.ticker import FuncFormatter, LogLocator
 
 
 def _map_pattern_title(pat_type: str, pat_name_fa: str = "") -> str:
@@ -76,137 +76,6 @@ def _map_pattern_title(pat_type: str, pat_name_fa: str = "") -> str:
     return pat_upper.replace("_", " ").title() or "Macro Structure"
 
 
-_SPOT_BOX_TF_MULT = {"4h": 1.25, "8h": 1.35, "12h": 1.50,
-                     "1d": 1.75, "3d": 2.50, "1w": 3.00}
-
-
-def _spot_box_target(upper_level: float, tf: str, ceiling=None) -> float:
-    """10-10 (his spot-box law): the green box rides to the NEXT STRUCTURAL
-    ceiling; only in virgin ATH air (no ceiling) does the TF-sized fallback
-    apply — never a flat 25% for every timeframe. Pure (unit-tested)."""
-    try:
-        up = float(upper_level)
-    except Exception:
-        up = 0.0
-    try:
-        ce = float(ceiling or 0.0)
-    except Exception:
-        ce = 0.0
-    if ce > up * 1.005:
-        return ce
-    mult = _SPOT_BOX_TF_MULT.get(str(tf or "").lower(), 1.25)
-    return up * mult
-
-
-def _spot_future_bars(n: int) -> int:
-    """10-11 (geometry pass): the projection tail scales with the visible
-    frame so candles always fill the panel — small frames stop drowning in
-    empty future, big frames keep the refs' ~10% tail. Pure (unit-tested)."""
-    try:
-        n = int(n)
-    except Exception:
-        n = 0
-    return max(8, min(24, max(n, 0) // 6))
-
-
-def _spot_engine_line_frame(line_info: dict, start_idx: int):
-    """10-11 (G1): the ENGINE's calibrated line re-expressed in render-frame
-    coordinates. Detection fits live in GLOBAL x (the full df); the chart
-    draws a TRIMMED frame starting at start_idx, so y(xf) = f(xf + start_idx).
-    Returns (log_slope, log_intercept_frame, x0_frame) or None when the line
-    carries no usable fit (caller falls back to the legacy pivot polyfit).
-    Pure (unit-tested)."""
-    try:
-        li = line_info or {}
-        s_idx = int(start_idx)
-        x0f = int(li.get("x0", 0)) - s_idx
-        if (li.get("log_fit") and li.get("log_slope") is not None
-                and li.get("log_intercept") is not None):
-            s = float(li.get("log_slope"))
-            c = float(li.get("log_intercept"))
-            return (s, c + s * s_idx, x0f)
-        if li.get("slope") is not None and li.get("intercept") is not None:
-            s = float(li.get("slope"))
-            c = float(li.get("intercept"))
-            # linear-space engine line, log-linearized at the frame start
-            # (the chart axis is log; downstream box math is log-convention).
-            y0 = s * float(s_idx) + c
-            y1 = s * float(s_idx + 1) + c
-            if y0 > 0 and y1 > 0 and y1 != y0:
-                sl = math.log10(y1) - math.log10(y0)
-                return (sl, math.log10(y0), x0f)
-            if y0 > 0:
-                return (0.0, math.log10(y0), x0f)
-        return None
-    except Exception:
-        return None
-
-
-def _spot_map_pivots(points, frame_ts):
-    """10-11 (G2): pivot ts → frame x. Out-of-frame pivots are SKIPPED
-    (never snapped to an edge). Pure (unit-tested)."""
-    out_x, out_y = [], []
-    try:
-        ts = list(frame_ts or [])
-        n = len(ts)
-        if n < 2 or not points:
-            return out_x, out_y
-        t0 = pd.to_datetime(ts[0])
-        t1 = pd.to_datetime(ts[-1])
-        bar_sec = abs((t1 - t0).total_seconds()) / max(1, n - 1)
-        bar_sec = bar_sec if bar_sec > 0 else 1.0
-        for pt in points:
-            try:
-                pt_dt = pd.to_datetime((pt or {}).get("ts"))
-                price = float((pt or {}).get("price"))
-            except Exception:
-                continue
-            diffs = [abs((pd.to_datetime(t) - pt_dt).total_seconds())
-                     for t in ts]
-            j = int(np.argmin(diffs))
-            if diffs[j] > 1.5 * bar_sec:
-                continue
-            out_x.append(j)
-            out_y.append(price)
-        return out_x, out_y
-    except Exception:
-        return out_x, out_y
-
-
-def _spot_earliest_inframe(point_tses, frame_start, frame_end, bar_sec: float):
-    """10-11 (G6): earliest pivot ts inside the frame (+-2 bars tolerance);
-    stale/unparsable pivots are ignored so the zoom follows the VISIBLE
-    pattern. None when nothing qualifies. Pure (unit-tested)."""
-    try:
-        t0 = pd.to_datetime(frame_start)
-        t1 = pd.to_datetime(frame_end)
-        tol = pd.Timedelta(seconds=2 * (float(bar_sec) if float(bar_sec) > 0 else 1.0))
-        good = []
-        for p in point_tses or []:
-            try:
-                pt = pd.to_datetime(p.get("ts") if isinstance(p, dict) else p)
-            except Exception:
-                continue
-            if t0 - tol <= pt <= t1 + tol:
-                good.append(pt)
-        return min(good) if good else None
-    except Exception:
-        return None
-
-
-def _spot_is_breakdown(stage: str, direction: str = "LONG") -> bool:
-    """10-12 (his ONDO chart: the target box MUST be drawn): a bearish-NAMED
-    shape (descending channel, falling wedge) still breaks UP for a LONG —
-    the box is skipped ONLY on a real BREAK_DOWN stage (or a SHORT
-    direction). Pure (unit-tested)."""
-    try:
-        if "BREAK_DOWN" in str(stage or "").upper():
-            return True
-        return str(direction or "LONG").upper() == "SHORT"
-    except Exception:
-        return False
-
-
 def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = False) -> bytes:
     """
     Render the definitive VIVA SIGNALS PRO Spot Chart obedient to Law G1:
@@ -245,16 +114,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
 
     start_idx = 0
     if all_points:
-        # 10-11 (G6): only IN-FRAME pivots anchor the zoom — a stale pivot
-        # (e.g. a snapshot-locked ts the frame has moved past) must not
-        # stretch the window; the zoom follows the visible pattern.
-        try:
-            _t0s = pd.to_datetime(df_clean['ts_dt'].iloc[0])
-            _t1s = pd.to_datetime(df_clean['ts_dt'].iloc[-1])
-            _bar73 = abs((_t1s - _t0s).total_seconds()) / max(1, len(df_clean) - 1)
-            earliest_pts = _spot_earliest_inframe(all_points, _t0s, _t1s, _bar73)
-        except Exception:
-            earliest_pts = None
+        earliest_pts = min([pd.to_datetime(p['ts']) for p in all_points if 'ts' in p], default=None)
         if earliest_pts is not None:
             matches = df_clean.index[df_clean['ts_dt'] <= earliest_pts]
             if len(matches) > 0:
@@ -319,45 +179,43 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
         ax.add_patch(rect)
 
     # 6. Draw EXACT pattern lines from candidate (Honest Geometry)
-    # 10-11 (G1): the ENGINE's calibrated line (log_fit keys, global x) is
-    # drawn re-expressed in frame coords — the renderer never refits what
-    # the engine validated. Legacy lines without fit keys keep the polyfit.
-    future = _spot_future_bars(n)
+    future = 24
     drawn_lines = []
     if primary_pat and 'lines' in primary_pat:
         for line_info in primary_pat['lines']:
-            pts = line_info.get('points', []) or []
-            # G2: pivots map by ts; out-of-frame ones are skipped (no snap).
-            x_pts, y_pts = _spot_map_pivots(pts, list(frame['ts_dt']))
-            slope_l = ic_l = None
-            x_start = None
-            _eng73 = _spot_engine_line_frame(line_info, start_idx)
-            if _eng73 is not None:
-                slope_l, ic_l, _x0f73 = _eng73
-                x_start = max(0, min([_x0f73] + x_pts)) if x_pts else max(0, _x0f73)
-            elif len(x_pts) >= 2 and max(x_pts) > min(x_pts):
-                # Legacy metadata without fit keys: fit in log10 space.
+            pts = line_info.get('points', [])
+            if len(pts) >= 2:
+                # Map timestamp points to current frame x-coordinates
+                x_pts = []
+                y_pts = []
+                for pt in pts:
+                    pt_dt = pd.to_datetime(pt['ts'])
+                    diffs = np.abs([(t - pt_dt).total_seconds() for t in frame['ts_dt']])
+                    best_match_idx = int(np.argmin(diffs))
+                    x_pts.append(best_match_idx)
+                    y_pts.append(float(pt['price']))
+
+                # Fit line in log10 space
                 log_ys = np.log10(np.clip(y_pts, 1e-12, None))
-                slope_l, ic_l = np.polyfit(x_pts, log_ys, 1)
-                slope_l, ic_l = float(slope_l), float(ic_l)
-                x_start = max(0, min(x_pts))
-            if slope_l is None or x_start is None:
-                continue
-            # Solid segment across pattern span
-            xs_solid = np.linspace(x_start, n - 1, 100)
-            ys_solid = 10.0 ** (slope_l * xs_solid + ic_l)
-            ax.plot(xs_solid, ys_solid, color='#1F2328', linewidth=2.0, zorder=5)
+                if max(x_pts) > min(x_pts):
+                    slope_l, ic_l = np.polyfit(x_pts, log_ys, 1)
+                    x_start = max(0, min(x_pts))
+                    
+                    # Solid segment across pattern span
+                    xs_solid = np.linspace(x_start, n - 1, 100)
+                    ys_solid = 10.0 ** (slope_l * xs_solid + ic_l)
+                    ax.plot(xs_solid, ys_solid, color='#1F2328', linewidth=2.0, zorder=5)
 
-            # Projection dashed segment into future
-            xs_proj = np.linspace(n - 1, n + future - 4, 40)
-            ys_proj = 10.0 ** (slope_l * xs_proj + ic_l)
-            ax.plot(xs_proj, ys_proj, color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.75, zorder=5)
-
-            # Scatter pivot touch points
-            for px, py in zip(x_pts, y_pts):
-                ax.scatter(px, py, s=36, facecolor='#FDF49F', edgecolor='#1F2328', linewidth=1.3, zorder=6)
-
-            drawn_lines.append({'slope': float(slope_l), 'intercept': float(ic_l), 'side': line_info.get('side')})
+                    # Projection dashed segment into future
+                    xs_proj = np.linspace(n - 1, n + future - 4, 40)
+                    ys_proj = 10.0 ** (slope_l * xs_proj + ic_l)
+                    ax.plot(xs_proj, ys_proj, color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.75, zorder=5)
+                    
+                    # Scatter pivot touch points
+                    for px, py in zip(x_pts, y_pts):
+                        ax.scatter(px, py, s=36, facecolor='#FDF49F', edgecolor='#1F2328', linewidth=1.3, zorder=6)
+                    
+                    drawn_lines.append({'slope': slope_l, 'intercept': ic_l, 'side': line_info.get('side')})
 
     # If no lines in metadata (fallback to adaptive fit)
     if not drawn_lines:
@@ -370,7 +228,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
 
     # 7. Measured Move Box or Breakdown Marker
     # Only draw bullish target box if it is actually a bullish setup or confirmation!
-    is_breakdown = _spot_is_breakdown(stage, getattr(candidate, "direction", "LONG"))
+    is_breakdown = 'BREAK_DOWN' in stage or 'نزولی' in pat_name_fa or 'BEAR' in pat_type_str
     
     y_min_data = float(np.min(lows))
     y_max_data = float(np.max(highs))
@@ -383,26 +241,12 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
             if up_cand:
                 upper_level = float(10.0 ** (up_cand[0]['slope'] * (n - 1) + up_cand[0]['intercept']))
         
-        # 10-10: ceiling-first box (the alert builder's md value wins;
-        # confirms recompute from the visible frame; virgin air → TF size).
-        try:
-            _ceil73s = float(md.get("spot_box_top") or 0.0)
-        except Exception:
-            _ceil73s = 0.0
-        if not (_ceil73s > upper_level * 1.005):
-            try:
-                from analysis.spot_engine import _structural_high_above as _sha73
-                _rc73s = _sha73(frame, float(frame["close"].iloc[-1])) or 0.0
-                if float(_rc73s) > upper_level * 1.005:
-                    _ceil73s = float(_rc73s) * 1.01  # «کمی بالاترش»
-            except Exception:
-                pass
-        target_price = _spot_box_target(upper_level, tf, _ceil73s)
+        target_price = upper_level * 1.25
         delta_p = target_price - upper_level
         pct_gain = (delta_p / max(1e-6, upper_level)) * 100.0
 
         bx0 = n - 1
-        bx1 = n + future - 4   # 10-11: box spans the future tail (24→n+20, as before)
+        bx1 = n + 20
         bw = bx1 - bx0
         ax.hlines(upper_level, bx0, bx1, colors='#1F2328', linewidth=1.4, zorder=6)
         rect_box = patches.Rectangle((bx0, upper_level), bw, target_price - upper_level,
@@ -414,17 +258,9 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
                     arrowprops=dict(arrowstyle='->', color='#1F2328', lw=1.5, mutation_scale=12), zorder=7)
         ticks = int(round(delta_p * 1000)) if delta_p < 10 else int(round(delta_p))
         label_text = f'{delta_p:.4g} (+{pct_gain:.2f}%) {ticks:,}'
-        # 10-12 (his GEO rule: candles must NEVER squash): near boxes
-        # (top within 1.35x data top) still fit whole (refs unchanged);
-        # far boxes run off-canvas (auto-clipped) with the % label pinned
-        # at the top edge.
-        _clip73b = bool(target_price > y_max_data * 1.35)
-        _cap73b = y_max_data * 1.07 * 1.28
-        _ly73b = _cap73b * 0.995 if _clip73b else target_price * 1.018
-        ax.text(arrow_x, _ly73b, label_text,
-                color='#1F2328', fontsize=9.2, fontweight='bold', ha='center',
-                va='top' if _clip73b else 'bottom', zorder=8)
-        y_max = _cap73b if _clip73b else max(y_max_data, target_price) * 1.07
+        ax.text(arrow_x, target_price * 1.018, label_text,
+                color='#1F2328', fontsize=9.2, fontweight='bold', ha='center', va='bottom', zorder=8)
+        y_max = max(y_max_data, target_price) * 1.07
         y_min = y_min_data * 0.96
     else:
         # For breakdowns or warning: no fake long target box!
@@ -484,42 +320,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     ax.set_xticks(pos_list)
     ax.set_xticklabels(labels, fontsize=9.5, color='#4A4640')
 
-    # 10-12 (his axis law: MORE price labels on EVERY spot chart, every TF):
-    # LogLocator(subs) density depends on the matplotlib VERSION (proven:
-    # sparse {10} on old-mpl, dense on new-mpl for the SAME code) — so
-    # sub-1.5-decade views now take EXPLICIT linear-nice ticks (his beloved
-    # ONDO density; FixedLocator = identical on every mpl); wider views
-    # keep log subs='all'.
-    try:
-        _lo73a = float(ax.get_ylim()[0])
-        _hi73a = float(ax.get_ylim()[1])
-        _dec73a = math.log10(_hi73a) - math.log10(_lo73a)
-        # version-proof subs census (tick_values itself delegates on
-        # new-mpl): pure arithmetic over subs x decades inside the view.
-        _in73a = []
-        _e073a = int(math.floor(math.log10(_lo73a)))
-        _e173a = int(math.ceil(math.log10(_hi73a)))
-        for _e73a in range(_e073a - 1, _e173a + 2):
-            for _s73a in (1.0, 1.5, 2.0, 3.0, 5.0, 7.0):
-                _t73a = _s73a * (10.0 ** _e73a)
-                if _lo73a <= _t73a <= _hi73a:
-                    _in73a.append(_t73a)
-    except Exception:
-        _dec73a, _in73a = 99.0, []
-    if _dec73a >= 1.5 or len(_in73a) >= 7:
-        ax.yaxis.set_major_locator(LogLocator(base=10.0, subs="all", numticks=20))
-    else:
-        try:
-            _lin73a = [t for t in MaxNLocator(nbins=9, min_n_ticks=7).tick_values(_lo73a, _hi73a)
-                       if _lo73a <= t <= _hi73a]
-        except Exception:
-            _lin73a = []
-        if len(_lin73a) >= 2:
-            ax.yaxis.set_major_locator(FixedLocator(_lin73a))
-        elif _in73a:
-            ax.yaxis.set_major_locator(FixedLocator(_in73a))
-        else:
-            ax.yaxis.set_major_locator(LogLocator(base=10.0, subs="all", numticks=20))
+    ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 1.5, 2.0, 3.0, 5.0, 7.0)))
     def price_fmt(x, _):
         if x <= 0: return ''
         if abs(x - live_price) / live_price < 0.035:

@@ -240,10 +240,7 @@ def test_renderer_uses_the_calibrated_helper():
     # the old hand-rolled chord draws are gone from the pattern loop
     assert "[_sl * _xa + _ic, _sl * _xend8 + _ic]" not in src
     # and a TF step-up rescales a calibrated line in log space
-    # (10-11 MTF fix: the divisor is the EFFECTIVE scale — _tfscale times
-    # pattern_tf/trigger_tf for locked MTF patterns, plain _tfscale otherwise)
-    assert "_ls8 = float(_ln0.get(\"log_slope\") or 0.0) / _pscale8" in src
-    assert "_pscale8 = _tfscale * (_mp8 / _mt8)" in src
+    assert "_ls8 = float(_ln0.get(\"log_slope\") or 0.0) / _tfscale" in src
 
 
 # ─────────────────────── axis decision (shape safety) ───────────────────────
