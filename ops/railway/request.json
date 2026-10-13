@@ -1,6 +1,6 @@
 {
-  "action": "access",
-  "service": "",
-  "nonce": 8,
+  "action": "deploy",
+  "service": "smc-scanner2",
+  "nonce": 9,
   "note": "10-11: access query v2 (minimal fields; v1 400s on current schema)."
 }
