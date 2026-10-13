@@ -22,16 +22,67 @@ import urllib.request
 API = "https://backboard.railway.com/graphql/v2"
 
 
-def _headers():
+_MODE = None
+
+
+def _probe(query, hdr):
     h = {"Content-Type": "application/json", "User-Agent": "viva-ops/1.0"}
+    h.update(hdr)
+    req = urllib.request.Request(API, data=json.dumps({"query": query}).encode(),
+                                 headers=h, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode())
+
+
+def _detect_mode():
+    """Viva 10-14 («چی شد چرا انجام نمیشه»): the API secret may actually
+    hold a PROJECT token (the dashboard hands people whichever string they
+    copy). Probe BOTH header modes plus account mode and use the one that
+    answers — no human round-trip, no secret value ever printed."""
+    global _MODE
+    if _MODE:
+        return _MODE
     pt = os.getenv("RAILWAY_TOKEN", "").strip()
     at = os.getenv("RAILWAY_API_TOKEN", "").strip()
     if pt:
-        h["Project-Access-Token"] = pt
-    elif at:
-        h["Authorization"] = f"Bearer {at}"
-    else:
+        _MODE = "project"
+        return _MODE
+    if not at:
         sys.exit("no RAILWAY_TOKEN / RAILWAY_API_TOKEN in env")
+    probe = "query { projectToken { projectId } }"
+    for mode, hdr in (("bearer", {"Authorization": f"Bearer {at}"}),
+                      ("project", {"Project-Access-Token": at})):
+        try:
+            out = _probe(probe, hdr)
+            if (out.get("data") or {}).get("projectToken"):
+                _MODE = "bearer-pt" if mode == "bearer" else "project-as-api"
+                print(f"railway auth mode: {mode} projectToken OK")
+                return _MODE
+        except Exception as exc:
+            print(f"railway auth probe {mode}: {type(exc).__name__}")
+    try:
+        out = _probe("query { projects(first: 5) { edges { node { id } } } }",
+                     {"Authorization": f"Bearer {at}"})
+        if ((out.get("data") or {}).get("projects") or {}).get("edges"):
+            _MODE = "account"
+            print("railway auth mode: account bearer")
+            return _MODE
+    except Exception as exc:
+        print(f"railway auth probe account: {type(exc).__name__}")
+    sys.exit("RAILWAY_API_TOKEN answers neither as project nor account token")
+
+
+def _headers():
+    h = {"Content-Type": "application/json", "User-Agent": "viva-ops/1.0"}
+    mode = _detect_mode()
+    pt = os.getenv("RAILWAY_TOKEN", "").strip()
+    at = os.getenv("RAILWAY_API_TOKEN", "").strip()
+    if mode == "project":
+        h["Project-Access-Token"] = pt
+    elif mode == "project-as-api":
+        h["Project-Access-Token"] = at
+    else:
+        h["Authorization"] = f"Bearer {at}"
     return h
 
 
