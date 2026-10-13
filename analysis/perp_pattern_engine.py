@@ -75,6 +75,9 @@ def render_viva_perp_chart(df: pd.DataFrame, candidate, confirmed: bool = False)
     # قیمت» — when several locked patterns ride the metadata, the ONE nearest
     # to the live price is the chart's subject; the window then covers it
     # plus ~20 candles of context before its first edge.
+    _LEV_BY_TF = {"15m": 5, "30m": 5, "1h": 5, "2h": 4, "4h": 3,
+                  "8h": 3, "12h": 2, "1d": 2}
+    _tr75 = float(md.get("trailing_stop") or md.get("trail_stop") or 0)
     rp_all = md.get("render_patterns") or []
     if len(rp_all) > 1:
         def _last_ts75(pat):
@@ -156,12 +159,14 @@ def render_viva_perp_chart(df: pd.DataFrame, candidate, confirmed: bool = False)
     except Exception:
         pass
     # Viva 10-13: «حاشیه پشت قیمت رو کم کن و به چارت اضافه کن» — 8% band.
-    future = int(max(12, min(28, round(0.08 * n))))
+    # Viva 10-14: the LIVE candle sits ~15% of the width away from the price
+    # axis (right gap = future / (n + future) = 0.15).
+    future = int(max(12, min(60, round(0.176 * n))))
 
     # ── 2) canvas: cream VIVA, price panel + volume panel ─────────────────
     fig, (ax, av) = plt.subplots(
         2, 1, figsize=(15, 8.5), dpi=240,   # frozen frame (R73)
-        gridspec_kw={"height_ratios": [4.6, 1.0], "hspace": 0.045})
+        gridspec_kw={"height_ratios": [4.6, 0.72], "hspace": 0.045})
     fig.patch.set_facecolor(BG)
     fig.subplots_adjust(left=0.115, right=0.938, top=0.895, bottom=0.075)
     for a_ in (ax, av):
@@ -327,6 +332,8 @@ def render_viva_perp_chart(df: pd.DataFrame, candidate, confirmed: bool = False)
     if sl:
         ax.hlines(sl, n - 1, n + future - 1, colors=RED, linestyles="--", lw=1.0, zorder=5)
         _pill(sl, "FIRST STOP", RED)
+        if _tr75 > 0:
+            _pill(_tr75, "TRAIL", "#7A4A00")
     for i, t in enumerate(tps, 1):
         if t:
             ax.hlines(t, n - 1, n + future - 1, colors=GREEN, linestyles="--", lw=0.9,
@@ -349,10 +356,11 @@ def render_viva_perp_chart(df: pd.DataFrame, candidate, confirmed: bool = False)
     ax.tick_params(axis="x", labelleft=False, left=False)
     av.tick_params(axis="x", labelsize=7.4, colors="#4A4640")
     for a_ in (ax, av):
-        for s in ("top", "left"):
-            a_.spines[s].set_visible(False)
-        a_.spines["right"].set_color("#8A857D")
-        a_.spines["bottom"].set_color("#8A857D")
+        # Viva 10-14: the frame reads as a FRAME — all four spines, darker.
+        for s in ("top", "left", "right", "bottom"):
+            a_.spines[s].set_visible(True)
+            a_.spines[s].set_color("#3B372F")
+            a_.spines[s].set_linewidth(1.4)
     # Viva 10-13 (his law #1): NO gridlines in the candle background.
     ax.grid(False, which="both")
 
@@ -392,16 +400,30 @@ def render_viva_perp_chart(df: pd.DataFrame, candidate, confirmed: bool = False)
     for i, t in enumerate(tps, 1):
         if t:
             _panel.append(f"TP{i} {_price_fmt(t)}")
-    fig.text(0.012, 0.86, "\n".join(_panel), fontsize=7.6, color="#4A4640",
-             va="top", ha="left", linespacing=1.9, fontweight="bold", zorder=30)
+    # Viva 10-14: margin + leverage ride the same block; trailing stop joins
+    # the tool when the chain carries one.
+    _lev75 = int(md.get("leverage") or _LEV_BY_TF.get(tf, 3))
+    _marg75 = str(md.get("margin_mode") or "ISOLATED").upper()
+    _panel.append(f"LEV {_lev75}x · MARGIN {_marg75}")
+    if _tr75 > 0:
+        _panel.append(f"TRAIL {_price_fmt(_tr75)}")
+    # Viva 10-14: the data block lives INSIDE the frame (3% margin), one
+    # unbroken column, parked in the empty left space above/below the candles.
+    _occ75 = (math.log10(max(live, 1e-12)) - math.log10(y_lo)) / max(
+        1e-9, math.log10(y_hi) - math.log10(y_lo))
+    _va75, _ya75 = ("top", 0.97) if _occ75 < 0.55 else ("bottom", 0.03)
+    ax.text(0.03, _ya75, "\n".join(_panel), transform=ax.transAxes,
+            fontsize=7.6, color="#4A4640", va=_va75, ha="left",
+            linespacing=1.9, fontweight="bold", zorder=30)
     fig.canvas.draw()
     try:
         _ly = fig.transFigure.inverted().transform(ax.transData.transform((n - 1, live)))[1]
         _hms = datetime.now(ZoneInfo("Asia/Tehran")).strftime("%H:%M:%S")
         fig.text(ax.get_position().x1 + 0.004, _ly, f" {_price_fmt(live)} \n {_hms} ",
                  ha="left", va="center", fontsize=7.0, fontweight="bold",
-                 color=PINK_FG, linespacing=1.15, zorder=46,
-                 bbox=dict(boxstyle="square,pad=0.22", facecolor=PINK_BG, edgecolor="none"))
+                 color="#FFFFFF", linespacing=1.15, zorder=46,
+                 bbox=dict(boxstyle="square,pad=0.22", facecolor="#141414",
+                           edgecolor="none"))
     except Exception as exc:
         print(f"perp v2 live cell warning: {exc}")
     try:

@@ -2761,6 +2761,23 @@ def _daily_report() -> None:
             f"کل: {summary['total_signals']} • Win: {summary['wins']} • Loss: {summary['losses']}",
             f"Win Rate: <b>{summary['winrate']}%</b> • Avg PnL: <b>{summary['avg_pnl']:+.2f}%</b>",
             "",
+        ]
+        # ── Viva 10-14 results cleanup: the last 24h of closed trades ride
+        # THIS one message — no more hunting scattered receipts.
+        try:
+            from database.db import get_last24h_results as _r24
+            _rows24 = _r24()
+            if _rows24:
+                lines.append("🧾 <b>نتایج ۲۴ ساعت گذشته</b>")
+                for _r in _rows24:
+                    _ico = "✅" if _r["result"] == "WIN" else "❌"
+                    lines.append(
+                        f"{_ico} {_r['symbol']}·{_r['tf']}·{_r['direction']} "
+                        f"<b>{_r['pnl']:+.2f}%</b> ({_r['setup']})")
+                lines.append("")
+        except Exception as _e24:
+            print(f"daily 24h results skipped: {_e24}")
+        lines += [
             "🏆 <b>عملکرد Setupها</b>",
         ]
         for item in strategies:

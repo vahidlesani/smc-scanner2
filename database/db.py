@@ -746,6 +746,37 @@ def get_performance_stats() -> dict:
     return stats
 
 
+def get_last24h_results(limit: int = 15) -> list:
+    """Viva 10-14 («نتایج روزانه پخشه ـ تمیزکاری»): the LAST 24h of closed
+    trades in ONE list so the daily report is the single place he reads
+    results from."""
+    with db_cursor() as c:
+        c.execute("""
+            SELECT symbol, trigger_timeframe, direction, result, pnl_pct,
+                   closed_at, setup_code
+            FROM signals
+            WHERE closed_at IS NOT NULL AND closed_at != ''
+              AND result IN ('WIN','LOSS')
+            ORDER BY closed_at DESC LIMIT ?
+        """, (int(limit),))
+        rows = c.fetchall()
+    out = []
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    for r in rows:
+        try:
+            ts = datetime.fromisoformat(str(r[5]).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts < cutoff:
+                continue
+        except Exception:
+            continue
+        out.append({"symbol": r[0], "tf": r[1], "direction": r[2],
+                    "result": r[3], "pnl": float(r[4] or 0),
+                    "closed_at": r[5], "setup": r[6]})
+    return out
+
+
 def get_strategy_performance() -> list:
     """آمار عملکرد هر استراتژی"""
     with db_cursor() as c:
