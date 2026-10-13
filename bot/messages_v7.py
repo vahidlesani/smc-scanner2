@@ -3067,7 +3067,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             notes.append((str(_bl8), CHART_THEME["muted"]))
         _htfp = (candidate.metadata or {}).get("render_htf_pattern")
         if _htfp:
-            notes.append((f"PAT 4H · {str(_htfp)}", CHART_THEME["muted"]))
+            # ── 10-12 STALE-BAR PACK (F7): the pill cited a hardcoded «4H»
+            # while htf_df can be 1h (or anything another caller passed) —
+            # cite the stamped TF, and say HTF (the header PAT is the line's
+            # own context TF, a different honest thing).
+            _htf_tf = str((candidate.metadata or {}).get("render_htf_tf") or "4H").upper()
+            notes.append((f"HTF {_htf_tf} · {str(_htfp)}", CHART_THEME["muted"]))
         # pattern render commands: wedge / triangle / channel / flag / range
         from analysis.render_kit import line_xy as _line_xy, line_y as _line_y_cal
         # r51 MULTI-TF-TREND LAW: foreign patterns (anchors outside THIS
@@ -6837,6 +6842,28 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
         pass
     if chart_df is not None and not chart_df.empty and "close" in chart_df.columns:
         candidate.metadata["live_price"] = float(chart_df["close"].iloc[-1])
+        # ── 10-12 STALE-BAR PACK (F4, VVV·T124937): the final wire. Entry is
+        # the confirm bar's close — if live already ran past his 0.2%
+        # confirm law, the ladder is a market of the past: the family still
+        # speaks (analysis annotation, reply-linked), but NO ladder goes out.
+        # Railway-tunable; HYPE·1.7%→annotation, ENA·0%→ladder.
+        try:
+            from analysis.confirm_r62 import live_entry_diverged_pct as _div4
+            _e4 = float(candidate.planned_entry or 0.0)
+            _l4 = float(candidate.metadata["live_price"] or 0.0)
+            _tol4 = float(getattr(SETTINGS, "confirm_live_tol_pct", 0.2) or 0.2)
+            _pct4 = _div4(_l4, _e4)
+            if _pct4 is not None and _pct4 > _tol4:
+                candidate.metadata["confirm_live_veto_pct"] = round(_pct4, 2)
+                send_setup_update(
+                    candidate, chart_df,
+                    note_fa=(f"⚠️ ورود {_e4:.8g} روی کندل تأیید ثبت شد اما قیمت زنده {_l4:.8g} است "
+                             f"({_pct4:.2f}٪ فاصله — بیش از حد {_tol4}٪ قانون تأیید). "
+                             "طبق قانون، نردبان اجرا فعال نشد؛ این پیام صرفاً ثبت تحلیلیِ تأییدِ گذشته‌بازار است."),
+                    critical=True)
+                return True
+        except Exception:
+            pass
         # ── Viva 09-22 round 16: «زمان تایید ابتدای ابزار لانگ و شورت دقیقا از
         # کندل لایو شروع بشه … نهایتا ۲ کندل آخر داخل ابزار» — the tool is
         # anchored to the LIVE candle at the confirmation moment (the forming

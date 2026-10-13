@@ -301,3 +301,45 @@ def frame_minutes(frame: Optional[pd.DataFrame]) -> float:
         return float(d.median() / 60.0) if len(d) else 0.0
     except Exception:
         return 0.0
+
+
+# ── 10-12 STALE-BAR PACK (VVV·T124937: the 30m chain confirmed at 22:00
+# Tehran on a bar from ~19:35 while live printed 24.819 vs entry 23.551).
+# Pure helpers so the replay tests pin the law without Telegram/DB.
+def frame_newest_age_minutes(newest_ts, now=None):
+    """Age of a frame's newest bar in minutes (None when unknowable)."""
+    try:
+        import pandas as _pd
+        from datetime import datetime as _dt, timezone as _tz
+        ts = _pd.Timestamp(newest_ts)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        ref = now or _dt.now(_tz.utc)
+        return (ref - ts.to_pydatetime()).total_seconds() / 60.0
+    except Exception:
+        return None
+
+
+def frame_is_fresh(newest_ts, tf_minutes, mult=2.0, now=None) -> bool:
+    """A frame whose newest bar is older than mult×TF candles is unusable
+    for confirmations — no verdict may be computed on it (fail-closed: an
+    unreadable newest bar is also stale)."""
+    try:
+        age = frame_newest_age_minutes(newest_ts, now=now)
+        span = float(mult or 2.0) * float(tf_minutes or 0.0)
+        if age is None or span <= 0:
+            return False
+        return age <= span
+    except Exception:
+        return False
+
+
+def live_entry_diverged_pct(live, entry):
+    """|live − entry| / entry × 100 (None when either side is missing)."""
+    try:
+        live_f, entry_f = float(live or 0.0), float(entry or 0.0)
+        if live_f <= 0 or entry_f <= 0:
+            return None
+        return abs(live_f - entry_f) / entry_f * 100.0
+    except Exception:
+        return None

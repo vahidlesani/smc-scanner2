@@ -1083,6 +1083,18 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
                               log_axis=_chart_will_be_log(candidate, htf_df)) \
             if htf_df is not None and len(htf_df) >= 60 else []
         md["render_htf_pattern"] = str(_hp[0]["type"]) if _hp else None
+        # ── 10-12 STALE-BAR PACK (F7): the pill used to hardcode «4H» but
+        # htf_df falls back to 1h (and other callers pass other TFs) — stamp
+        # the real TF inferred from the frame's own step so the note can cite
+        # it honestly («HTF 1H · X» instead of a lying «PAT 4H · X»).
+        try:
+            import pandas as _pd
+            _step = float(_pd.to_datetime(htf_df["timestamp"]).diff().dt.total_seconds().div(60).median() or 0.0)
+            _tags = ((1, "1M"), (5, "5M"), (15, "15M"), (30, "30M"), (60, "1H"),
+                     (120, "2H"), (240, "4H"), (1440, "1D"), (10080, "1W"))
+            md["render_htf_tf"] = min(_tags, key=lambda t: abs(t[0] - _step))[1] if _step > 0 else "4H"
+        except Exception:
+            md["render_htf_tf"] = md.get("render_htf_tf") or "4H"
     except Exception:
         md["render_htf_pattern"] = None
     # FLAG / FLAG-LIMIT: the flag's far edge IS a limit-entry zone

@@ -1763,10 +1763,35 @@ def _confirmation_stale_minutes(candidate, closed_df) -> Optional[int]:
             ts = ts.tz_localize("UTC")
         ts = ts + pd.Timedelta(minutes=bar_mins)
         age_min = (datetime.now(timezone.utc) - ts.to_pydatetime()).total_seconds() / 60.0
-        if age_min > 2 * max(mins, bar_mins):
+        # ── 10-12 STALE-BAR PACK (F1/F5, VVV·T124937): the old law measured
+        # the threshold in BREAK-detection candles (2×max(confirm, break-TF)):
+        # a 4H pattern's 30m entry aged 2.5h still scored «0.6 of a candle»
+        # and the ladder went out. Staleness now speaks ONLY the confirm
+        # timeframe (Railway-tunable), and a PRESENT-but-unreadable stamp
+        # fails CLOSED — a leaked/broken stamp must disarm the ladder, never
+        # sneak it through (the note below branches on stale_stamp_broken).
+        _mult = float(getattr(SETTINGS, "stale_confirm_bars", 2.0) or 2.0)
+        if age_min > _mult * mins:
             return int(age_min)
         return None
     except Exception:
+        # Fail CLOSED only when a stamp EXISTED (a stamp key, or a newest
+        # bar whose timestamp refused to parse). A chain with no stamp and
+        # a stamp-less frame (the pinned retry contract) keeps the old
+        # None — there is nothing present-but-unreadable to distrust.
+        try:
+            _stamp_key = bool(md.get("fast_break_bar") or md.get("confirm_bar"))
+            _ts_col = bool(closed_df is not None and len(closed_df)
+                            and "timestamp" in getattr(closed_df, "columns", ()))
+            _had = _stamp_key or _ts_col
+        except Exception:
+            _had = False
+        if _had:
+            try:
+                md["stale_stamp_broken"] = True
+            except Exception:
+                pass
+            return 10 ** 9
         return None
 
 
@@ -1814,6 +1839,22 @@ def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataF
             # Bybit's newest row is forming; only prior rows may confirm.
             closed = live.iloc[:-1].reset_index(drop=True)
             current_price = float(live["close"].iloc[-1])
+            # ── 10-12 STALE-BAR PACK (F2, VVV·T124937 — THE core fix): the
+            # fetcher CAN hand back a frame whose newest CLOSED bar is hours
+            # old (venue lag / fallback / a lying cache) without raising —
+            # and entry IS the newest close, so that bar BECOMES the entry
+            # (23.551 from ~19:35, sent at 22:00 with live at 24.819). A
+            # frame older than mult×TF candles never enters the dict: the
+            # chain waits for fresh data, no verdict is computed on the past.
+            try:
+                from analysis.confirm_r62 import frame_is_fresh as _fr2
+                _tfm2 = float(_TF_MINUTES_LIVE.get(str(tf).lower(), 0) or 0)
+                _newest2 = closed["timestamp"].iloc[-1] if "timestamp" in closed.columns and len(closed) else None
+                if not _fr2(_newest2, _tfm2, getattr(SETTINGS, "frame_max_age_mult", 2.0)):
+                    print(f"FRAME_STALE | {candidate.symbol} | {tf} | newest={_newest2}")
+                    continue
+            except Exception:
+                pass
             frames[key] = (live, closed, current_price)
             try:
                 _last63 = _bar_key63(closed["timestamp"].iloc[-1])
@@ -2029,6 +2070,11 @@ def monitor_candidates() -> Dict[str, int]:
                         candidate.status = "APPROACHING"
                         stats["approaching"] += 1
 
+            # ── 10-12 STALE-BAR PACK (F3): the F3 live-vs-entry veto judges
+            # FRESH confirms only — a retry re-publishes the ORIGINAL candle's
+            # entry by design («do not move Entry»), so live-drift must not
+            # veto it (the pinned retry contract: test_v7 …never_arms…).
+            _retry_pub_1012 = False
             if (
                 candidate.metadata.get("technical_confirmation_complete")
                 and not candidate.metadata.get("confirmation_sent")
@@ -2037,6 +2083,7 @@ def monitor_candidates() -> Dict[str, int]:
                 # Entry/confirmed_at to a later candle or inflate its score.
                 candidate.status = "CONFIRMED"
                 confirmed, reason = True, "تلاش مجدد برای تکمیل انتشار"
+                _retry_pub_1012 = True
             elif not have_frames:
                 # window closed: no closed candle to judge — never a NO_DATA
                 # reject (it used to stamp the chain's last_reject_code and hide
@@ -2199,7 +2246,53 @@ def monitor_candidates() -> Dict[str, int]:
                 # window, a chain frozen since the fetch-gate era), the entry is
                 # NOT tradeable any more. The family still speaks: an analysis note
                 # goes out, the ladder stays disarmed, the chain stays alive.
+                # ── 10-12 STALE-BAR PACK (F3, VVV·T124937): the data-sanity
+                # wire. Entry is the confirm bar's close; the forming bar's
+                # close is live. If they already disagree by more than a few
+                # percent, SOMETHING is lying (stale frame, broken stamp,
+                # venue lag) — disarm exactly like a stale confirm, never
+                # ladder a price the market left behind. Railway-tunable.
+                try:
+                    from analysis.confirm_r62 import live_entry_diverged_pct as _div3
+                    _pct3 = _div3(current_price, candidate.planned_entry)
+                    _max3 = float(getattr(SETTINGS, "liveclose_max_pct", 3.0) or 3.0)
+                except Exception:
+                    _pct3, _max3 = None, 3.0
+                if _pct3 is not None and _pct3 > _max3 and not _retry_pub_1012 and not candidate.metadata.get("live_entry_note_sent"):
+                    try:
+                        send_setup_update(
+                            candidate, (frames.get((candidate.symbol, candidate.trigger_timeframe)) or (None, closed, None))[1],
+                            note_fa=(f"⚠️ تأییدِ فنی روی {float(candidate.planned_entry):.8g} ثبت شد اما قیمت زنده "
+                                     f"{float(current_price):.8g} است ({_pct3:.2f}٪ فاصله — بیش از حد {_max3}٪). "
+                                     "طبق قانون، ورودِ گذشته‌بازار صادر نمی‌شود؛ این مورد فقط گزارش تحلیلی است. "
+                                     "زنجیره زیر نظر می‌ماند تا داده و قیمتِ تازه هم‌راستا شوند."),
+                            critical=True)
+                    except Exception as exc:
+                        print(f"live-entry note failed {candidate.signal_id}: {exc}")
+                    candidate.metadata["live_entry_veto_pct"] = round(_pct3, 2)
+                    candidate.metadata["live_entry_note_sent"] = True
+                    _r62_reset_stale(candidate)
+                    stats["live_entry_veto"] = stats.get("live_entry_veto", 0) + 1
+                    update_candidate(candidate)
+                    continue
                 _stale_conf = _confirmation_stale_minutes(candidate, closed)
+                if _stale_conf is not None and candidate.metadata.get("stale_stamp_broken"):
+                    # F5 fail-closed: the stamp existed but was unreadable —
+                    # say exactly that (never print the 1e9 sentinel as minutes).
+                    try:
+                        send_setup_update(
+                            candidate, (frames.get((candidate.symbol, candidate.trigger_timeframe)) or (None, closed, None))[1],
+                            note_fa=("⚠️ تأییدِ فنی ثبت شد اما مُهرِ زمانیِ کندلِ تأیید خوانا نبود؛ "
+                                     "طبق قانونِ احتیاط، ورود صادر نمی‌شود. این مورد فقط گزارش تحلیلی است و "
+                                     "زنجیره زیر نظر می‌ماند تا تأییدِ تازه با مُهرِ سالم شکل بگیرد."),
+                            critical=True)
+                    except Exception as exc:
+                        print(f"broken-stamp note failed {candidate.signal_id}: {exc}")
+                    candidate.metadata["stale_note_sent"] = True
+                    _r62_reset_stale(candidate)
+                    stats["stale_confirmation"] = stats.get("stale_confirmation", 0) + 1
+                    update_candidate(candidate)
+                    continue
                 if _stale_conf is not None and candidate.metadata.get("stale_note_sent"):
                     # R62-ARENA (audit C5): ONE analysis note per chain — the old
                     # loop re-sent «⏳ …» every cycle because the retry lane kept

@@ -77,6 +77,12 @@ class Settings:
     # 5x-ATR spike bar almost never occurs on liquid crypto, so no candidate
     # was ever produced; defaults are relaxed to tradeable-but-decisive.
     albrox_min_spike_atr: float = 2.5
+    # ── 10-12 STALE-BAR PACK (VVV·T124937: entry 23.551 printed from a
+    # 2.5h-old bar while live was 24.819) — all four are Railway-tunable.
+    stale_confirm_bars: float = 2.0
+    frame_max_age_mult: float = 2.0
+    liveclose_max_pct: float = 3.0
+    confirm_live_tol_pct: float = 0.2
     albrox_min_reclaim_frac: float = 0.40
     albrox_base_max_atr: float = 3.0
     pinwall_quality_enabled: bool = True
@@ -305,6 +311,10 @@ class Settings:
             albrox_enabled=_bool("ALBROX_ENABLED", cls.albrox_enabled),
             albrox_symbols=os.getenv("ALBROX_SYMBOLS", cls.albrox_symbols),
             albrox_min_spike_atr=_float("ALBROX_MIN_SPIKE_ATR", cls.albrox_min_spike_atr),
+            stale_confirm_bars=_float("VIVA_STALE_CONFIRM_BARS", cls.stale_confirm_bars),
+            frame_max_age_mult=_float("VIVA_FRAME_MAX_AGE_MULT", cls.frame_max_age_mult),
+            liveclose_max_pct=_float("VIVA_LIVECLOSE_MAX_PCT", cls.liveclose_max_pct),
+            confirm_live_tol_pct=_float("VIVA_CONFIRM_LIVE_TOL_PCT", cls.confirm_live_tol_pct),
             albrox_min_reclaim_frac=_float("ALBROX_MIN_RECLAIM_FRAC", cls.albrox_min_reclaim_frac),
             albrox_base_max_atr=_float("ALBROX_BASE_MAX_ATR", cls.albrox_base_max_atr),
             pinwall_quality_enabled=_bool("PINWALL_QUALITY_ENABLED", cls.pinwall_quality_enabled),

@@ -1818,9 +1818,11 @@ def evaluate_confirmation(
         candidate.score = min(10, candidate.score + 1)
     if candidate.score < SETTINGS.execution_min_score:
         return reject("SCORE_LOW", f"امتیاز نهایی {candidate.score} کمتر از حد اجرای {SETTINGS.execution_min_score} است.")
-    candidate.status = "CONFIRMED"
-    candidate.confirmed_at = candidate.confirmed_at or iso_now()
-    candidate.metadata["technical_confirmation_complete"] = True
+    # ── 10-12 STALE-BAR PACK (F6): the CONFIRMED stamp used to be written
+    # HERE, before the 09-19/20 counter-trend + MTF vetoes below — a vetoed
+    # chain died carrying status=CONFIRMED + technical_confirmation_complete.
+    # The stamp now lands only on the success return at the end of this
+    # function, after every veto had its say.
     # ── Viva 09-19/20 counter-trend & MTF-zone confirmation laws ──────────
     # (a) A TOUCH is never a confirmation against the structure: counter
     #     setups need a closed structure break in the trade direction (close
@@ -1920,4 +1922,11 @@ def evaluate_confirmation(
         candidate.metadata.pop("last_reject_fa", None)
     except Exception:
         pass
+    # ── 10-12 STALE-BAR PACK (F6): the CONFIRMED stamp lands HERE — after
+    # the 09-19/20 counter-trend + MTF vetoes above had their say. Nothing
+    # below this line can still veto, so a vetoed chain can never again die
+    # carrying status=CONFIRMED + technical_confirmation_complete.
+    candidate.status = "CONFIRMED"
+    candidate.confirmed_at = candidate.confirmed_at or iso_now()
+    candidate.metadata["technical_confirmation_complete"] = True
     return True, candidate, "تأیید ورود با کندل بسته‌شده صادر شد."
