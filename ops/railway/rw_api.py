@@ -173,6 +173,14 @@ def access():
             ld = si.get("latestDeployment") or {}
             print(f"- {s['name']}  id={s['id']}\n"
                   f"    last deploy: {ld.get('status')} @ {ld.get('createdAt')}")
+            dd, de = gql("query($id:String!){ service(id:$id){ serviceDomains"
+                         "{ edges{ node{ domain status } } } } }",
+                         {"id": s["id"]})
+            for dom in _edges((((dd or {}).get("service") or {})
+                               .get("serviceDomains"))):
+                print(f"    https://{dom.get('domain')}  [{dom.get('status')}]")
+            for m in de:
+                print("    domains gql:", m)
             _shown = True
         if not _shown:
             print(f"- {s['name']}  id={s['id']}  (no instance in this env)")
