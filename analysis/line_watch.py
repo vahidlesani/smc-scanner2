@@ -191,6 +191,26 @@ def _ticker_prices(market: str) -> Dict[str, float]:
     return out
 
 
+def _lw_render_chart(entry: dict, item: dict, slot: str):
+    """The live chart for a line-watch journey slot (Viva 10-14 chart-timing
+    law). Fail-soft: any render problem degrades to a text-only post."""
+    try:
+        from data.fetcher import get_market_bundle as _gmb73
+        from analysis.candle_counts import fetch_limits as _fl73
+        from analysis.spot_engine import build_spot_alert_candidate as _bsac73
+        from bot.messages_v7 import generate_chart as _gc73
+        _tf73 = str(entry.get("tf") or "").lower()
+        _bun73 = _gmb73(str(entry.get("symbol") or "").upper(), (_tf73,),
+                        limits=_fl73())
+        _frm73 = (_bun73.get(_tf73) if _bun73 else None)
+        if _frm73 is None:
+            return None
+        return _gc73(_frm73, _bsac73(item), confirmed=False)
+    except Exception as _r73exc:
+        print(f"line watch {slot} render skipped: {_r73exc}")
+        return None
+
+
 def run_once(force: bool = False) -> int:
     """Evaluate every watched edge against the live ticker. Returns alerts sent."""
     import time as _t
@@ -286,21 +306,12 @@ def run_once(force: bool = False) -> int:
                 except Exception:
                     _shape73 = None
                 _titem73 = _lw_touch_item(entry, price, _patt73 or "EDGE", _shape73)
-                _tchart73 = None
-                if _shape73:
-                    try:
-                        from data.fetcher import get_market_bundle as _gmb73
-                        from analysis.candle_counts import fetch_limits as _fl73
-                        from analysis.spot_engine import build_spot_alert_candidate as _bsac73
-                        from bot.messages_v7 import generate_chart as _gc73
-                        _bun73 = _gmb73(str(entry.get("symbol") or "").upper(), (str(entry.get("tf") or "").lower(),), limits=_fl73())
-                        _frm73 = (_bun73.get(str(entry.get("tf") or "").lower()) if _bun73 else None)
-                        if _frm73 is not None:
-                            _tcand73 = _bsac73(_titem73)
-                            _tchart73 = _gc73(_frm73, _tcand73, confirmed=False)
-                    except Exception as _r73exc:
-                        print(f"line watch s1 render skipped: {_r73exc}")
-                        _tchart73 = None
+                # ── Viva 10-14 CHART-TIMING LAW: the chart rides exactly four
+                # moments — mint, TOUCH, BREAK, first close after break. The
+                # touch slot therefore always carries its live chart (not only
+                # when a pattern shape is attached); every other update stays
+                # a text reply to the last chart.
+                _tchart73 = _lw_render_chart(entry, _titem73, "s1")
                 from bot.messages_v7 import send_spot_alert as _ssa73
                 if _ssa73(_titem73, _tchart73):
                     entry["j1"] = now
@@ -314,8 +325,10 @@ def run_once(force: bool = False) -> int:
                 entry["j2p"] = now
                 _bitem73 = _lw_touch_item(entry, price, _patt73 or "EDGE", None)
                 _bitem73.update({"stage": _kind73, "_journey_slot": "s2"})
+                # 10-14 law: BREAK is one of the four chart moments.
+                _bchart73 = _lw_render_chart(entry, _bitem73, "s2")
                 from bot.messages_v7 import send_spot_alert as _ssa73b
-                if _ssa73b(_bitem73, None):
+                if _ssa73b(_bitem73, _bchart73):
                     entry["j2"] = now
                     _sent73 += 1
                     print(f"LINE_WATCH s2 text {entry.get('symbol')}|{entry.get('tf')}|{_kind73}")

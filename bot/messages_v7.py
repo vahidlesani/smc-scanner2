@@ -2327,16 +2327,38 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     if _hit is not None:
         return _hit
 
-    # ── Viva 10-12 («همه باید با رندر جدید بیاد»): EVERY chart — spot AND
-    # futures, every setup timeframe — renders through the ONE unified R73
-    # pass below (mplfinance + smart-zoom + full chrome). The two prototype
-    # spot renderers (analysis/spot_pattern_engine.py lemon-gradient and
-    # tools/render_spot_cryptocove.py cream) are RETIRED from dispatch: they
-    # produced the charts he rejected on 10-12 — missing header/watermark/
-    # footer chrome and solid trendlines extrapolated off-canvas («از هندسه
-    # خارج»). Their modules stay on disk for the stage-1 tests only. The
-    # unified pass keeps its own exception-only fallbacks inside (old window
-    # laws when the solver returns None), per the production-fallback law.
+    # ── Viva 10-13 («این خطاها رو بگیر، نه اینکه انجین جدید و رندر جدید رو
+    # ریمو کنی»): the spot lane renders on the NEW CryptoCove-look engine
+    # (analysis/spot_pattern_engine V2) — rebuilt on the R73 smart-zoom core
+    # with the off-canvas line bug, the sparse ladder and the missing chrome
+    # FIXED IN-ENGINE. No env gate: every spot chart takes this path; only a
+    # hard exception falls through to the unified mplfinance pass below
+    # (production-fallback law). Perp charts keep the unified pass.
+    _v2_on75 = os.getenv("VIVA_RENDER_V2", "1") != "0"   # test-harness opt-out ONLY
+    if _is_spot and _v2_on75:
+        try:
+            from analysis.spot_pattern_engine import render_cryptocove_spot_chart as _rs74
+            _spot_png = _rs74(df, candidate, confirmed=bool(confirmed))
+            if _spot_png and len(_spot_png) > 1000:
+                _chart_cache_set(_ck, _spot_png)
+                return _spot_png
+        except Exception as _spot_err:
+            print(f"spot v2 render fallback: {_spot_err}")
+    elif not _is_spot and _v2_on75:
+        # ── Viva 10-13 («الان ساختی واسه اسپات و باید برای پرپچوآل هم بسازی»):
+        # perp charts render on the SAME new-engine geometry core
+        # (analysis/perp_pattern_engine V2) in his cream VIVA style — locked
+        # geometry clipped to the solver window, apex-bounded converging
+        # pairs, trade tool in the right margin. Exception-only fallback to
+        # the unified mplfinance pass below (production-fallback law).
+        try:
+            from analysis.perp_pattern_engine import render_viva_perp_chart as _rp75
+            _perp_png = _rp75(df, candidate, confirmed=bool(confirmed))
+            if _perp_png and len(_perp_png) > 1000:
+                _chart_cache_set(_ck, _perp_png)
+                return _perp_png
+        except Exception as _perp_err:
+            print(f"perp v2 render fallback: {_perp_err}")
     # Always initialize chart-only price-axis tags before entering any render branch.
     # This is display state only and never affects setup detection or message format.
     _axis_tags: list = []

@@ -187,15 +187,17 @@ def test_break_bypass_and_no_heartbeat_in_monitor_source():
     src = open(os.path.join(ROOT, "main.py")).read()
     # the DASH law: live price beyond the edge → forced frame fetch
     assert "_structural_break_edge" in src
-    assert "break_bypass_at" in src
+    # Viva 10-13: the bypass is lane-agnostic now and throttled per NEW
+    # closed bar of the confirm TF (break_bypass_bar), not a 10-min clock.
+    assert "break_bypass_bar" in src
     assert "break_bypass" in src
     # the update-event law: the candle heartbeat is retired
     assert '"hb_bar"' not in src
     assert '"hb_count"' not in src
     assert "گزارشِ پایانِ کندل" not in src
     assert "heartbeat watch" not in src
-    # structural lanes set membership is what the breaker keys on
-    assert '_STRUCTURAL_QUALITY_LANES' in src
+    # the breaker keys on the EDGE + live price, for EVERY lane now
+    assert "_edge51" in src and "_beyond51" in src
 
 
 def test_messages_module_still_importable():

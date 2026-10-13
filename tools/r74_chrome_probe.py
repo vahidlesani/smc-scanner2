@@ -46,16 +46,43 @@ def _metrics(plan, df):
             "right_gap": round(plan["right_gap"], 3)}
 
 
+def _binance_df(sym, tf, limit=140):
+    """Direct Binance spot REST fallback (Ourbit/Bybit 403 on some spots)."""
+    import requests, pandas as pd
+    r = requests.get("https://data-api.binance.vision/api/v3/klines",
+                     params={"symbol": sym, "interval": tf, "limit": limit}, timeout=20)
+    r.raise_for_status()
+    rows = r.json()
+    df = pd.DataFrame([{"timestamp": pd.to_datetime(int(k[0]), unit="ms"),
+                        "open": float(k[1]), "high": float(k[2]),
+                        "low": float(k[3]), "close": float(k[4]),
+                        "volume": float(k[5])} for k in rows])
+    return df
+
+
 def _spot_case(sym, tf):
-    df = get_klines(sym, tf, 400, closed_only=True, use_cache=False)
-    from analysis.candle_counts import candle_count as _cc73
-    _det = df.tail(int(_cc73(tf, 300))).reset_index(drop=True)
+    # PRODUCTION DOMAIN (main.py:_candidate_market_frames): the monitor
+    # fetches 140 rows, detects on the CLOSED reset frame and renders THAT
+    # same live frame. Mixing a 400-bar render df with fits computed on a
+    # tail window shifts every engine line by the offset (the «له شده»
+    # steep-leg artefact) — so the probe mirrors production 1:1.
+    df = get_klines(sym, tf, 140, closed_only=False, use_cache=False)
+    if df is None or df.empty:
+        df = _binance_df(sym, tf, 140)
+    _det = df.iloc[:-1].reset_index(drop=True)
     pats = detect_patterns(_det, "LONG", log_axis=True) or []
     pats = channel_upgrade(pats, _det)
     pick = next((p for p in pats if len(p.get("lines") or []) >= 2),
                 pats[0] if pats else None)
     price = float(df["close"].iloc[-1])
-    box_top = price * 1.18
+    # production-like ceiling: the alert builder's md value wins (10-10 law);
+    # mirror it with the next structural high above live, floored at +18%.
+    try:
+        from analysis.spot_engine import _structural_high_above as _sha73p
+        _sha73v = float(_sha73p(_det, price) or 0.0)
+    except Exception:
+        _sha73v = 0.0
+    box_top = max(price * 1.18, _sha73v * 1.01)
     cs = SignalCandidate(
         signal_id=f"R74-{sym}-{tf}", symbol=sym, style="SWING",
         setup_code="SPOT", setup_name="اسپات", strategy_fa="SPOT",
@@ -72,39 +99,43 @@ def _spot_case(sym, tf):
     return df, cs, pick
 
 
-def _perp_case(sym, tf, setup="TLBREAK"):
+def _perp_case(sym, tf, setup="TLBREAK", direction="LONG"):
     df = get_klines(sym, tf, 400, closed_only=True, use_cache=False)
     _det = df.tail(300).reset_index(drop=True)
-    pats = detect_patterns(_det, "LONG", log_axis=True) or []
+    # render the SAME frame detection ran on (production domain law): the
+    # engine's fit keys live in detection coords; an offset shifts lines.
+    pats = detect_patterns(_det, direction, log_axis=True) or []
     pick = next((p for p in pats if len(p.get("lines") or []) >= 2),
                 pats[0] if pats else None)
     last = float(df["close"].iloc[-1])
     rng = float((df["high"] - df["low"]).tail(60).mean())
+    sgn = 1.0 if direction == "LONG" else -1.0
     cs = SignalCandidate(
-        signal_id=f"R74-{sym}-{tf}", symbol=sym, style="DAYTRADE",
+        signal_id=f"R74-{sym}-{tf}-{direction}", symbol=sym, style="DAYTRADE",
         setup_code=setup, setup_name="شکست خط روند", strategy_fa=setup,
-        direction="LONG", score=8, status="CONFIRMED",
+        direction=direction, score=8, status="CONFIRMED",
         entry_zone_bottom=last * 0.998, entry_zone_top=last * 1.002,
-        planned_entry=last, sl=last - 1.7 * rng, tp1=last + 1.6 * rng,
-        tp2=last + 2.6 * rng, rr_tp1=1.4, rr_tp2=2.2, bias="BULL",
+        planned_entry=last, sl=last - sgn * 1.7 * rng, tp1=last + sgn * 1.6 * rng,
+        tp2=last + sgn * 2.6 * rng, rr_tp1=1.4, rr_tp2=2.2,
+        bias="BULL" if sgn > 0 else "BEAR",
         trigger_timeframe=tf, mandatory_gates={"zone": True},
         created_at=str(df["timestamp"].iloc[-70]),
         confirmed_at=str(df["timestamp"].iloc[-69]),
         metadata={"atr": rng, "touched": True,
                   "tool_entry_ts": str(df["timestamp"].iloc[-70]),
                   "render_patterns": [pick] if pick else [],
-                  "target_ladder": {"targets": [last + 1.6 * rng,
-                                                last + 2.6 * rng,
-                                                last + 3.4 * rng],
+                  "target_ladder": {"targets": [last + sgn * 1.6 * rng,
+                                                last + sgn * 2.6 * rng,
+                                                last + sgn * 3.4 * rng],
                                     "weights": [40.0, 35.0, 25.0],
                                     "path_pct": 3.0}})
-    return df, cs, pick
+    return _det, cs, pick
 
 
 SPOT_CASES = [("BTCUSDT", "4h"), ("STRKUSDT", "4h"), ("SUIUSDT", "1d"),
-              ("ENAUSDT", "4h"), ("BTCUSDT", "3d")]
-PERP_CASES = [("BTCUSDT", "15m"), ("ETHUSDT", "1h"), ("SOLUSDT", "4h"),
-              ("BTCUSDT", "1d")]
+              ("ENAUSDT", "4h"), ("BTCUSDT", "3d"), ("ETHUSDT", "4h"), ("ATOMUSDT", "8h")]
+PERP_CASES = [("BTCUSDT", "15m", "LONG"), ("BTCUSDT", "1h", "SHORT"),
+              ("SOLUSDT", "4h", "LONG"), ("BTCUSDT", "1d", "LONG")]
 
 for sym, tf in SPOT_CASES:
     key = f"spot {sym} {tf}"
@@ -123,15 +154,15 @@ for sym, tf in SPOT_CASES:
         REP[key] = {"ok": False, "err": str(e)}
         print(f"[{key}] FAIL {e}")
 
-for sym, tf in PERP_CASES:
-    key = f"perp {sym} {tf}"
+for sym, tf, d in PERP_CASES:
+    key = f"perp {sym} {tf} {d}"
     try:
-        df, cs, pick = _perp_case(sym, tf)
+        df, cs, pick = _perp_case(sym, tf, direction=d)
         lock_render_geometry(cs, frame=df)
         plan = solve_zoom(df, cs, confirmed=True, is_spot=False, chart_tf=tf)
         png = M.generate_chart(df, cs, confirmed=True)
         if png:
-            with open(os.path.join(OUT, f"perp_{sym}_{tf}.png"), "wb") as fh:
+            with open(os.path.join(OUT, f"perp_{sym}_{tf}_{d}.png"), "wb") as fh:
                 fh.write(png)
         REP[key] = {"ok": bool(png), "kind": (pick or {}).get("type"),
                     **_metrics(plan, df)}

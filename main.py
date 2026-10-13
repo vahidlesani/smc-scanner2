@@ -1909,12 +1909,17 @@ def monitor_candidates() -> Dict[str, int]:
         # is fetched NOW (throttled to one forced fetch / 10 min / chain) —
         # the cost window never gates a real break.
         if (not have_frames and not publication_in_progress
-                and candidate.setup_code in _STRUCTURAL_QUALITY_LANES
                 and current_price):
+            # Viva 10-13: the bypass is lane-agnostic now — ANY chain whose
+            # live price is beyond its edge gets a fresh frame on the tick it
+            # happens (throttled to one forced fetch per NEW closed bar of its
+            # confirm TF, not a 10-minute wall clock): «confirm/break instant».
             try:
                 _md51 = candidate.metadata if isinstance(candidate.metadata, dict) else {}
-                _now51 = time.time()
-                if _now51 - float(_md51.get("break_bypass_at") or 0) > 600:
+                _tf51 = str(_md51.get("confirm_tf")
+                            or candidate.trigger_timeframe or "15m")
+                _bar51 = str(_expected_closed_bar(_tf51) or "")
+                if _bar51 and _md51.get("break_bypass_bar") != _bar51:
                     _edge51 = _structural_break_edge(candidate)
                     _px51 = float(current_price)
                     _atr51 = float(_md51.get("atr") or 0) or abs(_px51) * 0.01
@@ -1923,8 +1928,7 @@ def monitor_candidates() -> Dict[str, int]:
                                      if candidate.direction == "LONG"
                                      else _px51 < _edge51 - 0.05 * _atr51)
                         if _beyond51:
-                            _tf51 = str(_md51.get("confirm_tf")
-                                        or candidate.trigger_timeframe or "15m")
+                            _md51["break_bypass_bar"] = _bar51
                             _live51 = get_klines(candidate.symbol, _tf51, 140,
                                                  closed_only=False, use_cache=False)
                             if _live51 is not None and len(_live51) >= 20:
@@ -1932,7 +1936,6 @@ def monitor_candidates() -> Dict[str, int]:
                                                float(_live51["close"].iloc[-1]))
                                 live, closed, current_price = market_data
                                 have_frames = True
-                                _md51["break_bypass_at"] = _now51
                                 candidate.metadata = _md51
                                 stats["break_bypass"] = stats.get("break_bypass", 0) + 1
             except Exception as _bp51_exc:
@@ -2410,7 +2413,7 @@ def run_realtime_execution_cycle() -> int:
         try:
             from database.realtime_monitor import pending_filled_count as _pfc67
             if _pfc67() == 0:
-                return 0
+                return -1   # Viva 10-13 diet sentinel: loop idles on -1
         except Exception:
             pass   # fail-open: never let the cost gate blind the exit lane
         from data.ourbit import get_ourbit_tickers
@@ -2695,12 +2698,20 @@ def _next_aligned_scan(now: datetime) -> datetime:
 
 
 def _realtime_execution_loop() -> None:
-    """Independent daemon so lengthy discovery scans cannot delay exits."""
+    """Independent daemon so lengthy discovery scans cannot delay exits.
+
+    Viva 10-13 diet: while the cost gate reports ZERO filled positions the
+    lane's wake-up stretches to REALTIME_IDLE_SECONDS (default 30) — the
+    5s cadence (and exit latency) snaps back on the tick a position fills."""
     interval = max(2, int(SETTINGS.realtime_execution_seconds))
+    idle = max(interval, int(os.getenv("REALTIME_IDLE_SECONDS", "30") or 30))
+    _idle13 = 0
     while not _SHUTDOWN:
         started = time.monotonic()
-        run_realtime_execution_cycle()
-        time.sleep(max(0.2, interval - (time.monotonic() - started)))
+        _rc13 = run_realtime_execution_cycle()
+        _idle13 = 0 if _rc13 != -1 else _idle13 + 1
+        _cur13 = interval if _idle13 < 3 else idle
+        time.sleep(max(0.2, _cur13 - (time.monotonic() - started)))
 
 
 def _candidate_monitor_loop() -> None:
@@ -2712,7 +2723,12 @@ def _candidate_monitor_loop() -> None:
     the full 10s; a confirmation waits for CLOSED candles anyway, and
     discovery (not this loop) mints candidates, so no alert can be delayed."""
     interval = max(5, int(SETTINGS.candidate_monitor_seconds))
-    idle_interval = max(interval, int(os.getenv("CANDIDATE_MONITOR_IDLE_SECONDS", "20") or 20))
+    # Viva 10-13 consumption pass: with ZERO chains the only payload of this
+    # loop is line_watch, which self-gates at 30s (_MIN_INTERVAL) — an idle
+    # tick at 20s therefore wasted a third of its wake-ups. Idle now aligns
+    # exactly with the line-watch cadence: same alert latency, 33% fewer
+    # wake-ups. The instant a chain exists the cadence snaps back to 10s.
+    idle_interval = max(interval, int(os.getenv("CANDIDATE_MONITOR_IDLE_SECONDS", "30") or 30))
     _idle_ticks = 0
     while not _SHUTDOWN:
         started = time.monotonic()

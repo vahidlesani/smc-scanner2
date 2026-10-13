@@ -62,7 +62,10 @@ def main() -> None:
     scanner.start()
     app.config["VIVA_SCANNER_THREAD"] = scanner
     port = int(os.getenv("PORT", os.getenv("DASHBOARD_PORT", "8080")))
-    threads = int(os.getenv("WEB_THREADS", "6"))
+    # Viva 10-13 consumption pass: the dashboard serves ONE admin plus the
+    # health probe; 6 idle worker threads are pure RAM-seconds on a metered
+    # plan. Override with WEB_THREADS if ever needed.
+    threads = int(os.getenv("WEB_THREADS", "2"))
     print(
         f"🌐 Viva combined service listening on 0.0.0.0:{port} "
         f"• scanner thread={scanner.name} • web threads={threads}"

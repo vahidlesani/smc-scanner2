@@ -1662,7 +1662,12 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
         if cands:
             stop = (max(cands) if direction == "LONG" else min(cands)) + (-buffer if direction == "LONG" else buffer)
     if is_break:
-        entry = live
+        # ── Viva 10-14 («ورودها همگی غلط .. قوانین خودِ ستاپ»): a breakout's
+        # entry is the RETEST of the broken line — the level the FTB law and
+        # the zone doctrine trade from — never the chase price at alert time.
+        # A fresh break has live≈line so nothing shifts; a late-detected run
+        # keeps its zone ON the line instead of floating ATRs above it.
+        entry = float(line_now) if float(line_now or 0) > 0 else float(live)
         # ── Viva 09-21 (round 12): the measured-move projection is NOT a live
         # level — DASH 15m went out with a 34% target off it. The path now goes
         # through the same doctrine funnel as every other setup: the measured

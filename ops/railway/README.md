@@ -47,3 +47,24 @@ git clone https://github.com/vahidlesani/smc-scanner2 && cd smc-scanner2
 bash ops/railway/ops.sh access
 BACKUP_PASSPHRASE='...' bash ops/railway/ops.sh backup
 ```
+
+## ۵) مهاجرت به اکانت جدید (۱۰-۱۳)
+اکانت فعلی تمام شده؛ پروژهٔ جدید روی اکانت تازه ساخته شده است.
+دو UUID که در چت آمدند **شناسهٔ پروژه**اند، نه توکن — با آن‌ها هیچ API کار نمی‌کند
+(تست شد: Not Authorized). مسیر درست:
+1. اکانت جدید ← پروژهٔ موردنظر ← **Settings → Tokens** ← یک Project Token برای
+   محیط `production` بسازید و در GitHub Secrets جای `RAILWAY_TOKEN` بگذارید
+   (توکن قدیمیِ اکانت تمام‌شده را برای اجرای `backup` نگه دارید تا بک‌آپ گرفته شود).
+2. روی سکرت قدیمی: اکشن `railway-ops` با `action=backup` → آرتیفکت رمزنگاری‌شده.
+3. سکرت را به توکن پروژهٔ جدید عوض کنید؛ `action=access` → ساخت سرویس با متغیرهای
+   بک‌آپ + پیش‌فرض‌های مصرف زیر؛ `action=deploy`.
+   | متغیر | مقدار | اثر |
+   |---|---|---|
+   | `REALTIME_EXECUTION_SECONDS` | `5` | کادنس خروج پوزیشن‌های زنده |
+   | `REALTIME_IDLE_SECONDS` | `30` | با صفر پوزیشن: بیدارشدن هر ۳۰ ثانیه (۱۰-۱۳) |
+   | `CANDIDATE_MONITOR_SECONDS` | `10` | مانیتور تأیید با زنجیرهٔ فعال |
+   | `CANDIDATE_MONITOR_IDLE_SECONDS` | `30` | بدون زنجیره: ۳۰ ثانیه |
+   | `FULL_SCAN_MINUTES` | `15` | اسکن اکتشاف (کش کندل روشن) |
+   مصرف وابسته به تعداد سیگنال نیست (۳→۱ اثر نکرد)؛ وابسته به بیدارشدن حلقه‌ها و
+   تعداد ریکوئست است — dietهای بالا همان مسیر را می‌بندند. بعد از دیپلوی،
+   `action=usage` عدد واقعی هر سرویس را می‌دهد.

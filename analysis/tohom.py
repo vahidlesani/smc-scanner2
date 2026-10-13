@@ -248,13 +248,36 @@ def evaluate_tohom_confirmation(
     score = float(getattr(candidate, "score", 0) or 0)
     last_row = subs.iloc[-1] if n_subs else None
     vol_ratio = 0.0
-    if last_row is not None and n_subs >= 2:
+    if last_row is not None and n_subs >= 1:
         hist = frame[frame["timestamp"] < subs.iloc[0]["timestamp"]]["volume"].tail(20)
         base = float(hist.mean()) if len(hist) else 0.0
         vol_ratio = (float(last_row["volume"]) / base) if base > 0 else 0.0
         strong = vol_ratio >= 2.0 and score >= 9.0
         if strong:
             need = 2
+    # ── Viva 10-13 INSTANT-CONFIRM LAW («لحظهٔ شکست، فوری و ارزان»): a single
+    # DECISIVE sub-close beyond the shared edge (≥0.5·ATR clearance, candle in
+    # the right direction, volume ≥1.5×) IS the break in progress — waiting for
+    # two more sub-candles is what let price reach TP3 before the channel saw
+    # «confirmed». The decisive flag also waives the candle-pattern gate: on an
+    # impulsive break the clearance + volume ARE the evidence.
+    _decisive13 = False
+    if n_subs >= 1 and n_subs < need:
+        try:
+            from analysis.confirm_r62 import confirm_edge_at as _cea13
+            _e13 = float(_cea13(candidate,
+                                pd.Timestamp(subs.iloc[-1]["timestamp"])) or 0.0)
+        except Exception:
+            _e13 = 0.0
+        if _e13 > 0:
+            _lr13 = subs.iloc[-1]
+            _c13, _o13 = float(_lr13["close"]), float(_lr13["open"])
+            _clr13 = (_c13 - _e13) if direction > 0 else (_e13 - _c13)
+            _dir13 = (_c13 > _o13) if direction > 0 else (_c13 < _o13)
+            _atr13 = float(md.get("atr", 0) or 0) or 0.01 * _e13
+            if _dir13 and _clr13 >= 0.5 * _atr13 and vol_ratio >= 1.5:
+                need = 1
+                _decisive13 = True
     if n_subs < need:
         return reject("TOHOM_WAIT", f"تنها {n_subs} کندلِ {sub_tf} از این کندلِ {tf} بسته شده است.")
 
@@ -320,7 +343,10 @@ def evaluate_tohom_confirmation(
     if not beyond:
         return reject("TOHOM_BEYOND", "کلوزِ تایم پایین‌تر هنوز از لبهٔ شکست عبور نکرده است.")
 
-    if vol_ratio < 1.3 or float(last["volume"]) <= float(subs.iloc[-2]["volume"]):
+    if not _decisive13 and (
+            vol_ratio < 1.3
+            or (n_subs >= 2
+                and float(last["volume"]) <= float(subs.iloc[-2]["volume"]))):
         return reject("TOHOM_VOL", "رشد حجمِ محسوس روی تایم پایین‌تر دیده نشد.")
 
     pattern = ""
@@ -338,7 +364,7 @@ def evaluate_tohom_confirmation(
             pattern = "پین‌بار معکوس"
         if pattern:
             break
-    if not pattern:
+    if not pattern and not _decisive13:
         return reject("TOHOM_PATTERN", "الگوی موافق (پین‌بار/انگلفینگ/قدرتی) روی سه کندلِ اخیر نیست.")
 
     md["tohom"] = 1

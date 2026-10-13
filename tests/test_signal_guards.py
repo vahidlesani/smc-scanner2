@@ -1365,6 +1365,7 @@ def test_slot_never_emits_detached_continuation_2026_09_16():
 
 
 def test_chart_pills_match_ladder_exits(monkeypatch):
+    import os as _os; _os.environ["VIVA_RENDER_V2"]="0"  # unified-path law test
     import data.fetcher as _f
     monkeypatch.setattr(_f, "get_klines", lambda *a, **k: None)
     """Viva 09-19: the confirmed chart must show EVERY ladder exit pill.

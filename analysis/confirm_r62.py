@@ -205,6 +205,29 @@ def confirm_edge_at(candidate, when=None) -> float:
             # broken geometry, not a line — fall back to the static level
             if static <= 0 or abs(v - static) <= 0.25 * static:
                 return v
+    # ── Viva 10-13: no stored geometry AND no tl anchor? the chart's OWN
+    # primary line (render_patterns pivots) rebuilds the sloped edge — a
+    # frozen alert-time level on a falling resistance confirms only at TP3.
+    try:
+        _dir13 = str(getattr(candidate, "direction", "") or "").upper()
+        _want13 = "HIGH" if _dir13 == "LONG" else "LOW"
+        for _rp13 in (md.get("render_patterns") or [])[:1]:
+            _cand13 = [ln for ln in (_rp13.get("lines") or [])
+                       if str(ln.get("side") or "").upper() == _want13]                 or [ln for ln in (_rp13.get("lines") or [])
+                    if len(ln.get("points") or []) >= 2]
+            for _ln13 in _cand13[:1]:
+                _pts13 = _ln13.get("points") or []
+                if len(_pts13) < 2:
+                    continue
+                _ta13, _pa13 = _naive(_pts13[0].get("ts")), float(_pts13[0].get("price") or 0)
+                _tb13, _pb13 = _naive(_pts13[-1].get("ts")), float(_pts13[-1].get("price") or 0)
+                _dt13 = (_tb13 - _ta13).total_seconds()
+                if _dt13 > 0 and _pa13 > 0 and _pb13 > 0:
+                    _v13 = _pb13 + (_pb13 - _pa13) / _dt13 * (_naive(when) - _tb13).total_seconds()
+                    if _v13 > 0 and (static <= 0 or abs(_v13 - static) <= 0.25 * static):
+                        return float(_v13)
+    except Exception:
+        pass
     try:
         if source == "LINE" and md.get("tl_a_ts") and md.get("tl_b_ts"):
             ta, tb = _naive(md["tl_a_ts"]), _naive(md["tl_b_ts"])

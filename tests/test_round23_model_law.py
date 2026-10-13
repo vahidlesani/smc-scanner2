@@ -114,6 +114,7 @@ def test_wedge_upper_break_confirms_long_and_never_short():
 # ── Round-24: the numeric tool — «ابزار لانگ و شورت در ۵ ستاپ فقط با
 #    tp1 تا tp5 مشخص بشه» (no big labels over candles/tool) ─────────────────
 def test_tool_pills_are_bare_numbers_with_axis_values(monkeypatch):
+    monkeypatch.setenv("VIVA_RENDER_V2", "0")  # unified-path law test
     # r32: no network — a real live candle would spike the frame range and
     # blow up the pill-grouping tolerance on this synthetic 100-tape.
     import data.fetcher as _f

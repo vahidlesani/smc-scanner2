@@ -71,6 +71,7 @@ def _capture(monkeypatch, tape, cand):
 # ── 1. broken leg → dashed through LIVE ─────────────────────────────────────
 
 def test_broken_leg_dashes_through_live(monkeypatch):
+    monkeypatch.setenv("VIVA_RENDER_V2", "0")  # unified-path law test
     tape = _tape()
     cand = _cand(tape, variant="ALBROX_ZONE", status="EDUCATIONAL")
     ibk = len(tape) - 45
@@ -96,6 +97,7 @@ def test_broken_leg_dashes_through_live(monkeypatch):
 # ── 2. zone lane with no stored points → BOTH edges ─────────────────────────
 
 def test_zone_lane_gets_both_edges(monkeypatch):
+    monkeypatch.setenv("VIVA_RENDER_V2", "0")  # unified-path law test
     tape = _tape()
     cand = _cand(tape, variant="ALBROX_ZONE", status="EDUCATIONAL")
     ax = _capture(monkeypatch, tape, cand)
@@ -144,6 +146,7 @@ def test_established_break_is_never_out_of_reach():
 # ── 5. shell guarantee: one-sided stored set gains the missing side ─────────
 
 def test_one_sided_shell_gains_refit_side(monkeypatch):
+    monkeypatch.setenv("VIVA_RENDER_V2", "0")  # unified-path law test
     tape = _tape()
     cand = _cand(tape)
     hi = tape.tail(70).nlargest(3, "high").sort_values("timestamp")

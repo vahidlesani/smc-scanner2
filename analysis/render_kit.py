@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
+import math
 import numpy as np
 import pandas as pd
 
@@ -326,6 +327,51 @@ def _chart_will_be_log(candidate, df: pd.DataFrame) -> bool:
     return str(getattr(candidate, "trigger_timeframe", "") or "").lower() == "1h" and ratio > 1.35
 
 
+def refit_asc_triangle_upper(gu, gl, df, n, line_y, _atr, scissor=False):
+    """Viva 10-13 (his STRK ruling: «ضلع بالاش از پیوت‌های ماژور درست شروع
+    نشده»): an ASCENDING TRIANGLE's upper side is the FLAT RESISTANCE through
+    the MAJOR-HIGH cluster. When both provisional edges rise but the upper one
+    runs far BELOW that cluster (a rising support mislabeled HIGH), return a
+    flat HIGH-side line on the cluster; else return gu unchanged.
+    Channel-safe: an ascending channel's upper edge already rides its top
+    cluster, so the gap gates stay silent there. Pure (unit-tested)."""
+    if gu is None or gl is None or scissor:
+        return gu
+    try:
+        if not (float(gu["slope"]) > 0 and float(gl["slope"]) > 0):
+            return gu
+        import math as _m75
+        from analysis.viva_tlbreak import pivots as _pv75
+        a75 = float(_atr(df))
+        hi75 = [q for q in _pv75(df.reset_index(drop=True), 3, 3)[0]
+                if float(q["index"]) >= n - 60]
+        if not hi75 or a75 <= 0:
+            return gu
+        top75 = max(float(q["price"]) for q in hi75)
+        clu75 = [q for q in hi75 if top75 - float(q["price"]) <= 0.5 * a75]
+        gy0 = line_y(gu, int(gu["x0"]))
+        gy1 = line_y(gu, n)
+        if not (len(clu75) >= 2 and top75 - gy1 > 0.8 * a75
+                and top75 - gy0 > 1.5 * a75):
+            return gu
+        p75 = float(sum(float(q["price"]) for q in clu75) / len(clu75))
+        return {
+            "side": "HIGH",
+            "slope": 0.0,
+            "intercept": p75,
+            "log_fit": True,
+            "log_slope": 0.0,
+            "log_intercept": _m75.log10(p75),
+            "break_x": None,
+            "x0": int(min(float(q["index"]) for q in clu75)),
+            "x1": int(n),
+            "points": [{"ts": str(q.get("timestamp")),
+                        "price": float(q.get("price"))} for q in clu75],
+        }
+    except Exception:
+        return gu
+
+
 def detect_patterns(df: pd.DataFrame, direction: str = "",
                     log_axis: Optional[bool] = None) -> List[Dict]:
     """Validated edge geometry + honest shape classification (doctrine:
@@ -506,6 +552,7 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                     # R62-ARENA (audit G2): honest = TWO TRENDLINES, not an
                     # empty chart (the old code blanked both edges here).
                     _scissor62 = True
+            gu = refit_asc_triangle_upper(gu, gl, df, n, line_y, _atr, _scissor62)
             if gu is not None and gl is not None and not _scissor62:
                 shape = classify_shape(_ns(gu), _ns(gl), n, df=df)
             else:

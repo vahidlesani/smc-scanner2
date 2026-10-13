@@ -1,6 +1,6 @@
 {
   "action": "access",
   "service": "",
-  "nonce": 7,
+  "nonce": 8,
   "note": "10-11: access query v2 (minimal fields; v1 400s on current schema)."
 }
