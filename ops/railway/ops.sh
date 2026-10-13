@@ -24,7 +24,7 @@ case "$ACTION" in
     for s in $(services); do
       echo "- $s:"
       railway variables --service "$s" --json 2>/dev/null \
-        | python3 -c 'import json,sys; d=json.load(sys.stdin); print("   ", " · ".join(sorted(d)))' \
+        | python3 -c 'import json,sys; raw=sys.stdin.read().strip(); d=json.loads(raw) if raw else {}; print("   ", " · ".join(sorted(d)) if d else "(none readable with this token mode)")' \
         || echo "    (cannot read variables of $s)"
     done
     ;;
