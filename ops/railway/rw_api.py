@@ -156,7 +156,7 @@ def access():
           environments{ edges{ node{ id name } } }
           services{ edges{ node{ id name
               serviceInstances{ edges{ node{ environmentId
-                  latestDeployment{ id status createdAt } } } } } } } } }"""
+                  latestDeployment{ id status createdAt url } } } } } } } } }"""
     d, e = gql(q, {"id": pid})
     for m in e:
         print("  gql:", m)
@@ -172,15 +172,8 @@ def access():
                 continue
             ld = si.get("latestDeployment") or {}
             print(f"- {s['name']}  id={s['id']}\n"
-                  f"    last deploy: {ld.get('status')} @ {ld.get('createdAt')}")
-            dd, de = gql("query($id:String!){ service(id:$id){ serviceDomains"
-                         "{ edges{ node{ domain status } } } } }",
-                         {"id": s["id"]})
-            for dom in _edges((((dd or {}).get("service") or {})
-                               .get("serviceDomains"))):
-                print(f"    https://{dom.get('domain')}  [{dom.get('status')}]")
-            for m in de:
-                print("    domains gql:", m)
+                  f"    last deploy: {ld.get('status')} @ {ld.get('createdAt')}"
+                  + (f"\n    deploy url: {ld.get('url')}" if ld.get("url") else ""))
             _shown = True
         if not _shown:
             print(f"- {s['name']}  id={s['id']}  (no instance in this env)")
