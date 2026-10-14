@@ -5,6 +5,7 @@ import analysis.tiered_scan as _ts
 from analysis.techclassic import (
     TECHCLASSIC_ENGINES, TC_ENTRY_RULES,
     get_tc_engine, tc_health_check, tc_alarm, tc_entry_check,
+    tc_trailing_check,
 )
 
 
@@ -88,6 +89,26 @@ def test_tc_entry_foreign_veto_refused_with_alarm(monkeypatch):
                         day="2099-02-03")
     assert _r["decision"] == "CONFIRM"  # veto REFUSED, entry proceeds
     assert len(_r["alarms"]) == 1 and "pinwall_zone_veto" in _r["alarms"][0]
+
+
+def test_tc_trailing_btc_case_stopped():
+    # BTC-1D sample: entry 86,794 / stop 85,603 / live 81,814 LONG.
+    _r = tc_trailing_check(entry=86794, stop=85603, live=81814,
+                           direction="LONG")
+    assert _r["state"] == "STOPPED"
+    assert len(_r["alarms"]) == 1 and "never CONFIRM" in _r["alarms"][0]
+
+
+def test_tc_trailing_healthy_and_short_mirror():
+    _h = tc_trailing_check(entry=86794, stop=85603, live=87000,
+                           direction="LONG")
+    assert _h["state"] == "HEALTHY" and _h["alarms"] == []
+    _s = tc_trailing_check(entry=86794, stop=87800, live=88000,
+                           direction="SHORT")
+    assert _s["state"] == "STOPPED"
+    _t = tc_trailing_check(entry=86794, stop=84000, live=84500, trail=84838,
+                           direction="LONG")
+    assert _t["state"] == "TRAIL_HIT"
 
 
 def test_tc_entry_budget_deferred_never_dropped(monkeypatch):
