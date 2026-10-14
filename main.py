@@ -1059,6 +1059,37 @@ def run_spot_scan() -> Dict[str, int]:
                 continue
         except Exception:
             pass
+        # R99h SPOT own-engine consult (fail-open, kill-switch SPOT_OWN_ENGINE_ENABLED=0).
+        try:
+            if str(os.getenv('SPOT_OWN_ENGINE_ENABLED', '1') or '1').strip() != '0':
+                from analysis.spot import spot_entry_check as _sp99, spot_trailing_check as _st99
+                _md99s = getattr(cand, 'metadata', None)
+                _md99s = _md99s if isinstance(_md99s, dict) else {}
+                _fg99s = [str(_k) for _k in _md99s if 'veto' in str(_k).lower()]
+                _sp99r = _sp99(broke_closed=True, foreign_gates=_fg99s)
+                for _a99s in (_sp99r.get('alarms') or []):
+                    print(_a99s)
+                    stats['spot_own_alarm'] = stats.get('spot_own_alarm', 0) + 1
+                if _sp99r.get('decision') != 'CONFIRM':
+                    stats['spot_own_skip'] = stats.get('spot_own_skip', 0) + 1
+                    continue
+                try:
+                    _b99 = bundles.get(cand.symbol.upper())
+                    _fr99 = _b99.get(cand.trigger_timeframe) if _b99 is not None else None
+                    _live99 = float(_fr99['close'].iloc[-1]) if _fr99 is not None else None
+                except Exception:
+                    _live99 = None
+                _e99 = _md99s.get('entry', _md99s.get('plan_entry', _md99s.get('spot_entry')))
+                _s99 = _md99s.get('stop', _md99s.get('initial_stop', _md99s.get('spot_stop', _md99s.get('plan_stop'))))
+                if _e99 and _s99 and _live99:
+                    _st99r = _st99(entry=_e99, stop=_s99, live=_live99)
+                    if _st99r.get('state') == 'STOPPED':
+                        print(_st99r['alarms'][0] if _st99r.get('alarms') else 'spot STOPPED')
+                        stats['spot_stop_skip'] = stats.get('spot_stop_skip', 0) + 1
+                        continue
+                stats['spot_own_confirm'] = stats.get('spot_own_confirm', 0) + 1
+        except Exception as _sp99e:
+            print(f'SPOT own-engine consult skipped: {_sp99e}')
         # R65 SNAPSHOT AT DETECTION (spot): the shape/trend is frozen the
         # moment its chain is born, so the confirmation or the rejection is
         # always judged and drawn on the SAME geometry.
