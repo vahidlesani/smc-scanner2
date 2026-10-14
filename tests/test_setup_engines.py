@@ -7,9 +7,9 @@ from analysis.setup_engines import (
 )
 
 
-def test_registry_has_all_five_setups():
+def test_registry_has_four_setups():
     assert sorted(SETUP_ENGINES) == [
-        "ALBROX", "PINVAL", "PINWALL", "TECHCLASSIC", "TLBREAK"]
+        "ALBROX", "PINVAL", "TECHCLASSIC", "TLBREAK"]
 
 
 def test_registry_detectors_resolve():
@@ -32,9 +32,9 @@ def test_registry_line_keys_nonempty_and_unique_per_setup():
         assert len(keys) == len(set(keys)), code
 
 
-def test_zones_only_albrox_pinwall():
+def test_zones_only_albrox():
     assert setup_has_zones("ALBROX") is True
-    assert setup_has_zones("PINWALL") is True
+    assert setup_has_zones("PINWALL") is False  # R99j: retired (r40)
     assert setup_has_zones("TECHCLASSIC") is False
     assert setup_has_zones("TLBREAK") is False
     assert setup_has_zones("PINVAL") is False

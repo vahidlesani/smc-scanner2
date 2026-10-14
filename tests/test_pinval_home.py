@@ -19,6 +19,7 @@ def test_pinval_all_nine_wired():
 
 def test_pinval_rules_no_zones():
     assert PINVAL_ENTRY_RULES["own_polarity_gate"] is True
+    assert PINVAL_ENTRY_RULES["legacy_display_name"] == "PINWALL"
     assert PINVAL_ENTRY_RULES["zones_may_draw"] is False
     assert pinval_zones_from_pivots({"highs": [(1, 2.0)], "lows": []}) == []
     assert get_pinval_engine("NOPE") is None

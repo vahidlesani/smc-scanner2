@@ -42,13 +42,9 @@ SETUP_ENGINES = {
         "zones": True,  # قانون: زون فقط ALBROX/PINWALL
         "notes": "box-to-same-tf-ceiling; shared-funnel-today",
     },
-    "PINWALL": {
-        "detectors": ["analysis.setups_experimental.detect_pinwall_quality"],
-        "line_keys": ["pattern_geo", "render_patterns",
-                      "viva_upper_points", "viva_lower_points"],
-        "zones": True,  # قانون: زون فقط ALBROX/PINWALL (+ PINWALL-union confirm)
-        "notes": "shared-funnel-today",
-    },
+    # R99j (r40 09-26): PINWALLQ is not emitted -- the surviving setup is
+    # PINWALL LEGACY, which IS the PINVAL lane above (display name PINWALL).
+    # No separate PINWALL lane exists; nothing may reference one.
 }
 
 # انجین‌های مشترک (دست نمی‌خورند مگر با دلیل مشترک):

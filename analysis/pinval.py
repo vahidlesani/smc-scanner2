@@ -31,6 +31,9 @@ PINVAL_ENGINES = {
 
 PINVAL_ENTRY_RULES = {
     "own_polarity_gate": True,
+                  # R99j (r40 09-26): this lane IS legacy PINWALL -
+                  # users see it under the display name PINWALL.
+                  "legacy_display_name": "PINWALL",
     "instant_confirm_after_break_close": True,
     "tohom_early_entry": True,
     "forbidden_gates": ["techclassic_veto", "tlbreak_veto", "pinwall_veto",
