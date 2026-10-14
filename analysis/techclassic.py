@@ -16,17 +16,17 @@ budget-gated; NEW mints respect the daily TOTAL cap (fail-open).
 
 TECHCLASSIC_ENGINES = {
     "detection": {
-        "entry": "analysis.pattern_engine.detect_technoclassic",
-        "status": "declared",
+        "entry": "analysis.techclassic.tc_detect",
+        "status": "wired",
         "notes": "existing detector; dedicated-geometry slice next",
     },
-    "zoom": {"entry": None, "status": "declared",
+    "zoom": {"entry": "analysis.techclassic.tc_zoom_window", "status": "wired",
              "notes": "own smart-zoom (hand-pan spec); not the shared funnel"},
-    "pivots": {"entry": None, "status": "declared",
+    "pivots": {"entry": "analysis.techclassic.tc_find_pivots", "status": "wired",
                "notes": "standard shadows count as pivots; body-drawn TLs rejected"},
-    "candle_count": {"entry": None, "status": "declared",
+    "candle_count": {"entry": "analysis.techclassic.tc_candles_for", "status": "wired",
                      "notes": "per-TF count from detected pattern; no min/max"},
-    "zones_render": {"entry": None, "status": "declared",
+    "zones_render": {"entry": "analysis.techclassic.tc_zones_from_pivots", "status": "wired",
                      "notes": "refined S/D boxes (soft blue/red) per TF + own render; DRAWN only"},
     "confirm_entry": {"entry": "analysis.techclassic.tc_entry_check",
                       "status": "wired",
@@ -34,8 +34,8 @@ TECHCLASSIC_ENGINES = {
     "trailing": {"entry": "analysis.techclassic.tc_trailing_check",
                  "status": "wired",
                  "notes": "live<=stop => STOPPED (confirm forbidden); trail-hit; precise exit"},
-    "tohom": {"entry": "analysis.tohom",
-              "status": "declared",
+    "tohom": {"entry": "analysis.techclassic.tc_tohom_fired",
+              "status": "wired",
               "notes": "module exists; TC hook takes tohom_fired as input (wiring next)"},
     "entry_rules": {"entry": "analysis.techclassic.tc_entry_check",
                     "status": "wired", "separate": True,
@@ -157,3 +157,100 @@ def tc_trailing_check(*, entry, stop, live, direction="LONG", trail=None):
     _dist = abs(_l - _s) / _s * 100 if _s else 0.0
     reasons.append(f"healthy ({_dist:.2f}% from stop)")
     return {"state": "HEALTHY", "alarms": alarms, "reasons": reasons}
+
+
+def tc_detect(bundle, style="DAYTRADE"):
+    """TC detection (engine 1): own wrapper over detect_technoclassic.
+
+    Tags every minted candidate as TC-owned so the TC path (and only it)
+    judges the chain afterwards.
+    """
+    from analysis.pattern_engine import detect_technoclassic as _det
+    cand = _det(bundle, style)
+    if cand is not None:
+        try:
+            if not isinstance(getattr(cand, "metadata", None), dict):
+                cand.metadata = {}
+            cand.metadata["tc_owned"] = True
+        except Exception:
+            pass
+    return cand
+
+
+def tc_find_pivots(highs, lows, left=2, right=2):
+    """TC pivots (engine 3): fractal swings on WICK highs/lows.
+
+    Standard shadows COUNT as pivots (user law) — highs/lows include wicks.
+    Returns {"highs": [(i, price)], "lows": [(i, price)]}.
+    """
+    try:
+        _h = [float(x) for x in (highs or [])]
+        _l = [float(x) for x in (lows or [])]
+    except Exception:
+        return {"highs": [], "lows": []}
+    _n = min(len(_h), len(_l))
+    _hi, _lo = [], []
+    for i in range(int(left), _n - int(right)):
+        _ph = _h[i]
+        if all(_ph >= _h[j] for j in range(i - int(left), i + int(right) + 1) if j != i) and \
+                any(_ph > _h[j] for j in range(i - int(left), i + int(right) + 1) if j != i):
+            _hi.append((i, _ph))
+        _pl = _l[i]
+        if all(_pl <= _l[j] for j in range(i - int(left), i + int(right) + 1) if j != i) and \
+                any(_pl < _l[j] for j in range(i - int(left), i + int(right) + 1) if j != i):
+            _lo.append((i, _pl))
+    return {"highs": _hi, "lows": _lo}
+
+
+def tc_candles_for(tf, pattern_span):
+    """TC candle count (engine 4): FROM the detected pattern (no min/max).
+
+    Detected span + 40 context bars (the R64 warm-up pad, kept).
+    """
+    try:
+        return max(1, int(pattern_span or 0) + 40)
+    except Exception:
+        return 300
+
+
+def tc_zoom_window(n_bars, count, pad_right_frac=0.12):
+    """TC zoom (engine 2): window from the count — pattern-anchored right.
+
+    Returns (x_from, x_to); the right pad keeps the live edge breathing.
+    """
+    try:
+        _n, _c = int(n_bars), max(1, int(count))
+        _x_to = _n - 1 + int(_c * float(pad_right_frac))
+        return (max(0, _x_to - _c), _x_to)
+    except Exception:
+        return (0, max(0, int(n_bars or 0) - 1))
+
+
+def tc_zones_from_pivots(pivots, direction="LONG"):
+    """TC zones (engine 5): refined S/D boxes from the two latest swings.
+
+    DRAWN on TC charts only — never gates entries (§6.9).
+    Returns [{"side": "supply"|"demand", "top": f, "bottom": f}].
+    """
+    try:
+        _p = pivots or {}
+        _out = []
+        _his = [float(p[1]) for p in (_p.get("highs") or [])[-2:]]
+        _los = [float(p[1]) for p in (_p.get("lows") or [])[-2:]]
+        if len(_his) == 2:
+            _out.append({"side": "supply", "top": max(_his), "bottom": min(_his)})
+        if len(_los) == 2:
+            _out.append({"side": "demand", "top": max(_los), "bottom": min(_los)})
+        return _out
+    except Exception:
+        return []
+
+
+def tc_tohom_fired(candidate, lower_closed_df=None, **kw):
+    """TC TOHOM hook (engine 8): True when the smart engine confirms early."""
+    try:
+        from analysis.tohom import evaluate_tohom_confirmation as _ev
+        _ok, _c, _reason = _ev(candidate, lower_closed_df, **kw)
+        return bool(_ok)
+    except Exception:
+        return False
