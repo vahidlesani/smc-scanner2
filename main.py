@@ -625,6 +625,24 @@ def run_discovery_scan() -> Dict[str, int]:
                     stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
                     _t(candidate)["budget_deferred"] = _t(candidate).get("budget_deferred", 0) + 1
                     continue  # not persisted; next scan retries when budget frees
+                # R99j TIER DAILY CAP (futures): the R99c cap never counted --
+                # nothing incremented the counter, so daily_budget_ok() was
+                # always True. Gate here (BEFORE add_candidate: a persisted
+                # row without a post is a GHOST chain) + incr after _educate.
+                # Not persisted; next scan retries when budget frees. Fail-open.
+                try:
+                    from analysis import tiered_scan as _tier99j
+                    try:
+                        _open99j = len(get_active_candidates() or [])
+                    except Exception:
+                        _open99j = 0
+                    if (not _tier99j.daily_budget_ok()
+                            or not _tier99j.concurrent_ok(_open99j)):
+                        stats["tier_cap_skip"] = stats.get("tier_cap_skip", 0) + 1
+                        _t(candidate)["tier_deferred"] = _t(candidate).get("tier_deferred", 0) + 1
+                        continue
+                except Exception:
+                    pass
                 for prior in supersede_alert_lineage(candidate):
                     try:
                         release_symbol_lock(prior.symbol, prior.signal_id)
@@ -662,6 +680,11 @@ def run_discovery_scan() -> Dict[str, int]:
                     continue
                 stats["new"] += 1
                 _t(candidate)["ready_new"] += 1
+                try:  # R99j: the missing half of the tiered cap -- count it
+                    from analysis import tiered_scan as _tier99j2
+                    _tier99j2.daily_count_incr("futures")
+                except Exception:
+                    pass
             if index % 10 == 0:
                 print(f"  scanned {index}/{len(symbols)} • new educational setups: {stats['new']}")
         except Exception as exc:
@@ -2195,8 +2218,6 @@ def monitor_candidates() -> Dict[str, int]:
                 _r99i_table = {
                     'TECHCLASSIC': ('analysis.techclassic', 'tc_entry_check',
                                     'TC_OWN_ENGINE_ENABLED'),
-                    'PINWALL': ('analysis.pinwall', 'pinwall_entry_check',
-                                'PINWALL_OWN_ENGINE_ENABLED'),
                     'PINVAL': ('analysis.pinval', 'pinval_entry_check',
                                'PINVAL_OWN_ENGINE_ENABLED'),
                     'ALBROX': ('analysis.albrox', 'albrox_entry_check',
