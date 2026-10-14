@@ -68,9 +68,9 @@ def test_zone_far_uses_side_margin_label_no_border():
     assert "linewidth=0" in seg                     # fill only — no border
 
 
-def test_cryptocove_candles_are_a_preview_switch():
+def test_cryptocove_candles_default_with_ink_hatch():
     src = open(os.path.join(ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()
-    assert 'os.getenv("CHART_CANDLE_STYLE", "ink")' in src
+    assert 'os.getenv("CHART_CANDLE_STYLE", "cryptocove")' in src
     assert '#089981", down="#F23645' in src.replace("up=\"", "")
 
 
