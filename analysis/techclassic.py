@@ -84,12 +84,14 @@ def _foreign_gate_hit(gate_name: str) -> bool:
 
 def tc_entry_check(*, broke: bool, closed_after_break: bool,
                    tohom_fired: bool = False, foreign_gates=(),
+                   direction: str = "LONG", live=None, entry=None, tp1=None,
                    day=None):
     """SEPARATE TC entry-law checker (§6.9). Pure + tested.
 
     Returns {"decision": "CONFIRM"|"WAIT"|"DEFERRED_BUDGET",
              "alarms": [...], "reasons": [...]}.
     A foreign gate NEVER vetoes: it raises an alarm and the entry proceeds.
+    A late confirm (live beyond entry) is ANNOTATED, entry proceeds.
     """
     alarms, reasons = [], []
     for _g in (foreign_gates or ()):
@@ -111,6 +113,15 @@ def tc_entry_check(*, broke: bool, closed_after_break: bool,
         reasons.append("daily TOTAL cap reached — deferred, never dropped")
         return {"decision": "DEFERRED_BUDGET", "alarms": alarms,
                 "reasons": reasons}
+    try:
+        _long = str(direction or "LONG").upper() != "SHORT"
+        if live is not None and entry is not None:
+            _late = (float(live) > float(entry)) if _long else (float(live) < float(entry))
+            if _late:
+                alarms.append(tc_alarm("LATE confirm annotated (live beyond entry)"))
+                reasons.append("late annotated")
+    except Exception:
+        pass
     try:
         from analysis import tiered_scan as _ts2
         _ts2.daily_count_incr("futures", day)

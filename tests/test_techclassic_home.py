@@ -166,6 +166,14 @@ def test_tc_trailing_healthy_and_short_mirror():
     assert _t["state"] == "TRAIL_HIT"
 
 
+def test_tc_entry_late_annotated(monkeypatch):
+    _fake_kv(monkeypatch, {})
+    _r = tc_entry_check(broke=True, closed_after_break=True,
+                        live=102.0, entry=100.0, day="2099-02-05")
+    assert _r["decision"] == "CONFIRM"
+    assert any("LATE" in a for a in _r["alarms"])
+
+
 def test_tc_entry_budget_deferred_never_dropped(monkeypatch):
     _fake_kv(monkeypatch, {"tier_day_count:2099-02-04:futures": 20,
                            "tier_day_count:2099-02-04:spot": 5})

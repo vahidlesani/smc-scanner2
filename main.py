@@ -2186,12 +2186,28 @@ def monitor_candidates() -> Dict[str, int]:
                     except Exception as exc:
                         print(f"TOHOM check skipped {candidate.signal_id}: {exc}")
 
-            # R99g TC own-engine consult (setup-gated, fail-open, kill-switch
-            # TC_OWN_ENGINE_ENABLED=0 bypasses without a deploy).
+            # R99i per-setup own-engine consult (generalizes R99g):
+            # every chain whose setup owns a discipline home gets its own
+            # entry law consulted. Setup-gated, fail-open, kill-switches:
+            # <SETUP>_OWN_ENGINE_ENABLED=0 bypasses that setup, no deploy.
             try:
-                if str(getattr(candidate, 'setup_code', '') or '').upper() == 'TECHCLASSIC' \
-                        and str(os.getenv('TC_OWN_ENGINE_ENABLED', '1') or '1').strip() != '0':
-                    from analysis.techclassic import tc_entry_check as _tc99g
+                _code99 = str(getattr(candidate, 'setup_code', '') or '').upper()
+                _r99i_table = {
+                    'TECHCLASSIC': ('analysis.techclassic', 'tc_entry_check',
+                                    'TC_OWN_ENGINE_ENABLED'),
+                    'PINWALL': ('analysis.pinwall', 'pinwall_entry_check',
+                                'PINWALL_OWN_ENGINE_ENABLED'),
+                    'PINVAL': ('analysis.pinval', 'pinval_entry_check',
+                               'PINVAL_OWN_ENGINE_ENABLED'),
+                    'ALBROX': ('analysis.albrox', 'albrox_entry_check',
+                               'ALBROX_OWN_ENGINE_ENABLED'),
+                    'TLBREAK': ('analysis.tlbreak', 'tlbreak_entry_check',
+                                'TLBREAK_OWN_ENGINE_ENABLED'),
+                }
+                _r99i = _r99i_table.get(_code99)
+                if _r99i and str(os.getenv(_r99i[2], '1') or '1').strip() != '0':
+                    import importlib as _il99
+                    _fn99 = getattr(_il99.import_module(_r99i[0]), _r99i[1])
                     try:
                         from analysis.confirm_r62 import break_established as _brk99
                         _broke99 = bool(_brk99(candidate.metadata or {}))
@@ -2199,23 +2215,45 @@ def monitor_candidates() -> Dict[str, int]:
                         _broke99 = False
                     _broke99 = _broke99 or bool(confirmed)
                     _via_tohom99 = bool(confirmed) and not have_frames
-                    _fg99 = [str(_k) for _k in (candidate.metadata or {}) if 'veto' in str(_k).lower()]
-                    _lrc99 = str((candidate.metadata or {}).get('last_reject_code') or '')
+                    _md99 = candidate.metadata or {}
+                    _fg99 = [str(_k) for _k in _md99 if 'veto' in str(_k).lower()]
+                    _lrc99 = str(_md99.get('last_reject_code') or '')
                     if 'VETO' in _lrc99:
                         _fg99.append(_lrc99)
-                    _tc99r = _tc99g(broke=_broke99, closed_after_break=bool(confirmed and have_frames),
-                                    tohom_fired=_via_tohom99, foreign_gates=_fg99)
+                    _ent99 = (_md99.get('entry') or getattr(candidate, 'entry', None)
+                              or _md99.get('activation_price'))
+                    _kw99 = dict(broke=_broke99,
+                                 closed_after_break=bool(confirmed and have_frames),
+                                 tohom_fired=_via_tohom99, foreign_gates=_fg99,
+                                 direction=str(getattr(candidate, 'direction', 'LONG')
+                                               or 'LONG'),
+                                 live=current_price, entry=_ent99,
+                                 tp1=(_md99.get('tp1') or getattr(candidate, 'tp1', None)))
+                    if _code99 == 'PINWALL':
+                        _kw99['carried_by'] = (_md99.get('pinwall_carried_by')
+                                               or _md99.get('carried_by'))
+                        _kw99['with_trend'] = bool(_md99.get('pinwall_with_trend', False))
+                    elif _code99 == 'PINVAL':
+                        _kw99['polarity_ok'] = bool(_md99.get('pinval_polarity_ok', True))
+                    elif _code99 == 'TLBREAK':
+                        _kw99['side'] = _md99.get('tlbreak_side')
+                    _tc99r = _fn99(**_kw99)
+                    _pfx99 = _code99.lower() + '_own_'
                     for _a99 in (_tc99r.get('alarms') or []):
                         print(_a99)
-                        stats['tc_own_alarm'] = stats.get('tc_own_alarm', 0) + 1
+                        stats['own_alarm'] = stats.get('own_alarm', 0) + 1
+                        stats[_pfx99 + 'alarm'] = stats.get(_pfx99 + 'alarm', 0) + 1
                     if _tc99r.get('decision') == 'CONFIRM':
-                        stats['tc_own_confirm'] = stats.get('tc_own_confirm', 0) + 1
+                        stats['own_confirm'] = stats.get('own_confirm', 0) + 1
+                        stats[_pfx99 + 'confirm'] = stats.get(_pfx99 + 'confirm', 0) + 1
                     else:
-                        stats['tc_own_defer'] = stats.get('tc_own_defer', 0) + 1
+                        stats['own_defer'] = stats.get('own_defer', 0) + 1
+                        stats[_pfx99 + 'defer'] = stats.get(_pfx99 + 'defer', 0) + 1
                         confirmed = False
-                        reason = 'TC own engine: ' + '; '.join(_tc99r.get('reasons') or ['wait'])
+                        reason = (_code99 + ' own engine: '
+                                  + '; '.join(_tc99r.get('reasons') or ['wait']))
             except Exception as _tc99e:
-                print(f'TC own-engine consult skipped: {_tc99e}')
+                print(f'own-engine consult skipped: {_tc99e}')
             if confirmed:
                 # ── Viva 09-21/22: the confirmation moment FROZENS the plan
                 # (entry/stop/ladder/lines) so no later update or absorb can
