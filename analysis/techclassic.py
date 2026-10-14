@@ -31,8 +31,9 @@ TECHCLASSIC_ENGINES = {
     "confirm_entry": {"entry": "analysis.techclassic.tc_entry_check",
                       "status": "wired",
                       "notes": "decision logic live; publish-path wiring next"},
-    "trailing": {"entry": None, "status": "declared",
-                 "notes": "precise trailing + smart exit on opposite patterns"},
+    "trailing": {"entry": "analysis.techclassic.tc_trailing_check",
+                 "status": "wired",
+                 "notes": "live<=stop => STOPPED (confirm forbidden); trail-hit; precise exit"},
     "tohom": {"entry": "analysis.tohom",
               "status": "declared",
               "notes": "module exists; TC hook takes tohom_fired as input (wiring next)"},
@@ -118,3 +119,41 @@ def tc_entry_check(*, broke: bool, closed_after_break: bool,
     reasons.append("tohom early entry" if tohom_fired and not closed_after_break
                    else "instant confirm after break+close")
     return {"decision": "CONFIRM", "alarms": alarms, "reasons": reasons}
+
+
+def tc_trailing_check(*, entry, stop, live, direction="LONG", trail=None):
+    """TC trailing/exit engine (R99e). Pure + tested.
+
+    LONG:  live <= stop  => STOPPED (a CONFIRM must never publish; EXIT).
+    SHORT: live >= stop  => STOPPED. A breached `trail` level => TRAIL_HIT.
+    Returns {"state": "STOPPED"|"TRAIL_HIT"|"HEALTHY", "alarms": [...],
+             "reasons": [...]}.
+    """
+    alarms, reasons = [], []
+    try:
+        _e, _s, _l = float(entry), float(stop), float(live)
+    except Exception:
+        return {"state": "HEALTHY", "alarms": alarms,
+                "reasons": ["unusable numbers — fail-open"]}
+    _long = str(direction or "LONG").upper() != "SHORT"
+    _dead = (_l <= _s) if _long else (_l >= _s)
+    if _dead:
+        alarms.append(tc_alarm(
+            f"position STOPPED (live {_l:,.0f} beyond stop {_s:,.0f}) — "
+            "EXIT, never CONFIRM"))
+        reasons.append("live beyond stop")
+        return {"state": "STOPPED", "alarms": alarms, "reasons": reasons}
+    if trail:
+        try:
+            _t = float(trail)
+            _hit = (_l <= _t) if _long else (_l >= _t)
+            if _hit:
+                alarms.append(tc_alarm(f"trail level {_t:,.0f} hit — exit"))
+                reasons.append("trail hit")
+                return {"state": "TRAIL_HIT", "alarms": alarms,
+                        "reasons": reasons}
+        except Exception:
+            pass
+    _dist = abs(_l - _s) / _s * 100 if _s else 0.0
+    reasons.append(f"healthy ({_dist:.2f}% from stop)")
+    return {"state": "HEALTHY", "alarms": alarms, "reasons": reasons}

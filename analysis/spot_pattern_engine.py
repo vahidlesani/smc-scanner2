@@ -284,7 +284,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
 
     # 3. Canvas setup with maximum width (Tight left/right margins)
     fig, ax = plt.subplots(figsize=(16, 9), dpi=180)
-    plt.subplots_adjust(left=0.030, right=0.935, top=0.925, bottom=0.065)
+    plt.subplots_adjust(left=0.030, right=0.935, top=0.925, bottom=0.20)
 
     # Authentic Lemon-to-Sky Vertical Gradient
     top_rgb = np.array([253, 244, 159]) / 255.0  # #FDF49F
@@ -434,6 +434,27 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     ax.set_ylim(y_min, y_max)
     ax.set_xlim(-1.0, n + future)
 
+    # 7b. Volume histogram (TradingView-like, R99f) — fail-soft when missing.
+    try:
+        _vol = frame['volume'].astype(float).values if 'volume' in frame.columns else None
+    except Exception:
+        _vol = None
+    if _vol is not None and len(_vol) == n:
+        try:
+            _vx = fig.add_axes([0.030, 0.065, 0.905, 0.11], zorder=1)
+            _vcol = ['#1f9d55' if closes[i] >= opens[i] else '#d23f5c' for i in range(n)]
+            _vx.bar(range(n), _vol, color=_vcol, width=0.7, alpha=0.75, zorder=2)
+            _vx.set_xlim(-1.0, n + future)
+            _vx.set_ylim(0, max(float(_vol.max()) * 1.45, 1e-9))
+            _vx.set_yticks([])
+            _vx.set_xticks([])
+            for _sp in ('top', 'left', 'right'):
+                _vx.spines[_sp].set_visible(False)
+            _vx.spines['bottom'].set_color('#8A857D')
+            _vx.tick_params(colors='#4A4640')
+        except Exception:
+            pass
+
     # 8. Live Price Guide & Single Distinct Live Price Pill on Axis
     ax.axhline(live_price, color='#1F2328', linestyle=':', linewidth=1.1, alpha=0.60, zorder=6)
     fmt_live = f'{live_price:,.4g}' if live_price < 10 else f'{live_price:,.2f}'
@@ -446,8 +467,8 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     try:
         tehran_now = datetime.now(ZoneInfo("Asia/Tehran")).strftime("%d %b %Y • %H:%M")
         ax.text(n - 1, y_min * 1.012, f'LIVE: {tehran_now} (Tehran)',
-                color='#1F2328', fontsize=8.5, fontweight='bold', ha='right', va='bottom',
-                bbox=dict(boxstyle='round,pad=0.2', facecolor='#FDF49F', edgecolor='#8A857D', alpha=0.85),
+                color='#FFFFFF', fontsize=8.5, fontweight='bold', ha='right', va='bottom',
+                bbox=dict(boxstyle='round,pad=0.2', facecolor='#1F2328', edgecolor='#1F2328', alpha=0.95),
                 zorder=9)
     except Exception:
         pass
@@ -455,6 +476,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     # 10. Clean Header Information matching Telegram Alert
     sub_title = f'{stage.replace("_", " ")} • {pat_title} • Log Scale'
     fig.text(0.038, 0.955, f'{symbol}  •  {tf.upper()}  •  SPOTBREAK', fontsize=15, fontweight='bold', color='#1F2328')
+    fig.text(0.935, 0.955, 'Vahid Lesani', fontsize=12, fontweight='bold', color='#1F2328', ha='right', va='center')
     fig.text(0.038, 0.932, f'VIVA SIGNALS PRO  •  {sub_title}', fontsize=10.5, color='#4A4640')
 
     # 11. Bottom-Right Official Brand & Golden Badge
@@ -477,6 +499,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     ax.spines['bottom'].set_color('#8A857D')
     ax.tick_params(colors='#4A4640', labelsize=9.5)
     ax.yaxis.tick_right()
+    ax.grid(True, color='#8A857D', alpha=0.22, linestyle='--', linewidth=0.7, zorder=0)
 
     step = max(15, n // 6)
     pos_list = list(range(5, n, step))
@@ -533,7 +556,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     ax.yaxis.set_minor_formatter(FuncFormatter(lambda x, _: ''))
 
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', facecolor='#FDF49F', edgecolor='none')
+    plt.savefig(buf, format='png', facecolor='white', edgecolor='none')
     plt.close()
     buf.seek(0)
     return buf.read()
