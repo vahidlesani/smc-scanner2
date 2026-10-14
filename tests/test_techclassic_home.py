@@ -1,9 +1,10 @@
-"""R99b-TC-home — TECHCLASSIC discipline-home tests."""
+"""R99b-TC-home + R99d entry engine — TECHCLASSIC discipline tests."""
 import importlib
 
+import analysis.tiered_scan as _ts
 from analysis.techclassic import (
     TECHCLASSIC_ENGINES, TC_ENTRY_RULES,
-    get_tc_engine, tc_health_check, tc_alarm,
+    get_tc_engine, tc_health_check, tc_alarm, tc_entry_check,
 )
 
 
@@ -21,6 +22,7 @@ def test_tc_detection_entry_resolves():
 
 def test_tc_entry_rules_separate_and_instant():
     assert TECHCLASSIC_ENGINES["entry_rules"].get("separate") is True
+    assert TECHCLASSIC_ENGINES["entry_rules"]["status"] == "wired"
     assert TC_ENTRY_RULES["instant_confirm_after_break_close"] is True
     assert TC_ENTRY_RULES["tohom_early_entry"] is True
     assert TC_ENTRY_RULES["final_chartless_pct"] == 0.4
@@ -45,3 +47,52 @@ def test_tc_get_engine_unknown_safe():
     assert get_tc_engine("nope") is None
     assert get_tc_engine("") is None
     assert get_tc_engine("ZOOM") == TECHCLASSIC_ENGINES["zoom"]
+
+
+def _fake_kv(monkeypatch, store):
+    class _KV:
+        @staticmethod
+        def get_json(_k, default=None):
+            return store.get(_k, default)
+
+        @staticmethod
+        def set_json(_k, _v):
+            store[_k] = _v
+            return True
+
+    monkeypatch.setattr(_ts, "_kv", lambda: _KV)
+
+
+def test_tc_entry_instant_confirm_and_wait(monkeypatch):
+    _fake_kv(monkeypatch, {})
+    assert tc_entry_check(broke=False, closed_after_break=False,
+                          day="2099-02-01")["decision"] == "WAIT"
+    assert tc_entry_check(broke=True, closed_after_break=False,
+                          day="2099-02-01")["decision"] == "WAIT"
+    _r = tc_entry_check(broke=True, closed_after_break=True, day="2099-02-01")
+    assert _r["decision"] == "CONFIRM" and _r["alarms"] == []
+
+
+def test_tc_entry_tohom_early(monkeypatch):
+    _fake_kv(monkeypatch, {})
+    _r = tc_entry_check(broke=True, closed_after_break=False, tohom_fired=True,
+                        day="2099-02-02")
+    assert _r["decision"] == "CONFIRM"
+    assert any("tohom" in x for x in _r["reasons"])
+
+
+def test_tc_entry_foreign_veto_refused_with_alarm(monkeypatch):
+    _fake_kv(monkeypatch, {})
+    _r = tc_entry_check(broke=True, closed_after_break=True,
+                        foreign_gates=["pinwall_zone_veto", "ok_gate"],
+                        day="2099-02-03")
+    assert _r["decision"] == "CONFIRM"  # veto REFUSED, entry proceeds
+    assert len(_r["alarms"]) == 1 and "pinwall_zone_veto" in _r["alarms"][0]
+
+
+def test_tc_entry_budget_deferred_never_dropped(monkeypatch):
+    _fake_kv(monkeypatch, {"tier_day_count:2099-02-04:futures": 20,
+                           "tier_day_count:2099-02-04:spot": 5})
+    _r = tc_entry_check(broke=True, closed_after_break=True, day="2099-02-04")
+    assert _r["decision"] == "DEFERRED_BUDGET"
+    assert any("never dropped" in x for x in _r["reasons"])
