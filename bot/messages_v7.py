@@ -78,14 +78,16 @@ def _sep_bullets(block: str) -> str:
     return block or ""
 CHAT_ID_ADMIN = os.getenv("CHAT_ID", "")
 
-# Chart identity: Viva's own TradingView look (light, monochrome candles,
-# borderless pastel supply/demand boxes). CHART_STYLE=dark restores the old
-# night theme; all colors remain overridable via the CHART_*_COLOR envs.
+# Chart identity: Viva's own TradingView look (R99k design-v2: white,
+# green/red candles, black tags, designer signature atop).
+# CHART_STYLE=dark restores the old night theme; all colors remain
+# overridable via the CHART_*_COLOR envs.
 _CHART_PRESETS = {
     "light": {
-        "figure": "#F8F1E7",
-        "panel": "#FFF9F0",
-        "grid": "#E6DDD0",
+        # R99k design-v2: white margins/panel (spot-fidelity parity).
+        "figure": "#FFFFFF",
+        "panel": "#FFFFFF",
+        "grid": "#E9E9E9",
         "text": "#25272B",
         "muted": "#74716C",
         "bull": "#F3E7DA",
@@ -101,8 +103,8 @@ _CHART_PRESETS = {
         "liquidity": "#7B3FF2",
         "structure": "#2962FF",
         "trend": "#3D4046",
-        "volume_up": "#C7A58A",
-        "volume_down": "#96745F",
+        "volume_up": "#9BD9C6",
+        "volume_down": "#F3B3B8",
     },
     "dark": {
         "figure": "#0B101A",
@@ -174,15 +176,15 @@ def _zone_family(poi: str) -> str:
 # Zone boxes AWAY from the price become faint family guides — red shades
 # above the price, green shades below — one ordered shade per kind
 # (SR → FVG → OB → FLAG), fill only (NO border), name parked in the
-# right-hand notes margin, never over the candles. CHART_CANDLE_STYLE=
-# cryptocove previews the green/red candle bodies (default stays ink until
-# Viva approves).
+# right-hand notes margin, never over the candles. R99k: green/red
+# candle bodies are the DEFAULT (Viva-approved); CHART_CANDLE_STYLE=ink
+# restores monochrome.
 _PATTERN_BLUE = "#2962FF" if _STYLE_NAME == "light" else "#4D8DFF"
 _ZONE_SHADES = {
     "above": {"SR": "#E0A3A3", "FVG": "#D47E7E", "OB": "#C25555", "FLAG": "#A83B3B"},
     "below": {"SR": "#A3CBA8", "FVG": "#7CBB89", "OB": "#57A46B", "FLAG": "#3A8B55"},
 }
-_CANDLE_STYLE = (os.getenv("CHART_CANDLE_STYLE", "ink") or "ink").lower()
+_CANDLE_STYLE = (os.getenv("CHART_CANDLE_STYLE", "cryptocove") or "cryptocove").lower()
 
 
 CHART_THEME = {
@@ -2977,8 +2979,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _lbl9 = str(_z.get("kind") or "")
                 if id(_z) in _target_zone_ids:
                     # r59.2: the trade's probable final target box
-                    _lbl9 = ("🎯 TARGET · " + _lbl9) if _dir_key == "LONG" \
-                        else ("🎯 TARGET · " + _lbl9)
+                    # R99k: diamond glyph (DejaVu-safe; the emoji drew tofu).
+                    _lbl9 = ("◆ TARGET · " + _lbl9) if _dir_key == "LONG" \
+                        else ("◆ TARGET · " + _lbl9)
                 ax.text(count + future * 0.45, 0.5 * (_zb9 + _zt9),
                         _lbl9, color=_t8, fontsize=6.5,
                         va="center", ha="center", fontweight="bold", zorder=12,
@@ -4640,13 +4643,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _yv9 = min(max(_lv9, _lo2), _hi2)
                     # r39b: sit the tag BELOW the ladder number, not ON it —
                     # the old 1.004/center printed «159.9210.00» mash-ups.
-                    ax.text(1.052, _yv9, _pv9, transform=_tr9, color=_cv9,
+                    # R99k: price tags are BLACK w/ white text (TV-style);
+                    # the thin edge keeps the tag's line color identity.
+                    ax.text(1.052, _yv9, _pv9, transform=_tr9, color="white",
                             fontsize=6.3, va="top", ha="right", zorder=13,
                             clip_on=False,
                             bbox={"boxstyle": "round,pad=0.22",
-                                  "facecolor": CHART_THEME["panel"],
+                                  "facecolor": "#1F2328",
                                   "edgecolor": _cv9, "alpha": 0.95,
-                                  "linewidth": 0.5})
+                                  "linewidth": 0.9})
             fig.canvas.draw()
             _rend = fig.canvas.get_renderer()
             _inv = ax.transData.inverted()
@@ -4747,6 +4752,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             color=CHART_THEME["muted"],
             fontsize=8,
             va="center",
+        )
+        # R99k: designer signature atop every futures chart (spot-v2
+        # parity) — above the title row so the setup sticker never collides.
+        fig.text(
+            0.955, 0.978, "Vahid Lesani", color="#1F2328", fontsize=11,
+            fontweight="bold", ha="right", va="center", zorder=30,
         )
         # ── Viva 09-21: «چرا چارت پینوال کیو استیکر بنام خودش نداره و بنام viva
         # setup درج میشه در جای استیکر هر ستاپ؟» — the header word is the FALLBACK
