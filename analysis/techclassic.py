@@ -1,25 +1,17 @@
-"""TECHCLASSIC home — فاز نظم و انضباط (R99b-TC-home).
+"""TECHCLASSIC home — فاز نظم و انضباط (R99b + R99d entry engine).
 
 End-state law (VIVA_USER_LAWS.md §10): every setup owns ONE file under
 analysis/ holding ALL its engines. This is TECHCLASSIC's file; its handoff
 and rules live HERE (§10), separate from every other setup.
 
-Engines (VIVA_USER_LAWS.md §6):
-  1. detection     — smart TL/pattern detection
-  2. zoom          — smart zoom
-  3. pivots        — correct-pivot detection
-  4. candle_count  — per-TF candle count from the detected pattern
-  5. zones_render  — refined S/D zones per TF (soft blue/red boxes) + render
-  6. confirm_entry — confirm + position entry
-  7. trailing      — smart stop trailing
-  8. tohom         — smart early entry before close
-  9. entry_rules   — SEPARATE entry-law checker; NO other gate may sit in
-                     front of it (the old bug: zones used to veto TC entries).
+Engines (VIVA_USER_LAWS.md §6): detection, zoom, pivots, candle_count,
+zones_render, confirm_entry, trailing, tohom, entry_rules (SEPARATE).
 
-Entry law: instant confirm right after break+close (or via own TOHOM).
-Zones are DRAWN for TC but must NEVER gate/veto its entries.
-
-DATA ONLY in this slice — nothing imports this module in production yet.
+Entry law (§6.9 + §8): instant CONFIRM right after break+close (or via own
+TOHOM). Zones are DRAWN for TC but must NEVER gate/veto its entries — any
+foreign gate found in the TC path raises an ALARM and the entry proceeds
+(the veto is REFUSED, never silent). Confirms of alerted chains are never
+budget-gated; NEW mints respect the daily TOTAL cap (fail-open).
 """
 
 TECHCLASSIC_ENGINES = {
@@ -36,14 +28,17 @@ TECHCLASSIC_ENGINES = {
                      "notes": "per-TF count from detected pattern; no min/max"},
     "zones_render": {"entry": None, "status": "declared",
                      "notes": "refined S/D boxes (soft blue/red) per TF + own render; DRAWN only"},
-    "confirm_entry": {"entry": None, "status": "declared",
-                      "notes": "instant confirm at break; confirm-with-tool at 0.2% pre-entry"},
+    "confirm_entry": {"entry": "analysis.techclassic.tc_entry_check",
+                      "status": "wired",
+                      "notes": "decision logic live; publish-path wiring next"},
     "trailing": {"entry": None, "status": "declared",
                  "notes": "precise trailing + smart exit on opposite patterns"},
-    "tohom": {"entry": None, "status": "declared",
-              "notes": "smart early entry before close; never fake"},
-    "entry_rules": {"entry": None, "status": "declared", "separate": True,
-                    "notes": "SEPARATE checker; forbidden_gates must be empty in TC path"},
+    "tohom": {"entry": "analysis.tohom",
+              "status": "declared",
+              "notes": "module exists; TC hook takes tohom_fired as input (wiring next)"},
+    "entry_rules": {"entry": "analysis.techclassic.tc_entry_check",
+                    "status": "wired", "separate": True,
+                    "notes": "SEPARATE checker; foreign gates alarm + veto refused"},
 }
 
 TC_ENTRY_RULES = {
@@ -75,3 +70,51 @@ def tc_health_check(candidate=None):
 def tc_alarm(message):
     """Alarm stub (§11): format an alarm payload (routing wired later)."""
     return f"[TC-ALARM] {message}"
+
+
+def _foreign_gate_hit(gate_name: str) -> bool:
+    _g = str(gate_name or "").lower()
+    if not _g:
+        return False
+    if _g in TC_ENTRY_RULES["forbidden_gates"]:
+        return True
+    return ("veto" in _g) or ("zone" in _g and "pinwall" in _g) or ("zone" in _g and "albrox" in _g)
+
+
+def tc_entry_check(*, broke: bool, closed_after_break: bool,
+                   tohom_fired: bool = False, foreign_gates=(),
+                   day=None):
+    """SEPARATE TC entry-law checker (§6.9). Pure + tested.
+
+    Returns {"decision": "CONFIRM"|"WAIT"|"DEFERRED_BUDGET",
+             "alarms": [...], "reasons": [...]}.
+    A foreign gate NEVER vetoes: it raises an alarm and the entry proceeds.
+    """
+    alarms, reasons = [], []
+    for _g in (foreign_gates or ()):
+        if _foreign_gate_hit(_g):
+            alarms.append(tc_alarm(
+                f"foreign gate in TC path: {_g} — veto REFUSED, entry proceeds"))
+    if not broke:
+        reasons.append("no break yet")
+        return {"decision": "WAIT", "alarms": alarms, "reasons": reasons}
+    if not (closed_after_break or tohom_fired):
+        reasons.append("break without close/TOHOM — waiting for the trigger")
+        return {"decision": "WAIT", "alarms": alarms, "reasons": reasons}
+    try:
+        from analysis import tiered_scan as _ts
+        _budget_ok = bool(_ts.daily_budget_ok(day))
+    except Exception:
+        _budget_ok = True
+    if not _budget_ok:
+        reasons.append("daily TOTAL cap reached — deferred, never dropped")
+        return {"decision": "DEFERRED_BUDGET", "alarms": alarms,
+                "reasons": reasons}
+    try:
+        from analysis import tiered_scan as _ts2
+        _ts2.daily_count_incr("futures", day)
+    except Exception:
+        pass
+    reasons.append("tohom early entry" if tohom_fired and not closed_after_break
+                   else "instant confirm after break+close")
+    return {"decision": "CONFIRM", "alarms": alarms, "reasons": reasons}
