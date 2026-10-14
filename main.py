@@ -971,6 +971,13 @@ def run_spot_scan() -> Dict[str, int]:
                 # R64 (his 10-02 «۲۵۰ تا ۳۵۰ کندل … هم اسپات»): the ONE map.
                 limits=__import__("analysis.candle_counts", fromlist=["fetch_limits"]).fetch_limits())
             bundles[symbol.upper()] = bundle
+            try:
+                from analysis import tiered_scan as _tier99c
+                if _tier99c.spot_unchanged_skip(symbol, bundle):
+                    stats["spot_skipped_unchanged"] = stats.get("spot_skipped_unchanged", 0) + 1
+                    continue
+            except Exception:
+                pass
             for cand in spot_signals_for(symbol, bundle):
                 stats["found"] += 1
                 pending.append(cand)
@@ -1041,6 +1048,17 @@ def run_spot_scan() -> Dict[str, int]:
         if _spot_tf_position_open(cand.symbol, cand.trigger_timeframe):
             stats["tf_position_skip"] = stats.get("tf_position_skip", 0) + 1
             continue
+        try:
+            from analysis import tiered_scan as _tier99
+            try:
+                _open99 = len(get_active_candidates() or [])
+            except Exception:
+                _open99 = 0
+            if not _tier99.daily_budget_ok() or not _tier99.concurrent_ok(_open99):
+                stats["tier_cap_skip"] = stats.get("tier_cap_skip", 0) + 1
+                continue
+        except Exception:
+            pass
         # R65 SNAPSHOT AT DETECTION (spot): the shape/trend is frozen the
         # moment its chain is born, so the confirmation or the rejection is
         # always judged and drawn on the SAME geometry.
@@ -1072,6 +1090,11 @@ def run_spot_scan() -> Dict[str, int]:
                     stats["published"] += 1
                     _spot_stamp(key, window)      # marker ONLY after success
                     _spot_tf_position_commit(cand.symbol, cand.trigger_timeframe)
+                    try:
+                        from analysis import tiered_scan as _tier99b
+                        _tier99b.daily_count_incr("spot")
+                    except Exception:
+                        pass
                     try:
                         from bot.messages_v7 import (_public_code as _pc57,
                                                      _spot_chain_get as _scg57,
@@ -2776,7 +2799,11 @@ def _next_aligned(now: datetime, interval: int, offset: int) -> datetime:
 
 def _next_aligned_scan(now: datetime) -> datetime:
     """Next :01/:16/:31/:46 UTC, shortly after a 15m candle closes."""
-    interval = max(1, SETTINGS.full_scan_minutes)
+    try:
+        from analysis.tiered_scan import deep_minutes as _tier_deep_minutes
+        interval = max(1, int(_tier_deep_minutes()))
+    except Exception:
+        interval = max(1, SETTINGS.full_scan_minutes)
     offset = SETTINGS.scan_offset_minute % interval
     base = now.replace(second=0, microsecond=0)
     minute = base.minute
@@ -2996,8 +3023,12 @@ def main() -> None:
                 _SPOT_THREAD[0] = threading.Thread(
                     target=_spot_pass_job, name="viva-spot-pass", daemon=True)
                 _SPOT_THREAD[0].start()
-            next_spot = now + timedelta(
-                minutes=max(15, int(os.getenv("SPOT_SCAN_MINUTES", "60") or 60)))
+            try:
+                from analysis.tiered_scan import spot_deep_minutes as _tier_spot_deep
+                _spot_min99 = _tier_spot_deep()
+            except Exception:
+                _spot_min99 = max(15, int(os.getenv("SPOT_SCAN_MINUTES", "60") or 60))
+            next_spot = now + timedelta(minutes=_spot_min99)
         if time.time() >= _hb["next"]:
             _hb["next"] = time.time() + 300
             _write_heartbeat({

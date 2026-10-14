@@ -1,0 +1,97 @@
+Branch `agent/geometry-fix` has been created, and the actual data and matplotlib are also ready. Now I'm going to write the unified geometry kernel — including all pattern families (16 patterns + pivot patterns), precise geometric conditions, a complete breakout cycle, and stable time coordinates:
+
+
+
+دو تابع در هسته نیاز به بازنویسی تمیز دارند (زیگزاگ و شمارش کلوز بیرون باند):
+
+
+
+حالا دو انجین (لایهٔ سیاست روی هسته):
+
+
+
+Next, I'll create two renderers — a spot with a reference style (without the CryptoCove mark), and a perpetual in the current white chart style, but with the new geometry:
+
+
+
+A small fix to the pivot pattern (the second edge should be placed at the neckline position, not at the shoulder position):
+
+
+
+حالا تست‌های مرحلهٔ ۱:
+
+
+
+Found a fundamental flaw: genuine breakouts were causing the resistance line to be rejected as a "violation" — the close test must not look at the breakout window at the end of the chart:
+
+
+
+باگ در helper تست بود (کندل‌های شکست بدون exp وارد می‌شدند):
+
+
+
+The spike rule needs to be "relative to other anchor wicks" — not an absolute threshold (otherwise, legitimate contacts on a clean chart would end up being treated as spikes):
+
+
+
+Identifying the root cause of the instability: the line was being fitted in local coordinates, while the indices were global — the coordinates need to be unified into a global coordinate system:
+
+
+
+All 15 tests in Step 1 are green. Now going to create the render matrix on real data from within the repo:
+
+
+
+Now I'm going to visually verify the rendering — first, two spot outputs and one perpetual output:
+
+
+
+Two fixes are needed: the price axis should not be displayed in exponential/scientific notation, and in the INSIDE state the target should not expand the axis:
+
+
+
+The white rendering of Perpetual has already gotten close to the current style of Viva. Next, I'll do one synthetic spot rendering with a confirmed break, show the style of the target box, and then do a local commit (without push):
+
+
+
+All complete — tests are green, rendering is ready, and local commits have been created too (no push has been done, waiting for your instructions).
+
+## What was built in the `agent/geometry-fix` branch
+
+**Unified Geometry Core** — `analysis/viva_geometry.py` (for both engines):
+- All key patterns in the code: 16 main patterns + horizontal channel + open channel + pivot patterns (double top/bottom, head and shoulders ±, cup and handle ±) with neckline and measured target.
+- Precise geometry: intersecting lines = invalid; apex and symmetry conditions (slope ratio 0.4–2.5); true parallelism via slope difference; rectangle requires both sides to be flat; entry side never changes the name.
+- Entry base = the strongest valid directional movement, not just the last pivot.
+- Event-based breakout cycle: first close-cross = event, sustained / fake (return within both sides) / retest / invalidation — `bars_ago` is calculated from the event itself.
+- Pivot pattern doctrine: entry only via neckline break; breaking the opposite side = invalidation (the BTC 3D double-top case was correctly invalidated).
+- r58 spike: an extreme wick only descends to the body if it's anomalous relative to other anchor wicks — legitimate touches are preserved.
+- Stable time coordinates: lines are fitted in global coordinates; in tests, with history truncation / zoom, **the two lines remain strictly identical** (slope and intercept accurate to 1e-6).
+
+**Two engines:** `engine_spot.py` (long-only, 4h–1w, downward breakout = alert) and `engine_perp.py` (single class with 4-brand adapter, long/short from both sides with nature gate and geometric stop).
+
+**Two renderers:** spot is exactly in the CryptoCove reference style (lemon→sky gradient, green/red candles, black lag-accurate lines, green/red target box with arrow and label `delta (pct%) target`, price axis on the right, date axis) **without the CryptoCove mark** and with the VIVA brand; perpetual has the same new geometry in the current white/ink style (solid line up to LIVE, then dashed, labels only in the right margin, volume panel, brand badge).
+
+## Tests (15/15 green)
+Synthetic + real-data stability, geometry validity, event cycle, pivot patterns, 85% cap and candle count. The 14 existing failures on main were not touched (separate round).
+
+## Render matrix — please review
+
+| File | Data | Result |
+|---|---|---|
+| `spot_BTC_4h / BTC_1d / ETH_4h / SOL_1d / SUI_1d / BTC_3d` | real | diverging channel / double top (correctly invalidated) |
+| `spot_BTC_4h_zoom300 / zoom240` | real, different candle counts | geometry preserved |
+| `spot_SYNTH_wedge_break` | synthetic (labeled) | falling wedge + confirmed break + 64.9% box, exactly per reference |
+| `perp_BTC_4h_albrox / ETH_15m_pinval (+z1000) / SOL_4h_tc / SUI_4h_albrox` | real | white style, new geometry |
+
+All files are in `/home/user/renders_stage1/`.
+
+## Remaining work (next steps, with your approval)
+1. **Your review of the renders** — if any geometry/style is problematic, tell me.
+2. Stage 2: precise wiring into `main.py`/`messages_v7` without touching the message format + resampling of 8h/12h/3d/1w + snapshot lock for each code.
+3. Calibration with 5–10 labeled charts of your own (line-selection thresholds on real data).
+
+After that, if you say the word, I'll push and follow through to the Railway deploy. **Now please review the renders and give me your instructions** — especially `spot_SYNTH_wedge_break.png` for the box style, and `perp_ETH_15m_pinval.png` for the white style.
+
+
+
+رندر نمونه باز شد؛ بقیهٔ ماتریس در `renders_stage1/` آمادهٔ بررسی است. منتظر نظر و تأیید تو برای پوش هستم.
