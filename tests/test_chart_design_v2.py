@@ -1,4 +1,4 @@
-"""R99k — futures design-v2 guards (spot-fidelity parity)."""
+"""R99k/R99l — futures design guards (spot-fidelity parity + layout laws)."""
 import os
 import re
 
@@ -36,8 +36,10 @@ def test_designer_signature_atop_futures_charts():
     assert '"Vahid Lesani"' in _chart_region()
 
 
-def test_price_axis_tags_black():
-    assert '"facecolor": "#1F2328"' in _chart_region()
+def test_price_axis_tags_colored_readable():
+    # R99l: black tags retired (unreadable) — line-colored, white bold text.
+    assert '"facecolor": _cv9' in _chart_region()
+    assert 'color="white"' in _chart_region()
 
 
 def test_no_emoji_tofu_in_chart_region():
@@ -45,3 +47,18 @@ def test_no_emoji_tofu_in_chart_region():
     # DejaVu — Telegram-text emoji outside generate_chart are unaffected.
     _bad = re.findall(r"[\U0001F300-\U0001FAFF\u2600-\u26FF]", _chart_region())
     assert not _bad, _bad[:5]
+
+
+def test_corner_notes_single_column():
+    # R99l: no wandering mid-chart column — one unified left stack.
+    assert "_cols = 1" in _src()
+
+
+def test_figure_has_thin_black_frame():
+    assert 'edgecolor="black", linewidth=1.0, zorder=100' in _chart_region()
+
+
+def test_webapp_behind_kill_switch_default_off():
+    _db = open(os.path.join(ROOT, "dashboard", "app.py"), encoding="utf-8").read()
+    assert 'os.getenv("WEBAPP_ENABLED", "0")' in _db
+    assert "/health" in _db
