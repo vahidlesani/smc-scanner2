@@ -284,7 +284,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
 
     # 3. Canvas setup with maximum width (Tight left/right margins)
     fig, ax = plt.subplots(figsize=(16, 9), dpi=180)
-    plt.subplots_adjust(left=0.030, right=0.935, top=0.925, bottom=0.20)
+    plt.subplots_adjust(left=0.022, right=0.955, top=0.925, bottom=0.16)
 
     # Authentic Lemon-to-Sky Vertical Gradient
     top_rgb = np.array([253, 244, 159]) / 255.0  # #FDF49F
@@ -434,16 +434,17 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     ax.set_ylim(y_min, y_max)
     ax.set_xlim(-1.0, n + future)
 
-    # 7b. Volume histogram (TradingView-like, R99f) — fail-soft when missing.
+    # 7b. Volume histogram (TradingView-like, R99f thin R99h) — fail-soft.
+    _vx = None
     try:
         _vol = frame['volume'].astype(float).values if 'volume' in frame.columns else None
     except Exception:
         _vol = None
     if _vol is not None and len(_vol) == n:
         try:
-            _vx = fig.add_axes([0.030, 0.065, 0.905, 0.11], zorder=1)
+            _vx = fig.add_axes([0.022, 0.075, 0.933, 0.062], zorder=1)
             _vcol = ['#1f9d55' if closes[i] >= opens[i] else '#d23f5c' for i in range(n)]
-            _vx.bar(range(n), _vol, color=_vcol, width=0.7, alpha=0.75, zorder=2)
+            _vx.bar(range(n), _vol, color=_vcol, width=0.55, alpha=0.55, zorder=2)
             _vx.set_xlim(-1.0, n + future)
             _vx.set_ylim(0, max(float(_vol.max()) * 1.45, 1e-9))
             _vx.set_yticks([])
@@ -476,7 +477,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     # 10. Clean Header Information matching Telegram Alert
     sub_title = f'{stage.replace("_", " ")} • {pat_title} • Log Scale'
     fig.text(0.038, 0.955, f'{symbol}  •  {tf.upper()}  •  SPOTBREAK', fontsize=15, fontweight='bold', color='#1F2328')
-    fig.text(0.935, 0.955, 'Vahid Lesani', fontsize=12, fontweight='bold', color='#1F2328', ha='right', va='center')
+    fig.text(0.955, 0.955, 'Vahid Lesani', fontsize=12, fontweight='bold', color='#1F2328', ha='right', va='center')
     fig.text(0.038, 0.932, f'VIVA SIGNALS PRO  •  {sub_title}', fontsize=10.5, color='#4A4640')
 
     # 11. Bottom-Right Official Brand & Golden Badge
@@ -505,7 +506,16 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     pos_list = list(range(5, n, step))
     labels = [pd.to_datetime(timestamps[p]).strftime('%b %d') for p in pos_list]
     ax.set_xticks(pos_list)
-    ax.set_xticklabels(labels, fontsize=9.5, color='#4A4640')
+    if _vx is not None:
+        # R99h TV-style: time labels live under the volume pane, not mid-chart.
+        try:
+            ax.set_xticks([])
+            _vx.set_xticks(pos_list)
+            _vx.set_xticklabels(labels, fontsize=9.5, color='#4A4640')
+        except Exception:
+            ax.set_xticklabels(labels, fontsize=9.5, color='#4A4640')
+    else:
+        ax.set_xticklabels(labels, fontsize=9.5, color='#4A4640')
 
     # 10-12 (his axis law: MORE price labels on EVERY spot chart, every TF):
     # LogLocator(subs) density depends on the matplotlib VERSION (proven:
