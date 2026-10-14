@@ -5,8 +5,63 @@ import analysis.tiered_scan as _ts
 from analysis.techclassic import (
     TECHCLASSIC_ENGINES, TC_ENTRY_RULES,
     get_tc_engine, tc_health_check, tc_alarm, tc_entry_check,
-    tc_trailing_check,
+    tc_trailing_check, tc_detect, tc_find_pivots, tc_candles_for,
+    tc_zoom_window, tc_zones_from_pivots, tc_tohom_fired,
 )
+
+
+def test_tc_all_nine_wired():
+    for _name, _e in TECHCLASSIC_ENGINES.items():
+        assert _e["status"] == "wired", _name
+        assert _e["entry"], _name
+
+
+def test_tc_detect_delegates_and_tags(monkeypatch):
+    import types as _t
+    import analysis.techclassic as _tc
+
+    _seen = {}
+
+    def _fake(bundle, style):
+        _seen["style"] = style
+        return _t.SimpleNamespace(setup_code="TECHCLASSIC", metadata={})
+
+    monkeypatch.setattr("analysis.pattern_engine.detect_technoclassic", _fake)
+    _c = _tc.tc_detect(object(), "SWING")
+    assert _seen["style"] == "SWING"
+    assert _c.metadata.get("tc_owned") is True
+
+
+def test_tc_pivots_fractal_on_wicks():
+    _h = [1, 2, 3, 2, 1, 2, 5, 2, 1]
+    _l = [1, 2, 3, 2, 0.5, 2, 5, 2, 1]
+    _p = tc_find_pivots(_h, _l, left=2, right=2)
+    assert (6, 5.0) in _p["highs"]
+    assert (4, 0.5) in _p["lows"]
+    assert tc_find_pivots([], []) == {"highs": [], "lows": []}
+
+
+def test_tc_candles_zoom_math():
+    assert tc_candles_for("1d", 120) == 160
+    assert tc_zoom_window(300, 160) == (158, 318)
+    assert tc_zoom_window(50, 160)[0] == 0
+
+
+def test_tc_zones_boxes():
+    _p = {"highs": [(5, 100.0), (9, 102.0)], "lows": [(3, 90.0), (7, 91.0)]}
+    _z = tc_zones_from_pivots(_p)
+    _s = [z for z in _z if z["side"] == "supply"][0]
+    _d = [z for z in _z if z["side"] == "demand"][0]
+    assert (_s["top"], _s["bottom"]) == (102.0, 100.0)
+    assert (_d["top"], _d["bottom"]) == (91.0, 90.0)
+    assert tc_zones_from_pivots({"highs": [], "lows": []}) == []
+
+
+def test_tc_tohom_wrapper_no_crash():
+    import types as _t
+    _c = _t.SimpleNamespace(setup_code="TECHCLASSIC", direction="LONG",
+                            trigger_timeframe="1h", metadata={})
+    assert tc_tohom_fired(_c, None) is False
 
 
 def test_tc_has_nine_engines():
