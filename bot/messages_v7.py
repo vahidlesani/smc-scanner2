@@ -949,24 +949,23 @@ def _log_axis_decorate(ax) -> None:
         _lo52, _hi52 = ax.get_ylim()
         _dec52 = (math.log10(_hi52) - math.log10(_lo52)
                   if (_lo52 > 0 and _hi52 > 0) else 99.0)
-        if _dec52 < 1.0:
-            # R64.3 (his 10-03, HBAR 1h: «چرا روی محور قیمت فقط یک قیمت
-            # داره؟») — a sub-decade view (0.0964→0.1071) leaves the decade
-            # locator ONE label (0.1); every subs tick falls outside the
-            # view. Fixed GEOMETRIC ticks inside the view keep the log scale
-            # AND a readable axis.
-            # 10-12 (his axis law: MORE price labels, spot AND perp) — 8-10
-            # explicit ticks (FixedLocator = identical on every mpl version).
-            _t52 = np.geomspace(max(_lo52, 1e-12), _hi52,
-                                10 if _dec52 < 0.3 else 8)
-            ax.yaxis.set_major_locator(_mt52.FixedLocator(_t52))
-            ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
-            ax.yaxis.set_minor_formatter(_mt52.NullFormatter())
+        # R99q (his 10-15 law: «محور قیمت‌ها خالیه باید قیمت‌ها دقیق نوشته
+        # بشه») — ONE shared tick kit (viva_geometry.nice_price_ticks): round
+        # steps, 10-18 labels, precision from the step (BTC → 0 decimals,
+        # sub-dollar coins → 3-4). FixedLocator = identical on every mpl.
+        from analysis.viva_geometry import nice_price_ticks as _npt99
+        _tk99, _dp99 = _npt99(_lo52, _hi52)
+        if len(_tk99) >= 6:
+            ax.yaxis.set_major_locator(_mt52.FixedLocator(_tk99))
+            _f99 = "{:,.%df}" % _dp99
+            ax.yaxis.set_major_formatter(
+                FuncFormatter(lambda _v, _p=None, _f=_f99: _f.format(_v)))
         else:
             ax.yaxis.set_major_locator(
-                _mt52.LogLocator(base=10.0, subs="all", numticks=18))
+                _mt52.LogLocator(base=10.0, subs=(1.0, 2.0, 2.5, 5.0),
+                                 numticks=24))
             ax.yaxis.set_major_formatter(FuncFormatter(_axis_price))
-            ax.yaxis.set_minor_formatter(_mt52.NullFormatter())
+        ax.yaxis.set_minor_formatter(_mt52.NullFormatter())
     except Exception as exc:
         print(f"log-axis decorate warning: {exc}")
 
@@ -1344,15 +1343,15 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
     if os.path.isfile(CHART_LOGO_PATH):
         try:
             mark_ax = ax.inset_axes([0.395, 0.315, 0.21, 0.37], transform=ax.transAxes, zorder=0)
-            mark_ax.imshow(mpimg.imread(CHART_LOGO_PATH), alpha=0.090)
+            mark_ax.imshow(mpimg.imread(CHART_LOGO_PATH), alpha=0.17)
             mark_ax.set_axis_off()
             mark_ax.patch.set_alpha(0)
         except Exception as exc:
             print(f"Chart watermark warning: {exc}")
     ax.text(
         0.50, 0.50, CHART_BRAND_NAME.upper(), transform=ax.transAxes,
-        ha="center", va="center", fontsize=31, fontweight="bold",
-        color=CHART_THEME["text"], alpha=0.075, zorder=0,
+        ha="center", va="center", fontsize=34, fontweight="bold",
+        color=CHART_THEME["text"], alpha=0.13, zorder=0,
     )
     # (the in-axes bottom-right brand mark is GONE — Viva 09-23/24: the chart
     # showed TWO watermarks; the figure footer + the center mark are the brand)
@@ -4801,7 +4800,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # R99k: designer signature atop every futures chart (spot-v2
         # parity) — above the title row so the setup sticker never collides.
         fig.text(
-            0.955, 0.978, "Vahid Lesani", color="#1F2328", fontsize=11,
+            0.955, 0.978, "by: Vahid Lesani", color="#1F2328", fontsize=11,
             fontweight="bold", ha="right", va="center", zorder=30,
         )
         # ── Viva 09-21: «چرا چارت پینوال کیو استیکر بنام خودش نداره و بنام viva

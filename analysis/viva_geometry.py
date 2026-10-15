@@ -787,3 +787,58 @@ def choose_view(df: pd.DataFrame, res: PatternResult,
     return {"x_from": x_from, "x_to": x_to, "bars": x_to - x_from + 1,
             "pad_right": right, "y_min": math.exp(y_min), "y_max": math.exp(y_max),
             "fill": float(fill), "diagonal_pattern": bool(diag), "tf": tf}
+
+
+# ── R99q (Viva 10-15): «محور قیمت‌ها خالیه باید قیمت‌ها دقیق نوشته بشه» ───
+# یک قانونِ واحد برای تیک‌های محور قیمت در همهٔ چارت‌ها (اسپات + پرپ):
+# گام‌های رُند ۱/۱٫۵/۲/۲٫۵/۵/۷٫۵ ×۱۰^k با ۱۰ تا ۱۶ لیبل، و تعداد اعشار از
+# خودِ گام (۰٫۰۱۵ → سه اعشار، ۵۰۰۰ → صفر اعشار). قطعی و نسخه-مستقل.
+_TICK_LADDER = (1.0, 1.5, 2.0, 2.5, 5.0, 7.5)
+
+
+def nice_price_ticks(lo: float, hi: float, target: int = 13):
+    """(ticks, decimals) — لیست تیک‌های رُند داخل [lo, hi] و دقت نمایش."""
+    try:
+        lo_f, hi_f = float(lo), float(hi)
+        if not (hi_f > lo_f > 0):
+            return [], 4
+        raw = (hi_f - lo_f) / max(4, int(target) - 1)
+        mag = 10.0 ** math.floor(math.log10(raw))
+        best = None
+        for mult in (1.0, 2.0, 2.5, 5.0, 10.0):
+            step = mult * mag
+            n = int((hi_f - lo_f) / step) + 1
+            if 8 <= n <= 18:
+                best = step
+                break
+        if best is None:
+            # گام ریزتر با نصفِ لدر (۱٫۵/۷٫۵) برای بازه‌های باریک
+            for mult in (1.5, 7.5, 0.5, 0.25):
+                step = mult * mag
+                n = int((hi_f - lo_f) / step) + 1
+                if 8 <= n <= 26:
+                    best = step
+                    break
+        if best is None:
+            best = (hi_f - lo_f) / max(4, int(target) - 1)
+        _ord = int(math.floor(math.log10(best) + 1e-9))
+        dec = max(0, -_ord)
+        _mult = round(best / (10.0 ** _ord), 3)
+        if _mult in (1.5, 2.5, 7.5):
+            dec += 1
+        start = math.ceil((lo_f * (1 + 1e-9)) / best) * best
+        ticks, t = [], start
+        while t <= hi_f * (1 + 1e-9) and len(ticks) < 40:
+            ticks.append(round(t, 10))
+            t += best
+        if len(ticks) < 6:               # خیلی باریک: گام را نصف کن
+            best2 = best / 2.0
+            dec = max(dec, -int(math.floor(math.log10(best2))))
+            start = math.ceil((lo_f * (1 + 1e-9)) / best2) * best2
+            ticks, t = [], start
+            while t <= hi_f * (1 + 1e-9) and len(ticks) < 40:
+                ticks.append(round(t, 10))
+                t += best2
+        return ticks, int(dec)
+    except Exception:
+        return [], 4

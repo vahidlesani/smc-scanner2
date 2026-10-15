@@ -33,7 +33,8 @@ def test_green_red_candles_default_with_ink_hatch():
 
 
 def test_designer_signature_atop_futures_charts():
-    assert '"Vahid Lesani"' in _chart_region()
+    # R99q (his 10-15): the signature now wears «by: » per his dictation
+    assert '"by: Vahid Lesani"' in _chart_region()
 
 
 def test_price_axis_tags_colored_readable():

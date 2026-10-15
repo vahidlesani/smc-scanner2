@@ -247,3 +247,29 @@ def test_r99q_spot_prefers_real_channel():
     _rs = open(os.path.join(_root, "tools", "render_spot_cryptocove.py"),
                encoding="utf-8").read()
     assert 'a.get("name_slug") or a.get("slug")' in _rs
+
+
+# ── R99q: axis density law + signature (his 10-15 dictation) ────────────
+def test_r99q_price_axis_is_dense_and_precise():
+    from analysis.viva_geometry import nice_price_ticks
+    _t, _d = nice_price_ticks(96.5, 126.0)
+    assert len(_t) >= 10 and _d == 0                 # SOL: whole dollars
+    _t, _d = nice_price_ticks(0.123, 0.300)
+    assert len(_t) >= 12 and _d == 2                 # ENA: cents
+    _t, _d = nice_price_ticks(55_638, 104_137)
+    assert len(_t) >= 8 and _d == 0                  # BTC: no decimals
+    _t, _d = nice_price_ticks(0.064, 0.098)
+    assert len(_t) >= 10 and _d == 3                 # DOGE: 3 decimals
+
+
+def test_r99q_signature_and_watermark_wired():
+    import os as _os
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    _mv = open(_os.path.join(_root, "bot", "messages_v7.py"), encoding="utf-8").read()
+    assert '"by: Vahid Lesani"' in _mv               # his «بنوس by :»
+    assert "alpha=0.17" in _mv                       # logo watermark stronger
+    _rs = open(_os.path.join(_root, "tools", "render_spot_cryptocove.py"),
+               encoding="utf-8").read()
+    assert '"by: Vahid Lesani"' in _rs
+    assert "VIVA SIGNALS PRO\" , transform=ax.transAxes" not in _rs
+    assert "nice_price_ticks" in _rs                 # shared dense axis kit

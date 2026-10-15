@@ -150,7 +150,9 @@ def test_strategy_titles_no_longer_demand_pullback_bos():
 def test_log_axis_decorate_helper_and_sites():
     src = open(os.path.join(ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()
     assert "def _log_axis_decorate" in src
-    assert "LogLocator(base=10.0, subs=\"all\"" in src
+    # R99q (his 10-15 axis law): the fallback lane now uses the same
+    # shared nice-tick kit; LogLocator stays as the fail-open branch.
+    assert "nice_price_ticks" in src and "LogLocator(base=10.0" in src
     # every set_yscale("log") site inside generate_chart paths is followed by
     # the decorate call (the three known sites)
     assert src.count('_log_axis_decorate(') >= 3

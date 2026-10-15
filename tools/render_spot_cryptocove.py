@@ -182,15 +182,19 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
             linestyle="-", zorder=1)
 
     # ── 2) واترمارک‌ها: متن محو نماد + لوگوی VIVA (وسط)
-    ax.text(0.5, 0.52, f"{sym},{tf}", transform=ax.transAxes, ha="center",
-            va="center", fontsize=52, fontweight="bold", color="#C9C4B8",
-            alpha=0.42, zorder=1)
+    ax.text(0.5, 0.545, f"{sym},{tf}", transform=ax.transAxes, ha="center",
+            va="center", fontsize=50, fontweight="bold", color="#BFB9AB",
+            alpha=0.52, zorder=1)
+    # برند وسط چارت (مثل چارت ستاپ‌ها) — محو، پشت کندل‌ها
+    ax.text(0.5, 0.50, "VIVA SIGNALS PRO", transform=ax.transAxes,
+            ha="center", va="center", fontsize=30, fontweight="bold",
+            color="#B9B3A5", alpha=0.14, zorder=1)
     logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                              "assets", "vivasignals-logo.png")
     if os.path.isfile(logo_path):
         try:
             _w_ax = ax.inset_axes([0.40, 0.30, 0.20, 0.38], zorder=1)
-            _w_ax.imshow(mpimg.imread(logo_path), alpha=0.085)
+            _w_ax.imshow(mpimg.imread(logo_path), alpha=0.17)
             _w_ax.set_axis_off()
             _w_ax.patch.set_alpha(0)
         except Exception:
@@ -316,8 +320,8 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
              f"L {_price_fmt(last_l)}   C {_price_fmt(last_c)}   "
              f"{chg:+.4f} ({chg_pct:+.2f}%)   •   BINANCE SPOT",
              fontsize=10, fontweight="bold", color="#B3261E")
-    fig.text(0.976, 0.968, "Vahid Lesani", fontsize=12.5, fontweight="bold",
-             color=INK, ha="right")
+    fig.text(0.976, 0.968, "by: Vahid Lesani", fontsize=12.5,
+             fontweight="bold", color=INK, ha="right")
 
     # ── 10) فوتر
     fig.text(0.020, 0.024, f"{sym}  •  VIVA  •  SPOT  •  BINANCE SPOT",
@@ -334,8 +338,26 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
 
     # ── 11) محورها
     ax.yaxis.tick_right()
-    ax.yaxis.set_major_formatter(FuncFormatter(_fmt_axis))
-    ax.yaxis.set_minor_formatter(FuncFormatter(_fmt_axis))
+    # چگالی لیبل قیمت (قانون ۱۰-۱۵ خودش: «محور قیمت‌ها خالیه باید قیمت‌ها دقیق
+    # نوشته بشه»): تیک‌های رُندِ مشترک از هستهٔ هندسه — ۱۰ تا ۱۸ لیبل با دقتی
+    # متناسب با گام (BTC صفر اعشار، ENA/DOGE سه اعشار).
+    try:
+        from matplotlib.ticker import FixedLocator as _FL99
+        _tk99, _dp99 = vg.nice_price_ticks(*ax.get_ylim())
+        if len(_tk99) >= 6:
+            ax.yaxis.set_major_locator(_FL99(_tk99))
+            ax.yaxis.set_minor_locator(_FL99([]))
+            _f99 = "{:,.%df}" % _dp99
+            ax.yaxis.set_major_formatter(
+                FuncFormatter(lambda _v, _p=None, _f=_f99: _f.format(_v)))
+            ax.yaxis.set_minor_formatter(
+                FuncFormatter(lambda _v, _p=None: ""))
+        else:
+            ax.yaxis.set_major_formatter(FuncFormatter(_fmt_axis))
+            ax.yaxis.set_minor_formatter(FuncFormatter(_fmt_axis))
+    except Exception:
+        ax.yaxis.set_major_formatter(FuncFormatter(_fmt_axis))
+        ax.yaxis.set_minor_formatter(FuncFormatter(_fmt_axis))
     _ts_axis(ax, df, tf)
     ax.tick_params(axis="x", labelsize=10.5, colors="#3A362F", pad=4)
     ax.tick_params(axis="y", labelsize=9, colors=MUTED)
