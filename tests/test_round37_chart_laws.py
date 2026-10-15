@@ -55,7 +55,13 @@ def test_spot_case_tool_fully_inside_and_candles_centered():
     # r40: candles may get shorter when the frame is wide — the user accepted
     # «خیلی ریز بودن کندل‌ها اشکال نداره» in exchange for full fill.
     occ = (0.0990 - 0.0900) / (yhi - ylo)
-    assert occ >= 0.25, (occ,)
+    # R99q14 CANDLE-HEIGHT LAW (Viva 10-16: «بیشتر از ۷۰ تا ۷۵ درصد
+    # نشه از کل ارتفاع چارت») SUPERSEDES the old ≥25% recent-block floor:
+    # the WHOLE visible tape owns at most ~72% of the panel; the r37
+    # centering and the r40 full-fill assertions above still hold.
+    tape_occ = (0.105 - 0.075) / (yhi - ylo)
+    assert 0.45 <= tape_occ <= 0.75, (tape_occ, ylo, yhi)
+    assert occ >= 0.15, (occ,)
 
 
 def test_far_level_case_still_fights_the_basement():

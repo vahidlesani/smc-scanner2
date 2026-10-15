@@ -56,6 +56,31 @@ SPOT_WINDOW_CAP = {"1m": 200, "3m": 200, "5m": 200, "15m": 220, "30m": 220,
                    "12h": 260, "1d": 260, "3d": 300, "1w": 300}
 
 
+
+# ── R99q14 SPOT ENVELOPE LAW (his 10-16, verbatim: «ارتفاع کندل‌های اسپات هم
+# درست کردی؟؟ … بیشتر از ۷۰ تا ۷۵ درصد نشه از کل ارتفاع چارت»): the visible
+# candle block owns at most ~72% of the price panel — the old pads
+# (−0.17 / +0.06 of the log span) left the block at 81% of the window.
+# Pads now total 0.39·span → 1/1.39 = 71.9%; the target box may open it further.
+SPOT_PAD_BELOW_FRAC = 0.60
+SPOT_ENVELOPE_TARGET = 0.72
+
+
+def spot_y_window(d_lo: float, d_hi: float, d_span: float = None) -> tuple:
+    """(y_lo, y_hi) with the candle block ≤72% of the panel. Log-space span."""
+    try:
+        _lo, _hi = float(d_lo), float(d_hi)
+        _sp = float(d_span) if d_span is not None else (
+            math.log(max(_hi, 1e-12)) - math.log(max(_lo, 1e-12)))
+        # the total pad is what the law needs; it is split bottom-heavy
+        # (his reference frames keep more air under the tape than above it)
+        _pad_total = max(0.0, (1.0 / SPOT_ENVELOPE_TARGET) - 1.0)
+        return (_lo * math.exp(-_pad_total * SPOT_PAD_BELOW_FRAC * _sp),
+                _hi * math.exp(_pad_total * (1.0 - SPOT_PAD_BELOW_FRAC) * _sp))
+    except Exception:
+        return float(d_lo), float(d_hi)
+
+
 def spot_window_count(tf, x0p: int, n: int) -> int:
     """چند کندل در قاب اسپات؟ کف ۱۲۵، بر اساس اسپن پترن، سقف per تایم‌فریم."""
     import os as _os
@@ -176,7 +201,7 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     n_show = slice(x_from, n)
     d_lo, d_hi = float(np.min(l[n_show])), float(np.max(h[n_show]))
     d_span = math.log(max(d_hi, 1e-12)) - math.log(max(d_lo, 1e-12))
-    y_lo, y_hi = d_lo * math.exp(-0.17 * d_span), d_hi * math.exp(0.06 * d_span)
+    y_lo, y_hi = spot_y_window(d_lo, d_hi, d_span)
 
     brk = a.get("breakout") or {}
     target, level = a.get("target"), a.get("level")

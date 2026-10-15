@@ -2248,6 +2248,27 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
                     ylo, yhi = _mid14 - 0.5 * _need, _mid14 + 0.5 * _need
     except Exception as _ch14:
         print(f"candle-height law skipped: {_ch14}")
+    # ── R99q14 ENVELOPE LAW (his 10-16 clarification, verbatim: «ارتفاع کندل‌های
+    # اسپات … بیشتر از ۷۰ تا ۷۵ درصد نشه از کل ارتفاع چارت»): the WHOLE visible
+    # candle block — not just the tallest candle — owns at most ~72% of the price
+    # panel. The pane is the UNION of the current window and a ±72% environment
+    # around the block's mid, so overlays keep their full-drawn guarantee (r37)
+    # and nothing is ever cut (r40); only breathing room is added.
+    try:
+        # the block the window actually frames is the EFFECTIVE tape bound
+        # (r64's soft far-clip on deep frames), never the raw full tape — else
+        # a 900-bar history would blow the pane open again.
+        _blk_lo, _blk_hi = float(min(_flo64, _fhi64)), float(max(_flo64, _fhi64))
+        _env_need = (_blk_hi - _blk_lo) / 0.72
+        _pane = yhi - ylo
+        if _env_need > _pane:
+            # grow about the EXISTING mid so the approved centering (r37) and
+            # the full-drawn overlays (r37) and the never-cut tape (r40) all
+            # survive untouched — only air is added.
+            _env_mid = 0.5 * (yhi + ylo)
+            ylo, yhi = _env_mid - 0.5 * _env_need, _env_mid + 0.5 * _env_need
+    except Exception as _env14:
+        print(f"envelope law skipped: {_env14}")
     # the r57 pad speaks the PRE-law span: the candle-height law above may only
     # OPEN the pane (more room), never re-shape the approved tight/roomy pads.
     if r_span >= 3.0 * _a:
@@ -4403,8 +4424,38 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # ── VIVA-TLBREAK validated geometry overlay ─────────────────────
         # r613: the ALBROX zone lane carries the same two-edge guarantee —
         # «یک ترند میکشه بالایی رو نمیکشه» applies to every break lane.
-        if md.get("strategy_variant") in ("VIVA_TLBREAK", "ALBROX_ZONE"):
+        # R99q14 (his 10-16 question: «چرا بعضی چارت‌های پینوال پترن و ترندلاین
+        # نمی‌کشه روش؟»): the validated-edge overlay used to run ONLY for the
+        # TLBREAK / ALBROX_ZONE variants, so a PINVAL chain that carries its own
+        # viva_upper_points / viva_lower_points (47/60 of the live chains DO)
+        # never had them painted. It now runs for ANY futures chain that carries
+        # an edge set — the anti-clutter rule inside keeps it honest (an edge
+        # already drawn by the pattern painter is skipped).
+        _has_edges9 = bool(md.get("viva_upper_points") or md.get("viva_lower_points"))
+        if (md.get("strategy_variant") in ("VIVA_TLBREAK", "ALBROX_ZONE")
+                or (_has_edges9 and not _is_spot)):
             try:
+                _atr_ov9 = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
+
+                def _covered9(_key, _y_now):
+                    """True when a DRAWN pattern line of the same side already sits
+                    on this level (his «دید رو کور می‌کنه»): never paint an edge
+                    twice. 0.45 ATR at the live bar."""
+                    try:
+                        if _atr_ov9 <= 0:
+                            return False
+                        _want = (("HIGH", "UPPER") if _key == "viva_upper_points"
+                                 else ("LOW", "LOWER"))
+                        for _pp9 in (_draw_pats or []):
+                            for _ll9 in (_pp9.get("lines") or []):
+                                if str(_ll9.get("side") or "").upper() not in _want:
+                                    continue
+                                if abs(float(_line_y_cal(_ll9, int(count))) - float(_y_now)) \
+                                        <= 0.45 * _atr_ov9:
+                                    return True
+                    except Exception:
+                        return False
+                    return False
                 _up0 = md.get("viva_upper_points") or []
                 _lo0 = md.get("viva_lower_points") or []
                 # r51 (Viva 09-27): on a chart TF whose window predates the
@@ -4471,6 +4522,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         continue  # skip vertical artifact lines
                     if _mode9 == "log" and abs(slope) > 0.025:
                         continue  # skip vertical artifact in log space
+                    # R99q14 anti-clutter: the pattern painter may already have
+                    # drawn this very edge — then the validated line adds noise.
+                    _y_now9 = (10 ** (slope * count + intercept)) if _mode9 == "log" \
+                        else (slope * count + intercept)
+                    if _covered9(key, _y_now9):
+                        continue
                     _fits9[key] = (xs, ys, _mode9, slope, intercept, color, label)
                 # r613 ZONE-LANE GUARANTEE: a zone-lane chain with NO stored
                 # edges fits BOTH sides on this frame as real family-colored

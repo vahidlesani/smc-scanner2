@@ -990,3 +990,43 @@ def test_r99q14_render_contract_points_are_read_by_the_slope_derive():
     assert '_p.get("ts")' in _derive and "_pp0x" in _derive
     _native = src.split("R99q14: accept the r59 RENDER contract key too")[1][:400]
     assert '_pt.get("ts")' in _native
+
+
+def test_r99q14_spot_envelope_never_over_75_percent():
+    """Viva 10-16: «ارتفاع کندل‌های اسپات … بیشتر از ۷۰ تا ۷۵ درصد نشه از کل
+    ارتفاع چارت» — the visible candle block owns ≤75% of the spot price panel."""
+    import math as _math
+    from tools.render_spot_cryptocove import spot_y_window
+    for _lo, _hi in ((100.0, 130.0), (2300.0, 2800.0), (0.8, 1.4), (0.075, 0.105)):
+        _yl, _yh = spot_y_window(_lo, _hi)
+        _env = ((_math.log(_hi) - _math.log(_lo))
+                / (_math.log(_yh) - _math.log(_yl)))
+        assert 0.60 <= _env <= 0.75, (_lo, _hi, _env)
+
+
+def test_r99q14_futures_envelope_law_bounds_the_visible_tape():
+    """Same law on every setup chart: the tape the window FRAMES owns ≤75% of
+    the pane — and the deep-frame soft clip (r64) still keeps its live region."""
+    from bot.messages_v7 import _smart_y_window
+    _win = _smart_y_window(100.0, 130.0, 1.0, recent_lo=110.0, recent_hi=125.0,
+                           bars=130)
+    assert _win is not None
+    _ylo, _yhi = _win
+    assert (130.0 - 100.0) / (_yhi - _ylo) <= 0.75
+    _deep = _smart_y_window(0.0, 100.0, 0.8, None, None,
+                            recent_lo=48.0, recent_hi=52.0, bars=300)
+    assert _deep[0] > 20.0, _deep                      # r64 still holds
+
+
+def test_r99q14_pinval_chains_get_their_validated_edges():
+    """His 10-16 question: «چرا بعضی چارت‌های پینوال پترن و ترندلاین نمی‌کشه
+    روش؟» — the validated-edge overlay was variant-gated (TLBREAK/ALBROX only),
+    so PINVAL chains carrying their own viva_upper/lower_points never had them
+    painted. It now runs for any futures chain with an edge set, and an edge the
+    pattern painter already drew is skipped (never paint an edge twice)."""
+    import os as _os
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    _src = open(_os.path.join(_root, "bot", "messages_v7.py"), encoding="utf-8").read()
+    assert 'or (_has_edges9 and not _is_spot)' in _src
+    assert "def _covered9" in _src
+    assert "_covered9(key, _y_now9)" in _src
