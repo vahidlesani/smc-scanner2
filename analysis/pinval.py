@@ -109,11 +109,23 @@ def pinval_find_pivots(highs, lows, left=2, right=2):
     return {"highs": _hi, "lows": _lo}
 
 
+# R99q v2 frame law (his 10-15 per-setup zoom law) — PINVAL's OWN numbers:
+# a pin level is read against its recent taps, so the intraday window keeps
+# one bar more than the pattern engines' and the higher frames cap tighter
+# than TC's (pin charts are levels, not long shapes).
+_PINVAL_FRAME_CAP = {"1h": 75, "2h": 70, "4h": 70, "6h": 75, "8h": 80,
+                     "12h": 85, "1d": 110, "3d": 130, "1w": 140}
+
+
 def pinval_candles_for(tf, pattern_span):
     try:
-        return max(1, int(pattern_span or 0) + 40)
+        _t = str(tf or "").lower()
+        if _t in ("1m", "3m", "5m", "15m", "30m"):
+            return 15          # pin level + its recent taps
+        _span = max(0, int(pattern_span or 0))
+        return max(1, min(_span + 14, _PINVAL_FRAME_CAP.get(_t, 80)))
     except Exception:
-        return 300
+        return 80
 
 
 def pinval_zoom_window(n_bars, count, pad_right_frac=0.12):

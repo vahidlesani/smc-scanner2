@@ -404,12 +404,15 @@ def albrox_candles_for(tf, pattern_span):
     pattern + a small breathing pad, never a wide 190-bar wall."""
     try:
         _t = str(tf or "").lower()
-        _pad = 10 if _t in ("1m", "3m", "5m", "15m", "30m") else 16
+        # حکم دقیق ۱۰-۱۵ روی ۱۵ دقیقه‌ها: «تعداد کندل غلطه اینجا باید حدود
+        # ۱۰ تا ۱۱ کندل باشه» و XRP «حد اقل ۹ تا ۱۰» → زیر ۱ ساعته همیشه یک
+        # پنجرهٔ ۱۱ کندلی روی لبهٔ زنده (خطوط بلند از قاب بیرون‌اند و فقط
+        # مورب‌هایشان داخل قاب می‌افتد — همان چیزی که خودش با آبی کشید).
+        if _t in ("1m", "3m", "5m", "15m", "30m"):
+            return 11
         _cap = _ALBROX_FRAME_CAP.get(_t, 70)
         _span = int(pattern_span or 0)
-        _want = _span + _pad
-        # pattern longer than the cap: the cap wins (his «تعداد کندل باید کمتر
-        # بشه») — the painter anchors right, the far tail simply leaves frame.
+        _want = _span + 10          # HYPE 4H: span 44 → 54 (50-60 ✓)
         return max(1, min(_want, _cap))
     except Exception:
         return 300

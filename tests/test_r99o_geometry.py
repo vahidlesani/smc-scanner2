@@ -77,7 +77,7 @@ def test_tc_refine_fail_open():
 
 
 def test_tc_count_zoom_pure():
-    assert tc_candles_for("15m", 50) == 60
+    assert tc_candles_for("15m", 50) == 12
     _x0, _x1 = tc_zoom_window(194, 90)
     assert (_x0, _x1) == (194 - 1 + 10 - 90, 194 - 1 + 10)  # (113, 203)
 

@@ -42,7 +42,7 @@ def test_tc_pivots_fractal_on_wicks():
 
 
 def test_tc_candles_zoom_math():
-    assert tc_candles_for("1d", 120) == 120
+    assert tc_candles_for("1d", 120) == 120  # patterns keep their own span
     assert tc_zoom_window(300, 160) == (158, 318)
     assert tc_zoom_window(50, 160)[0] == 0
 

@@ -228,10 +228,14 @@ def tc_candles_for(tf, pattern_span):
     """TC candle count (engine 4, v2): pattern span + 20 pad, TF-capped."""
     try:
         _t = str(tf or "").lower()
-        _pad = 12 if _t in ("1m", "3m", "5m", "15m", "30m") else 20
+        # همان قانون فریم او (ETC/TAO 15M «زوم و تعداد کندل غلطه»): زیر ۱
+        # ساعته = پنجرهٔ ثابت ۱۲ کندلی روی لبهٔ زنده؛ آنچه مهم است خودِ
+        # هندسه و خطوط است، نه ۱۹۰ کندل تاریخ.
+        if _t in ("1m", "3m", "5m", "15m", "30m"):
+            return 12
         _span = max(0, int(pattern_span or 0))
         _cap = _TC_FRAME_CAP.get(_t, 85)
-        _want = _span + _pad
+        _want = _span + 12
         return max(1, min(_want, _cap))  # cap wins (his zoom verdicts)
     except Exception:
         return 90

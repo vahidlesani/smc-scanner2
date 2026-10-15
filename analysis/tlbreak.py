@@ -102,11 +102,23 @@ def tlbreak_find_pivots(highs, lows, left=2, right=2):
     return {"highs": _hi, "lows": _lo}
 
 
+# R99q v2 frame law (his 10-15: «همه انجینهای ... زوم و پیوت باید دقیق طبق
+# قانون ساخته بشه برا همون ستاپ، نه کپی هم») — TLBREAK's OWN numbers: the
+# break chart must breathe a bit more than a pattern chart (the line's last
+# pivots AND the post-break candles have to be inside the same view).
+_TLBREAK_FRAME_CAP = {"1h": 85, "2h": 85, "4h": 80, "6h": 85, "8h": 90,
+                      "12h": 95, "1d": 130, "3d": 150, "1w": 160}
+
+
 def tlbreak_candles_for(tf, pattern_span):
     try:
-        return max(1, int(pattern_span or 0) + 40)
+        _t = str(tf or "").lower()
+        if _t in ("1m", "3m", "5m", "15m", "30m"):
+            return 14          # live edge + the break leg
+        _span = max(0, int(pattern_span or 0))
+        return max(1, min(_span + 14, _TLBREAK_FRAME_CAP.get(_t, 90)))
     except Exception:
-        return 300
+        return 90
 
 
 def tlbreak_zoom_window(n_bars, count, pad_right_frac=0.12):

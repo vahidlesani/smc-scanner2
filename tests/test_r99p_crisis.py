@@ -2,6 +2,7 @@
 import math
 import os
 import sys
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -144,7 +145,7 @@ def test_far_faint_paint_key():
 
 
 def test_albrox_zoom_pure():
-    assert albrox_candles_for("4h", 44) == 60
+    assert albrox_candles_for("4h", 44) == 54
     assert albrox_zoom_window(270, 84) == (195, 279)
 
 
@@ -281,18 +282,19 @@ def test_r99q_signature_and_watermark_wired():
 def test_r99q_albrox_v2_frame_is_tight_and_capped():
     """His 10-15 corrected ALBROX charts: HYPE 4H 50-60 candles, TAO 4H 30-40,
     ETC/WLD/XRP 15m 9-11 → the frame is pattern + 16 pad, hard-capped per TF."""
-    assert albrox_candles_for("4h", 44) == 60      # 44+16 → capped at 60
-    assert albrox_candles_for("4h", 200) == 60     # never a 240-bar wall
-    assert albrox_candles_for("15m", 200) == 45
-    assert albrox_candles_for("15m", 30) == 40
+    assert albrox_candles_for("4h", 44) == 54      # HYPE 4H: 44+10 (50-60 ✓)
+    assert albrox_candles_for("4h", 200) == 60     # never a 190-bar wall
+    assert albrox_candles_for("15m", 200) == 11    # his WLD/XRP ruling
+    assert albrox_candles_for("15m", 30) == 11
+    assert albrox_candles_for("15m", 8) == 11
     assert albrox_candles_for("1d", 200) == 90
 
 
 def test_r99q_tc_v2_frame_and_noise_wedge():
     """TC v2: same tight-frame law + a 2-line 'shape' on <3 pivots is noise."""
-    assert tc_candles_for("15m", 50) == 60
-    assert tc_candles_for("15m", 200) == 60    # cap wins (his zoom verdicts)
-    assert tc_candles_for("1d", 120) == 120
+    assert tc_candles_for("15m", 50) == 12     # tight live-edge window
+    assert tc_candles_for("15m", 200) == 12
+    assert tc_candles_for("1d", 28) == 40
     _noise = {"type": "WEDGE_FALLING", "lines": [
         {"x0": 150, "x1": 194, "points": [{"x": 150}], "slope": .001, "intercept": 1.},
         {"x0": 152, "x1": 194, "points": [{"x": 152}], "slope": .001, "intercept": 1.}]}
@@ -379,18 +381,20 @@ def test_r99q7_week_wallet_spends_and_resets():
     from analysis import tiered_scan as _ts
     _wk = "1999-W07"          # an old week so the real wallet is untouched
     _wk2 = "1999-W08"
-    assert _ts.weekly_count(_wk, "PROBE") == 0
-    assert _ts.weekly_licence_ok("PROBE", _wk) is True
+    _roll = uuid.uuid4().hex[:6]          # idempotent across reruns
+    _setup = f"PROBE{_roll}"
+    assert _ts.weekly_count(_wk, _setup) == 0
+    assert _ts.weekly_licence_ok(_setup, _wk) is True
     for _ in range(3):
-        assert _ts.weekly_licence_incr("PROBE", _wk) == _ + 1
-    assert _ts.weekly_count(_wk, "PROBE") == 3
-    _cap = _ts.weekly_licence_cap("PROBE")
-    _ts.weekly_licence_incr("PROBE", _wk, n=_cap)
-    assert _ts.weekly_count(_wk, "PROBE") == 3 + _cap
-    assert _ts.weekly_licence_ok("PROBE", _wk) is False          # wallet empty
-    assert _ts.weekly_licence_ok("PROBE", _wk2) is True          # new week full
-    _snap = _ts.weekly_licence_snapshot(["PROBE"], _wk)
-    assert _snap["PROBE"]["used"] == 3 + _cap and _snap["PROBE"]["left"] == 0
+        assert _ts.weekly_licence_incr(_setup, _wk) == _ + 1
+    assert _ts.weekly_count(_wk, _setup) == 3
+    _cap = _ts.weekly_licence_cap(_setup)
+    _ts.weekly_licence_incr(_setup, _wk, n=_cap)
+    assert _ts.weekly_count(_wk, _setup) == 3 + _cap
+    assert _ts.weekly_licence_ok(_setup, _wk) is False           # wallet empty
+    assert _ts.weekly_licence_ok(_setup, _wk2) is True           # new week full
+    _snap = _ts.weekly_licence_snapshot([_setup], _wk)
+    assert _snap[_setup]["used"] == 3 + _cap and _snap[_setup]["left"] == 0
 
 
 def test_r99q7_gates_are_wired_in_main():
@@ -402,3 +406,20 @@ def test_r99q7_gates_are_wired_in_main():
     assert _mn.count("weekly_licence_incr(") == 2
     assert "not in _tier99j.SETUP_TRIGGER_TFS" in _mn   # bias-only refusal
     assert '"licence": _lic99' in _mn                   # DB-readable wallet
+
+
+def test_r99q7_all_four_engines_own_their_frame():
+    """TLBREAK and PINVAL keep their OWN zoom numbers (his per-engine law),
+    and the chart-window selector consults all four setups."""
+    from analysis.tlbreak import tlbreak_candles_for
+    from analysis.pinval import pinval_candles_for
+    assert tlbreak_candles_for("15m", 200) == 14      # live edge + break leg
+    assert tlbreak_candles_for("4h", 40) == 54
+    assert tlbreak_candles_for("4h", 400) == 80       # own cap
+    assert pinval_candles_for("15m", 200) == 15       # one bar more (taps)
+    assert pinval_candles_for("2h", 40) == 54
+    assert pinval_candles_for("2h", 400) == 70        # own cap, tighter than TC
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _mv = open(os.path.join(_root, "bot", "messages_v7.py"), encoding="utf-8").read()
+    assert '"TECHCLASSIC", "ALBROX", "TLBREAK", "PINVAL"' in _mv
+    assert "tlbreak_candles_for" in _mv and "pinval_candles_for" in _mv

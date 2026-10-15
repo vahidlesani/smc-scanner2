@@ -2744,15 +2744,30 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         _xlim99o = None
         try:
             _setup99o = str(getattr(candidate, "setup_code", "") or "").upper()
-            if _setup99o in ("TECHCLASSIC", "ALBROX") and not _is_spot:
+            # R99q v2 (his 10-15 «هر ستاپ در انجین خودش»): all FOUR setups own
+            # their frame numbers — the other two are consulted here, never
+            # copied from a sibling engine.
+            if _setup99o in ("TECHCLASSIC", "ALBROX", "TLBREAK", "PINVAL") \
+                    and not _is_spot:
                 if _setup99o == "TECHCLASSIC":
                     from analysis.techclassic import tc_candles_for as _tcc99o
                     from analysis.techclassic import tc_zoom_window as _tcz99o
                     _span99o = (candidate.metadata or {}).get("tc_pattern_span") or 0
-                else:
+                elif _setup99o == "ALBROX":
                     from analysis.albrox import albrox_candles_for as _tcc99o
                     from analysis.albrox import albrox_zoom_window as _tcz99o
                     _span99o = (candidate.metadata or {}).get("albrox_pattern_span") or 0
+                elif _setup99o == "TLBREAK":
+                    from analysis.tlbreak import tlbreak_candles_for as _tcc99o
+                    from analysis.tlbreak import tlbreak_zoom_window as _tcz99o
+                    _span99o = (candidate.metadata or {}).get(
+                        "tlbreak_pattern_span",
+                        (candidate.metadata or {}).get("tl_pattern_span")) or 0
+                else:
+                    from analysis.pinval import pinval_candles_for as _tcc99o
+                    from analysis.pinval import pinval_zoom_window as _tcz99o
+                    _span99o = (candidate.metadata or {}).get(
+                        "pinval_pattern_span") or 0
                 _tf99o = str(((candidate.metadata or {}).get("chart_view_tf")
                                or getattr(candidate, "trigger_timeframe", "")
                                or "15m")).lower()
@@ -4537,6 +4552,21 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _ovs28 = [v for v in _ovs28 if v is not None and math.isfinite(v) and v > 0]
             _atr28 = float((frame["high"] - frame["low"]).tail(14).mean())
             _win28 = None
+            # R99q v2 (his 10-15 tight-zoom verdicts): the Y-window follows
+            # the VISIBLE candles. Before this, a tight x-zoom still inherited
+            # dead space from bars that left the screen (BNB 15m printed a
+            # 747.5 top with nothing above 738 and a 705 floor under a 712.6
+            # wick). Spot keeps its own accepted window.
+            _vf = frame
+            try:
+                if not _is_spot:
+                    _x0v, _x1v = ax.get_xlim()
+                    _i0v = max(0, int(math.floor(float(_x0v))))
+                    _i1v = min(len(frame), int(math.ceil(float(_x1v))) + 1)
+                    if _i1v - _i0v >= 6:
+                        _vf = frame.iloc[_i0v:_i1v].reset_index(drop=True)
+            except Exception:
+                _vf = frame
             # ── R64 SMART LOG ZOOM (his 10-02: «چارت‌ها تا حد امکان لگاریتمی …
             # اسپایک → محور جمع شه، کندل‌های فلت → محور باز شه»): on a LOG axis
             # the window is solved in log10 space — centering/padding become
@@ -4546,8 +4576,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # instead of drawn as a flat line. Candles are never cut (r40).
             try:
                 if str(ax.get_yscale()) == "log":
-                    _lh64 = np.log10(frame["high"].astype(float).clip(lower=1e-12).to_numpy())
-                    _ll64 = np.log10(frame["low"].astype(float).clip(lower=1e-12).to_numpy())
+                    _lh64 = np.log10(_vf["high"].astype(float).clip(lower=1e-12).to_numpy())
+                    _ll64 = np.log10(_vf["low"].astype(float).clip(lower=1e-12).to_numpy())
                     _u64 = float(np.median(_lh64 - _ll64)) * 1.35
                     _ovl64 = [math.log10(v) for v in _ovs28]
                     # R66 SPIKE CANDLE ISOLATION: protect active price action from being
@@ -4574,8 +4604,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception:
                 _win28 = None
             if _win28 is None:
-                _lh_lin = frame["high"].astype(float).to_numpy()
-                _ll_lin = frame["low"].astype(float).to_numpy()
+                _lh_lin = _vf["high"].astype(float).to_numpy()
+                _ll_lin = _vf["low"].astype(float).to_numpy()
                 _p1_lin = float(np.percentile(_ll_lin, 1.0))
                 _p99_lin = float(np.percentile(_lh_lin, 99.0))
                 _c_lo_lin = max(float(_ll_lin.min()), _p1_lin - 2.5 * _atr28)
@@ -4583,9 +4613,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _win28 = _smart_y_window(
                     _c_lo_lin, _c_hi_lin, _atr28,
                     min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None,
-                    recent_lo=float(frame["low"].tail(40).min()),
-                    recent_hi=float(frame["high"].tail(40).max()),
-                    bars=len(frame))
+                    recent_lo=float(_vf["low"].tail(40).min()),
+                    recent_hi=float(_vf["high"].tail(40).max()),
+                    bars=len(_vf))
             if _win28:
                 ax.set_ylim(*_win28)
                 if _cfm73:
@@ -4604,8 +4634,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     except Exception:
                         pass
             else:
-                _ylo = float(frame["low"].min())
-                _yhi = float(frame["high"].max())
+                _ylo = float(_vf["low"].min())
+                _yhi = float(_vf["high"].max())
                 _yr = max(_yhi - _ylo, 1e-9)
                 ax.set_ylim(_ylo - 0.20 * _yr, _yhi + 0.20 * _yr)
 
