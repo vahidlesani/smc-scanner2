@@ -158,3 +158,26 @@ def test_span_follows_lead():
     _ref(_NS(setup_code="ALBROX", trigger_timeframe="4h", metadata=_md),
          bundle={"4h": _df})
     assert _md["albrox_pattern_span"] == 44  # young lead, not ancient 264
+
+
+# ── R99q: spot single render path (his «این نشد اون… نداریم») ──────────
+def test_r99q_spot_single_render_path():
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _mv = open(os.path.join(_root, "bot", "messages_v7.py"),
+               encoding="utf-8").read()
+    _seg = _mv[_mv.find("if _is_spot:"):]
+    _seg = _seg[:_seg.find("# Always initialize chart-only price-axis tags")]
+    assert "tools.render_spot_cryptocove import render" in _seg
+    assert "render_cryptocove_spot_chart" not in _seg   # old renderer off-path
+    assert "return b\"\"" in _seg                       # no chart → text-only
+
+
+def test_r99q_spot_renderer_design_guards():
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _rs = open(os.path.join(_root, "tools", "render_spot_cryptocove.py"),
+               encoding="utf-8").read()
+    assert 'ax.scatter(_tix' in _rs          # data-space Circle bug never returns
+    assert "Circle((ti" not in _rs
+    assert "_gspan > _dspan * 1.45" in _rs  # GEO: candles are never squashed
+    assert "x_right = max(x_to, bx1 + 2)" in _rs  # frame follows the box
+    assert "SPOTBREAK" in _rs and "BINANCE SPOT" in _rs
