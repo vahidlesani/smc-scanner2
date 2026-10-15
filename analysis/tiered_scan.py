@@ -220,3 +220,60 @@ def guard_should_fire(side: str, entry, live) -> bool:
     """True when a chain is inside the guard band (pure; tested)."""
     _d = dist_to_entry_pct(side, entry, live)
     return bool(_d is not None and _d <= guard_band_pct())
+SETUP_SLOT_MODULES = {
+    "PINVAL": "analysis.pinval",
+    "ALBROX": "analysis.albrox",
+    "TLBREAK": "analysis.tlbreak",
+    "TECHCLASSIC": "analysis.techclassic",
+    "SPOT": "analysis.spot",
+}
+
+
+def setup_cap(setup_code: str) -> int:
+    """Concurrent-chain allowance OWNED by one setup (R99n).
+
+    <SETUP>_MAX_CONCURRENT_CHAINS env wins; else the setup's own engine
+    file (OWN_MAX_CONCURRENT_CHAINS); else 30. Fail-open: 30.
+    """
+    _code = str(setup_code or "").strip().upper()
+    try:
+        _env = (os.getenv(f"{_code}_MAX_CONCURRENT_CHAINS", "") or "").strip()
+        if _env:
+            return max(1, int(_env))
+    except Exception:
+        pass
+    _mod = SETUP_SLOT_MODULES.get(_code)
+    if _mod:
+        try:
+            import importlib as _il99n
+            _v = getattr(_il99n.import_module(_mod),
+                         "OWN_MAX_CONCURRENT_CHAINS", None)
+            if _v is not None:
+                return max(1, int(_v))
+        except Exception:
+            pass
+    return 30
+
+
+def count_open_by_setup(actives) -> dict:
+    """Group open chains per setup (R99n). Fail-open: {}."""
+    _out: dict = {}
+    try:
+        for _c in (actives or []):
+            _k = str(getattr(_c, "setup_code", "") or "").strip().upper()
+            if not _k:
+                continue
+            _out[_k] = int(_out.get(_k, 0) or 0) + 1
+    except Exception:
+        return {}
+    return _out
+
+
+def concurrent_ok_for_setup(setup_code, open_by_setup=None) -> bool:
+    """True while THIS setup is under its own allowance (R99n)."""
+    try:
+        _code = str(setup_code or "").strip().upper()
+        _n = int((open_by_setup or {}).get(_code, 0) or 0)
+        return _n < setup_cap(_code)
+    except Exception:
+        return True

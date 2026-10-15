@@ -9,6 +9,11 @@ Engines (§6 adapted): detection, zoom, pivots, candle_count, zones_render,
 confirm_entry, trailing, tohom, entry_rules (SEPARATE).
 """
 
+# R99n: this setup OWNS its concurrent-chain allowance (Viva 10-15:
+# no global first-come pool — a full neighbour book never starves us).
+OWN_MAX_CONCURRENT_CHAINS = 30
+
+
 SPOT_ENGINES = {
     "detection": {"entry": "analysis.spot.spot_detect", "status": "wired",
                   "notes": "own wrapper over spot_signals_for; tags spot_owned"},

@@ -7,6 +7,11 @@ input exists anywhere in this file, by design (fix zoom/count instead).
 TLBREAK draws NO zones (TLs only).
 """
 
+# R99n: this setup OWNS its concurrent-chain allowance (Viva 10-15:
+# no global first-come pool — a full neighbour book never starves us).
+OWN_MAX_CONCURRENT_CHAINS = 30
+
+
 TLBREAK_ENGINES = {
     "detection": {"entry": "analysis.tlbreak.tlbreak_detect", "status": "wired",
                   "notes": "own wrapper over detect_viva_tlbreak; tags tlbreak_owned"},

@@ -14,6 +14,11 @@ foreign gate found in the TC path raises an ALARM and the entry proceeds
 budget-gated; NEW mints respect the daily TOTAL cap (fail-open).
 """
 
+# R99n: this setup OWNS its concurrent-chain allowance (Viva 10-15:
+# no global first-come pool — a full neighbour book never starves us).
+OWN_MAX_CONCURRENT_CHAINS = 30
+
+
 TECHCLASSIC_ENGINES = {
     "detection": {
         "entry": "analysis.techclassic.tc_detect",

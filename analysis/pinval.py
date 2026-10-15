@@ -7,6 +7,11 @@ delay its entries (that is its law); foreign gates alarm + veto refused.
 PINVAL draws NO zones (pin lines only).
 """
 
+# R99n: this setup OWNS its concurrent-chain allowance (Viva 10-15:
+# no global first-come pool — a full neighbour book never starves us).
+OWN_MAX_CONCURRENT_CHAINS = 30
+
+
 PINVAL_ENGINES = {
     "detection": {"entry": "analysis.pinval.pinval_detect", "status": "wired",
                   "notes": "unified walk over PINVAL_DETECTORS; tags firing gate"},
