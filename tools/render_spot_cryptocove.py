@@ -133,7 +133,7 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     n = len(df)
     tf = str(a.get("tf") or "4h").lower()
     sym = str(symbol or "").upper() or "SPOT"
-    title = title or pattern_title(a.get("slug"))
+    title = title or pattern_title(a.get("name_slug") or a.get("slug"))
 
     o = df["open"].astype(float).to_numpy()
     h = df["high"].astype(float).to_numpy()
@@ -156,18 +156,19 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     up_dir = bool(target and level and float(target) > float(level))
     box_drawn = bool(target and level and brk.get("status") not in (None, "INSIDE")
                      and up_dir)
-    # باکسِ نزدیک (داخل ۱.۴۵ برابر دامنهٔ کندل‌ها) کامل جا می‌شود؛ باکسِ دور
-    # (قانون GEO) قاب را باز نمی‌کند و از لبه بیرون می‌زند.
+    # باکس هدف «نازک و دراز» عین رفرنس‌ها: اگر طولش تا ۱٫۵ برابر دامنهٔ
+    # کندل‌ها باشد، قاب کمی باز می‌شود تا باکس کامل (دراز) دیده شود؛ بیشتر از
+    # آن = قانون GEO (کندل‌ها له نمی‌شوند) و باکس از لبه بیرون می‌زند.
     if box_drawn:
-        t_log = math.log(max(float(target), 1e-12))
-        t_top = math.log(max(float(target), float(level)))
-        if t_top - math.log(max(d_lo, 1e-12)) <= 1.45 * d_span:
-            y_hi = max(y_hi, float(target) * math.exp(0.04 * d_span))
+        _t_span = abs(math.log(max(float(target), 1e-12))
+                      - math.log(max(float(level), 1e-12)))
+        if _t_span <= 1.5 * d_span:
+            y_hi = max(y_hi, float(target) * math.exp(0.035 * d_span))
 
     fig, ax = plt.subplots(figsize=(16, 9), dpi=130)
     fig.patch.set_facecolor("#FFFFFF")
-    # حاشیهٔ کم (یادداشت خودش): محور قیمت چسبیده به قاب، پایین جمع‌وجور
-    fig.subplots_adjust(left=0.016, right=0.947, top=0.915, bottom=0.072)
+    # حاشیهٔ کم (یادداشت خودش: «حاشیهٔ پشت محور و پایین صفحه رو کم کن»)
+    fig.subplots_adjust(left=0.016, right=0.952, top=0.915, bottom=0.066)
 
     top_rgb = np.array([253, 244, 159]) / 255.0
     bot_rgb = np.array([145, 203, 248]) / 255.0
@@ -206,8 +207,10 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
                 _vh = (_hgt * (float(v[i]) / vmax)) if vmax else 0.0
                 if _vh <= 0:
                     continue
-                ax.add_patch(Rectangle((i - 0.33, _base), 0.66,
-                                       math.exp(_base + _vh) - math.exp(_base),
+                # ارتفاع در فضای قیمت: کمیت لگاریتمی → ضرب در پایه (نه exp
+                # روی قیمت؛ آن باگ کل پنل را پر می‌کرد)
+                _hbar = _base * (math.exp(_vh) - 1.0)
+                ax.add_patch(Rectangle((i - 0.33, _base), 0.66, _hbar,
                                        facecolor=GREEN if c[i] >= o[i] else RED,
                                        edgecolor="none", alpha=0.30, zorder=2))
     except Exception:
@@ -334,7 +337,8 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     ax.yaxis.set_major_formatter(FuncFormatter(_fmt_axis))
     ax.yaxis.set_minor_formatter(FuncFormatter(_fmt_axis))
     _ts_axis(ax, df, tf)
-    ax.tick_params(labelsize=9, colors=MUTED)
+    ax.tick_params(axis="x", labelsize=10.5, colors="#3A362F", pad=4)
+    ax.tick_params(axis="y", labelsize=9, colors=MUTED)
     for s in ("top", "left"):
         ax.spines[s].set_visible(False)
     ax.spines["right"].set_color("#8A857D")

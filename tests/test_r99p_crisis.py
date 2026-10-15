@@ -1,4 +1,5 @@
 """R99p — the morning-after repair (Viva 10-15, #18 fallout)."""
+import math
 import os
 import sys
 
@@ -178,7 +179,7 @@ def test_r99q_spot_renderer_design_guards():
                encoding="utf-8").read()
     assert 'ax.scatter(_tix' in _rs          # data-space Circle bug never returns
     assert "Circle((ti" not in _rs
-    assert "1.45 * d_span" in _rs           # GEO: a far box never squashes candles
+    assert "1.5 * d_span" in _rs            # GEO: a far box never squashes candles
     assert "PAD_RIGHT_BARS" in _rs and "MAX_BARS" in _rs  # tight refs zoom
     assert "and up_dir" in _rs              # box only for upward break (refs law)
     assert "SPOTBREAK" in _rs and "BINANCE SPOT" in _rs
@@ -208,3 +209,41 @@ def test_r99q_drying_gate_removed():
     _ts = open(os.path.join(_root, "analysis", "tiered_scan.py"),
                encoding="utf-8").read()
     assert "RETIRED (R99q" in _ts
+
+
+# ── R99q: spot shape naming + channel priority (his «پترن غلط») ─────────
+def test_r99q_spot_shape_name_from_geometry():
+    from analysis.engine_spot import _shape_name
+
+    class _L:
+        def __init__(self, s, i):
+            self.slope, self.intercept = s, i
+
+        def price_at(self, x):
+            return math.exp(self.slope * x + self.intercept)
+
+    class _R:
+        def __init__(self, u, lo, x0, x1):
+            self.upper, self.lower, self.x0, self.x1, self.slug = u, lo, x0, x1, "CHANNEL_DESCENDING_BROAD"
+
+    # converging downward (the ENA hand-drawn shape) → wedge, not «broad»
+    conv = _shape_name(_R(_L(-0.0021, -0.60), _L(-0.0012, -1.15), 321, 419))
+    assert conv == "WEDGE_FALLING"
+    # parallel downward → plain channel
+    par = _shape_name(_R(_L(-0.0021, -0.60), _L(-0.0021, -1.00), 321, 419))
+    assert par == "CHANNEL_DESCENDING"
+    # diverging downward → the broad label is honest
+    div = _shape_name(_R(_L(-0.0005, -0.70), _L(-0.0021, -0.60), 321, 419))
+    assert div == "CHANNEL_DESCENDING_BROAD"
+
+
+def test_r99q_spot_prefers_real_channel():
+    import inspect
+    from analysis import engine_spot as es
+    src = inspect.getsource(es.best_pattern)
+    assert "_up * _lo > 0" in src and ">= top.score - 4.0" in src
+    assert "name_slug" in inspect.getsource(es.analyze)
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _rs = open(os.path.join(_root, "tools", "render_spot_cryptocove.py"),
+               encoding="utf-8").read()
+    assert 'a.get("name_slug") or a.get("slug")' in _rs

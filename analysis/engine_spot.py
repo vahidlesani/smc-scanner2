@@ -57,11 +57,72 @@ def _pivot_gate(res, brk):
         return dict(brk, status="INVALIDATED", gate_note=f"شکست {brk['edge']} = ابطال الگو")
     return brk
 
+def _shape_name(res) -> str:
+    """نام هندسیِ واقعیِ الگو از خودِ دو ضلع (اسپات، فایل خودش).
+
+    دسته‌بندِ عمومی گاهی «موازی/پهن‌شونده» می‌گوید در حالی که دو ضلع دارند به هم
+    می‌رسند (همان «پترن غلط»). اینجا نسبتِ فاصلهٔ دو ضلع در ابتدا و انتهای الگو
+    حساب می‌شود: نزدیک‌شونده = گوه/مثلث، دورشونده = پهن‌شونده، ثابت = کانال.
+    """
+    try:
+        import math
+        u, lo = res.upper, res.lower
+        if u is None or lo is None:
+            return res.slug
+        x0, x1 = int(res.x0), int(res.x1)
+        g0 = math.log(max(u.price_at(x0), 1e-12)) - math.log(max(lo.price_at(x0), 1e-12))
+        g1 = math.log(max(u.price_at(x1), 1e-12)) - math.log(max(lo.price_at(x1), 1e-12))
+        if g0 <= 0 or g1 <= 0:
+            return res.slug
+        ratio = g1 / g0
+        both_down = float(u.slope) < 0 and float(lo.slope) < 0
+        both_up = float(u.slope) > 0 and float(lo.slope) > 0
+        if ratio <= 0.85:                      # نزدیک‌شونده
+            if both_down:
+                return "WEDGE_FALLING"
+            if both_up:
+                return "WEDGE_RISING"
+            return "TRIANGLE_SYMMETRICAL"
+        if ratio >= 1.18:                      # دورشونده = واقعاً پهن‌شونده
+            return res.slug if "BROAD" in res.slug.upper() else (
+                "CHANNEL_DESCENDING_BROAD" if both_down else
+                "CHANNEL_ASCENDING_BROAD" if both_up else "BROADENING")
+        if both_down:                          # موازی
+            return "CHANNEL_DESCENDING"
+        if both_up:
+            return "CHANNEL_ASCENDING"
+        return "CHANNEL_FLAT"
+    except Exception:
+        return res.slug
+
+
 def best_pattern(df: pd.DataFrame, tf: str, lookback: Optional[int] = None):
+    """بهترین پترن اسپات + اولویت کانال (R99q، یادداشت دستی ویوا روی ENA).
+
+    روی چارتِ ENA، ویوا با دست دو خط «نزولی/نزولی» کشی: ضلع بالا روی سقف‌های
+    ماژور و ضلع پایین موازی‌اش — یعنی ساختار عملیاتی = کانال/ترندِ نزولی، نه ضلع
+    افقی. اگر کاندیدِ کانال تا ۳ امتیاز به صدر نزدیک باشد، کانال می‌برد
+    (کانال = هر دو ضلع هم‌جهت؛ قانون خودش «ترند ماژور»). موتور فقط همین‌جای
+    اسپات است — سراغ انجین‌های دیگر نمی‌رود (§5: جراحی در فایل خودِ ستاپ).
+    """
     two = vg.fit_patterns(df, lookback=lookback)
     piv = vg.detect_pivot_patterns(df, lookback=lookback)
     allp = sorted(two + piv, key=lambda r: -r.score)
-    return allp[0] if allp else None
+    if not allp:
+        return None
+    top = allp[0]
+    try:
+        for r in allp:
+            _up, _lo = float(r.upper.slope), float(r.lower.slope)
+            if (r.slug.upper().startswith("CHANNEL")
+                    and r.score >= top.score - 4.0          # پنجرهٔ نزدیک (ENA: 3.1)
+                    and _up * _lo > 0                        # هر دو ضلع هم‌جهت = کانال واقعی
+                    and abs(_up - _lo) < 0.012               # موازی‌مانند، نه پهن‌شونده
+                    and len(r.upper.touches) >= 2 and len(r.lower.touches) >= 2):
+                return r
+    except Exception:
+        pass
+    return top
 
 
 def analyze(df: pd.DataFrame, tf: str, lookback: Optional[int] = None) -> Optional[Dict]:
@@ -97,8 +158,10 @@ def analyze(df: pd.DataFrame, tf: str, lookback: Optional[int] = None) -> Option
         if c > line.price_at(len(df) - 1) * (1 - 0.01) and edge == "UPPER":
             alert = "نزدیک به شکست صعودی — در انتظار کلوز معتبر"
 
+    _name9 = _shape_name(res)
     return {
-        "engine": "SPOT", "tf": tf, "slug": res.slug, "fa": _fa(res.slug),
+        "engine": "SPOT", "tf": tf, "slug": res.slug, "name_slug": _name9,
+        "fa": _fa(_name9),
         "kind": res.kind, "result": res,
         "upper": res.upper, "lower": res.lower, "neckline": res.neckline,
         "x0": res.x0, "x1": res.x1,
