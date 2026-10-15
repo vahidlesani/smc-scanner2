@@ -50,7 +50,7 @@ def test_pinval_pivots_candles_zoom():
     _p = pinval_find_pivots([1, 2, 3, 2, 1, 2, 5, 2, 1],
                             [1, 2, 3, 2, 0.5, 2, 5, 2, 1])
     assert (6, 5.0) in _p["highs"] and (4, 0.5) in _p["lows"]
-    assert pinval_candles_for("30m", 100) == 15   # R99q v2 live-edge frame
+    assert pinval_candles_for("30m", 100) == 165  # R99q9 wide law
     assert pinval_zoom_window(300, 160) == (158, 318)
 
 

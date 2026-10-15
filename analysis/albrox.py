@@ -6,6 +6,45 @@ break — first close after the break. Own zones may draw (and judge for
 ALBROX only); foreign gates alarm + veto refused. Late confirm =
 annotation, entry proceeds.
 """
+_ALBROX_FRAME_PAD = {"15m": 60, "30m": 65, "1h": 80, "2h": 90, "4h": 100,
+                     "6h": 105, "8h": 105, "12h": 110, "1d": 120, "3d": 140,
+                     "1w": 150}
+_ALBROX_FRAME_CAP = {"15m": 160, "30m": 165, "1h": 180, "2h": 190, "4h": 200,
+                     "6h": 205, "8h": 205, "12h": 215, "1d": 240, "3d": 280,
+                     "1w": 300}
+_ALBROX_LINE_FAMILIES = ("TRENDLINE", "CHANNEL")
+
+
+_CANDLE_FLOOR = 80   # کف قانونی او؛ VIVA_CANDLE_MIN آن را override می‌کند
+
+
+def _candle_floor() -> int:
+    try:
+        import os as _os
+        return max(20, int(str(_os.getenv("VIVA_CANDLE_MIN", "") or "").strip() or 80))
+    except Exception:
+        return 80
+
+
+def albrox_candles_for(tf, pattern_span, pattern=None):
+    """قانون جدید ۱۰-۱۵ (verbatim): «کمترین حالت ... کف تعداد کندل‌ها ۸۰ کندل
+    هست و سقفش با توجه شکل و نوع پترن، تایم‌فریم و ترندلاین باید انتخاب بشه»
+    + HYPE: «۴۰ تا ۵۰ تا کندل بیشتر باشه تا زوم بهتر بشه» → قاب پهن است:
+    کف ۸۰ (قابل تنظیم با VIVA_CANDLE_MIN)، سقف با تایم‌فریم، و ترندلاین/کانال
+    (خطوط بلند) قاب را پرتر می‌کند.
+    """
+    try:
+        _t = str(tf or "").lower()
+        _pad = _ALBROX_FRAME_PAD.get(_t, 90)
+        _cap = _ALBROX_FRAME_CAP.get(_t, 200)
+        _span = max(0, int(pattern_span or 0))
+        _base = _span + _pad
+        _fam = str(pattern or "").upper()
+        if any(_k in _fam for _k in _ALBROX_LINE_FAMILIES):
+            _base = _span + 2 * _pad        # ترندلاین/کانال ⇒ قاب پرتر
+        return max(_candle_floor(), min(_cap, _base))
+    except Exception:
+        return 120
 
 # R99n: this setup OWNS its concurrent-chain allowance (Viva 10-15:
 # no global first-come pool — a full neighbour book never starves us).
@@ -97,13 +136,6 @@ def albrox_find_pivots(highs, lows, left=2, right=2):
         if all(_l[i] <= _l[j] for j in _w) and any(_l[i] < _l[j] for j in _w):
             _lo.append((i, _l[i]))
     return {"highs": _hi, "lows": _lo}
-
-
-def albrox_candles_for(tf, pattern_span):
-    try:
-        return max(1, int(pattern_span or 0) + 40)
-    except Exception:
-        return 300
 
 
 def albrox_zoom_window(n_bars, count, pad_right_frac=0.12):
@@ -390,32 +422,6 @@ def albrox_pattern_distance_atr(pat, live_idx, live_price, atr):
         return float("inf")
     except Exception:
         return float("inf")
-
-
-_ALBROX_FRAME_CAP = {"5m": 40, "15m": 45, "30m": 50, "1h": 65, "2h": 65,
-                     "4h": 60, "6h": 65, "8h": 70, "1d": 90, "3d": 110,
-                     "1w": 120}
-
-
-def albrox_candles_for(tf, pattern_span):
-    """ALBROX candle count (own engine R99q): pattern span + 16 context bars,
-    HARD-capped per TF — his 10-15 corrected charts (HYPE 4H «۵۰ تا ۶۰ کندل
-    کمتر»، TAO 4H «۳۰ تا ۴۰ کندل»، 15m «تعداد کندل غلطه»): the frame is the
-    pattern + a small breathing pad, never a wide 190-bar wall."""
-    try:
-        _t = str(tf or "").lower()
-        # حکم دقیق ۱۰-۱۵ روی ۱۵ دقیقه‌ها: «تعداد کندل غلطه اینجا باید حدود
-        # ۱۰ تا ۱۱ کندل باشه» و XRP «حد اقل ۹ تا ۱۰» → زیر ۱ ساعته همیشه یک
-        # پنجرهٔ ۱۱ کندلی روی لبهٔ زنده (خطوط بلند از قاب بیرون‌اند و فقط
-        # مورب‌هایشان داخل قاب می‌افتد — همان چیزی که خودش با آبی کشید).
-        if _t in ("1m", "3m", "5m", "15m", "30m"):
-            return 11
-        _cap = _ALBROX_FRAME_CAP.get(_t, 70)
-        _span = int(pattern_span or 0)
-        _want = _span + 10          # HYPE 4H: span 44 → 54 (50-60 ✓)
-        return max(1, min(_want, _cap))
-    except Exception:
-        return 300
 
 
 def albrox_zoom_window(n_bars, count, pad_right_frac=0.12):

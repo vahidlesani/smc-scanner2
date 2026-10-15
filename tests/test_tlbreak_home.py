@@ -41,7 +41,7 @@ def test_tlbreak_pivots_candles_zoom():
     _p = tlbreak_find_pivots([1, 2, 3, 2, 1, 2, 5, 2, 1],
                              [1, 2, 3, 2, 0.5, 2, 5, 2, 1])
     assert (6, 5.0) in _p["highs"] and (4, 0.5) in _p["lows"]
-    assert tlbreak_candles_for("1d", 150) == 130  # R99q v2: span+14 → 1d cap
+    assert tlbreak_candles_for("1d", 150) == 245  # R99q9 wide law
     assert tlbreak_zoom_window(300, 164) == (154, 318)
 
 

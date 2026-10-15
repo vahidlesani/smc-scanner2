@@ -117,15 +117,36 @@ _PINVAL_FRAME_CAP = {"1h": 75, "2h": 70, "4h": 70, "6h": 75, "8h": 80,
                      "12h": 85, "1d": 110, "3d": 130, "1w": 140}
 
 
-def pinval_candles_for(tf, pattern_span):
+_CANDLE_FLOOR = 80   # کف قانونی او؛ VIVA_CANDLE_MIN آن را override می‌کند
+
+
+def _candle_floor() -> int:
     try:
-        _t = str(tf or "").lower()
-        if _t in ("1m", "3m", "5m", "15m", "30m"):
-            return 15          # pin level + its recent taps
-        _span = max(0, int(pattern_span or 0))
-        return max(1, min(_span + 14, _PINVAL_FRAME_CAP.get(_t, 80)))
+        import os as _os
+        return max(20, int(str(_os.getenv("VIVA_CANDLE_MIN", "") or "").strip() or 80))
     except Exception:
         return 80
+
+
+_PINVAL_FRAME_PAD = {"15m": 65, "30m": 70, "1h": 80, "2h": 90, "4h": 100, "6h": 105, "8h": 105, "12h": 110, "1d": 120, "3d": 140, "1w": 150}
+_PINVAL_FRAME_CAP = {"15m": 160, "30m": 165, "1h": 175, "2h": 185, "4h": 195, "6h": 200, "8h": 205, "12h": 215, "1d": 235, "3d": 275, "1w": 295}
+_PINVAL_LINE_FAMILIES = ("TRENDLINE", "CHANNEL")
+
+
+def pinval_candles_for(tf, pattern_span, pattern=None):
+    """قانون جدید ۱۰-۱۵ (verbatim): «کف تعداد کندل‌ها ۸۰ کندل و سقفش با توجه شکل و نوع پترن، تایم‌فریم و ترندلاین» + «۴۰ تا ۵۰ کندل بیشتر تا زوم بهتر بشه» → قاب پهن: کف ۸۰ (VIVA_CANDLE_MIN قابل تنظیم)؛ PINVAL سطح پین + لمس‌هایش را می‌خواند؛ ترندلاین/کانال قاب را پرتر می‌کند."""
+    try:
+        _t = str(tf or "").lower()
+        _pad = _PINVAL_FRAME_PAD.get(_t, 90)
+        _cap = _PINVAL_FRAME_CAP.get(_t, 200)
+        _span = max(0, int(pattern_span or 0))
+        _base = _span + _pad
+        _fam = str(pattern or "").upper()
+        if any(_k in _fam for _k in _PINVAL_LINE_FAMILIES):
+            _base = _span + 2 * _pad
+        return max(_candle_floor(), min(_cap, _base))
+    except Exception:
+        return 120
 
 
 def pinval_zoom_window(n_bars, count, pad_right_frac=0.12):

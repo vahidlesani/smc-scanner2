@@ -2771,7 +2771,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _tf99o = str(((candidate.metadata or {}).get("chart_view_tf")
                                or getattr(candidate, "trigger_timeframe", "")
                                or "15m")).lower()
-                _cnt99o = int(_tcc99o(_tf99o, _span99o) or 0)
+                # R99q9: the pattern family rides along — a trendline/channel
+                # earns a fuller frame (his «سقفش با توجه ... ترندلاین»).
+                _pat99o = str((candidate.metadata or {}).get("render_htf_pattern")
+                              or (candidate.metadata or {}).get("pattern_type")
+                              or (candidate.metadata or {}).get("tl_pattern") or "")
+                try:
+                    _cnt99o = int(_tcc99o(_tf99o, _span99o, _pat99o) or 0)
+                except TypeError:            # older 2-arg engines
+                    _cnt99o = int(_tcc99o(_tf99o, _span99o) or 0)
                 _n99o = int(count or 0)
                 if _n99o > 10 and _cnt99o > 10:
                     _xlim99o = _tcz99o(_n99o, min(_cnt99o, _n99o))

@@ -39,7 +39,7 @@ def test_albrox_pivots_candles_zoom_zones():
     _p = albrox_find_pivots([1, 2, 3, 2, 1, 2, 5, 2, 1],
                             [1, 2, 3, 2, 0.5, 2, 5, 2, 1])
     assert (6, 5.0) in _p["highs"] and (4, 0.5) in _p["lows"]
-    assert albrox_candles_for("4h", 200) == 60  # R99q tight capped frame
+    assert albrox_candles_for("4h", 200) == 200  # R99q9 wide law
     assert albrox_zoom_window(300, 160) == (158, 318)
     _z = albrox_zones_from_pivots(
         {"highs": [(1, 2.0), (2, 2.1)], "lows": [(1, 1.5), (2, 1.6)]})

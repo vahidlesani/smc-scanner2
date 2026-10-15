@@ -219,26 +219,45 @@ def tc_find_pivots(highs, lows, left=2, right=2):
 # زوم غلطه»): the frame is the detected pattern + a slim 20-bar pad, capped
 # per TF. If the pattern itself is longer than the cap it wins (never cut a
 # detected shape) and only the pad shrinks.
-_TC_FRAME_CAP = {"1m": 50, "3m": 50, "5m": 50, "15m": 60, "30m": 65,
-                 "1h": 80, "2h": 80, "4h": 75, "6h": 80, "8h": 85,
-                 "12h": 90, "1d": 120, "3d": 140, "1w": 150}
+_TC_FRAME_PAD = {"1m": 50, "3m": 50, "5m": 55, "15m": 55, "30m": 60,
+                 "1h": 75, "2h": 85, "4h": 95, "6h": 100, "8h": 100,
+                 "12h": 105, "1d": 115, "3d": 135, "1w": 145}
+_TC_FRAME_CAP = {"1m": 140, "3m": 140, "5m": 145, "15m": 150, "30m": 155,
+                 "1h": 170, "2h": 180, "4h": 190, "6h": 195, "8h": 200,
+                 "12h": 210, "1d": 230, "3d": 270, "1w": 290}
+_TC_LINE_FAMILIES = ("TRENDLINE", "CHANNEL")
 
 
-def tc_candles_for(tf, pattern_span):
-    """TC candle count (engine 4, v2): pattern span + 20 pad, TF-capped."""
+_CANDLE_FLOOR = 80   # کف قانونی او؛ VIVA_CANDLE_MIN آن را override می‌کند
+
+
+def _candle_floor() -> int:
+    try:
+        import os as _os
+        return max(20, int(str(_os.getenv("VIVA_CANDLE_MIN", "") or "").strip() or 80))
+    except Exception:
+        return 80
+
+
+def tc_candles_for(tf, pattern_span, pattern=None):
+    """قانون جدید ۱۰-۱۵ (verbatim): «کمترین حالت ... کف تعداد کندل‌ها ۸۰ کندل
+    هست و سقفش با توجه شکل و نوع پترن، تایم‌فریم و ترندلاین باید انتخاب بشه»
+    + HYPE: «۴۰ تا ۵۰ تا کندل بیشتر باشه تا زوم بهتر بشه» → قاب پهن است:
+    کف ۸۰ (قابل تنظیم با VIVA_CANDLE_MIN)، سقف با تایم‌فریم، و ترندلاین/کانال
+    (خطوط بلند) قاب را پرتر می‌کند.
+    """
     try:
         _t = str(tf or "").lower()
-        # همان قانون فریم او (ETC/TAO 15M «زوم و تعداد کندل غلطه»): زیر ۱
-        # ساعته = پنجرهٔ ثابت ۱۲ کندلی روی لبهٔ زنده؛ آنچه مهم است خودِ
-        # هندسه و خطوط است، نه ۱۹۰ کندل تاریخ.
-        if _t in ("1m", "3m", "5m", "15m", "30m"):
-            return 12
+        _pad = _TC_FRAME_PAD.get(_t, 85)
+        _cap = _TC_FRAME_CAP.get(_t, 190)
         _span = max(0, int(pattern_span or 0))
-        _cap = _TC_FRAME_CAP.get(_t, 85)
-        _want = _span + 12
-        return max(1, min(_want, _cap))  # cap wins (his zoom verdicts)
+        _base = _span + _pad
+        _fam = str(pattern or "").upper()
+        if any(_k in _fam for _k in _TC_LINE_FAMILIES):
+            _base = _span + 2 * _pad
+        return max(_candle_floor(), min(_cap, _base))
     except Exception:
-        return 90
+        return 120
 
 
 def tc_zoom_window(n_bars, count, pad_right_frac=0.12):

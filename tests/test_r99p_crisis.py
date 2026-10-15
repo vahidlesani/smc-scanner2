@@ -145,7 +145,7 @@ def test_far_faint_paint_key():
 
 
 def test_albrox_zoom_pure():
-    assert albrox_candles_for("4h", 44) == 54
+    assert albrox_candles_for("4h", 44) == 144
     assert albrox_zoom_window(270, 84) == (195, 279)
 
 
@@ -280,21 +280,23 @@ def test_r99q_signature_and_watermark_wired():
 
 
 def test_r99q_albrox_v2_frame_is_tight_and_capped():
-    """His 10-15 corrected ALBROX charts: HYPE 4H 50-60 candles, TAO 4H 30-40,
-    ETC/WLD/XRP 15m 9-11 → the frame is pattern + 16 pad, hard-capped per TF."""
-    assert albrox_candles_for("4h", 44) == 54      # HYPE 4H: 44+10 (50-60 ✓)
-    assert albrox_candles_for("4h", 200) == 60     # never a 190-bar wall
-    assert albrox_candles_for("15m", 200) == 11    # his WLD/XRP ruling
-    assert albrox_candles_for("15m", 30) == 11
-    assert albrox_candles_for("15m", 8) == 11
-    assert albrox_candles_for("1d", 200) == 90
+    """R99q9 — his corrected law: FLOOR 80 candles, ceiling adaptive by TF,
+    pattern family and trendline (his XRP 90-110 / WLD 120-140 / HYPE «۴۰ تا
+    ۵۰ کندل بیشتر تا زوم بهتر بشه»). My earlier 11-12 candle read was wrong
+    and is explicitly reverted here."""
+    assert albrox_candles_for("4h", 44) == 144     # HYPE 4H: span+pad
+    assert albrox_candles_for("4h", 200) == 200    # ceiling, adaptive
+    assert albrox_candles_for("15m", 200) == 160   # 15m ceiling
+    assert albrox_candles_for("15m", 30) == 90
+    assert albrox_candles_for("15m", 8) == 80    # القانون: کف ۸۰
+    assert albrox_candles_for("1d", 200) == 240
 
 
 def test_r99q_tc_v2_frame_and_noise_wedge():
     """TC v2: same tight-frame law + a 2-line 'shape' on <3 pivots is noise."""
-    assert tc_candles_for("15m", 50) == 12     # tight live-edge window
-    assert tc_candles_for("15m", 200) == 12
-    assert tc_candles_for("1d", 28) == 40
+    assert tc_candles_for("15m", 50) == 105
+    assert tc_candles_for("15m", 200) == 150
+    assert tc_candles_for("1d", 28) == 143
     _noise = {"type": "WEDGE_FALLING", "lines": [
         {"x0": 150, "x1": 194, "points": [{"x": 150}], "slope": .001, "intercept": 1.},
         {"x0": 152, "x1": 194, "points": [{"x": 152}], "slope": .001, "intercept": 1.}]}
@@ -413,14 +415,66 @@ def test_r99q7_all_four_engines_own_their_frame():
     and the chart-window selector consults all four setups."""
     from analysis.tlbreak import tlbreak_candles_for
     from analysis.pinval import pinval_candles_for
-    assert tlbreak_candles_for("15m", 200) == 14      # live edge + break leg
-    assert tlbreak_candles_for("4h", 40) == 54
-    assert tlbreak_candles_for("4h", 400) == 80       # own cap
-    assert tlbreak_candles_for("1d", 150) == 130      # own 1d cap
-    assert pinval_candles_for("15m", 200) == 15       # one bar more (taps)
-    assert pinval_candles_for("2h", 40) == 54
-    assert pinval_candles_for("2h", 400) == 70        # own cap, tighter than TC
+    assert tlbreak_candles_for("15m", 200) == 170     # ceiling, wide frame
+    assert tlbreak_candles_for("4h", 40) == 205
+    assert tlbreak_candles_for("4h", 400) == 205      # own cap
+    assert tlbreak_candles_for("1d", 150) == 245      # own 1d cap
+    assert pinval_candles_for("15m", 200) == 160      # pin level + taps
+    assert pinval_candles_for("2h", 40) == 130
+    assert pinval_candles_for("2h", 400) == 185       # own cap
     _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     _mv = open(os.path.join(_root, "bot", "messages_v7.py"), encoding="utf-8").read()
     assert '"TECHCLASSIC", "ALBROX", "TLBREAK", "PINVAL"' in _mv
     assert "tlbreak_candles_for" in _mv and "pinval_candles_for" in _mv
+
+
+# ── R99q9: candle-count law v2 (his correction) + PINVAL-only ──────────
+def test_r99q9_candle_law_floor_and_adaptive_ceiling():
+    """His verbatim correction: «کف تعداد کندل‌ها ۸۰ کندل هست و سقفش با توجه
+    شکل و نوع پترن، تایم‌فریم و ترندلاین» + «۴۰ تا ۵۰ کندل بیشتر تا زوم بهتر
+    بشه». My earlier 11-12 candle reading was a misread of his zeros."""
+    from analysis.techclassic import tc_candles_for
+    from analysis.tlbreak import tlbreak_candles_for
+    from analysis.pinval import pinval_candles_for
+    # floor everywhere
+    assert albrox_candles_for("15m", 0) == 80
+    assert tc_candles_for("15m", 0) == 80
+    assert pinval_candles_for("15m", 0) == 80
+    # adaptive ceiling per TF
+    assert albrox_candles_for("15m", 400) == 160
+    assert albrox_candles_for("4h", 400) == 200
+    assert albrox_candles_for("1d", 400) == 240
+    assert tc_candles_for("1d", 400) == 230
+    # a trendline/channel earns a fuller frame (his ceiling factor)
+    assert albrox_candles_for("4h", 44) == 144
+    assert albrox_candles_for("4h", 44, "CHANNEL_DESCENDING") == 200
+    assert pinval_candles_for("2h", 40) == 130
+    assert pinval_candles_for("2h", 40, "TRENDLINE") == 185
+    # TLBREAK shows the line AND the break leg → its own wider pad
+    assert tlbreak_candles_for("15m", 40) == 170
+    # his tunable floor
+    import os as _os
+    _keep = _os.environ.get("VIVA_CANDLE_MIN")
+    try:
+        _os.environ["VIVA_CANDLE_MIN"] = "40"
+        assert albrox_candles_for("15m", 0) == 60   # floor lowered → pad wins
+    finally:
+        if _keep is None:
+            _os.environ.pop("VIVA_CANDLE_MIN", None)
+        else:
+            _os.environ["VIVA_CANDLE_MIN"] = _keep
+
+
+def test_r99q9_pinval_only_switch():
+    """His order «فقط pinval باید روشن باشه»: the Railway values keep PINVAL
+    on and the other four setups off."""
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _p = os.path.join(os.path.dirname(_root), "RAILWAY_VALUES_PASTE.txt")
+    if not os.path.exists(_p):
+        return                      # file lives outside the repo copy
+    _txt = open(_p, encoding="utf-8").read()
+    assert "PINVAL_ENABLED=true" in _txt
+    for _off in ("ALBROX_ENABLED=false", "TECHCLASSIC_ENABLED=false",
+                 "VIVA_TLBREAK_ENABLED=false", "PINWALL_QUALITY_ENABLED=false",
+                 "EXPERIMENTAL_TLBREAK_ENABLED=false"):
+        assert _off in _txt, _off

@@ -110,15 +110,33 @@ _TLBREAK_FRAME_CAP = {"1h": 85, "2h": 85, "4h": 80, "6h": 85, "8h": 90,
                       "12h": 95, "1d": 130, "3d": 150, "1w": 160}
 
 
-def tlbreak_candles_for(tf, pattern_span):
+_CANDLE_FLOOR = 80   # کف قانونی او؛ VIVA_CANDLE_MIN آن را override می‌کند
+
+
+def _candle_floor() -> int:
+    try:
+        import os as _os
+        return max(20, int(str(_os.getenv("VIVA_CANDLE_MIN", "") or "").strip() or 80))
+    except Exception:
+        return 80
+
+
+_TLBREAK_FRAME_PAD = {"15m": 70, "30m": 75, "1h": 85, "2h": 95, "4h": 105, "6h": 110, "8h": 110, "12h": 115, "1d": 125, "3d": 145, "1w": 155}
+_TLBREAK_FRAME_CAP = {"15m": 170, "30m": 175, "1h": 185, "2h": 195, "4h": 205, "6h": 210, "8h": 215, "12h": 225, "1d": 245, "3d": 285, "1w": 305}
+
+
+def tlbreak_candles_for(tf, pattern_span, pattern=None):
+    """قانون جدید ۱۰-۱۵ (verbatim): «کف تعداد کندل‌ها ۸۰ کندل و سقفش با توجه شکل و نوع پترن، تایم‌فریم و ترندلاین» + «۴۰ تا ۵۰ کندل بیشتر تا زوم بهتر بشه» → قاب پهن: کف ۸۰ (VIVA_CANDLE_MIN قابل تنظیم)؛ TLBREAK همیشه خط + پاچ بریک را با هم نشان می‌دهد (بنابراین pad دوبل این ستاپ خودش)."""
     try:
         _t = str(tf or "").lower()
-        if _t in ("1m", "3m", "5m", "15m", "30m"):
-            return 14          # live edge + the break leg
+        _pad = _TLBREAK_FRAME_PAD.get(_t, 90)
+        _cap = _TLBREAK_FRAME_CAP.get(_t, 200)
         _span = max(0, int(pattern_span or 0))
-        return max(1, min(_span + 14, _TLBREAK_FRAME_CAP.get(_t, 90)))
+        _base = _span + _pad
+        _base = _span + 2 * _pad      # خط و پاچ بریک هر دو داخل قاب
+        return max(_candle_floor(), min(_cap, _base))
     except Exception:
-        return 90
+        return 120
 
 
 def tlbreak_zoom_window(n_bars, count, pad_right_frac=0.12):
