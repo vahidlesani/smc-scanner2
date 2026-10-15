@@ -213,6 +213,9 @@ _ALBROX_TYPE_ORDER = {"WEDGE": 0, "CHANNEL": 0, "TRIANGLE": 0, "FLAG": 1,
                       "PENNANT": 1, "TRENDLINE": 2, "DOUBLE": 3, "RANGE": 4}
 
 
+_ALBROX_MULTI_EDGE = {"WEDGE", "CHANNEL", "TRIANGLE", "FLAG", "PENNANT"}
+
+
 def albrox_select_patterns(patterns, live_idx, live_price=None, atr=None):
     """R99p v2 (Viva 10-15, LTC 4H: a 6-week far line led while the clear
     near wedge lost): dedupe → drop stale/noise/far-single → rank NEAREST
@@ -256,6 +259,13 @@ def albrox_select_patterns(patterns, live_idx, live_price=None, atr=None):
             _d99p = albrox_pattern_distance_atr(_p, _live, live_price, atr)
             if _d99p != float("inf") and _d99p > 2.5:
                 continue  # far nowhere-single (r59's own 2.5 ATR)
+        # R99q v2 (his 10-15 ALBROX 15m verdicts «پترن غلطه»): a two-line
+        # "wedge/channel" standing on <3 pivots is noise drawn on the tape —
+        # ALBROX's own honesty floor (TC keeps its own copy).
+        if (len(_lines) >= 2 and _touches < 3
+                and str(_p.get("type") or _p.get("name") or "").upper().split("_")[0]
+                in _ALBROX_MULTI_EDGE):
+            continue
         _filt.append(_p)
 
     def _key(_p):
@@ -266,7 +276,12 @@ def albrox_select_patterns(patterns, live_idx, live_price=None, atr=None):
         except Exception:
             _t, _x = 0, 0
         _fam = str(_p.get("type") or _p.get("name") or "").upper().split("_")[0]
-        return (albrox_pattern_distance_atr(_p, _live, live_price, atr),
+        # R99q پنجرهٔ تنگ خودش: الگویی که پیوت اولش ۱۲۰ کندل عقب‌تر است، قاب را
+        # به «جادهٔ بی‌سر» تبدیل می‌کند (حکم ۱۰-۱۵: تعداد کندل غلط). داخلِ قاب
+        # رتبهٔ بهتری می‌گیرد، ولی حذف نمی‌شود (خطِ بلند ماژور معتبر است).
+        _in99 = 0 if (_x0 >= max(0, _live - 100)) else 1
+        return (_in99,
+                albrox_pattern_distance_atr(_p, _live, live_price, atr),
                 -_t, -_x, _ALBROX_TYPE_ORDER.get(_fam, 5))
 
     _filt.sort(key=_key)
@@ -377,11 +392,25 @@ def albrox_pattern_distance_atr(pat, live_idx, live_price, atr):
         return float("inf")
 
 
+_ALBROX_FRAME_CAP = {"5m": 40, "15m": 45, "30m": 50, "1h": 65, "2h": 65,
+                     "4h": 60, "6h": 65, "8h": 70, "1d": 90, "3d": 110,
+                     "1w": 120}
+
+
 def albrox_candles_for(tf, pattern_span):
-    """ALBROX candle count (own engine, R99p): detected span + 40 context bars
-    (same shape as TC's — duplicated per his per-setup law, not imported)."""
+    """ALBROX candle count (own engine R99q): pattern span + 16 context bars,
+    HARD-capped per TF — his 10-15 corrected charts (HYPE 4H «۵۰ تا ۶۰ کندل
+    کمتر»، TAO 4H «۳۰ تا ۴۰ کندل»، 15m «تعداد کندل غلطه»): the frame is the
+    pattern + a small breathing pad, never a wide 190-bar wall."""
     try:
-        return max(1, int(pattern_span or 0) + 40)
+        _t = str(tf or "").lower()
+        _pad = 10 if _t in ("1m", "3m", "5m", "15m", "30m") else 16
+        _cap = _ALBROX_FRAME_CAP.get(_t, 70)
+        _span = int(pattern_span or 0)
+        _want = _span + _pad
+        # pattern longer than the cap: the cap wins (his «تعداد کندل باید کمتر
+        # بشه») — the painter anchors right, the far tail simply leaves frame.
+        return max(1, min(_want, _cap))
     except Exception:
         return 300
 

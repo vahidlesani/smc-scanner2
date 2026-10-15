@@ -77,14 +77,14 @@ def test_tc_refine_fail_open():
 
 
 def test_tc_count_zoom_pure():
-    assert tc_candles_for("15m", 50) == 90
+    assert tc_candles_for("15m", 50) == 60
     _x0, _x1 = tc_zoom_window(194, 90)
     assert (_x0, _x1) == (194 - 1 + 10 - 90, 194 - 1 + 10)  # (113, 203)
 
 
 # ── ALBROX selection: XLM replay ────────────────────────────
 def test_xlm_twins_deduped_best_two_kept():
-    _pats = [_pat("WEDGE_FALLING", [_line(104, 199, 1), _line(110, 199, 1)]),
+    _pats = [_pat("WEDGE_FALLING", [_line(104, 199, 2), _line(110, 199, 1)]),
              _pat("TRENDLINE", [_line(97, 199, 6)]),
              _pat("DOUBLE_BOTTOM", [_line(185, 199, 0)]),
              _pat("DOUBLE_BOTTOM", [_line(185, 199, 0)])]

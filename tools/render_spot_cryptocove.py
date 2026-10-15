@@ -154,8 +154,11 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     brk = a.get("breakout") or {}
     target, level = a.get("target"), a.get("level")
     up_dir = bool(target and level and float(target) > float(level))
-    box_drawn = bool(target and level and brk.get("status") not in (None, "INSIDE")
-                     and up_dir)
+    # قانون به‌روز ۱۰-۱۵ خودش: «برای شکست‌ها در اسپات هم باکس قرمز بذار» —
+    # دیگر فقط شکست صعودی باکس ندارد؛ شکست نزولی هم باکس قرمز رو به پایین
+    # می‌گیرد (لانگ‌نشدن اسپات یعنی خروج/حفاظت، نه بی‌باکسی).
+    box_drawn = bool(target and level
+                     and brk.get("status") not in (None, "INSIDE"))
     # باکس هدف «نازک و دراز» عین رفرنس‌ها: اگر طولش تا ۱٫۵ برابر دامنهٔ
     # کندل‌ها باشد، قاب کمی باز می‌شود تا باکس کامل (دراز) دیده شود؛ بیشتر از
     # آن = قانون GEO (کندل‌ها له نمی‌شوند) و باکس از لبه بیرون می‌زند.
@@ -182,13 +185,11 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
             linestyle="-", zorder=1)
 
     # ── 2) واترمارک‌ها: متن محو نماد + لوگوی VIVA (وسط)
-    ax.text(0.5, 0.545, f"{sym},{tf}", transform=ax.transAxes, ha="center",
-            va="center", fontsize=50, fontweight="bold", color="#BFB9AB",
-            alpha=0.52, zorder=1)
-    # برند وسط چارت (مثل چارت ستاپ‌ها) — محو، پشت کندل‌ها
-    ax.text(0.5, 0.50, "VIVA SIGNALS PRO", transform=ax.transAxes,
-            ha="center", va="center", fontsize=30, fontweight="bold",
-            color="#B9B3A5", alpha=0.14, zorder=1)
+    # واترمارک وسط چارت = فقط برند (دستور ۱۰-۱۵: «گفتم برند من رو بزن همون
+    # VIVA SIGNALS PRO» — نه اسم نماد).
+    ax.text(0.5, 0.52, "VIVA SIGNALS PRO", transform=ax.transAxes,
+            ha="center", va="center", fontsize=40, fontweight="bold",
+            color="#B9B3A5", alpha=0.20, zorder=1)
     logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                              "assets", "vivasignals-logo.png")
     if os.path.isfile(logo_path):
@@ -265,25 +266,31 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
             ax.scatter(_nix, [nk.price_at(t) for t in _nix], s=46, zorder=7,
                        facecolors="#FDF49F", edgecolors=INK, linewidths=1.3)
 
-    # ── 6) باکس هدف — فقط شکست صعودی (رفرنس‌ها: نازک، چسبیده به آخرین کندل)
+    # ── 6) باکس هدف — نازک و دراز، چسبیده به آخرین کندل.
+    #     لانگ = سبز با پیکان بالا؛ شکست نزولی = قرمز با پیکان پایین (قانون
+    #     به‌روز ۱۰-۱۵: «برای شکست‌ها در اسپات هم باکس قرمز بذار»).
     if box_drawn:
         bx0 = n + 1
         bx1 = n + 7
         lo_, hi_ = sorted([float(level), float(target)])
+        _fce, _ece, _tcol = (("#A8D49B", "#388E3C", "#1B5E20") if up_dir
+                             else ("#F2B8B0", "#C0392B", "#8E2418"))
         ax.add_patch(Rectangle((bx0, lo_), bx1 - bx0, hi_ - lo_,
-                               facecolor="#A8D49B", edgecolor="#388E3C",
+                               facecolor=_fce, edgecolor=_ece,
                                linewidth=1.4, alpha=0.65, zorder=5))
         ax.plot([bx0, bx1], [float(level)] * 2, color=INK, lw=1.2, zorder=6)
-        ax.plot([bx0, bx1], [float(target)] * 2, color="#388E3C", lw=1.2, zorder=6)
+        ax.plot([bx0, bx1], [float(target)] * 2, color=_ece, lw=1.2, zorder=6)
         ax.annotate("", xy=((bx0 + bx1) / 2, float(target)),
                     xytext=((bx0 + bx1) / 2, float(level)),
                     arrowprops=dict(arrowstyle="-|>", color=INK, lw=1.4,
                                     mutation_scale=14), zorder=7)
         delta = abs(float(target) - float(level))
         pct = (float(target) / float(level) - 1.0) * 100.0
-        ax.text((bx0 + bx1) / 2, float(target) * math.exp(0.05 * d_span),
-                f"{delta:.4g} ({pct:+.2f}%)", ha="center", va="bottom",
-                fontsize=9.5, fontweight="bold", color="#1B5E20", zorder=8)
+        _ytx = float(target) * math.exp(0.05 * d_span) if up_dir else \
+            float(target) * math.exp(-0.05 * d_span)
+        ax.text((bx0 + bx1) / 2, _ytx, f"{delta:.4g} ({pct:+.2f}%)",
+                ha="center", va="bottom" if up_dir else "top",
+                fontsize=9.5, fontweight="bold", color=_tcol, zorder=8)
 
     # ── 7) خط لایو + پیل قیمت (صورتی، رفرنس ENA)
     live = float(c[-1])

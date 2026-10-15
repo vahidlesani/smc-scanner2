@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from analysis.albrox import (albrox_select_patterns, albrox_pattern_distance_atr,
                              albrox_candles_for, albrox_zoom_window)
+from analysis.techclassic import tc_candles_for, tc_validate_pattern
 from database.candidate_store import _cluster_dupe_rows
 
 
@@ -54,7 +55,8 @@ def test_distance_pure():
 
 
 def test_legacy_touches_rank_without_live():
-    _pats = [_pat("WEDGE_FALLING", [_line(104, 199, 1, 0.01, 1.0),
+    # v2 floor: real wedges stand on >=3 pivots (R99q walk)
+    _pats = [_pat("WEDGE_FALLING", [_line(104, 199, 2, 0.01, 1.0),
                                    _line(110, 199, 1, 0.01, 1.0)]),
              _pat("TRENDLINE", [_line(97, 199, 6, 0.01, 1.0)])]
     _kept = albrox_select_patterns(_pats, 199)
@@ -142,7 +144,7 @@ def test_far_faint_paint_key():
 
 
 def test_albrox_zoom_pure():
-    assert albrox_candles_for("4h", 44) == 84
+    assert albrox_candles_for("4h", 44) == 60
     assert albrox_zoom_window(270, 84) == (195, 279)
 
 
@@ -181,7 +183,8 @@ def test_r99q_spot_renderer_design_guards():
     assert "Circle((ti" not in _rs
     assert "1.5 * d_span" in _rs            # GEO: a far box never squashes candles
     assert "PAD_RIGHT_BARS" in _rs and "MAX_BARS" in _rs  # tight refs zoom
-    assert "and up_dir" in _rs              # box only for upward break (refs law)
+    # R99q update (his 10-15 order): red box on SPOT breakdowns too
+    assert "قرمز بذار" in _rs and '("#F2B8B0", "#C0392B", "#8E2418")' in _rs
     assert "SPOTBREAK" in _rs and "BINANCE SPOT" in _rs
 
 
@@ -273,3 +276,60 @@ def test_r99q_signature_and_watermark_wired():
     assert '"by: Vahid Lesani"' in _rs
     assert "VIVA SIGNALS PRO\" , transform=ax.transAxes" not in _rs
     assert "nice_price_ticks" in _rs                 # shared dense axis kit
+
+
+def test_r99q_albrox_v2_frame_is_tight_and_capped():
+    """His 10-15 corrected ALBROX charts: HYPE 4H 50-60 candles, TAO 4H 30-40,
+    ETC/WLD/XRP 15m 9-11 → the frame is pattern + 16 pad, hard-capped per TF."""
+    assert albrox_candles_for("4h", 44) == 60      # 44+16 → capped at 60
+    assert albrox_candles_for("4h", 200) == 60     # never a 240-bar wall
+    assert albrox_candles_for("15m", 200) == 45
+    assert albrox_candles_for("15m", 30) == 40
+    assert albrox_candles_for("1d", 200) == 90
+
+
+def test_r99q_tc_v2_frame_and_noise_wedge():
+    """TC v2: same tight-frame law + a 2-line 'shape' on <3 pivots is noise."""
+    assert tc_candles_for("15m", 50) == 60
+    assert tc_candles_for("15m", 200) == 60    # cap wins (his zoom verdicts)
+    assert tc_candles_for("1d", 120) == 120
+    _noise = {"type": "WEDGE_FALLING", "lines": [
+        {"x0": 150, "x1": 194, "points": [{"x": 150}], "slope": .001, "intercept": 1.},
+        {"x0": 152, "x1": 194, "points": [{"x": 152}], "slope": .001, "intercept": 1.}]}
+    assert tc_validate_pattern(_noise, "WEDGE", 194, "15m")[1] == "under-touched"
+    _real = {"type": "WEDGE_FALLING", "lines": [
+        {"x0": 150, "x1": 194, "points": [{"x": 150}, {"x": 170}],
+         "slope": .001, "intercept": 1.},
+        {"x0": 152, "x1": 194, "points": [{"x": 152}, {"x": 176}],
+         "slope": .001, "intercept": 1.}]}
+    assert tc_validate_pattern(_real, "WEDGE", 194, "15m")[0] is True
+
+
+def test_r99q_spot_red_breakdown_box_and_brand_center():
+    """His 10-15 update: break boxes on SPOT are RED on breakdowns (the older
+    green up-box ref is superseded), and the centre watermark is the BRAND
+    «VIVA SIGNALS PRO» — never the symbol name."""
+    import os as _os
+    _src = open(_os.path.join(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__))), "tools", "render_spot_cryptocove.py"),
+        encoding="utf-8").read()
+    assert "قرمز بذار" in _src and "#F2B8B0" in _src
+    assert '("#F2B8B0", "#C0392B", "#8E2418")' in _src and "if up_dir" in _src
+    assert 'f"{sym},{tf}"' not in _src          # symbol watermark removed
+    assert '"VIVA SIGNALS PRO"' in _src and "0.52" in _src
+
+
+def test_r99q_albrox_under_touched_noise_wedge_dropped():
+    """ALBROX's own honesty floor (his ETC/TAO 15m «پترن غلطه»): a two-line
+    shape standing on fewer than three pivots is noise; a real wedge survives."""
+    _noise = {"type": "WEDGE_FALLING", "lines": [
+        {"x0": 150, "x1": 199, "points": [{"x": 150}], "slope": .001, "intercept": 1.},
+        {"x0": 152, "x1": 199, "points": [{"x": 152}], "slope": .002, "intercept": 1.}]}
+    _real = {"type": "WEDGE_FALLING", "lines": [
+        {"x0": 150, "x1": 199, "points": [{"x": 150}, {"x": 170}],
+         "slope": .001, "intercept": 1.},
+        {"x0": 152, "x1": 199, "points": [{"x": 152}], "slope": .002, "intercept": 1.}]}
+    _kept = albrox_select_patterns([_noise], 199)
+    assert _kept == []
+    _kept2 = albrox_select_patterns([_real], 199)
+    assert [str(p.get("type")) for p in _kept2] == ["WEDGE_FALLING"]

@@ -214,15 +214,27 @@ def tc_find_pivots(highs, lows, left=2, right=2):
     return {"highs": _hi, "lows": _lo}
 
 
-def tc_candles_for(tf, pattern_span):
-    """TC candle count (engine 4): FROM the detected pattern (no min/max).
+# R99q TC v2 zoom law (his 10-15 corrected TECHCLASSIC charts: ETC 15M and
+# TAO 15M «پترن و زوم و تعداد کندل غلطه»، BNB 1D «پترن درسته .. تعداد کندل و
+# زوم غلطه»): the frame is the detected pattern + a slim 20-bar pad, capped
+# per TF. If the pattern itself is longer than the cap it wins (never cut a
+# detected shape) and only the pad shrinks.
+_TC_FRAME_CAP = {"1m": 50, "3m": 50, "5m": 50, "15m": 60, "30m": 65,
+                 "1h": 80, "2h": 80, "4h": 75, "6h": 80, "8h": 85,
+                 "12h": 90, "1d": 120, "3d": 140, "1w": 150}
 
-    Detected span + 40 context bars (the R64 warm-up pad, kept).
-    """
+
+def tc_candles_for(tf, pattern_span):
+    """TC candle count (engine 4, v2): pattern span + 20 pad, TF-capped."""
     try:
-        return max(1, int(pattern_span or 0) + 40)
+        _t = str(tf or "").lower()
+        _pad = 12 if _t in ("1m", "3m", "5m", "15m", "30m") else 20
+        _span = max(0, int(pattern_span or 0))
+        _cap = _TC_FRAME_CAP.get(_t, 85)
+        _want = _span + _pad
+        return max(1, min(_want, _cap))  # cap wins (his zoom verdicts)
     except Exception:
-        return 300
+        return 90
 
 
 def tc_zoom_window(n_bars, count, pad_right_frac=0.12):
@@ -305,6 +317,9 @@ def tc_validate_pattern(pat, label_family, live_idx, tf):
         _touches = 0
     if _touches == 0 and (max(_x1s) - min(_x0s)) < 20:
         return (False, "empty-noise", None)  # R5
+    if _tc_fam(_t) in _TC_MULTI_EDGE and len(_lines) >= 2 and _touches < 3:
+        return (False, "under-touched", None)  # R99q v2: 2 lines, <3 pivots
+        # = a wedge drawn on noise (his ETC/TAO 15M «پترن غلطه»)
     if _tc_fam(_t) in _TC_MULTI_EDGE:
         if label_family and _tc_fam(_t) != str(label_family).upper():
             if len(_lines) == 1:
@@ -358,6 +373,15 @@ def tc_refine_geometry(candidate, bundle=None):
                     pass
             else:
                 _dropped.append(f"{(_p.get('type') or _p.get('name'))}:{_reason}")
+        # R99q v2: the lead (kept[0] → pill + span + view) is the pattern whose
+        # first anchor lives inside the tight frame — in-frame first, order kept.
+        try:
+            _kept.sort(key=lambda _q: 0 if (_live and all(
+                int(L.get("x0") or 0) >= _live - 130
+                for L in (_q.get("lines") or []) if isinstance(L, dict))
+                ) else 1)
+        except Exception:
+            pass
         md["render_patterns"] = _kept
         md["tc_pattern_span"] = max(_spans) if _spans else 0
         # R99o context honesty (Viva 10-15, honesty-veto class): surviving
