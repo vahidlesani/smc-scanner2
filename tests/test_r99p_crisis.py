@@ -416,6 +416,7 @@ def test_r99q7_all_four_engines_own_their_frame():
     assert tlbreak_candles_for("15m", 200) == 14      # live edge + break leg
     assert tlbreak_candles_for("4h", 40) == 54
     assert tlbreak_candles_for("4h", 400) == 80       # own cap
+    assert tlbreak_candles_for("1d", 150) == 130      # own 1d cap
     assert pinval_candles_for("15m", 200) == 15       # one bar more (taps)
     assert pinval_candles_for("2h", 40) == 54
     assert pinval_candles_for("2h", 400) == 70        # own cap, tighter than TC
