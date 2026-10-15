@@ -2766,8 +2766,21 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 else:
                     from analysis.pinval import pinval_candles_for as _tcc99o
                     from analysis.pinval import pinval_zoom_window as _tcz99o
-                    _span99o = (candidate.metadata or {}).get(
-                        "pinval_pattern_span") or 0
+                    _md99p = (candidate.metadata or {})
+                    _span99o = _md99p.get("pinval_pattern_span") or 0
+                    if not _span99o:
+                        # R99q9: PINVAL does not mint a span of its own — derive
+                        # it from the drawn geometry (longest edge in view), so
+                        # the frame stays honest («سقف با توجه ... ترندلاین»).
+                        try:
+                            _sp99p = [int(L.get("x1") or 0) - int(L.get("x0") or 0)
+                                      for _q in (_md99p.get("render_patterns") or [])
+                                      if isinstance(_q, dict)
+                                      for L in (_q.get("lines") or [])
+                                      if isinstance(L, dict)]
+                            _span99o = max(_sp99p) if _sp99p else 0
+                        except Exception:
+                            _span99o = 0
                 _tf99o = str(((candidate.metadata or {}).get("chart_view_tf")
                                or getattr(candidate, "trigger_timeframe", "")
                                or "15m")).lower()
@@ -3233,14 +3246,39 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         # Missing one of the edges: fit the complementary edge from frame pivots
                         from analysis.viva_tlbreak import fit_validated_line, load_config
                         _mcfg = load_config()
+                        def _as_render_line(_ln, _frame):
+                            # R99q9: the RENDER contract speaks {"ts","price"}
+                            # in points (pivots speak {"timestamp"}); a line
+                            # appended raw used to reach the painter with
+                            # ts=None → «Unknown datetime string format: None»
+                            # → the whole chart died (webapp demo 404).
+                            _d = (_ln.to_dict() if hasattr(_ln, "to_dict")
+                                  else dict(vars(_ln)))
+                            _pts = []
+                            for _p in (_d.get("points") or []):
+                                if not isinstance(_p, dict):
+                                    continue
+                                _ts = _p.get("ts") or _p.get("timestamp")
+                                _pr = _p.get("price")
+                                if _ts is None and _p.get("index") is not None:
+                                    _ix = int(_p.get("index") or 0)
+                                    if 0 <= _ix < len(_frame.index):
+                                        _ts = _frame.index[_ix]
+                                if _ts is not None and _pr is not None:
+                                    _pts.append({"ts": str(_ts), "price": float(_pr)})
+                            if _pts:
+                                _d["points"] = _pts
+                            _d["slope"] = float(_ln.slope)
+                            _d["intercept"] = float(_ln.intercept)
+                            return _d
                         if "HIGH" not in _sides:
                             _up_line = fit_validated_line(frame, "HIGH", _mcfg)
                             if _up_line is not None:
-                                _existing_lines.append(_up_line.to_dict() if hasattr(_up_line, "to_dict") else vars(_up_line))
+                                _existing_lines.append(_as_render_line(_up_line, frame))
                         if "LOW" not in _sides:
                             _lo_line = fit_validated_line(frame, "LOW", _mcfg)
                             if _lo_line is not None:
-                                _existing_lines.append(_lo_line.to_dict() if hasattr(_lo_line, "to_dict") else vars(_lo_line))
+                                _existing_lines.append(_as_render_line(_lo_line, frame))
                         _pat_item["lines"] = _existing_lines
         except Exception as _e_both:
             print(f"Both edges guarantee error: {_e_both}")
@@ -3422,19 +3460,43 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # 1/scale (15m→1h: ×4) — the line keeps its true angle.
                 _sl8 = float(_ln0["slope"]) / _pscale8
                 _pt8 = _ln0.get("points") or []
-                if _pt8:
+                _ts8 = None
+                try:
+                    if _pt8:
+                        _ts8 = (_pt8[0].get("ts") or _pt8[0].get("timestamp")
+                                or _pt8[0].get("bar_ts"))
+                        if _ts8 is None and _pt8[0].get("index") is not None:
+                            _ix8 = int(_pt8[0].get("index") or 0)
+                            if _is_spot and _ix8 < len(frame.index):
+                                _ts8 = frame.index[_ix8]
+                except Exception:
+                    _ts8 = None
+                if _pt8 and _ts8 is not None:
                     # R63: TIME projection (a pre-window pivot extrapolates to
                     # a negative x instead of clamping to 0 — the clamp is what
                     # bent stored lines and forced the r51 per-TF re-fit).
                     try:
                         _x0f = float(_viva_points_xs(
-                            [{"timestamp": _pt8[0].get("ts")}], frame)[0])
+                            [{"timestamp": _ts8}], frame)[0])
                         if not math.isfinite(_x0f):
                             raise ValueError("nan x")
                     except Exception:
-                        _x0f = float(np.searchsorted(
-                            frame.index, pd.Timestamp(str(_pt8[0].get("ts")))))
+                        try:
+                            _x0f = float(np.searchsorted(
+                                frame.index, pd.Timestamp(str(_ts8))))
+                        except Exception:
+                            _x0f = 0.0
                     _ic8 = float(_pt8[0].get("price")) - _sl8 * _x0f
+                elif _pt8:
+                    # R99q9: a points list that carries NO usable stamp used to
+                    # crash the whole chart here (pd.Timestamp('None')) — the
+                    # webapp demo 404. Anchor on the line's own x0 instead.
+                    if _is_spot:
+                        _x0f = max(0.0, float(_ln0.get("x0", 0)))
+                    else:
+                        _x0f = max(0.0, (float(_ln0.get("x0", 0))
+                                         - max(0, len(df) - len(frame))) * _pscale8)
+                    _ic8 = float(_ln0.get("intercept") or 0.0)
                 else:
                     if _is_spot:
                         _x0f = max(0.0, float(_ln0.get("x0", 0)))
@@ -3496,7 +3558,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _pts_x = []
                 for q in (_ln.get("points") or []):
                     try:
-                        _qx = float(np.searchsorted(frame.index, pd.Timestamp(str(q.get("ts")))))
+                        _qx = float(np.searchsorted(frame.index, pd.Timestamp(str(q.get("ts") or q.get("timestamp")))))
                         if 0 <= _qx < len(frame):
                             _pts_x.append(_qx)
                     except Exception:
@@ -3612,8 +3674,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             solid_capstyle="butt")
                 _px8, _xs8 = [], []
                 for q in (_ln.get("points") or []):
-                    _qx = float(np.searchsorted(
-                        frame.index, pd.Timestamp(str(q.get("ts")))))
+                    try:
+                        _qts8 = q.get("ts") or q.get("timestamp")
+                        if _qts8 is None:
+                            continue
+                        _qx = float(np.searchsorted(
+                            frame.index, pd.Timestamp(str(_qts8))))
+                    except Exception:
+                        continue
                     if _qx <= _xend8 + 0.5:
                         _xs8.append(_qx); _px8.append(float(q.get("price")))
                 if _xs8:

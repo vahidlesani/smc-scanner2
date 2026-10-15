@@ -74,6 +74,24 @@ WICK_EXTREME_MED_MULT = 3.0
 WICK_EXTREME_ATR_FRAC = 1.5
 
 
+def _ts_at(_df, _i):
+    """R99q9: the render contract indexes frames BY timestamp (the column is
+    gone by then). Pivots keep a usable stamp whether the column or the index
+    carries it — the both-edges guarantee used to die here with KeyError."""
+    try:
+        if "timestamp" in _df.columns:
+            return _df["timestamp"].iloc[_i]
+        try:
+            import pandas as _pd
+            if isinstance(_df.index, _pd.DatetimeIndex):
+                return _df.index[_i]
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return None
+
+
 def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
            wick_noise_filter: bool = False,
            wick_policy: str = "outlier") -> Tuple[List[Dict], List[Dict]]:
@@ -84,6 +102,7 @@ def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
       • "bodies"  — drawing anchors are ALWAYS the candle BODY; a trend or
         pattern edge is drawn where the mass of the candle is, never where a
         liquidation wick poked (DASH/ARB 3d mega-wicks bent the lines)."""
+
 
     highs: List[Dict] = []
     lows: List[Dict] = []
@@ -127,7 +146,7 @@ def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
                     _price = float(max(o[i], c[i]))
                     _anchor = "body"
             highs.append({"index": i, "price": _price, "raw_price": float(h[i]),
-                          "anchor": _anchor, "timestamp": df["timestamp"].iloc[i]})
+                          "anchor": _anchor, "timestamp": _ts_at(df, i)})
         if l[i] <= np.min(l[i - left : i + right + 1]):
             _price = float(l[i])
             _anchor = "wick"
@@ -149,7 +168,7 @@ def pivots(df: pd.DataFrame, left: int = 3, right: int = 3,
                     _price = float(min(o[i], c[i]))
                     _anchor = "body"
             lows.append({"index": i, "price": _price, "raw_price": float(l[i]),
-                         "anchor": _anchor, "timestamp": df["timestamp"].iloc[i]})
+                         "anchor": _anchor, "timestamp": _ts_at(df, i)})
     return highs, lows
 
 

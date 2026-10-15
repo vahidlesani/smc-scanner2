@@ -478,3 +478,52 @@ def test_r99q9_pinval_only_switch():
                  "VIVA_TLBREAK_ENABLED=false", "PINWALL_QUALITY_ENABLED=false",
                  "EXPERIMENTAL_TLBREAK_ENABLED=false"):
         assert _off in _txt, _off
+
+
+def test_r99q9_pivots_survive_the_indexed_render_frame():
+    """Real bug found on the live BNB pin chart: the render contract indexes
+    frames BY timestamp (the column is dropped), and the both-edges guarantee
+    called pivots() on that frame → KeyError 'timestamp' → every missing edge
+    silently failed (PINVAL BNB drew one line, the rejection tag hung in
+    space). Pivots must work on a column-less, DatetimeIndexed frame."""
+    import pandas as _pd
+    import numpy as _np
+    from analysis.indicators import pivots
+    _n = 60
+    _ts = _pd.date_range("2026-10-01", periods=_n, freq="15min")
+    _base = 700 + 20 * _np.sin(_np.linspace(0, 6, _n))
+    _df = _pd.DataFrame({"open": _base, "high": _base + 1.5, "low": _base - 1.5,
+                         "close": _base + 0.2})
+    _idx = _df.copy()
+    _idx.index = _pd.DatetimeIndex(_ts)
+    _h1, _l1 = pivots(_df.assign(timestamp=_ts), 2, 2)
+    _h2, _l2 = pivots(_idx, 2, 2)          # the render frame shape
+    assert len(_h1) == len(_h2) and len(_h1) > 0
+    assert _h2[0]["timestamp"] is not None
+    assert str(_h2[0]["timestamp"]) == str(_ts[_h2[0]["index"]])
+
+
+def test_r99q9_spot_is_its_own_lane():
+    """His answer «اسپات جداست»: the spot lane is independent of the setup
+    switches — the switch block touches futures setups only."""
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _p = os.path.join(os.path.dirname(_root), "RAILWAY_VALUES_PASTE.txt")
+    if not os.path.exists(_p):
+        return
+    _txt = open(_p, encoding="utf-8").read()
+    assert "SPOT_ENGINE_ENABLED" not in _txt and "SPOT_ENABLED" not in _txt
+    assert "TIER_SPOT_DEEP_MINUTES" in _txt          # spot keeps its own cadence
+
+
+def test_r99q9_both_edges_lines_speak_the_render_contract():
+    """The both-edges guarantee must hand the painter {"ts","price"} points
+    (a raw pivot dict has no "ts" → the painter raised DateParseError 'None'
+    and the whole chart died — the webapp demo's 404)."""
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _mv = open(os.path.join(_root, "bot", "messages_v7.py"), encoding="utf-8").read()
+    assert "_as_render_line" in _mv
+    assert '_d["points"] = _pts' in _mv
+    # the painter itself must never trust a stamp blindly
+    assert 'q.get("ts") or q.get("timestamp")' in _mv
+    _ind = open(os.path.join(_root, "analysis", "indicators.py"), encoding="utf-8").read()
+    assert "def _ts_at(" in _ind and "_ts_at(df, i)" in _ind
