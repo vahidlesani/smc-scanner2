@@ -324,6 +324,10 @@ def _bars_since_candidate(candidate: SignalCandidate, closed_df: pd.DataFrame) -
         timestamps = timestamps.dt.tz_convert("UTC").dt.tz_localize(None)
     # The alert candle is the information boundary. Including it (or falling
     # back to historical bars) can confirm a signal using pre-alert data.
+    # 10-15 note: the boundary stays the alert's own candle. Widening it to the
+    # bar CONTAINING the alert (its close is post-alert information) was tried
+    # and reverted: it shifts which bar the r61.2 reclaim gate judges, which is
+    # a separate doctrine decision (Viva's call).
     return closed_df.loc[timestamps > created].copy()
 
 
@@ -535,6 +539,102 @@ def _stale_tp_1010(direction, tp1, executable_entry, close) -> bool:
     return False
 
 
+def rebase_confirm_entry(candidate: SignalCandidate, close: float,
+                         bar_ts=None, bar_tf_min: float = 0.0,
+                         source: str = "FIRST_CLOSE") -> Optional[dict]:
+    """CONFIRM-TIMING LAW (Viva 10-15, verbatim: «اولین کلوز بعد از شکست تایید
+    بده … راه حل مشکل باید پیدا بشه و سروقت تایید برسه … باید جوری درستش بکنی
+    که در همه ستاپ ها هر کدام در انجینهای مخصوص خودشون تایید بگیره»).
+
+    The one-close law says the FIRST closed candle beyond the break edge IS the
+    confirmation — so that candle's close IS the entry. The plan used to keep
+    its pre-break zone entry while the verdict was judged against the newest
+    close, and every downstream geometry gate (`ENTRY_AFTER_TARGET`,
+    `TP_HIT_BEFORE_CONFIRM`, the chase gate) then voided the confirmation for
+    hours (UNIUSDT·T698813: the first valid close landed at 15:30 and the
+    signal was published at 19:05 — 215 minutes of pure gate latency).
+
+    Re-anchoring the plan on the confirming close — entry + the whole target
+    path shifted by the same delta, stop untouched (it is the tool's
+    invalidation level) — removes that latency INSIDE the engine instead of
+    gating the send: the ladder keeps the tool's measured length, the stop
+    stays structural, and the R multiples are re-derived by the ladder
+    builder as usual. Returns the rebase record, or None when nothing moved
+    (a pullback entry is already ahead of the close) or when the plan is
+    already frozen/published (a retry re-publishes the ORIGINAL entry by
+    contract — «do not move Entry»).
+    """
+    try:
+        md = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+        if md.get("technical_confirmation_complete") or md.get("confirmation_sent") \
+                or isinstance(md.get("confirmed_snapshot"), dict):
+            return None
+        entry_old = float(getattr(candidate, "planned_entry", 0) or 0.0)
+        _close = float(close or 0.0)
+        if entry_old <= 0 or _close <= 0:
+            return None
+        _long = str(getattr(candidate, "direction", "LONG") or "LONG").upper() != "SHORT"
+        delta = (_close - entry_old) if _long else (entry_old - _close)
+        if delta <= max(1e-12, 1e-6 * entry_old):
+            return None                       # entry already ahead of the close
+        # a plan whose final target sits BEHIND its own entry is a broken tool,
+        # not a runaway market — the geometry vetoes keep their verdict
+        _tp2_side = float(getattr(candidate, "tp2", 0) or 0.0)
+        if _tp2_side > 0:
+            _tp2_ok = (_tp2_side > entry_old) if _long else (_tp2_side < entry_old)
+            if not _tp2_ok:
+                return None
+        tp1 = float(getattr(candidate, "tp1", 0) or 0.0)
+        tp2 = float(getattr(candidate, "tp2", 0) or 0.0)
+        _ahead = (lambda x: x > _close) if _long else (lambda x: x < _close)
+        candidate.planned_entry = float(_close)
+        # the tool's structural/measured final target is the chart's own level:
+        # it stays whenever the path still has room. If the break close has
+        # already consumed the whole path, the target shifts with the entry so
+        # the ladder keeps a tradeable (non-empty) path.
+        _tp2_kept = bool(tp2 > 0 and _ahead(tp2))
+        if tp2 > 0 and not _tp2_kept:
+            candidate.tp2 = float(tp2 + delta) if _long else float(tp2 - delta)
+            md["ladder_shifted_note_fa"] = (
+                f"کلوزِ تأیید از هدفِ ساختاری ({tp2:.8g}) هم گذشته بود؛ نردبان با "
+                "همان طولِ مسیرِ ابزار از ورودِ جدید بازتنظیم شد.")
+        if tp1 > 0 and _ahead(tp1):
+            pass                                   # first rung still open
+        else:
+            # the first rung was already consumed by the break close: rebuild it
+            # from the new entry (doctrine: TP1 = one fifth of the intact path)
+            _path = abs(float(candidate.tp2 or 0) - _close)
+            _step = _path / 5.0 if _path > 0 else 0.0
+            if _step <= 0:
+                try:
+                    _step = max(1.5 * float(md.get("atr") or 0), 0.01 * _close)
+                except Exception:
+                    _step = 0.01 * _close
+            candidate.tp1 = float(_close + _step) if _long else float(_close - _step)
+        try:
+            md["entry_rebase_tp2_kept"] = _tp2_kept
+        except Exception:
+            pass
+        rec = {"from": float(entry_old), "to": float(_close),
+               "delta": float(delta), "source": str(source or "FIRST_CLOSE"),
+               "bar": str(bar_ts)[:19] if bar_ts is not None else ""}
+        md["entry_rebased"] = rec
+        md["confirm_entry_bar"] = rec["bar"]
+        try:
+            if float(bar_tf_min or 0.0) > 0:
+                md["confirm_entry_tf_min"] = float(bar_tf_min)
+        except Exception:
+            pass
+        md["entry_rebase_note_fa"] = (
+            f"ورود روی کلوزِ تأیید بازتنظیم شد: {entry_old:.8g} → {_close:.8g} "
+            f"(Δ {delta:.8g})؛ نردبان هدف با همان طولِ مسیرِ ابزار جابه‌جا شد و "
+            "استاپ ساختاری سرجای خودش ماند.")
+        candidate.metadata = md
+        return rec
+    except Exception:
+        return None
+
+
 def evaluate_confirmation(
     candidate: SignalCandidate, closed_df: pd.DataFrame,
     htf_closed_df: Optional[pd.DataFrame] = None,
@@ -721,7 +821,18 @@ def evaluate_confirmation(
                 _pin_line67 = None
         # R62: after a STALE verdict the old break bar may not confirm again —
         # only a later close, after a First-Time-Back touch of the edge.
-        _stale_after = str(_md.get("stale_after_bar") or "")
+        # ── 10-15 CONFIRM-TIMING LAW (Viva, verbatim: «مگه قرارلر نبود اولین
+        # کلوز بعد از شکست تایید بده ... همه ستاپها این مشکل رو دارن»): the
+        # FTB precondition may only speak for a chain that has ALREADY consumed
+        # a confirmation (a re-confirm after a real pullback). For the FIRST
+        # close after the break it is removed — it was what kept a valid close
+        # from confirming for hours while the market ran away (UNIUSDT·T698813,
+        # ZECUSDT·K259097). The one-close law is the law.
+        _consumed = bool(
+            _md.get("confirmation_consumed") or _md.get("confirmation_sent")
+            or _md.get("confirmation_message_sent") or _md.get("confirmation_chart_sent")
+            or _md.get("technical_confirmation_complete"))
+        _stale_after = str(_md.get("stale_after_bar") or "") if _consumed else ""
         # ── r60.3 THE multi-TF law (Viva 09-30, twice-dictated): the ENTRY
         # break is the TRIGGER timeframe's own break — «شکست همون تایم تریگر
         # واسه ورود باید تایید بشه نه تایم بالاتر ... تایید اما از تایم
@@ -1366,6 +1477,10 @@ def evaluate_confirmation(
             _c61 = float(_row61["close"])
             _bad61 = (_c61 < _bl61 - 0.10 * _atr61) if _sd61 == "UPPER" \
                 else (_c61 > _bl61 + 0.10 * _atr61)
+            # 10-15 note: the reclaim stays judged on the FIRING bar — his
+            # 09-13 law («شکست میاد ولی تأیید نمیده») keeps a settled break bar
+            # confirmable even when later bars dip back inside; the newest
+            # close rides the entry, the live price rides the caption.
             # r61.2 + 10-09 law («ری‌کلیم = مرگ شکست»): the reclaim veto applies
             # to EVERY confirmation path — a fast-lane stamp set hours earlier
             # must not confirm after the close walked back through the broken
@@ -1596,6 +1711,24 @@ def evaluate_confirmation(
     # The executable entry is the confirmation close, not the historical POI
     # midpoint. Reject a late confirmation if its real risk/reward has degraded.
     executable_entry = close
+    # ── 10-15 CONFIRM-TIMING LAW (in-engine, every setup): once the ONE-CLOSE
+    # law has fired, the confirming close IS the entry — the plan is re-anchored
+    # HERE, before any geometry gate, so `ENTRY_AFTER_TARGET` /
+    # `TP_HIT_BEFORE_CONFIRM` / the chase line can never turn a valid first
+    # close into hours of silence (UNIUSDT·T698813: first valid close 15:30,
+    # published 19:05). Never touches a frozen/published plan.
+    if fast_lane or (candidate.metadata or {}).get("tl_fast_break"):
+        try:
+            _rb_bar = str(row["timestamp"])[:19] if "timestamp" in getattr(closed_df, "columns", ()) else None
+            _rb = rebase_confirm_entry(
+                candidate, close, bar_ts=_rb_bar,
+                bar_tf_min=float(frame_tf_minutes or 0.0),
+                source=str((candidate.metadata or {}).get("break_confirm_source") or "FIRST_CLOSE"))
+            if _rb:
+                candidate.metadata["break_confirm_source"] = "ONE_CLOSE_REBASED"
+                executable_entry = float(_rb["to"])
+        except Exception as _rb_exc:
+            print(f"confirm rebase skipped {getattr(candidate, 'signal_id', '?')}: {_rb_exc}")
     # R62-ARENA (audit C6, evaluated): the executable entry stays the NEWEST
     # closed price — that is what a member can actually fill; the confirming
     # close is recorded next to it for the record (a break bar older than two
@@ -1693,8 +1826,15 @@ def evaluate_confirmation(
         _zone_fam_1009 = str(getattr(candidate, "setup_code", "") or "").upper() in {
             "ALBROX", "PINVAL", "PINWALLQ"}
         # Viva Pure Breakout Law: TLBREAK and TECHCLASSIC breakouts confirm immediately on first close!
+        # ── 10-15: a first close beyond the break is FAR from the zone by
+        # nature, and the entry is re-based ON that close (rebase_confirm_entry)
+        # — so the chase line annotates the distance and lets the signal out for
+        # EVERY setup (his ban: no veto line that closes the send gate). The
+        # 3.2-ATR runaway bound stays as the sanity ceiling.
+        _rebased_1009 = bool((candidate.metadata or {}).get("entry_rebased"))
         if chase_atr > max_chase and not _fast_ok and not _is_pure_break_setup \
-                and not (_fresh_break_1009 and _zone_fam_1009):
+                and not (_fresh_break_1009 and _zone_fam_1009) \
+                and not (_rebased_1009 and chase_atr <= _fb_max):
             return reject("ENTRY_TOO_FAR", f"کلوز تأیید {chase_atr:.2f} ATR از زون دور شده؛ Chase مجاز نیست.")
         if chase_atr > max_chase:
             # a fresh single-close break IS far from the zone by nature —

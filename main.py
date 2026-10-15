@@ -1760,7 +1760,15 @@ def _r62_reset_stale(candidate) -> None:
     edge (FTB law, 09-29 §6) or a fresh TOHOM read may confirm it."""
     md = candidate.metadata if isinstance(candidate.metadata, dict) else {}
     bar = md.get("fast_break_bar") or md.get("tohom_confirm_bar")
-    if bar:
+    # ── 10-15 CONFIRM-TIMING LAW: disarming belongs to a chain that ALREADY
+    # published a confirmation (its old bar may not re-fire). A chain that has
+    # never published keeps its armed first-close verdict — otherwise a valid
+    # close is thrown away and the FTB precondition then silences the chain for
+    # hours (UNIUSDT·T698813: 215 min of silence caused exactly by this).
+    _consumed = bool(md.get("confirmation_consumed") or md.get("confirmation_sent")
+                     or md.get("confirmation_message_sent")
+                     or md.get("confirmation_chart_sent"))
+    if bar and _consumed:
         md["stale_after_bar"] = str(bar)[:19]
     for k in ("technical_confirmation_complete", "tl_fast_break", "fast_break_bar",
               "fast_break_close", "confirm_level_used", "tohom", "tohom_note_fa",
@@ -1941,7 +1949,13 @@ def _confirmation_stale_minutes(candidate, closed_df) -> Optional[int]:
         # fast lane stored the frame's integer INDEX, so this guard parsed
         # garbage) and age is measured from the bar's CLOSE on its own TF.
         bar_mins = float(md.get("fast_break_tf_min") or 0.0) or mins
-        stamp = md.get("fast_break_bar") or md.get("confirm_bar")
+        # ── 10-15 CONFIRM-TIMING LAW: the age that matters is the age of the
+        # bar the ENTRY comes from — the confirming close (rebase_confirm_entry
+        # stamps `confirm_entry_bar`). Measuring the OLD break bar instead
+        # condemned a verdict computed seconds earlier on the CURRENT close
+        # («⏳ ۱۶۵ دقیقه» and the ladder was thrown away — UNIUSDT·T698813).
+        stamp = md.get("confirm_entry_bar") or md.get("fast_break_bar") or md.get("confirm_bar")
+        bar_mins = float(md.get("confirm_entry_tf_min") or 0.0) or bar_mins
         if not stamp and closed_df is not None and len(closed_df):
             stamp = closed_df["timestamp"].iloc[-1]
             bar_mins = mins
@@ -2513,23 +2527,19 @@ def monitor_candidates() -> Dict[str, int]:
                     _max3 = float(getattr(SETTINGS, "liveclose_max_pct", 3.0) or 3.0)
                 except Exception:
                     _pct3, _max3 = None, 3.0
-                if _pct3 is not None and _pct3 > _max3 and not _retry_pub_1012 and not candidate.metadata.get("live_entry_note_sent"):
-                    try:
-                        send_setup_update(
-                            candidate, (frames.get((candidate.symbol, candidate.trigger_timeframe)) or (None, closed, None))[1],
-                            note_fa=(f"⚠️ تأییدِ فنی روی {float(candidate.planned_entry):.8g} ثبت شد اما قیمت زنده "
-                                     f"{float(current_price):.8g} است ({_pct3:.2f}٪ فاصله — بیش از حد {_max3}٪). "
-                                     "طبق قانون، ورودِ گذشته‌بازار صادر نمی‌شود؛ این مورد فقط گزارش تحلیلی است. "
-                                     "زنجیره زیر نظر می‌ماند تا داده و قیمتِ تازه هم‌راستا شوند."),
-                            critical=True)
-                    except Exception as exc:
-                        print(f"live-entry note failed {candidate.signal_id}: {exc}")
-                    candidate.metadata["live_entry_veto_pct"] = round(_pct3, 2)
-                    candidate.metadata["live_entry_note_sent"] = True
-                    _r62_reset_stale(candidate)
-                    stats["live_entry_veto"] = stats.get("live_entry_veto", 0) + 1
-                    update_candidate(candidate)
-                    continue
+                # ── 10-15 CONFIRM-TIMING LAW (Viva, verbatim: «نه اینکه یک خط
+                # بنویسی وقتی اینجوری بود وتو بشه و گیت ببنده ارسال به تلگرام
+                # رو»): the divergence between the frozen entry and the live
+                # market may NEVER gate the send. It is a CAPTION fact: the
+                # confirmation goes out with its real numbers, the distance is
+                # printed, and the ladder stays alive. The genuine data-sanity
+                # wires (FRAME_STALE, broken stamp) keep their own verdicts.
+                if _pct3 is not None and _pct3 > _max3 and not _retry_pub_1012:
+                    candidate.metadata["live_entry_drift_pct"] = round(_pct3, 2)
+                    candidate.metadata["live_entry_note_fa"] = (
+                        f"قیمت زنده در لحظهٔ تأیید {float(current_price):.8g} در برابر ورود "
+                        f"{float(candidate.planned_entry):.8g} ({_pct3:.2f}٪ فاصله) — "
+                        "فاصله فقط گزارش می‌شود؛ تأیید و نردبان سرجای خودشان می‌مانند.")
                 _stale_conf = _confirmation_stale_minutes(candidate, closed)
                 if _stale_conf is not None and candidate.metadata.get("stale_stamp_broken"):
                     # F5 fail-closed: the stamp existed but was unreadable —

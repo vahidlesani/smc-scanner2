@@ -163,11 +163,16 @@ def test_main_runs_tohom_outside_fetch_windows():
 
 # ── C5: stale confirmation is disarmed once ─────────────────────────────────
 def test_stale_reset_disarms_the_old_bar():
+    """10-15 law (Viva): disarming is for a chain that ALREADY published — its
+    old bar may not re-fire. A chain that never published keeps its armed
+    first-close verdict (the disarm + FTB pair used to silence valid
+    confirmations for hours: UNIUSDT·T698813, LINKUSDT 1h, XRPUSDT 1h)."""
     import main
     c = make_candidate()
     c.status = "CONFIRMED"
     c.metadata.update({"technical_confirmation_complete": True, "tl_fast_break": True,
-                       "fast_break_bar": "2026-09-30 13:00:00", "viva_state": "S6_CONFIRMED"})
+                       "fast_break_bar": "2026-09-30 13:00:00", "viva_state": "S6_CONFIRMED",
+                       "confirmation_sent": True})
     main._r62_reset_stale(c)
     md = c.metadata
     assert md["stale_after_bar"] == "2026-09-30 13:00:00"
@@ -175,6 +180,12 @@ def test_stale_reset_disarms_the_old_bar():
     assert not md.get("fast_break_bar")
     assert md["viva_state"] == "S2_BREAKOUT_CLOSED"
     assert c.status == "APPROACHING"
+    # a chain that has NEVER published keeps its armed verdict untouched
+    c2 = make_candidate()
+    c2.status = "APPROACHING"
+    c2.metadata.update({"fast_break_bar": "2026-09-30 13:00:00", "tl_fast_break": True})
+    main._r62_reset_stale(c2)
+    assert not (c2.metadata or {}).get("stale_after_bar")
 
 
 def test_stale_minutes_measured_from_bar_close():

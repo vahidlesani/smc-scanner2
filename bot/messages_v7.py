@@ -6728,7 +6728,8 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
         f"🎯 Entry: <b>{_price(candidate.planned_entry)}</b>",
         f"🛑 First Stop: <b>{_price(candidate.sl)}</b>",
         *([f"🎯 PinWall Entry 2: <b>{_price(float((candidate.metadata or {}).get('pinwall_entry2')))}</b>"] if candidate.setup_code in {"PINVAL","PINWALLQ"} and float((candidate.metadata or {}).get("pinwall_entry2") or 0) > 0 else []),
-        f"📈 Live Price: <b>{_price(float((candidate.metadata or {}).get('live_price') or candidate.planned_entry))}</b>",
+        *([f"↔️ فاصله با بازار در لحظهٔ تأیید: {_e(candidate.metadata.get('confirm_live_drift_fa'))}"] if (candidate.metadata or {}).get("confirm_live_drift_fa") else []),
+        f"📈 Live Price: <b>{_price(_live_price_for_message(candidate)) if _live_price_for_message(candidate) > 0 else 'نامعلوم (تیکر در دسترس نبود)'}</b>",
         *[f"🏁 TP{i+1}: {_price(level)} • {weight:.0f}%" for i, (level, weight) in enumerate(zip((candidate.metadata.get('target_ladder') or {}).get('targets', [candidate.tp1, candidate.tp2]), (candidate.metadata.get('target_ladder') or {}).get('weights', [50, 30, 20])))],
         # Viva 09-20 (third time, verbatim): «فرمول ریسک به ریوارد ... اصلا
         # اهمیت نداره» → shown as a read-out only, never as a criterion.
@@ -6785,6 +6786,48 @@ def _bypass_trigger_frame(candidate) -> Optional[pd.DataFrame]:
         return None
 
 
+def _live_price_for_message(candidate, chart_df=None) -> float:
+    """10-15 CONFIRM-TIMING LAW — «قیمت لایو یه چیزه .. ورود یه چیزه .. توی پیام
+    یه چیزه» (Viva, verbatim). The Live Price line must print the market at SEND
+    time — never the frozen entry. ZECUSDT·K259097 printed 1,109.43 (the entry)
+    while the chart box read 1,150.21.
+
+    Priority: the fresh chart close → the venue ticker → the stored live_price.
+    A missing ticker returns 0.0 so the caller can say «نامعلوم» instead of
+    silently printing the entry.
+    """
+    try:
+        if chart_df is not None and not getattr(chart_df, "empty", True) and "close" in chart_df.columns:
+            _v = float(chart_df["close"].iloc[-1])
+            if _v > 0:
+                return _v
+    except Exception:
+        pass
+    _sym = str(getattr(candidate, "symbol", "") or "").upper()
+    for _fn, _path in (("get_ourbit_tickers", "data.ourbit"), ("get_tickers", "data.fetcher")):
+        try:
+            import importlib as _il
+            _mod = _il.import_module(_path)
+            _n = getattr(_mod, _fn, None)
+            if _n is None:
+                continue
+            for _row in _n(use_cache=True) if _fn == "get_ourbit_tickers" else _n():
+                if str(_row.get("symbol") or "").upper() != _sym:
+                    continue
+                _p = float(_row.get("last_price") or 0)
+                if _p > 0:
+                    return _p
+        except Exception:
+            continue
+    try:
+        _stored = float((candidate.metadata or {}).get("live_price") or 0.0)
+        if _stored > 0:
+            return _stored
+    except Exception:
+        pass
+    return 0.0
+
+
 def _send_activation_reply(candidate: SignalCandidate) -> bool:
     """10-10 STAGE-C (his A/B/C design): the stage-B chart (frozen tools) is
     ALREADY in the channel — activation is a zero-fetch, zero-render REPLY to
@@ -6804,11 +6847,14 @@ def _send_activation_reply(candidate: SignalCandidate) -> bool:
         except Exception:
             _b_age73 = ""
         _fill73 = _md73.get("activation_price") or _md73.get("live_price") or candidate.planned_entry
+        # ── 10-15: the activation stamp is NOT the live market. Read the live
+        # price at send time; never fall back to the entry.
         try:
-            if float(_fill73 or 0) > 0:
-                candidate.metadata["live_price"] = float(_fill73)
+            _live73 = _live_price_for_message(candidate)
+            if _live73 > 0:
+                candidate.metadata["live_price"] = float(_live73)
         except Exception:
-            pass
+            _live73 = 0.0
         if _snap73:
             try:
                 from analysis.quality_engine import apply_confirmed_snapshot as _apply73
@@ -6816,8 +6862,11 @@ def _send_activation_reply(candidate: SignalCandidate) -> bool:
             except Exception:
                 pass
         _cap73 = (f"✅ <b>پوزیشن فعال شد</b>\n"
-                  f"💰 قیمت فعال‌سازی: <b>{_price(float(_fill73 or 0))}</b>"
+                  f"💰 قیمت فعال‌سازی (لحظهٔ تأیید): <b>{_price(float(_fill73 or 0))}</b>"
                   + (f" • 🕓 سن چارت: {_b_age73}" if _b_age73 else "") + "\n"
+                  + (f"📈 Live Price (همین حالا): <b>{_price(float(_live73))}</b>\n"
+                     if float(_live73 or 0) > 0 else
+                     "📈 Live Price (همین حالا): <b>نامعلوم (تیکر در دسترس نبود)</b>\n")
                   + _confirmed_chart_caption(candidate))
         _target73 = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
         _mid73 = send_message(_cap73, _target73, reply_to_message_id=_b_txt73)
@@ -7050,15 +7099,16 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
             _l4 = float(candidate.metadata["live_price"] or 0.0)
             _tol4 = float(getattr(SETTINGS, "confirm_live_tol_pct", 0.2) or 0.2)
             _pct4 = _div4(_l4, _e4)
+            # ── 10-15 CONFIRM-TIMING LAW (Viva, verbatim: «نه اینکه یک خط بنویسی
+            # وقتی اینجوری بود وتو بشه و گیت ببنده ارسال به تلگرام رو»): the
+            # drift between the confirm entry and the live market is CAPTION
+            # data — the confirmation and its ladder go out, the distance is
+            # printed on the message. No veto line closes the send gate.
             if _pct4 is not None and _pct4 > _tol4:
-                candidate.metadata["confirm_live_veto_pct"] = round(_pct4, 2)
-                send_setup_update(
-                    candidate, chart_df,
-                    note_fa=(f"⚠️ ورود {_e4:.8g} روی کندل تأیید ثبت شد اما قیمت زنده {_l4:.8g} است "
-                             f"({_pct4:.2f}٪ فاصله — بیش از حد {_tol4}٪ قانون تأیید). "
-                             "طبق قانون، نردبان اجرا فعال نشد؛ این پیام صرفاً ثبت تحلیلیِ تأییدِ گذشته‌بازار است."),
-                    critical=True)
-                return True
+                candidate.metadata["confirm_live_drift_pct"] = round(_pct4, 2)
+                candidate.metadata["confirm_live_drift_fa"] = (
+                    f"ورود {_e4:.8g} روی کندل تأیید · قیمت زنده {_l4:.8g} "
+                    f"({_pct4:.2f}٪ فاصله) — فقط گزارش.")
         except Exception:
             pass
         # ── Viva 09-22 round 16: «زمان تایید ابتدای ابزار لانگ و شورت دقیقا از

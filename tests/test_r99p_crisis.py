@@ -564,3 +564,127 @@ def test_r99q12_spot_zoom_floor_125():
                encoding="utf-8").read()
     assert "spot_window_count" in _rs and "VIVA_SPOT_CANDLE_MIN" in _rs
     assert "MAX_BARS = 240" in _rs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R99q13 — CONFIRM-TIMING LAW (Viva 10-15, verbatim: «مگه قرار نبود اولین کلوز
+# بعد از شکست تایید بده .. همه ستاپها این مشکل رو دارن .. راه حل مشکل باید پیدا
+# بشه و سروقت تایید برسه.. نه اینکه یک خط بنویسی وقتی اینجوری بود وتو بشه و گیت
+# ببنده ارسال به تلگرام رو». Live evidence: T698813 UNIUSDT 30m TECHCLASSIC
+# identified 15:05Z, first valid close 15:30Z, PUBLISHED 19:05Z (215 min late);
+# PINVAL K259097/K151415/K759570 + LINKUSDT 1h (270 min) / XRPUSDT 1h (241 min)
+# on the same two rails: ENTRY_AFTER_TARGET on a ladder built from the pre-break
+# entry, and the stale-stamp disarm that threw the verdict away.
+# ─────────────────────────────────────────────────────────────────────────────
+def _confirm_frame(closes, tf_min=15, line=None, start="2026-10-15 12:00"):
+    import pandas as pd
+    ts = pd.date_range(start, periods=len(closes), freq=f"{tf_min}min")
+    line = float(line if line is not None else closes[0] - 1.0)
+    rows = []
+    for i, c in enumerate(closes):
+        rows.append({"timestamp": ts[i], "open": c - 0.05, "high": c + 0.10,
+                     "low": c - 0.10, "close": c, "volume": 1000.0})
+    df = pd.DataFrame(rows).set_index("timestamp")
+    df.index.name = "timestamp"
+    df["timestamp"] = df.index
+    return df, line
+
+
+def _confirm_cand(setup, direction="LONG", entry=100.3, tp1=100.9, tp2=104.0,
+                  sl=98.0, line=100.5, created="2026-10-15 12:00", extra=None):
+    from test_v7 import make_candidate
+    cand = make_candidate(status="NEAR_CONFIRM")
+    cand.setup_code = setup
+    cand.direction = direction
+    cand.trigger_timeframe = "30m"
+    cand.entry_zone_bottom, cand.entry_zone_top = 100.0, 100.6
+    cand.planned_entry, cand.sl, cand.tp1, cand.tp2 = entry, sl, tp1, tp2
+    cand.created_at = created
+    cand.metadata.update({"atr": 0.60, "confirm_tf": "15m", "touched": True,
+                          "viva_break_line": line, "viva_breakout_line": line,
+                          "break_edge": "UPPER", "viva_state": "S2_BREAKOUT_CLOSED"})
+    if extra:
+        cand.metadata.update(extra)
+    return cand
+
+
+def _run(cand, closes, line=None):
+    """Pad to >= 20 in-scan bars (the engine's data floor) with a settled
+    pre-alert base, so the verify frame is realistic."""
+    from analysis.quality_engine import evaluate_confirmation
+    pad = [99.9, 100.0, 100.02, 100.04, 99.98] * 6            # 30 pre-break bars
+    df, _line = _confirm_frame(pad + list(closes), tf_min=15, start="2026-10-15 04:00",
+                               line=(line if line is not None else cand.metadata["viva_break_line"]))
+    return evaluate_confirmation(cand, df, frame_tf_minutes=15.0)
+
+
+def test_r99q13_first_close_after_break_confirms_every_setup():
+    """The first valid close beyond the break edge confirms IMMEDIATELY for every
+    setup — the pre-break ladder (`tp1` behind that close) may never veto it: the
+    entry is re-based on the confirming close, TP1 is rebuilt ahead of it and the
+    tool's structural target (tp2) stays. T698813 shape."""
+    for setup in ("TECHCLASSIC", "PINVAL", "TLBREAK", "ALBROX"):
+        cand = _confirm_cand(setup, tp1=100.9, tp2=104.0, entry=100.3)
+        ok, c2, reason = _run(cand, [99.9, 100.0, 100.05, 100.1, 101.6])
+        assert ok is True, f"{setup}: {reason}"
+        md = c2.metadata or {}
+        assert md.get("break_confirm_source") == "ONE_CLOSE_REBASED", setup
+        rec = md.get("entry_rebased") or {}
+        assert abs(float(rec.get("to")) - 101.6) < 1e-9, setup
+        assert abs(c2.planned_entry - 101.6) < 1e-9, setup
+        assert c2.tp1 > c2.planned_entry, setup          # the veto can never re-fire
+        assert abs(c2.tp2 - 104.0) < 1e-9, setup         # the tool's target is kept
+        assert str(md.get("confirm_entry_bar") or "")[:4] == "2026", setup
+        assert float(md.get("confirm_entry_tf_min") or 0) == 15.0, setup
+
+
+def test_r99q13_stale_stamp_never_disarms_a_first_close():
+    """UNIUSDT·T698813: `stale_after_bar` + no FTB touch used to leave the chain
+    silent for 215 minutes. A chain that never published keeps confirming on the
+    first close beyond the edge."""
+    for setup in ("TECHCLASSIC", "PINVAL"):
+        cand = _confirm_cand(setup, tp1=100.9, tp2=104.0, entry=100.3,
+                             extra={"stale_after_bar": "2026-10-15 12:15:00"})
+        ok, c2, reason = _run(cand, [99.9, 100.0, 100.05, 100.1, 101.6])
+        assert ok is True, f"{setup}: {reason}"
+
+
+def test_r99q13_ftb_still_guards_a_republished_confirm():
+    """The FTB precondition survives for a chain that ALREADY published — its old
+    bar may not re-fire without a first-time-back touch."""
+    cand = _confirm_cand("TECHCLASSIC", tp1=100.9, tp2=104.0, entry=100.3,
+                         extra={"stale_after_bar": "2026-10-15 12:15:00",
+                                "confirmation_sent": True})
+    ok, c2, reason = _run(cand, [99.9, 100.0, 100.05, 100.1, 101.6])
+    assert ok is False, reason
+
+
+def test_r99q13_rebase_never_moves_a_frozen_plan():
+    from analysis.quality_engine import rebase_confirm_entry
+    cand = _confirm_cand("TECHCLASSIC", entry=100.3, tp1=100.9, tp2=104.0)
+    cand.metadata["confirmed_snapshot"] = {"entry": 100.3, "sl": 98.0}
+    assert rebase_confirm_entry(cand, 101.6) is None
+    assert abs(cand.planned_entry - 100.3) < 1e-9
+
+
+def test_r99q13_rebase_refuses_a_broken_ladder():
+    """A ladder whose final target sits behind its own entry is a broken tool —
+    the rebase refuses and the geometry veto keeps its verdict."""
+    from analysis.quality_engine import rebase_confirm_entry
+    cand = _confirm_cand("PINVAL", entry=100.3, tp1=99.6, tp2=99.0)
+    assert rebase_confirm_entry(cand, 101.6) is None
+
+
+def test_r99q13_live_price_is_never_the_entry():
+    """«قیمت لایو یه چیزه .. ورود یه چیزه .. توی پیام یه چیزه» — the Live Price
+    line reads the market (frame close / venue ticker), never the frozen entry
+    (ZECUSDT·K259097 printed 1,109.43 while the chart read 1,150.21)."""
+    import pandas as pd
+    from bot.messages_v7 import _live_price_for_message
+    cand = _confirm_cand("PINVAL", entry=1109.43)
+    frame = pd.DataFrame({"timestamp": pd.date_range("2026-10-15 12:00", periods=3, freq="5min"),
+                          "close": [1140.0, 1145.0, 1150.21]})
+    assert abs(_live_price_for_message(cand, frame) - 1150.21) < 1e-9
+    # no frame + no venue answer ⇒ 0.0 (the message says «نامعلوم») — never the entry
+    assert _live_price_for_message(cand, None) != cand.planned_entry or \
+        _live_price_for_message(cand, None) == 0.0
