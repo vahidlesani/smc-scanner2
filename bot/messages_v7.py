@@ -2737,19 +2737,27 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # R99l (Viva 10-15: the right side sits too empty): tighter
         # future on futures; spot keeps its own window.
         future = 45 if _is_spot else (18 if _cfm73 else 16)
-        # R99o (Viva 10-15, R99i-pattern consult): TC owns its window — the
+        # R99o/R99p (Viva 10-15, R99i-pattern consult): TC/ALBROX own their
+        # windows (r65 widens the FRAME to the earliest stored anchor — a
+        # far-major context line would hold the VIEW at 6 weeks; the view
+        # follows the LEAD pattern's span instead) — the
         # shared count ignored tc_candles_for/tc_zoom_window (ZERO callers).
         # xlim only (coords intact, no remap); fail-open to shared behavior.
         _xlim99o = None
         try:
-            if (str(getattr(candidate, "setup_code", "") or "").upper()
-                    == "TECHCLASSIC" and not _is_spot):
-                from analysis.techclassic import tc_candles_for as _tcc99o
-                from analysis.techclassic import tc_zoom_window as _tcz99o
+            _setup99o = str(getattr(candidate, "setup_code", "") or "").upper()
+            if _setup99o in ("TECHCLASSIC", "ALBROX") and not _is_spot:
+                if _setup99o == "TECHCLASSIC":
+                    from analysis.techclassic import tc_candles_for as _tcc99o
+                    from analysis.techclassic import tc_zoom_window as _tcz99o
+                    _span99o = (candidate.metadata or {}).get("tc_pattern_span") or 0
+                else:
+                    from analysis.albrox import albrox_candles_for as _tcc99o
+                    from analysis.albrox import albrox_zoom_window as _tcz99o
+                    _span99o = (candidate.metadata or {}).get("albrox_pattern_span") or 0
                 _tf99o = str(((candidate.metadata or {}).get("chart_view_tf")
                                or getattr(candidate, "trigger_timeframe", "")
                                or "15m")).lower()
-                _span99o = (candidate.metadata or {}).get("tc_pattern_span") or 0
                 _cnt99o = int(_tcc99o(_tf99o, _span99o) or 0)
                 _n99o = int(count or 0)
                 if _n99o > 10 and _cnt99o > 10:
@@ -3449,6 +3457,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _pblue9 = bool(_atr9 > 0 and _d9 and min(_d9) > 2.0 * _atr9)
                 except Exception:
                     _pblue9 = False
+            # R99p (his R67.1 «پررنگ/کمرنگ», completed for the main set): a
+            # far SHAPE (>2 ATR, the _pblue9 test — singles excluded) paints
+            # faint, same hue. Paint-only key: ylim-framing (4523) untouched.
+            if _pblue9 and not _pat.get("far_major"):
+                try:
+                    _pat["far_faint99p"] = True
+                except Exception:
+                    pass
             _flat8 = []
             _brk8 = []
             for _ln in _lns:
@@ -3537,9 +3553,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # spec §13: parent patterns thick & solid, children thin;
                 # r59 far-majors sit between (a thin BLUE background major)
                 # R67.1: faint far / thin child / bold parent — same hue
-                _lw8 = 1.3 if _pat.get("far_major") else (
+                _lw8 = 1.3 if (_pat.get("far_major") or _pat.get("far_faint99p")) else (
                     1.2 if _pat.get("child") else 2.0)
-                _al8 = 0.55 if _pat.get("far_major") else (
+                _al8 = 0.55 if (_pat.get("far_major") or _pat.get("far_faint99p")) else (
                     0.60 if _pat.get("child") else 0.95)
                 # R16 phase 3: draw the CALIBRATED geometry. A log-fitted line
                 # is a curve on a log axis, so it is painted as a polyline

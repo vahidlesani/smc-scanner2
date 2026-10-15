@@ -577,17 +577,19 @@ def candidate_status(signal_id: str) -> str:
         return ""
 
 
-def chains_last_24h(symbol: str, setup_code: str, trigger_tf: str | None = None) -> int:
+def chains_last_24h(symbol: str, setup_code: str, trigger_tf: str | None = None, direction: str | None = None) -> int:
     """How many alert-chains this symbol+setup (+trigger, when given) started
-    in the last 24 hours — Viva's rotating-licence capacity is per timeframe."""
+    in the last 24 hours — Viva's rotating-licence capacity is per timeframe.
+    R99p: +direction lane (crash-day: stale LONGs must not veto fresh SHORTs)."""
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
     since = (_dt.now(_tz.utc) - _td(hours=24)).isoformat()
     with _connection() as conn:
         row = conn.execute(
             "SELECT COUNT(*) AS n FROM signal_candidates WHERE symbol=? AND setup_code=? "
-            "AND (? = '' OR trigger_tf=?) AND status<>'DEAD_GATE' AND created_at>=?",
+            "AND (? = '' OR trigger_tf=?) AND (? = '' OR direction=?) "
+            "AND status<>'DEAD_GATE' AND created_at>=?",
             (symbol.upper(), setup_code.upper(), (trigger_tf or "").lower(),
-             (trigger_tf or "").lower(), since),
+             (trigger_tf or "").lower(), (direction or "").upper(), (direction or "").upper(), since),
         ).fetchone()
     try:
         return int(row["n"])
@@ -645,3 +647,89 @@ def get_resolved_candidates(limit: int = 400) -> List[SignalCandidate]:
             """, (int(limit),)
         ).fetchall()
     return [SignalCandidate.from_json(row["payload"]) for row in rows]
+def _cluster_dupe_rows(rows):
+    """Same (symbol, setup, tf, direction) + zone-overlap (0.2 ATR / 1e-4 rel
+    — the quiet tolerance): keep newest, retire the rest. Pure (testable)."""
+    _retire = set()
+    _groups = {}
+    for _r in rows or []:
+        try:
+            _groups.setdefault((
+                str(_r.get("sym") or "").upper(),
+                str(_r.get("setup") or "").upper(),
+                str(_r.get("tf") or "").lower(),
+                str(_r.get("direction") or "").upper()), []).append(_r)
+        except Exception:
+            continue
+    for _grows in _groups.values():
+        try:
+            _grows.sort(key=lambda r: str(r.get("created") or ""), reverse=True)
+        except Exception:
+            pass
+        _kept = []
+        for _r in _grows:
+            try:
+                _mid = float(_r.get("mid") or 0)
+            except Exception:
+                _kept.append(_r)  # never retire on doubt
+                continue
+            _dup = False
+            for _k in _kept:
+                try:
+                    _kmid = float(_k.get("mid") or 0)
+                    _tol = max(0.2 * float(_k.get("atr") or 0), abs(_kmid) * 1e-4)
+                    if abs(_mid - _kmid) <= _tol:
+                        _dup = True
+                        break
+                except Exception:
+                    continue
+            if _dup and _r.get("sid"):
+                _retire.add(_r.get("sid"))
+            else:
+                _kept.append(_r)
+    return _retire
+
+
+def retire_open_duplicate_chains() -> int:
+    """R99p boot-hygiene (Viva 10-15, the #18 silence): the exempt era minted
+    chain-per-scan duplicates (no absorb!) that now clog the per-tuple quota.
+    Per (symbol, setup, tf, direction): open rows sharing a ZONE keep the
+    NEWEST; the rest retire to EXPIRED. Permanent law: same-tuple+dir+zone+
+    open can never be two scenarios. Returns retired count. Fail-open."""
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        _now = _dt.now(_tz.utc).isoformat()
+        with _connection() as conn:
+            _rows = conn.execute(
+                "SELECT signal_id, symbol, setup_code, trigger_tf, direction,"
+                " created_at, payload FROM signal_candidates "
+                "WHERE status IN ('EDUCATIONAL','APPROACHING') AND expires_at>?",
+                (_now,)).fetchall()
+        _dicts = []
+        for _r in _rows:
+            try:
+                _c = SignalCandidate.from_json(_r["payload"])
+                _md = _c.metadata or {}
+                _mid = (float(_c.entry_zone_bottom or 0)
+                        + float(_c.entry_zone_top or 0)) / 2
+                _dicts.append({"sid": _r["signal_id"], "sym": _r["symbol"],
+                               "setup": _r["setup_code"], "tf": _r["trigger_tf"],
+                               "direction": _r["direction"], "mid": _mid,
+                               "atr": float(_md.get("atr") or 0),
+                               "created": _r["created_at"]})
+            except Exception:
+                continue
+        _retire = _cluster_dupe_rows(_dicts)
+        _n = 0
+        for _sid in _retire:
+            try:
+                set_status(str(_sid), "EXPIRED")
+                _n += 1
+            except Exception:
+                continue
+        if _n:
+            print(f"R99p boot-hygiene: retired {_n} duplicate open chains")
+        return _n
+    except Exception as _exc:
+        print(f"R99p boot-hygiene skipped: {_exc}")
+        return 0

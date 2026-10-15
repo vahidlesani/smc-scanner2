@@ -216,8 +216,12 @@ _ALBROX_TYPE_ORDER = {"WEDGE": 0, "CHANNEL": 0, "TRIANGLE": 0, "FLAG": 1,
                       "PENNANT": 1, "TRENDLINE": 2, "DOUBLE": 3, "RANGE": 4}
 
 
-def albrox_select_patterns(patterns, live_idx):
-    """Dedupe → drop stale/noise → keep top 2 (touches, recency, type)."""
+def albrox_select_patterns(patterns, live_idx, live_price=None, atr=None):
+    """R99p v2 (Viva 10-15, LTC 4H: a 6-week far line led while the clear
+    near wedge lost): dedupe → drop stale/noise/far-single → rank NEAREST
+    first (his «nearest (most important)»), touches second → top 2.
+    Far SHAPES survive (far-major context, painted faint); far SINGLE
+    lines die (the nowhere-line class). live/atr unknown → touches rank."""
     _seen, _uniq = set(), []
     for _p in (patterns or []):
         if not isinstance(_p, dict):
@@ -251,6 +255,10 @@ def albrox_select_patterns(patterns, live_idx):
             continue  # stale
         if _touches == 0 and (_x1 - _x0) < 20:
             continue  # empty noise
+        if len(_lines) == 1 and not _p.get("pivots_ts"):
+            _d99p = albrox_pattern_distance_atr(_p, _live, live_price, atr)
+            if _d99p != float("inf") and _d99p > 2.5:
+                continue  # far nowhere-single (r59's own 2.5 ATR)
         _filt.append(_p)
 
     def _key(_p):
@@ -261,7 +269,8 @@ def albrox_select_patterns(patterns, live_idx):
         except Exception:
             _t, _x = 0, 0
         _fam = str(_p.get("type") or _p.get("name") or "").upper().split("_")[0]
-        return (-_t, -_x, _ALBROX_TYPE_ORDER.get(_fam, 5))
+        return (albrox_pattern_distance_atr(_p, _live, live_price, atr),
+                -_t, -_x, _ALBROX_TYPE_ORDER.get(_fam, 5))
 
     _filt.sort(key=_key)
     return _filt[:2]
@@ -290,12 +299,23 @@ def albrox_refine_geometry(candidate, bundle=None):
                             if isinstance(L, dict))
             except Exception:
                 _live = 0
-        _kept = albrox_select_patterns(_pats, _live)
+        _live_px99p, _atr99p = None, None
+        try:
+            if bundle is not None:
+                _fr99p = bundle.get(getattr(candidate, "trigger_timeframe", ""))
+                if _fr99p is not None and len(_fr99p) >= 15:
+                    _live_px99p = float(_fr99p["close"].iloc[-1])
+                    _atr99p = float((_fr99p["high"] - _fr99p["low"]).tail(14).mean())
+        except Exception:
+            _live_px99p, _atr99p = None, None
+        _kept = albrox_select_patterns(_pats, _live, _live_px99p, _atr99p)
         _kept_ids = set(map(id, _kept))
         md["render_patterns"] = _kept
         try:
+            # R99p: the span follows the LEAD (kept[0], nearest) — a far-major
+            # context line must not hold the view at 6 weeks.
             _spans = [max(int(L.get("x1") or 0) - int(L.get("x0") or 0), 0)
-                      for _p in _kept for L in (_p.get("lines") or [])
+                      for _p in _kept[:1] for L in (_p.get("lines") or [])
                       if isinstance(L, dict)]
             md["albrox_pattern_span"] = max(_spans) if _spans else 0
         except Exception:
@@ -322,3 +342,58 @@ def albrox_refine_geometry(candidate, bundle=None):
         except Exception:
             pass
         return candidate
+def _albrox_line_y_at(ln, x):
+    try:
+        return float(ln.get("intercept") or 0) + float(ln.get("slope") or 0) * float(x)
+    except Exception:
+        return None
+
+
+def albrox_pattern_distance_atr(pat, live_idx, live_price, atr):
+    """Nearest distance (ATR) of the pattern to the live price. +inf unknown."""
+    try:
+        if not atr or float(atr) <= 0 or live_price is None:
+            return float("inf")
+        _lp, _at = float(live_price), float(atr)
+        _lines = [L for L in (pat.get("lines") or []) if isinstance(L, dict)]
+        if _lines:
+            _ds = []
+            for L in _lines:
+                _y = _albrox_line_y_at(L, live_idx)
+                if _y is not None:
+                    _ds.append(abs(_y - _lp) / _at)
+            return min(_ds) if _ds else float("inf")
+        for _k in ("pivots_ts", "pivots"):
+            _pvs = pat.get(_k) or []
+            if _pvs:
+                try:
+                    return min(abs(float(p.get("price") or 0) - _lp) / _at
+                               for p in _pvs if isinstance(p, dict))
+                except Exception:
+                    pass
+        _hi = pat.get("hi", pat.get("top", pat.get("high")))
+        _lo = pat.get("lo", pat.get("bottom", pat.get("low")))
+        if _hi is not None and _lo is not None:
+            return abs((float(_hi) + float(_lo)) / 2 - _lp) / _at
+        return float("inf")
+    except Exception:
+        return float("inf")
+
+
+def albrox_candles_for(tf, pattern_span):
+    """ALBROX candle count (own engine, R99p): detected span + 40 context bars
+    (same shape as TC's — duplicated per his per-setup law, not imported)."""
+    try:
+        return max(1, int(pattern_span or 0) + 40)
+    except Exception:
+        return 300
+
+
+def albrox_zoom_window(n_bars, count, pad_right_frac=0.12):
+    """ALBROX zoom (own engine, R99p): (x_from, x_to), pattern-anchored right."""
+    try:
+        _n, _c = int(n_bars), max(1, int(count))
+        _x_to = _n - 1 + int(_c * float(pad_right_frac))
+        return (max(0, _x_to - _c), _x_to)
+    except Exception:
+        return (0, max(0, int(n_bars or 0) - 1))

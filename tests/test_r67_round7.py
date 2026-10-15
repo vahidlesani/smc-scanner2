@@ -408,7 +408,9 @@ def test_far_edges_are_side_hues_never_blue():
         encoding="utf-8").read()
     assert "_PATTERN_BLUE if _pblue9" not in src
     assert "_cTop9 = _cBot9 = _PATTERN_BLUE" not in src
-    assert "_lw8 = 1.3 if _pat.get(\"far_major\")" in src
+    # R99p: the faint hierarchy now also covers main-set far shapes
+    # (paint-only key far_faint99p) — same hue, still never blue.
+    assert "_lw8 = 1.3 if (_pat.get(\"far_major\") or _pat.get(\"far_faint99p\"))" in src
 
 
 # ── ⑧ R67.2 — Railway cost gates (Viva 10-04) ──────────────────────────────

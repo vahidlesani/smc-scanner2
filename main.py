@@ -528,8 +528,10 @@ def run_discovery_scan() -> Dict[str, int]:
                             print(f"chain absorb warning {candidate.symbol}/{candidate.setup_code}: {exc}")
                         continue
                     try:
+                        # R99p: direction lane — stale LONGs must not veto fresh SHORTs.
                         used = chains_last_24h(candidate.symbol, candidate.setup_code,
-                                         str(candidate.trigger_timeframe or "").lower())
+                                         str(candidate.trigger_timeframe or "").lower(),
+                                         str(candidate.direction or ""))
                     except Exception:
                         used = 0
                     if used >= max(1, int(getattr(SETTINGS, "chains_per_symbol_setup_24h", 3) or 3)):
@@ -755,12 +757,27 @@ def run_discovery_scan() -> Dict[str, int]:
             _t9 = tally or {}
             _seen9 = sum(t["seen"] for t in _t9.values())
             _low9 = sum(t["low_score"] for t in _t9.values())
+            # R99p (his «یعنی چی؟؟»): the pulse hid 9 counters — show them.
+            _dup9 = sum(t.get("dup", 0) for t in _t9.values())
+            _add9 = sum(t.get("add_failed", 0) for t in _t9.values())
+            _edf9 = sum(t.get("educate_failed", 0) for t in _t9.values())
+            _lic9 = " ".join(f"{_sc}:{_t.get('license_cap', 0)}"
+                             for _sc, _t in sorted(_t9.items())
+                             if _t.get("license_cap"))
             _sm9(
                 f"🩺 پالس اسکن • {len(symbols)} نماد • seen={_seen9} • "
                 f"absorbed={stats.get('chain_absorbed', 0)} • "
                 f"liccap={stats.get('chain_license_cap', 0)} • "
                 f"quiet={stats.get('same_zone_quiet', 0)} • "
                 f"low_score={_low9} • errors={stats.get('errors', 0)} • "
+                f"dup={_dup9} gated={stats.get('gated', 0)} "
+                f"sep2={stats.get('license_sep_block', 0)} "
+                f"dead={stats.get('dead_gate', 0)} "
+                f"pretp1={stats.get('suppressed_pre_tp1', 0)} "
+                f"budget={stats.get('edu_cycle_deferred', 0)} "
+                f"tier={stats.get('tier_cap_skip', 0)} "
+                f"addfail={_add9} edufail={_edf9} • "
+                f"liccap_by={_lic9 or '-'} • "
                 f"پیام نیامد چون هیچ ستاپی از گیت‌ها عبور نکرد",
                 CHAT_ID_RESULTS or CHAT_ID_ADMIN,
             )
@@ -3052,6 +3069,14 @@ def main() -> None:
                           f"schema problems will be retried next cycle.")
                 else:
                     time.sleep(5 * _attempt)
+    # R99p (Viva 10-15, the #18 silence): retire exempt-era chain-per-scan
+    # duplicates (same zone+direction open dupes, keep newest) so fresh
+    # scenarios flow again. Loud-but-never-fatal like every boot step.
+    try:
+        from database.candidate_store import retire_open_duplicate_chains as _rd99p
+        _rd99p()
+    except Exception as _rd99p_exc:
+        print(f"⚠️ Boot hygiene skipped: {_rd99p_exc}")
     # Viva 2026-09-11: deploy heartbeat — the DB becomes proof-of-life, so we
     # never have to guess whether the NEW build is actually running.
     try:

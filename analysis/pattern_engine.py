@@ -834,7 +834,7 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
                     "event_id": f"{side}|{pattern}|{STATE_VIOLATED}|{ev_ref9}",
                     "violation_fa": (
                         f"الگوی {PATTERN_FA.get(pattern, pattern)} در تایم‌فریم {pattern_tf} "
-                        f"نقض شد — بریک و کلوز از ضلعِ {'بالا' if side == 'upper' else 'پایین'} "
+                        f"نقض شد — عبور زنده (بدون کلوز) از ضلعِ {'بالا' if side == 'upper' else 'پایین'} "
                         "در خلافِ ماهیت الگو است. هیچ سیگنالی تأیید نمی‌شود؛ فقط هشدار."),
                 })
                 continue
@@ -1117,6 +1117,19 @@ def _cooldown_ok(key: str, state: str) -> bool:
     _seen_store()
     return True
 
+
+
+def _preview_anchor_seen(symbol: str, pattern_tf: str, pattern: str, side: str) -> bool:
+    """R99p: was a NEAR/READY preview alert sent for (symbol|tf|pattern|side)?
+    The preview path stamps the same key shape via _cooldown_ok — a violation
+    without an anchor is a ghost (his 09-13 law). Fail-quiet (False)."""
+    try:
+        _seen_map = _seen()
+        _base = f"{str(symbol or '?')}|{str(pattern_tf or '?')}|{str(pattern or '?')}"
+        return (f"{_base}|{STATE_NEAR}|{str(side or '?')}" in _seen_map
+                or f"{_base}|{STATE_READY}|{str(side or '?')}" in _seen_map)
+    except Exception:
+        return False
 
 def choose_primary(events: List[Dict]) -> List[Dict]:
     """One alert per (symbol, pattern_tf): the edge price is CLOSEST to.
@@ -2259,6 +2272,21 @@ def send_prebreak_alerts(bundle) -> Dict[str, int]:
             if ev.get("warn_only"):
                 # Viva 09-24: violation = light warn message, no preview chain
                 counts["violated"] = counts.get("violated", 0) + 1
+                # R99p anchor law (his «بی‌سر و ته»): a violation may only
+                # warn when its pattern was ANNOUNCED (NEAR/READY preview
+                # sent for this symbol|tf|pattern|side) — unannounced
+                # failures stay silent (a real close still fires the
+                # r54 counter-signal; the tradeable event lives).
+                try:
+                    _anch99p = _preview_anchor_seen(
+                        str(bundle.symbol), str(ev.get("pattern_tf") or ""),
+                        str(ev.get("pattern") or ""), str(ev.get("side") or ""))
+                except Exception:
+                    _anch99p = False
+                if not _anch99p:
+                    counts["violated_unannounced"] = counts.get(
+                        "violated_unannounced", 0) + 1
+                    continue
                 try:
                     from bot.messages_v7 import send_pattern_violation
                     send_pattern_violation(ev)
