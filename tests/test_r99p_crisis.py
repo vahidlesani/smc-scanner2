@@ -534,3 +534,33 @@ def test_r99q9_both_edges_lines_speak_the_render_contract():
     assert 'q.get("ts") or q.get("timestamp")' in _mv
     _ind = open(os.path.join(_root, "analysis", "indicators.py"), encoding="utf-8").read()
     assert "def _ts_at(" in _ind and "_ts_at(df, i)" in _ind
+
+
+def test_r99q12_spot_zoom_floor_125():
+    """His 10-15 ruling on the FIL 8h spot chart: «تعداد کندل ۵۰ تا است ..
+    کمه .. باید از ۱۲۵ باشه به بالا بر اساس پترن .. زیر ۱۰۰ خیلی»."""
+    from tools.render_spot_cryptocove import spot_window_count, SPOT_WINDOW_CAP
+    # a small pattern must still get the 125-candle floor
+    assert spot_window_count("8h", 240, 300) == 125
+    assert spot_window_count("4h", 200, 300) == 125
+    assert spot_window_count("1d", 295, 300) == 125
+    # a bigger pattern earns a wider frame, up to its own cap
+    assert spot_window_count("8h", 150, 300) == 171
+    assert spot_window_count("8h", 60, 300) == SPOT_WINDOW_CAP["8h"]
+    # the hard floor can never be configured below 100
+    import os as _os
+    _keep = _os.environ.get("VIVA_SPOT_CANDLE_MIN")
+    try:
+        _os.environ["VIVA_SPOT_CANDLE_MIN"] = "40"
+        assert spot_window_count("8h", 295, 300) == 100   # the absolute hard floor
+    finally:
+        if _keep is None:
+            _os.environ.pop("VIVA_SPOT_CANDLE_MIN", None)
+        else:
+            _os.environ["VIVA_SPOT_CANDLE_MIN"] = _keep
+    # the spot renderer really uses it (no more 120-bar narrow frame)
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _rs = open(os.path.join(_root, "tools", "render_spot_cryptocove.py"),
+               encoding="utf-8").read()
+    assert "spot_window_count" in _rs and "VIVA_SPOT_CANDLE_MIN" in _rs
+    assert "MAX_BARS = 240" in _rs

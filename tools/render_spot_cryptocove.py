@@ -43,11 +43,34 @@ INK = "#1F2328"
 MUTED = "#6B675F"
 LIVE_PINK = "#E0197D"
 
-# زوم: چپ = پیوت اول الگو منهای این تعداد کندل کانتکست؛ راست = این تعداد
-# کندلِ تصویرِ آینده (رفرنس‌ها: قابِ جمع و کندلِ درشت، نه شش هفته تاریخ).
+# زوم اسپات — قانون ۱۰-۱۵ (verbatim): «تعداد کندل ۵۰ تا است .. کمه ... باید
+# از ۱۲۵ باشه به بالا بر اساس پترن .. زیر ۱۰۰ خیلی». پس قاب اسپات:
+#   کفِ سخت = ۱۲۵ کندل (env: VIVA_SPOT_CANDLE_MIN)، پهن‌تر اگر خودِ پترن
+#   بخواهد (اسپن پترن + پدها)، و سقفِ نرم per تایم‌فریم.
+# چپ = پیوت اول الگو منهای این تعداد کندل کانتکست؛ راست = کندلِ آینده.
 PAD_LEFT_BARS = 8
 PAD_RIGHT_BARS = 14
-MAX_BARS = 120
+MAX_BARS = 240                      # سقفِ کلی (بالاترین سقف per-TF)
+SPOT_WINDOW_CAP = {"1m": 200, "3m": 200, "5m": 200, "15m": 220, "30m": 220,
+                   "1h": 230, "2h": 230, "4h": 220, "6h": 230, "8h": 260,
+                   "12h": 260, "1d": 260, "3d": 300, "1w": 300}
+
+
+def spot_window_count(tf, x0p: int, n: int) -> int:
+    """چند کندل در قاب اسپات؟ کف ۱۲۵، بر اساس اسپن پترن، سقف per تایم‌فریم."""
+    import os as _os
+    try:
+        _floor = int(str(_os.getenv("VIVA_SPOT_CANDLE_MIN", "") or "").strip() or 125)
+    except Exception:
+        _floor = 125
+    _floor = max(100, _floor)          # زیر ۱۰۰ «خیلی» غلط است — قفل سخت
+    try:
+        _span = max(0, int(n) - 1 - int(x0p or 0))
+        _want = _span + PAD_LEFT_BARS + PAD_RIGHT_BARS
+        _cap = SPOT_WINDOW_CAP.get(str(tf or "").lower(), 240)
+        return int(max(_floor, min(_want, _cap)))
+    except Exception:
+        return 125
 
 EN_TITLE = {
     "CHANNEL_FLAT": "Parallel Channel", "CHANNEL": "Parallel Channel",
@@ -140,12 +163,16 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     l = df["low"].astype(float).to_numpy()
     c = df["close"].astype(float).to_numpy()
 
-    # ── 1) قاب: از پیوت اول همین الگو تا کمی بعد از آخرین کندل
+    # ── 1) قاب: کف ۱۲۵ کندل (قانون ۱۰-۱۵)، پهن‌تر اگر پترن بخواهد
     x0p = int(a.get("x0") or 0)
-    x_from = max(0, x0p - PAD_LEFT_BARS)
     x_to = n - 1 + PAD_RIGHT_BARS
-    if x_to - x_from > MAX_BARS:
+    _want_count = spot_window_count(tf, x0p, n)
+    _pat_from = max(0, x0p - PAD_LEFT_BARS)
+    x_from = min(_pat_from, max(0, x_to - _want_count))
+    if x_to - x_from > MAX_BARS:            # سقفِ کلی (when the pattern is huge)
         x_from = max(0, x_to - MAX_BARS)
+    if x_to - x_from < min(125, n):         # قفل سخت: هرگز زیر کفِ قانون
+        x_from = max(0, x_to - min(125, n))
     n_show = slice(x_from, n)
     d_lo, d_hi = float(np.min(l[n_show])), float(np.max(h[n_show]))
     d_span = math.log(max(d_hi, 1e-12)) - math.log(max(d_lo, 1e-12))

@@ -2451,14 +2451,42 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         except Exception:
             pass
         if _is_spot:
-            # CryptoCove Spot Zoom Law: dynamically encompass the true macro peak (160–350 bars)
+            # CryptoCove Spot Zoom Law: dynamically encompass the true macro peak.
+            # R99q12 (his 10-15 verbatim on FIL 8h: «تعداد کندل ۵۰ تا است ..
+            # کمه ... باید از ۱۲۵ باشه به بالا بر اساس پترن .. زیر ۱۰۰ خیلی»):
+            # the frame can never be thinner than the 125-candle floor, and it
+            # widens to include the pattern's own origin.
             try:
+                from tools.render_spot_cryptocove import (spot_window_count as _spc12,
+                                                          PAD_RIGHT_BARS as _pr12)
                 _highs_all = df["high"].astype(float).to_numpy()
                 _n_all = len(df)
                 _search_lim = max(15, int(_n_all * 0.85))
                 _peak_idx = int(np.argmax(_highs_all[:_search_lim]))
                 _bars_from_peak = _n_all - _peak_idx
                 _lookback = min(_n_all, max(180, _bars_from_peak + 25))
+                try:
+                    _md12 = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+                    _x0p12 = 0
+                    for _k12 in ("spot_x0", "pattern_x0", "x0"):
+                        try:
+                            _x0p12 = int(_md12.get(_k12) or 0)
+                        except Exception:
+                            _x0p12 = 0
+                        if _x0p12:
+                            break
+                    if not _x0p12:      # the drawn geometry's own origin
+                        _xs12 = [int(L.get("x0") or 0)
+                                 for _q12 in (_md12.get("render_patterns") or [])
+                                 if isinstance(_q12, dict)
+                                 for L in (_q12.get("lines") or [])
+                                 if isinstance(L, dict)]
+                        _x0p12 = min(_xs12) if _xs12 else 0
+                    if _x0p12:
+                        _lookback = max(_lookback, _spc12(_chart_tf, _x0p12, _n_all))
+                except Exception:
+                    pass
+                _lookback = max(_lookback, min(_n_all, 125))   # the hard floor
             except Exception:
                 _lookback = min(len(df), 320)
         else:
