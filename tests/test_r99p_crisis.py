@@ -466,18 +466,25 @@ def test_r99q9_candle_law_floor_and_adaptive_ceiling():
 
 
 def test_r99q9_pinval_only_switch():
-    """His order «فقط pinval باید روشن باشه»: the Railway values keep PINVAL
-    on and the other four setups off."""
+    """His correction: of the TWO pins only the LEGACY one is on
+    (PINVAL = PINWALL LEGACY lane); the OTHER setups stay ON — I never had
+    permission to switch ALBROX/TECHCLASSIC/TLBREAK off."""
     _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     _p = os.path.join(os.path.dirname(_root), "RAILWAY_VALUES_PASTE.txt")
     if not os.path.exists(_p):
         return                      # file lives outside the repo copy
     _txt = open(_p, encoding="utf-8").read()
-    assert "PINVAL_ENABLED=true" in _txt
-    for _off in ("ALBROX_ENABLED=false", "TECHCLASSIC_ENABLED=false",
-                 "VIVA_TLBREAK_ENABLED=false", "PINWALL_QUALITY_ENABLED=false",
-                 "EXPERIMENTAL_TLBREAK_ENABLED=false"):
-        assert _off in _txt, _off
+    assert "PINVAL_ENABLED=true" in _txt                 # legacy pin ON
+    assert "PINWALL_QUALITY_ENABLED=false" in _txt       # the other pin OFF
+    for _on in ("ALBROX_ENABLED=true", "TECHCLASSIC_ENABLED=true",
+                "VIVA_TLBREAK_ENABLED=true"):
+        assert _on in _txt, _on
+    assert "WEBAPP_ENABLED" not in _txt                  # not my call to set
+    # and the Q lane really is inert in code (nothing to publish)
+    from analysis import setups_experimental as _se
+    assert _se.PINWALL_QUALITY_DETECTORS == []
+    assert "detect_pinbar_zone" in [
+        getattr(_d, "__name__", "") for _d in _se.PINVAL_DETECTORS]
 
 
 def test_r99q9_pivots_survive_the_indexed_render_frame():
