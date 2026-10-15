@@ -3799,6 +3799,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             "SUPPLY" if _is_upper8 else "DEMAND",
                             color=_col8, fontsize=6.5, va="center", ha="right",
                             fontweight="bold", zorder=12)
+                    # R99q14: an HONEST flat edge is painted as a band, so the
+                    # honesty veto must know geometry WAS drawn (a horizontal
+                    # TRENDLINE is a level, not a missing line — ETH 4h TLBREAK
+                    # was vetoed for exactly this).
+                    try:
+                        fig._viva_pattern_geometry = True
+                    except Exception:
+                        pass
                     _flat8.append(True)
                     _brk8.append(False)
                     continue
@@ -3860,6 +3868,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     continue  # Do not paint vertical or mini-flag artifact lines!
 
                 _xsA, _ysA = _line_xy(_ln, _xa, _xend8)
+                try:
+                    fig._viva_pattern_geometry = True
+                except Exception:
+                    pass
                 ax.plot(_xsA, _ysA,
                         color=_col8, linewidth=_lw8, alpha=_al8, zorder=7,
                         solid_capstyle="round")
@@ -5162,7 +5174,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _fam74 = _cit74(candidate.metadata or {})
             if _fam74 in ("TRIANGLE", "WEDGE", "CHANNEL", "TRENDLINE", "TL"):
                 _nsl74 = _count_incanvas_sloped_lines(fig)
-                if _nsl74 == 0:
+                # R99q14: a pattern whose OWN edge is flat is painted as a zone
+                # band (the flat→band law) — that photo is honest and must not
+                # be vetoed for having no sloped line.
+                _drew74 = bool(getattr(fig, "_viva_pattern_geometry", False))
+                if _nsl74 == 0 and not _drew74:
                     print(f"VIVA-HONESTY-VETO {candidate.signal_id}: cites {_fam74} "
                           f"but 0 in-canvas sloped lines — photo vetoed, text-first fallback")
                     try:

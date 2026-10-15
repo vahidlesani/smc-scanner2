@@ -963,3 +963,30 @@ def alb_find_pivots_probe(_arr):
     """Helper: the ALBROX pivot helper must answer on raw arrays too."""
     from analysis.albrox import albrox_find_pivots
     return albrox_find_pivots(_arr, _arr)
+
+
+def test_r99q14_honesty_veto_accepts_an_honest_flat_edge():
+    """A horizontal TRENDLINE is a LEVEL, not a missing line: the flat→band law
+    paints it as a zone band, so the honesty veto must not kill that photo
+    (ETHUSDT 4h TLBREAK was vetoed for exactly this while its edge was flat)."""
+    import os as _os
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    src = open(_os.path.join(_root, "bot", "messages_v7.py"), encoding="utf-8").read()
+    assert "_viva_pattern_geometry" in src
+    assert "if _nsl74 == 0 and not _drew74:" in src
+    # the flag is set on BOTH paint paths (band + line)
+    assert src.count("fig._viva_pattern_geometry = True") >= 2
+
+
+def test_r99q14_render_contract_points_are_read_by_the_slope_derive():
+    """The RENDER contract speaks {"ts","price"} while _viva_points_xs reads
+    {"timestamp"}: feeding it raw ts-points returned NaN for both ends, the
+    slope collapsed to 0.0 and the edge painted as a flat band (the whole
+    «چارت هندسه نداره» class). Both readers must accept the render key."""
+    import os as _os
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    src = open(_os.path.join(_root, "bot", "messages_v7.py"), encoding="utf-8").read()
+    _derive = src.split("R99q14: the RENDER contract speaks")[1][:900]
+    assert '_p.get("ts")' in _derive and "_pp0x" in _derive
+    _native = src.split("R99q14: accept the r59 RENDER contract key too")[1][:400]
+    assert '_pt.get("ts")' in _native
