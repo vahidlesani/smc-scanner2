@@ -478,16 +478,30 @@ def run_discovery_scan() -> Dict[str, int]:
                     print(f"Public-code reservation failed {candidate.signal_id}: {exc}")
                     continue  # fail closed; never publish an unreserved code
                 _quality_lane = str(getattr(candidate, "setup_code", "") or "").upper() in _STRUCTURAL_QUALITY_LANES
-                # ── Viva licence law (restated 2026-09-13, verbatim) ──────────
-                # 3 rotating licences per (symbol, trigger timeframe, setup).
-                # The next licence frees when the previous signal CONFIRMS;
-                # while one chain is unresolved, a new detection on the same
-                # tuple is absorbed into it. Different setup or different
-                # trigger timeframe = fully independent. A new licence also
-                # needs >=2% price distance from the last CONFIRMED price.
+                # ── Viva licence law (his 10-15 restatement, verbatim) ────────
+                # «اون ۳ زنجیره ۳ سیگنال همزمان روی یک نماد در یک تایم فریمه
+                # … نه اینکه سقف هشدار و تایید … هر ستاپ میتونه روی یک نماد
+                # در همه تایم فریمها کلا ۱۸ سیگنال همزمان بده» — the licence
+                # is a CONCURRENCY cap: 3 live unfolding chains per (symbol,
+                # setup, trigger-tf), 3 per timeframe, free across timeframes.
+                # A detection in a live chain's zone refreshes that chain; a
+                # new zone opens the next free seat. Different setup or
+                # different trigger timeframe = fully independent. A new
+                # licence also needs >=2% price distance from the last
+                # CONFIRMED price (2026-09-13).
                 if SETTINGS.chain_slot_gate_enabled and not _quality_lane:
+                    # R99q (Viva 10-15, verbatim: «اون ۳ زنجیره ۳ سیگنال همزمان
+                    # روی یک نماد در یک تایم فریمه … نه اینکه سقف هشدار و
+                    # تایید … هر ستاپ می‌تونه روی یک نماد در همه تایم فریم‌ها
+                    # کلا ۱۸ سیگنال همزمان بده»): the licence is a CONCURRENCY
+                    # cap, not a 24h publish quota — at most 3 live unfolding
+                    # chains per (symbol, setup, trigger-tf), 3 per timeframe,
+                    # free across timeframes. A chain that resolved frees its
+                    # seat immediately; no «سقف هشدار و تایید» exists.
+                    _trig = str(candidate.trigger_timeframe or "").lower()
+                    _concmax = max(1, int(getattr(
+                        SETTINGS, "chains_per_symbol_setup_24h", 3) or 3))
                     try:
-                        _trig = str(candidate.trigger_timeframe or "").lower()
                         live_chains = [
                             c for c in open_chains_for(candidate.symbol, candidate.setup_code, _trig)
                             if c.signal_id != candidate.signal_id
@@ -495,8 +509,22 @@ def run_discovery_scan() -> Dict[str, int]:
                         ]
                     except Exception:
                         live_chains = []
-                    if live_chains:
-                        holder = live_chains[0]
+                    # turn-taking («نقش نوبتی»): a detection in the ZONE of a live
+                    # chain refreshes that chain; a new zone opens a new seat
+                    # while fewer than 3 chains of the tuple are live.
+                    _czm = float(candidate.zone_mid or 0.0)
+                    _ctol = max(max(float((candidate.metadata or {}).get("atr", 0) or 0),
+                                    1e-9) * 0.20, abs(_czm) * 1e-4)
+
+                    def _zone_hit(_c):
+                        try:
+                            return abs(float(_c.zone_mid or 0.0) - _czm) <= _ctol
+                        except Exception:
+                            return False
+
+                    _sz_live = [c for c in live_chains if _zone_hit(c)]
+                    if _sz_live:
+                        holder = _sz_live[0]
                         stats["chain_absorbed"] = stats.get("chain_absorbed", 0) + 1
                         t = _t(candidate)
                         t["absorbed"] = t.get("absorbed", 0) + 1
@@ -527,16 +555,13 @@ def run_discovery_scan() -> Dict[str, int]:
                         except Exception as exc:
                             print(f"chain absorb warning {candidate.symbol}/{candidate.setup_code}: {exc}")
                         continue
-                    try:
-                        # R99p: direction lane — stale LONGs must not veto fresh SHORTs.
-                        used = chains_last_24h(candidate.symbol, candidate.setup_code,
-                                         str(candidate.trigger_timeframe or "").lower(),
-                                         str(candidate.direction or ""))
-                    except Exception:
-                        used = 0
-                    if used >= max(1, int(getattr(SETTINGS, "chains_per_symbol_setup_24h", 3) or 3)):
+                    if len(live_chains) >= _concmax:
                         stats["chain_license_cap"] = stats.get("chain_license_cap", 0) + 1
                         _t(candidate)["license_cap"] = _t(candidate).get("license_cap", 0) + 1
+                        print(
+                            f"licence seats full {candidate.symbol}/{candidate.setup_code}/"
+                            f"{_trig}: {len(live_chains)} live chains (max {_concmax}) — "
+                            "the next seat frees when one chain resolves")
                         continue
                     # same-zone repeat dedupe: a zone already watched in 24h
                     # never re-alerts — that is noise control, not the licence

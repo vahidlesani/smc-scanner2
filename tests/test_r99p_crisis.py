@@ -61,14 +61,17 @@ def test_legacy_touches_rank_without_live():
 
 
 # ── licence direction lane + dupe hygiene ──────────────────────────────
-def test_quota_sql_has_direction():
+def test_direction_lane_intact():
+    """R99q keeps the R99p direction lane where it now matters: the live-chain
+    seats of the absorb/concurrency gate are per direction (a stale LONG chain
+    can never block fresh SHORTs), and the 24h counter keeps its lane SQL."""
     _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     _cs = open(os.path.join(_root, "database", "candidate_store.py"),
                encoding="utf-8").read()
     assert "OR direction=?" in _cs
     _mp = open(os.path.join(_root, "main.py"), encoding="utf-8").read()
-    _i = _mp.find("chains_last_24h(candidate.symbol")
-    assert _i > 0 and "direction" in _mp[_i:_i + 300]
+    assert 'str(c.direction).upper() == str(candidate.direction).upper()' in _mp
+    assert "len(live_chains) >= _concmax" in _mp
 
 
 def test_cluster_dupe_rows_pure():
@@ -93,13 +96,20 @@ def test_boot_hygiene_wired():
     assert "retire_open_duplicate_chains" in _mp
 
 
-# ── violation honesty + anchor ─────────────────────────────────────────
-def test_violation_text_honest():
+# ── R99q: no perp violation alerts at all ──────────────────────────────
+def test_r99q_perp_violation_alerts_retired():
     _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     _pe = open(os.path.join(_root, "analysis", "pattern_engine.py"),
                encoding="utf-8").read()
-    assert "بدون کلوز" in _pe
-    assert "بریک و کلوز از ضلع" not in _pe
+    assert '"warn_only": True' not in _pe          # never emitted on the perp path
+    assert "send_pattern_violation" not in _pe      # and never sent from it
+
+
+def test_r99q_licence_is_concurrency_not_quota():
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _mp = open(os.path.join(_root, "main.py"), encoding="utf-8").read()
+    assert "len(live_chains) >= _concmax" in _mp    # seats, not a 24h quota
+    assert "used >= max(1, int(getattr(SETTINGS" not in _mp
 
 
 def test_preview_anchor_gate():

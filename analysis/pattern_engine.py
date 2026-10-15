@@ -806,37 +806,18 @@ def scan_edges(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         _nat = _NATURAL_EDGE.get(pattern)
         _counter54 = bool(_nat and _nat != side)
         if not direction:
-            # Viva 09-24: the wrong-side break of a ONE-NATURE pattern was
-            # warn-only. r54 (his 09-28 law, superseding): a wrong-side CLOSE
-            # break IS the counter-doctrine confirmation («اگر نزولی قراره
-            # بده اون هم با بریکِ ترند پایین و کلوز یا توهم باید تایید بشه»)
-            # — it now runs the NORMAL break machinery as a counter candidate;
-            # a live-only cross (wick, no close) stays a WARN-ONLY event.
+            # R99q (Viva 10-15, verbatim: «اون ۲۴.۹ برای اسپات بود نه ستاپ‌ها …
+            # ورود به پوزیشن و تایید بعد از شکست پترن‌ها یا ترندلاین‌ها در جهت
+            # شکسته»): the PERP setups no longer emit any «هشدار نقض». A
+            # one-nature shape is crossed both ways intraday; the alert storm
+            # the 09-24 spot sheet spawned is not a setup law. The trade book
+            # is the r54 rule below — a wrong-side CLOSE-break runs the normal
+            # counter machinery; a live-only wick cross stays SILENT.
             if str(pattern).upper() not in _ONE_NATURE:
                 continue
             _ln9 = float(line.price_at(n))
-            _cross9 = (live > _ln9) if side == "upper" else (live < _ln9)
-            if not _cross9:
-                continue
             _cc54 = (last_close > _ln9) if side == "upper" else (last_close < _ln9)
             if not _cc54:
-                events.append({
-                    "pattern": pattern, "pattern_fa": PATTERN_FA.get(pattern, pattern),
-                    "side": side, "direction": None, "state": STATE_VIOLATED,
-                    "warn_only": True, "distance_atr": round(abs(live - _ln9) / max(atr_p, 1e-12), 3),
-                    "break_edge": "UPPER" if side == "upper" else "LOWER",
-                    "break_direction": "UP" if side == "upper" else "DOWN",
-                    "line_price": _ln9, "live": live, "pattern_tf": pattern_tf,
-                    "ref_ts": str(trigger_df["timestamp"].iloc[-1]),
-                    "approach_direction": approach_direction,
-                    "pattern_role": _role9, "role_confidence": _rolec9,
-                    "legality": "WARNING_ONLY",
-                    "event_id": f"{side}|{pattern}|{STATE_VIOLATED}|{ev_ref9}",
-                    "violation_fa": (
-                        f"الگوی {PATTERN_FA.get(pattern, pattern)} در تایم‌فریم {pattern_tf} "
-                        f"نقض شد — عبور زنده (بدون کلوز) از ضلعِ {'بالا' if side == 'upper' else 'پایین'} "
-                        "در خلافِ ماهیت الگو است. هیچ سیگنالی تأیید نمی‌شود؛ فقط هشدار."),
-                })
                 continue
             # r54: a wrong-side CLOSE-cross falls through to the normal break
             # machinery below with the counter direction (SHORT via the lower
@@ -2270,28 +2251,9 @@ def send_prebreak_alerts(bundle) -> Dict[str, int]:
         for ev in evaluate_prebreak(str(bundle.symbol), pdf, trig, pattern_tf,
                                     live_price=(live if live > 0 else None)):
             if ev.get("warn_only"):
-                # Viva 09-24: violation = light warn message, no preview chain
-                counts["violated"] = counts.get("violated", 0) + 1
-                # R99p anchor law (his «بی‌سر و ته»): a violation may only
-                # warn when its pattern was ANNOUNCED (NEAR/READY preview
-                # sent for this symbol|tf|pattern|side) — unannounced
-                # failures stay silent (a real close still fires the
-                # r54 counter-signal; the tradeable event lives).
-                try:
-                    _anch99p = _preview_anchor_seen(
-                        str(bundle.symbol), str(ev.get("pattern_tf") or ""),
-                        str(ev.get("pattern") or ""), str(ev.get("side") or ""))
-                except Exception:
-                    _anch99p = False
-                if not _anch99p:
-                    counts["violated_unannounced"] = counts.get(
-                        "violated_unannounced", 0) + 1
-                    continue
-                try:
-                    from bot.messages_v7 import send_pattern_violation
-                    send_pattern_violation(ev)
-                except Exception as exc:
-                    print(f"pattern-violation send skipped: {exc}")
+                # R99q: the perp engines never emit warn-only events any more
+                # (see evaluate_prebreak) — a legacy shape, if it ever slips
+                # through, stays silent. No Telegram, no counts.
                 continue
             counts["near" if ev["state"] == STATE_NEAR else "ready"] += 1
             counts["sent"] += 1

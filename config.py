@@ -42,14 +42,14 @@ class Settings:
     # Viva 2026-09-11 (final chain doctrine): per scan cycle only this many
     # NEW detailed alerts may be published — the rest defer to the next scan.
     education_max_per_scan: int = 16
-    # One setup may open at most this many alert-chains per symbol per 24h…
-    # 10-11 spam surgery (his «نوبت دوم و سوم سیگنال به ستاپها رو فعلا
-    # ببند … هر تایم تریگر اجازه صدور یک پوزیشن»): ONE alert per
-    # (symbol, setup, trigger-TF) per 24h. Railway override stays:
-    # CHAINS_PER_SYMBOL_SETUP_24H=3 restores the old rotating licence.
-    chains_per_symbol_setup_24h: int = 1
-    # …and never two at once: while one chain of the same symbol+setup is
-    # still unresolved, new detections feed its UPDATE slot instead.
+    # R99q (Viva 10-15, verbatim): the licence is a CONCURRENCY seat count,
+    # not a 24h publish quota — «۳ سیگنال همزمان روی یک نماد در یک تایم
+    # فریم … هر ستاپ … کلا ۱۸ سیگنال همزمان». Three live unfolding chains
+    # per (symbol, setup, trigger-TF); the seat frees when a chain resolves.
+    chains_per_symbol_setup_24h: int = 3
+    # …and the turn-taking («نقش نوبتی») holds per chain: a detection inside
+    # the ZONE of a live chain feeds that chain's UPDATE slot; a detection in
+    # a new zone takes the next free seat.
     chain_slot_gate_enabled: bool = True
     # Viva 2026-09-13 four-stream ladder: 1D grand swing, 4H mid swing, 1H
     # mid swing and 15m short all run as full alert streams (SCALP re-enabled

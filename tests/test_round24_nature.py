@@ -72,7 +72,11 @@ def test_falling_wedge_wrong_side_break_warns_and_never_signals():
     assert c["doctrine_direction"] == "LONG"           # the wedge's own nature
     assert not [e for e in events if e.get("warn_only")],         "a CLOSE-cross takes the counter path, not the warn path"
     src = open("analysis/pattern_engine.py", encoding="utf-8").read()
-    assert "_cc54" in src and "STATE_VIOLATED" in src  # wick-only stays warn
+    assert "_cc54" in src                                # the close test stays
+    # R99q (Viva 10-15, verbatim: «اون ۲۴.۹ برای اسپات بود نه ستاپها … ورود به
+    # پوزیشن و تایید بعد از شکست پترنها یا ترندلاینها در جهت شکسته»): the
+    # perp engines emit NO warn-only violation events at all any more.
+    assert '"warn_only": True' not in src
 
 
 def test_ascending_triangle_upper_break_confirms_long_only():
