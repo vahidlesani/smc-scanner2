@@ -287,14 +287,14 @@ def test_r99q_albrox_v2_frame_is_tight_and_capped():
     assert albrox_candles_for("4h", 44) == 144     # HYPE 4H: span+pad
     assert albrox_candles_for("4h", 200) == 200    # ceiling, adaptive
     assert albrox_candles_for("15m", 200) == 160   # 15m ceiling
-    assert albrox_candles_for("15m", 30) == 90
-    assert albrox_candles_for("15m", 8) == 80    # القانون: کف ۸۰
+    assert albrox_candles_for("15m", 30) == 120   # R99q14: setup floor is 120 now
+    assert albrox_candles_for("15m", 8) == 120   # القانون: کف ۱۲۰ (R99q14)
     assert albrox_candles_for("1d", 200) == 240
 
 
 def test_r99q_tc_v2_frame_and_noise_wedge():
     """TC v2: same tight-frame law + a 2-line 'shape' on <3 pivots is noise."""
-    assert tc_candles_for("15m", 50) == 105
+    assert tc_candles_for("15m", 50) == 120   # R99q14: setup floor is 120 now
     assert tc_candles_for("15m", 200) == 150
     assert tc_candles_for("1d", 28) == 143
     _noise = {"type": "WEDGE_FALLING", "lines": [
@@ -437,9 +437,9 @@ def test_r99q9_candle_law_floor_and_adaptive_ceiling():
     from analysis.tlbreak import tlbreak_candles_for
     from analysis.pinval import pinval_candles_for
     # floor everywhere
-    assert albrox_candles_for("15m", 0) == 80
-    assert tc_candles_for("15m", 0) == 80
-    assert pinval_candles_for("15m", 0) == 80
+    assert albrox_candles_for("15m", 0) == 120   # R99q14: setup floor is 120 now
+    assert tc_candles_for("15m", 0) == 120   # R99q14: setup floor is 120 now
+    assert pinval_candles_for("15m", 0) == 120   # R99q14: setup floor is 120 now
     # adaptive ceiling per TF
     assert albrox_candles_for("15m", 400) == 160
     assert albrox_candles_for("4h", 400) == 200
@@ -452,17 +452,22 @@ def test_r99q9_candle_law_floor_and_adaptive_ceiling():
     assert pinval_candles_for("2h", 40, "TRENDLINE") == 185
     # TLBREAK shows the line AND the break leg → its own wider pad
     assert tlbreak_candles_for("15m", 40) == 170
-    # his tunable floor
+    # his tunable floors: R99q14 split them — VIVA_SETUP_CANDLE_MIN (120) owns
+    # the PICTURE of a setup, VIVA_CANDLE_MIN stays the raw-detection floor.
     import os as _os
     _keep = _os.environ.get("VIVA_CANDLE_MIN")
+    _keep2 = _os.environ.get("VIVA_SETUP_CANDLE_MIN")
     try:
         _os.environ["VIVA_CANDLE_MIN"] = "40"
-        assert albrox_candles_for("15m", 0) == 60   # floor lowered → pad wins
+        assert albrox_candles_for("15m", 0) == 120   # the setup floor holds
+        _os.environ["VIVA_SETUP_CANDLE_MIN"] = "70"
+        assert albrox_candles_for("15m", 0) == 70    # floor lowered → pad wins
     finally:
-        if _keep is None:
-            _os.environ.pop("VIVA_CANDLE_MIN", None)
-        else:
-            _os.environ["VIVA_CANDLE_MIN"] = _keep
+        for _k, _v in (("VIVA_CANDLE_MIN", _keep), ("VIVA_SETUP_CANDLE_MIN", _keep2)):
+            if _v is None:
+                _os.environ.pop(_k, None)
+            else:
+                _os.environ[_k] = _v
 
 
 def test_r99q9_pinval_only_switch():
@@ -688,3 +693,273 @@ def test_r99q13_live_price_is_never_the_entry():
     # no frame + no venue answer ⇒ 0.0 (the message says «نامعلوم») — never the entry
     assert _live_price_for_message(cand, None) != cand.planned_entry or \
         _live_price_for_message(cand, None) == 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R99q14 — PRE-BREAK EARLY-ALERT LAW (Viva 10-15, verbatim: «وقتی که هشدار
+# آموزشی و ابتدایی اومده عملا قیمت بریک رو انجام داده بوده و کار از کار گذشته
+# بوده؛ باید قبل از اینکه قیمت به اضلاع الگوها و یا در حال بریک پترنها و
+# ترندلاینها و نواحی ستاپ برسه اولین هشدار ابتدایی بده .. و بعد از بریک تایید
+# بده … دقیقا در اسپات اینرو داریم .. در همه ستاپها یکسانه … فقط بدون هر ستاپ
+# جدا جدا جراحی بشه» + «ستاپها هم از ۱۲۰ به بالا باید باشه بر اساس انتخاب پترن
+# در زوم درست» + «در ستاپها در همه تایمفریم هاشون ارتفاع کندلها نباید بیشتر ۷۰
+# درصد بشه» + the green box «کالیبره روی و زیر اضلاع پترنها و ترندلاینها».
+# Live evidence: UNIUSDT·T698813's first message was a FINAL WATCH minted on an
+# already-broken edge; the preview lane's flat 8h cooldown (NEAR stamped 11:21,
+# break 15:00, next eligible 19:22) is exactly «کار از کار گذشته».
+# ─────────────────────────────────────────────────────────────────────────────
+def _pb_event(setup="TECHCLASSIC", side="upper", edge=100.5, dist=0.40, tf="1h",
+              direction="LONG", **extra):
+    ev = {"setup": setup, "setup_name": setup, "symbol": "UNIUSDT", "tf": tf,
+          "pattern_tf": tf, "side": side, "direction": direction,
+          "pattern": "WEDGE_FALLING", "pattern_fa": "گوه نزولی",
+          "edge": edge, "distance_atr": dist, "atr": 0.6,
+          "state": "EDGE_NEAR", "score": 7,
+          "upper_points": [{"timestamp": "2026-10-15 04:00", "price": 101.4},
+                           {"timestamp": "2026-10-15 08:00", "price": 100.9}],
+          "lower_points": [{"timestamp": "2026-10-15 05:00", "price": 99.2},
+                           {"timestamp": "2026-10-15 09:00", "price": 99.9}],
+          "line_geo": {"price": edge, "a": edge, "b": 0.0, "slope": 0.0}}
+    ev.update(extra)
+    return ev
+
+
+def test_r99q14_every_setup_answers_through_its_own_engine():
+    """ONE law, every setup — but each setup's answer is produced by its OWN
+    module (his «فقط بدون هر ستاپ جدا جدا جراحی بشه»)."""
+    from analysis import prebreak_lane as pb
+    for setup in ("TECHCLASSIC", "ALBROX", "PINVAL", "PINWALLQ", "TLBREAK"):
+        assert setup in pb.PROVIDERS, setup
+        _mod, _fn = pb.PROVIDERS[setup]
+        assert pb.provide(setup) is not None, (setup, _mod, _fn)
+        assert _fn in ("techclassic_prebreak", "albrox_prebreak", "pinval_prebreak",
+                       "pinwall_prebreak", "tlbreak_prebreak"), setup
+    # the lane never speaks for a setup whose switch is off
+    assert pb.setup_enabled("TECHCLASSIC") is True
+
+
+def test_r99q14_alert_speaks_inside_the_pattern_before_the_break():
+    """The watch is minted while price is still INSIDE / near the edge: the
+    candidate is an EDUCATIONAL S0_WATCH whose line is the very edge the
+    confirmation will later judge (one chain: alert → confirm)."""
+    from analysis import prebreak_lane as pb
+    ev = pb.normalize(_pb_event(edge=100.5, dist=0.40), symbol="UNIUSDT",
+                      setup="TECHCLASSIC", tf="1h")
+    assert ev is not None
+    cand = pb.build_watch_candidate(ev, None)
+    md = cand.metadata
+    assert cand.status == "EDUCATIONAL"
+    assert md["viva_state"] == "S0_WATCH" and md["alert_stage"] == "PREBREAK"
+    assert abs(float(md["viva_break_line"]) - 100.5) < 1e-9
+    assert abs(float(md["viva_watch_line"]) - 100.5) < 1e-9
+    assert abs(cand.planned_entry - 100.5) < 1e-9
+    # the box sits ON the edge and extends AWAY from the pattern (R99q14
+    # calibration): long → above the upper edge, never straddling the line
+    assert abs(cand.entry_zone_bottom - 100.5) < 1e-9
+    assert cand.entry_zone_top > 100.5
+    _short = pb.build_watch_candidate(
+        pb.normalize(_pb_event(side="lower", direction="SHORT", edge=100.5, dist=0.3),
+                     symbol="UNIUSDT", setup="PINVAL", tf="1h"), None)
+    assert abs(_short.entry_zone_top - 100.5) < 1e-9
+    assert _short.entry_zone_bottom < 100.5
+    assert md["confirm_tf"] == "15m"                      # one step below the trigger
+    # the chart's own geometry rides along (the engine's pivots, never invented)
+    assert md["render_patterns"] and md["render_patterns"][0]["lines"], "geometry lost"
+    assert md["viva_upper_points"] and md["viva_lower_points"]
+    assert "prebreak" in md and md["prebreak_distance_atr"] == 0.40
+
+
+def test_r99q14_never_speaks_after_the_break():
+    """Once the edge is broken the confirm lane owns the moment — the early
+    alert must stay silent (his «بعد از بریک تایید بده»)."""
+    import pandas as pd
+    from analysis import prebreak_lane as pb
+    ev = pb.normalize(_pb_event(edge=100.5, dist=0.40), symbol="UNIUSDT",
+                      setup="TECHCLASSIC", tf="1h")
+    df, _ = _confirm_frame([100.2, 100.3, 100.4, 101.6, 101.7], tf_min=60,
+                           start="2026-10-15 04:00", line=100.5)
+    assert pb.edge_broken(ev, df) is True
+    _df2, _ = _confirm_frame([100.2, 100.3, 100.4, 100.45, 100.42], tf_min=60,
+                             start="2026-10-15 04:00", line=100.5)
+    assert pb.edge_broken(ev, _df2) is False
+
+
+def test_r99q14_band_dedupe_and_cooldown():
+    """One watch per EDGE: a level answered by two setups speaks once, an edge
+    outside the inside/near band never speaks, and the cooldown holds the gap."""
+    from analysis import prebreak_lane as pb
+    _near = pb.normalize(_pb_event(setup="PINVAL", edge=100.5, dist=0.30),
+                         symbol="UNIUSDT", setup="PINVAL", tf="1h")
+    _twin = pb.normalize(_pb_event(setup="PINWALLQ", edge=100.52, dist=0.32),
+                         symbol="UNIUSDT", setup="PINWALLQ", tf="1h")
+    _far = pb.normalize(_pb_event(setup="ALBROX", edge=120.0, dist=9.0),
+                        symbol="UNIUSDT", setup="ALBROX", tf="1h")
+    assert max(_near["distance_atr"], _twin["distance_atr"]) <= pb.inside_band_atr()
+    assert _far["distance_atr"] > pb.inside_band_atr()
+    assert abs(float(_near["edge"]) - float(_twin["edge"])) <= 0.05 * float(_near["atr"])
+    pb.reset_seen_cache()
+    k = ("UNIUSDT", "PINVAL", "1h", "upper")
+    assert pb.cooldown_ok(*k) is True
+    assert pb.cooldown_ok(*k) is False                     # inside the 45-min gap
+    # the lane's own cadence is much shorter than the retired 8h preview cooldown
+    assert pb.gap_minutes("PINVAL") <= 60.0
+
+
+def test_r99q14_watch_chain_confirms_on_the_first_close():
+    """THE WHOLE POINT: the pre-break watch and the confirmation are ONE chain —
+    the first valid close beyond the watch's edge confirms it (no second setup,
+    no hours of silence)."""
+    from analysis import prebreak_lane as pb
+    ev = pb.normalize(_pb_event(edge=100.5, dist=0.30), symbol="UNIUSDT",
+                      setup="TECHCLASSIC", tf="1h")
+    cand = pb.build_watch_candidate(ev, None)
+    cand.created_at = "2026-10-15 04:00"
+    ok, c2, reason = _run(cand, [99.9, 100.0, 100.05, 100.1, 101.6])
+    assert ok is True, reason
+    assert abs(c2.planned_entry - 101.6) < 1e-9, "entry must be the confirming close"
+    assert (c2.metadata or {}).get("alert_stage") == "PREBREAK"
+
+
+def test_r99q14_stale_guard_measures_the_entry_bar_not_the_old_break_bar():
+    """A verdict computed on the LIVE close may never be disarmed as «۱۶۵ دقیقه
+    کهنه» because the OLD break bar is still in the metadata (UNIUSDT·T698813)."""
+    from datetime import datetime, timedelta, timezone
+    from main import _confirmation_stale_minutes
+    from analysis.prebreak_lane import build_watch_candidate, normalize
+    _start = (datetime.now(timezone.utc) - timedelta(minutes=45)).strftime("%Y-%m-%d %H:%M")
+    cand = _confirm_cand("TECHCLASSIC", entry=100.3, tp1=100.9, tp2=104.0)
+    df, _ = _confirm_frame([100.0, 100.1, 100.2, 101.6], tf_min=15,
+                           start=_start, line=100.5)
+    # the bar the entry came from is the newest closed bar → fresh
+    cand.metadata["confirm_entry_bar"] = str(df["timestamp"].iloc[-1])[:19]
+    cand.metadata["confirm_entry_tf_min"] = 15.0
+    cand.metadata["fast_break_bar"] = str(df["timestamp"].iloc[-4])[:19]  # the OLD claim
+    assert _confirmation_stale_minutes(cand, df) is None
+    # without the stamp the old break bar is what used to condemn the verdict
+    cand.metadata.pop("confirm_entry_bar")
+    cand.metadata.pop("confirm_entry_tf_min")
+    assert _confirmation_stale_minutes(cand, df) is not None
+
+
+def test_r99q14_setup_charts_are_120_candles_or_more():
+    """His law: setup charts start at 120 candles, chosen by the OWNING setup's
+    own candle law (pattern selection + TF), never a thin 50–90-bar frame."""
+    from analysis.techclassic import tc_candles_for, _candle_floor as _tc_floor
+    from analysis.albrox import albrox_candles_for, _candle_floor as _ab_floor
+    from analysis.pinval import pinval_candles_for, _candle_floor as _pv_floor
+    from analysis.tlbreak import tlbreak_candles_for, _candle_floor as _tl_floor
+    for _f in (_tc_floor, _ab_floor, _pv_floor, _tl_floor):
+        assert _f() >= 120
+    for _fn in (tc_candles_for, albrox_candles_for, pinval_candles_for, tlbreak_candles_for):
+        for _tf in ("15m", "30m", "1h", "4h", "1d"):
+            assert _fn(_tf, 0, "") >= 120, (_fn.__name__, _tf)
+            assert _fn(_tf, 200, "TRENDLINE") >= 120, (_fn.__name__, _tf)
+    # the render path floors a setup chart at the same number
+    from bot.messages_v7 import _setup_chart_count
+    cand = _confirm_cand("PINVAL")
+    assert _setup_chart_count(cand, "1h", 300, None) >= 120
+
+
+def test_r99q14_candle_height_never_over_70_percent():
+    """His law: «در ستاپها در همه تایمفریم هاشون ارتفاع کندلها نباید بیشتر ۷۰
+    درصد بشه» — a lone spike may not flatten the tape; the pane opens instead
+    (candles are never cut: the r40 law)."""
+    import numpy as np
+    from bot.messages_v7 import _smart_y_window
+    _ranges = np.array([0.10] * 40 + [20.0])          # one liquidation spike
+    _lo, _hi = float(np.array([100.0] * 40 + [95.0]).min()), 120.0
+    win = _smart_y_window(_lo, _hi, 0.8, recent_lo=100.0, recent_hi=101.0,
+                          bars=41, candle_ranges=_ranges)
+    assert win is not None
+    _span = float(win[1]) - float(win[0])
+    assert float(np.percentile(_ranges, 99.0)) <= 0.70 * _span + 1e-9
+    assert float(np.median(_ranges)) <= 0.30 * _span + 1e-9
+    # a quiet block is NOT inflated by the law (it only opens a pane when a
+    # candle would fill more than 70% of it)
+    _quiet = np.array([0.10] * 41)
+    _w_plain = _smart_y_window(100.0, 101.0, 0.05, recent_lo=100.2, recent_hi=100.8,
+                               bars=41)
+    _w_law = _smart_y_window(100.0, 101.0, 0.05, recent_lo=100.2, recent_hi=100.8,
+                             bars=41, candle_ranges=_quiet)
+    assert _w_law is not None and _w_plain is not None
+    assert abs((_w_law[1] - _w_law[0]) - (_w_plain[1] - _w_plain[0])) < 1e-9
+
+
+def test_r99q14_spot_box_rides_the_pattern_edge():
+    """The green/red box is calibrated ON the shape's own line at the END of the
+    pattern (a sloped trendline is not a flat number) — his exact wording."""
+    import os as _os
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    _src = open(_os.path.join(_root, "tools", "render_spot_cryptocove.py"),
+                encoding="utf-8").read()
+    assert "_edge_ln = a.get(\"upper\") if up_dir else a.get(\"lower\")" in _src
+    assert "price_at(bx0)" in _src
+    assert "box sits ON/above the edge" in _src and "hangs UNDER the edge" in _src
+
+
+# ── R99q14 (cont.): the silent-geometry class ────────────────────────────────
+def test_r99q14_pivot_finders_accept_arrays_and_series():
+    """`x or []` on a numpy array raises ValueError ("truth value ... is
+    ambiguous") and every pivot finder swallowed it into an EMPTY pivot set —
+    i.e. geometry disappeared with no error whenever an engine handed arrays
+    or a pandas Series in. Lists, arrays and Series must agree."""
+    import numpy as _np
+    import pandas as _pd
+    from analysis.albrox import albrox_find_pivots
+    from analysis.techclassic import tc_find_pivots
+    from analysis.pinval import pinval_find_pivots
+    from analysis.tlbreak import tlbreak_find_pivots
+    from analysis.spot import spot_find_pivots
+
+    _h = [1, 2, 3, 2, 1, 2, 5, 2, 1, 3, 4, 3, 2, 1, 2, 6, 3, 1, 2, 2, 2, 2]
+    _l = [0, 1, 2, 1, 0, 1, 4, 1, 0, 2, 3, 2, 1, 0, 1, 5, 2, 0, 1, 1, 1, 1]
+    for fn, kw in ((albrox_find_pivots, {}), (tc_find_pivots, {}),
+                   (pinval_find_pivots, {}), (tlbreak_find_pivots, {}),
+                   (spot_find_pivots, {"left": 2, "right": 2})):
+        _list = fn(list(_h), list(_l), **kw)
+        assert _list["highs"], f"{fn.__name__} found no pivots on a list"
+        assert fn(_np.array(_h), _np.array(_l), **kw) == _list
+        assert fn(_pd.Series(_h), _pd.Series(_l), **kw) == _list
+        assert fn(None, None, **kw) == {"highs": [], "lows": []}
+
+
+def test_r99q14_albrox_prebreak_reads_albrox_own_inventory():
+    """The ALBROX pre-break lane was silent on every live frame (0 events /
+    0 exceptions). Two defects, both closed here: the numpy-truthiness bug in
+    its pivot helper, and a "zone" synthesised from the last two pivot highs
+    (a 4-ATR smear). It must now speak from ALBROX's OWN r60 inventory and
+    never draw a zone taller than 3 ATR (r61.1 sane-zone law)."""
+    import numpy as _np
+    import pandas as _pd
+    from analysis.albrox import albrox_prebreak
+
+    _n = 140
+    _px = [100.0] * _n
+    for _i in range(_n):                      # a long tape with a clean OB
+        _px[_i] = 100.0 + 0.05 * _i
+    _px[-30] = 101.0                          # supply OB: up candle ...
+    _px[-29] = 103.0                          # ... then displacement down
+    _px[-28] = 102.0
+    _df = _pd.DataFrame({
+        "timestamp": _pd.date_range("2026-01-01", periods=_n, freq="1h"),
+        "open": [p - 0.05 for p in _px],
+        "high": [p + 0.40 for p in _px],
+        "low": [p - 0.40 for p in _px],
+        "close": list(_px),
+        "volume": [10.0] * _n,
+    })
+    _ev = albrox_prebreak(_df, "1h", symbol="TESTUSDT")
+    assert isinstance(_ev, list)
+    _atr = float((_df["high"] - _df["low"]).tail(14).mean())
+    for _e in _ev:
+        for _z in _e.get("zones") or []:
+            assert abs(float(_z["top"]) - float(_z["bottom"])) <= 3.0 * _atr
+        assert float(_e["distance_atr"]) <= 2.4
+    # arrays/series go through the same door (no silent empty inventory)
+    assert isinstance(alb_find_pivots_probe(_np.array(_px)), dict)
+
+
+def alb_find_pivots_probe(_arr):
+    """Helper: the ALBROX pivot helper must answer on raw arrays too."""
+    from analysis.albrox import albrox_find_pivots
+    return albrox_find_pivots(_arr, _arr)

@@ -19,11 +19,19 @@ _CANDLE_FLOOR = 80   # کف قانونی او؛ VIVA_CANDLE_MIN آن را overri
 
 
 def _candle_floor() -> int:
+    """R99q14 SETUP-CANDLE LAW (Viva 10-15, verbatim: «ستاپ‌ها هم از ۱۲۰ به بالا
+    باید باشه بر اساس انتخاب پترن در زوم درست … چارت‌ها اکثرا نه هندسه دارن نه
+    اینکه زوم درستی دارن»): the setup's own floor is 120 candles now (his 80-floor
+    of 10-15 stayed for the raw detection tape; the PICTURE of a setup must show
+    the pattern), still overridable per deploy.
+    """
     try:
         import os as _os
-        return max(20, int(str(_os.getenv("VIVA_CANDLE_MIN", "") or "").strip() or 80))
+        _own = int(str(_os.getenv("VIVA_SETUP_CANDLE_MIN", "") or "").strip() or 120)
+        _old = int(str(_os.getenv("VIVA_CANDLE_MIN", "") or "").strip() or 80)
+        return max(20, _own, _old)
     except Exception:
-        return 80
+        return 120
 
 
 def albrox_candles_for(tf, pattern_span, pattern=None):
@@ -122,8 +130,13 @@ def albrox_detect(bundle, style="DAYTRADE"):
 
 def albrox_find_pivots(highs, lows, left=2, right=2):
     try:
-        _h = [float(x) for x in (highs or [])]
-        _l = [float(x) for x in (lows or [])]
+        # R99q14: NEVER `x or []` here — the pre-break lane hands numpy
+        # arrays in and `bool(array)` raises ValueError ("truth value of an
+        # array ... is ambiguous"), which the guard below swallowed as an
+        # EMPTY pivot set → the ALBROX pre-break lane was silent on every
+        # live frame (0 events / 0 exceptions) while TC/PINVAL/TLBREAK spoke.
+        _h = [float(x) for x in ([] if highs is None else highs)]
+        _l = [float(x) for x in ([] if lows is None else lows)]
     except Exception:
         return {"highs": [], "lows": []}
     _n = min(len(_h), len(_l))
@@ -432,3 +445,131 @@ def albrox_zoom_window(n_bars, count, pad_right_frac=0.12):
         return (max(0, _x_to - _c), _x_to)
     except Exception:
         return (0, max(0, int(n_bars or 0) - 1))
+
+
+# ── R99q14 PRE-BREAK EARLY ALERT — ALBROX's OWN zone lane (Viva 10-15: the first
+# alert must arrive while price is still inside / near the setup's own edges).
+# Lane B judge: the freshest un-mitigated pivot supply/demand zone. The edge that
+# matters is the zone's PROXIMAL line (demand top / supply bottom) — the level
+# whose break is the trade. No foreign detector speaks for ALBROX.
+def _prebreak_atr(df) -> float:
+    try:
+        from analysis.brooks_pa import atr as _atr_b
+        _v = float(_atr_b(df))
+        return _v if _v > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def albrox_prebreak(df, tf: str, symbol: str = "", bundle=None,
+                    live_price: float = None) -> list:
+    """Pre-break events from ALBROX's own zone inventory."""
+    if df is None or len(df) < 45:
+        return []
+    atr_v = _prebreak_atr(df)
+    if atr_v <= 0:
+        return []
+    # R99q14: ALBROX's pre-break view reads ALBROX'S OWN inventory — the r60
+    # zone builders in `setups_experimental` (un-mitigated FVGs, pivot SD/flip
+    # levels, freshest order blocks) — exactly the set the zone lane trades.
+    # (The provider used to synthesise a "zone" from the last two pivot highs /
+    # last two pivot lows, which on a live frame is a 4-ATR-wide smear, not a
+    # zone — and it was silent anyway, see albrox_find_pivots.) The own-pivot
+    # SD zones stay as the fallback when the inventory comes back empty.
+    zones = []
+    try:
+        from analysis.setups_experimental import _albrox_zones as _inventory
+        _atr_s = float((df["high"] - df["low"]).tail(14).mean() or 0.0) or atr_v
+        zones = list(_inventory(df, bundle, tf, _atr_s) or [])
+    except Exception:
+        zones = []
+    if not zones:
+        try:
+            highs = df["high"].astype(float).to_numpy()
+            lows = df["low"].astype(float).to_numpy()
+            zones = albrox_zones_from_pivots(albrox_find_pivots(highs, lows))
+        except Exception:
+            zones = []
+    if not zones:
+        return []
+    live = live_price
+    if live is None:
+        try:
+            live = float(df["close"].iloc[-1])
+        except Exception:
+            return []
+    band = 0.85
+    try:
+        from analysis.prebreak_lane import band_atr as _band
+        band = float(_band())
+    except Exception:
+        pass
+    try:
+        from analysis.prebreak_lane import inside_band_atr as _inb
+        inside = float(_inb())
+    except Exception:
+        inside = 2.4
+    closes = df["close"].astype(float).to_numpy()
+    out = []
+    for z in zones:
+        try:
+            _zlo, _zhi = sorted((float(z["bottom"]), float(z["top"])))
+            # r61.1 SANE-ZONE LAW («این چه ناحیه ای است که دنبال سیگناله؟؟»):
+            # a zone taller than 3 ATR is not a zone — never speak, never draw.
+            if (_zhi - _zlo) > 3.0 * atr_v or _zhi <= _zlo:
+                continue
+            _kind = str(z.get("kind") or "").upper()
+            _side = str(z.get("side") or "").lower()
+            if _side not in ("demand", "supply"):
+                if _kind.endswith("DEMAND") or _kind == "DEMAND":
+                    _side = "demand"
+                elif _kind.endswith("SUPPLY") or _kind == "SUPPLY":
+                    _side = "supply"
+                else:
+                    # FVG / FLIP / SD carry no side: demand below the tape,
+                    # supply above it (the only reading the zone lane trades)
+                    _side = "demand" if _zhi <= live else "supply"
+            if _side == "demand":
+                edge, edge_side, direction = _zhi, "upper", "LONG"
+                # price must still be at/below the zone's proximal line
+                if live > edge + band * atr_v:
+                    continue
+                if (closes[-1] > edge + 0.10 * atr_v and closes[-2] > edge):
+                    continue                       # already broken → confirm lane
+            else:
+                edge, edge_side, direction = _zlo, "lower", "SHORT"
+                if live < edge - band * atr_v:
+                    continue
+                if (closes[-1] < edge - 0.10 * atr_v and closes[-2] < edge):
+                    continue
+        except Exception:
+            continue
+        dist = abs(live - edge) / atr_v
+        if dist > inside:
+            continue
+        out.append({
+            "setup": "ALBROX",
+            "setup_name": "ALBROX",
+            "tf": tf,
+            "pattern_tf": tf,
+            "side": edge_side,
+            "direction": direction,
+            "pattern": str(z.get("kind") or "ZONE_SD"),
+            "pattern_fa": ("ناحیه عرضه/تقاضا" if str(z.get("kind") or "").upper().startswith(("SD", "FLIP"))
+                           else ("ناحیه تقاضا" if direction == "LONG" else "ناحیه عرضه")),
+            "edge": edge,
+            "distance_atr": round(dist, 3),
+            "line_geo": {"price": edge, "a": edge, "b": 0.0, "slope": 0.0,
+                         "ts": str(df["timestamp"].iloc[-1]) if "timestamp" in df.columns else ""},
+            "pattern_geo": {},
+            "zones": [{"kind": str(z.get("kind") or "SD"), "bottom": _zlo, "top": _zhi,
+                       "bias": "DEMAND" if _side == "demand" else "SUPPLY"}],
+            "measured": {"from": edge, "to": edge, "pct": 0.0, "height": 0.0},
+            "touches": 2,
+            "score": 6,
+            "atr": atr_v,
+            "state": "EDGE_NEAR",
+            "note_fa": ("قیمت درون/نزدیکِ ناحیهٔ خودِ آبروکس است و لبهٔ نزدیک ناحیه "
+                        f"({edge:g}) هنوز شکسته نشده."),
+        })
+    return out

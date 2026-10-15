@@ -1122,7 +1122,11 @@ def _viva_points_native(points: list, frame) -> bool:
     _b = _t1.tz_localize(None) if _t1.tzinfo is not None else _t1
     for _pt in points:
         try:
-            _ts = pd.Timestamp(str(_pt.get("timestamp")))
+            # R99q14: accept the r59 RENDER contract key too ({"ts","price"}) —
+            # a stored line in render shape was judged "not native" and got
+            # re-fitted (or dropped) on every chart.
+            _ts = pd.Timestamp(str(_pt.get("timestamp") or _pt.get("ts")
+                                   or _pt.get("bar_ts")))
         except Exception:
             return False
         if _ts.tzinfo is not None:
@@ -2051,13 +2055,92 @@ def _r62_tool_fit_lookback(df: pd.DataFrame, candidate, lookback: int,
     return int(min_n)
 
 
+# ── R99q14: which SETUP owns this chart, and how many candles does its own
+# engine ask for? (his law: «بر اساس انتخاب پترن در زوم درست» — the pattern
+# selection decides the zoom, each setup by its own rule, floored at 120.)
+_SETUP_CANDLE_MIN = int(str(os.getenv("VIVA_SETUP_CANDLE_MIN", "") or "").strip() or 120)
+_SETUP_COUNT_FN = {
+    "TECHCLASSIC": ("analysis.techclassic", "techclassic_candles_for"),
+    "ALBROX": ("analysis.albrox", "albrox_candles_for"),
+    "PINVAL": ("analysis.pinval", "pinval_candles_for"),
+    "PINWALLQ": ("analysis.pinval", "pinval_candles_for"),
+    "PINWALL": ("analysis.pinval", "pinval_candles_for"),
+    "TLBREAK": ("analysis.tlbreak", "tlbreak_candles_for"),
+}
+
+
+def _setup_pattern_span(candidate) -> int:
+    md = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+    for k in ("pattern_span", "tc_pattern_span", "viva_pattern_span", "pinval_pattern_span"):
+        try:
+            v = int(md.get(k) or 0)
+        except Exception:
+            v = 0
+        if v > 0:
+            return v
+    try:
+        _pp = (md.get("render_patterns") or [])
+        if _pp:
+            _xs = []
+            for _p in _pp:
+                for _ln in (_p.get("lines") or []):
+                    for _pt in (_ln.get("points") or []):
+                        _xs.append(str(_pt.get("ts") or ""))
+            if len(_xs) >= 2:
+                _d = pd.to_datetime(pd.Series(_xs)).sort_values()
+                _mins = (_d.iloc[-1] - _d.iloc[0]).total_seconds() / 60.0
+                return int(_mins)
+    except Exception:
+        pass
+    return 0
+
+
+def _setup_chart_count(candidate, chart_tf: str, base: int, frame=None) -> int:
+    """The chart window (bars) for a SETUP chart: the owning engine's own count
+    for this TF and pattern span, floored at VIVA_SETUP_CANDLE_MIN (120), and
+    never thinner than the pattern's own origin needs (his «هندسه باید دیده
+    بشه» law). SPOT is not routed here (own R99q12 law)."""
+    _base = int(base or 300)
+    _md = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+    _span = _setup_pattern_span(candidate)
+    _pattern = str(_md.get("viva_pattern") or _md.get("pattern_type") or "")
+    _own = 0
+    _spec = _SETUP_COUNT_FN.get(str(getattr(candidate, "setup_code", "") or "").upper())
+    if _spec:
+        try:
+            import importlib as _il14
+            _fn = getattr(_il14.import_module(_spec[0]), _spec[1])
+            _own = int(_fn(chart_tf, _span, _pattern) or 0)
+        except Exception:
+            _own = 0
+    _want = max(int(_SETUP_CANDLE_MIN), _own, 0)
+    # the pattern's own origin must be inside the picture: bars from the FIRST
+    # pivot to now (never less than the law's floor)
+    try:
+        if frame is not None and len(frame) and _span > 0:
+            try:
+                from database.repository_v7 import TF_MINUTES as _TFM14
+                _tfm = float(_TFM14.get(str(chart_tf).lower()) or 0) or 0.0
+            except Exception:
+                _tfm = 0.0
+            if _tfm > 0:
+                _bars = int(_span / _tfm) if _span > 60 else int(_span)
+                _want = max(_want, min(len(frame), _bars + 24))
+    except Exception:
+        pass
+    if frame is not None and len(frame):
+        _want = min(_want, len(frame))
+    return max(60, min(max(_base, _want), 600))
+
+
 def _smart_y_window(c_lo: float, c_hi: float, atr: float,
                     ov_lo: Optional[float] = None,
                     ov_hi: Optional[float] = None,
                     recent_lo: Optional[float] = None,
                     recent_hi: Optional[float] = None,
                     log_space: bool = False,
-                    bars: int = 0) -> Optional[tuple]:
+                    bars: int = 0,
+                    candle_ranges=None) -> Optional[tuple]:
     """r37 SMART price zoom — «کندلها تا حد امکان در مرکز صفحه چارت قرار
     بگیرند … ابزار نصفه نیمه رسم میشه».
 
@@ -2143,6 +2226,30 @@ def _smart_y_window(c_lo: float, c_hi: float, atr: float,
     # candle block gets a TIGHT pad (less dead headroom → bigger pattern);
     # quiet tapes keep the roomy pad. (The 20% «scroll» pad of 10-06..10-11
     # violated this law and flattened every chart — retired.)
+    # ── R99q14 CANDLE-HEIGHT LAW (Viva 10-15, verbatim: «راستی در چارت‌هایی که
+    # می‌فرستم تعیین هوشمند ارتفاع کندل‌ها رعایت نشده، در ستاپ‌ها در همه
+    # تایم‌فریم‌هاشون ارتفاع کندل‌ها نباید بیشتر ۷۰ درصد بشه»): the pane opens up
+    # until no candle fills more than 70% of the price window and the TYPICAL
+    # candle stays a readable share of it. Candles are never cut (r40 law) — the
+    # axis simply grows, which is exactly what «محور جمع شه، کندل‌ها کوتاه‌تر بشن»
+    # asked for, in the opposite direction (a spike may not flatten the tape).
+    try:
+        if candle_ranges is not None:
+            _rr = np.asarray(candle_ranges, dtype=float)
+            _rr = _rr[np.isfinite(_rr) & (_rr > 0)]
+            if _rr.size >= 3:
+                _max_r = float(np.percentile(_rr, 99.0))
+                _med_r = float(np.median(_rr))
+                _need = max(_max_r / 0.70, _med_r / 0.30)
+                _cur = (yhi - 0.015 * yr) - (ylo - 0.05 * yr)
+                _cur = max(_cur, yhi - ylo)
+                if _need > _cur:
+                    _mid14 = 0.5 * (yhi + ylo)
+                    ylo, yhi = _mid14 - 0.5 * _need, _mid14 + 0.5 * _need
+    except Exception as _ch14:
+        print(f"candle-height law skipped: {_ch14}")
+    # the r57 pad speaks the PRE-law span: the candle-height law above may only
+    # OPEN the pane (more room), never re-shape the approved tight/roomy pads.
     if r_span >= 3.0 * _a:
         return ylo - 0.015 * yr, yhi + 0.025 * yr
     return ylo - 0.05 * yr, yhi + 0.06 * yr
@@ -2434,6 +2541,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # the r51 per-TF re-fit, and «نقطهٔ شروع زوم» must always show the
         # CryptoCove density, never a month of needle candles.
         _lookback = _CHART_CANDLE_COUNTS.get(_chart_tf, 300)
+        # ── R99q14 SETUP-CHART CANDLE LAW (Viva 10-15, verbatim: «ستاپ‌ها هم از
+        # ۱۲۰ به بالا باید باشه بر اساس انتخاب پترن در زوم درست … چارت‌ها اکثرا
+        # نه هندسه دارن نه اینکه زوم درستی دارن»): a SETUP chart's window is the
+        # OWNING setup's own count (its engine's `*_candles_for(tf, pattern_span,
+        # pattern)` — the pattern selection drives the zoom), floored at
+        # VIVA_SETUP_CANDLE_MIN (120) and widened to include the pattern origin.
+        # SPOT keeps its own R99q12 law (handled below).
+        if not _is_spot:
+            try:
+                _lookback = _setup_chart_count(candidate, _chart_tf, _lookback, df)
+            except Exception as _lc14:
+                print(f"setup candle count fallback: {_lc14}")
         # r37 (Viva 09-26, «ترندهای ماژور و مینور مهم اصلا دیده نمیشن و رسم
         # نمیشن»): the r33 identity pins a chain's geometry forever, but the
         # render window is re-cut per render — when the fetch returns fewer
@@ -3269,7 +3388,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _ptype = str(_pat_item.get("type") or "").upper()
                 if any(t in _ptype for t in _two_line_types):
                     _existing_lines = _pat_item.get("lines") or []
-                    _sides = {str(l.get("side") or "").upper() for l in _existing_lines}
+                    _sides = {("HIGH" if str(l.get("side") or "").upper() in ("HIGH", "UPPER")
+                               else ("LOW" if str(l.get("side") or "").upper() in ("LOW", "LOWER")
+                                     else str(l.get("side") or "").upper()))
+                              for l in _existing_lines}
                     if "HIGH" not in _sides or "LOW" not in _sides:
                         # Missing one of the edges: fit the complementary edge from frame pivots
                         from analysis.viva_tlbreak import fit_validated_line, load_config
@@ -3428,6 +3550,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # built on: the M/W/H&S polyline + its neckline, time-projected
             # (identical on every chart of the code — snapshot lock).
             if _pat.get("pivots_ts"):
+                _drew63 = False
                 try:
                     _pv63 = [p for p in (_pat.get("pivots_ts") or []) if p.get("timestamp")]
                     _xs63 = _viva_points_xs(_pv63, frame)
@@ -3453,9 +3576,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                 va="bottom" if _bear63 else "top", zorder=12,
                                 bbox={"boxstyle": "round,pad=0.22", "facecolor": CHART_THEME["panel"],
                                       "edgecolor": "none", "alpha": 0.78})
+                        _drew63 = True
                 except Exception as _e63:
                     print(f"R63 pivot draw warning: {_e63}")
-                continue
+                # R99q14: a TWO-pivot pattern (the pre-break early-alert lane
+                # hands the owning engine's own two-pivot line/edge) has no
+                # M/W/H&S polyline to paint. Falling through to the standard
+                # edge painter below keeps its geometry ON the canvas — the
+                # unconditional `continue` here is what left the photo with
+                # ZERO sloped lines and tripped the honesty veto
+                # («cites TRENDLINE but 0 in-canvas sloped lines»).
+                if _drew63:
+                    continue
             # Viva 09-18 placement law: lines are re-anchored by PIVOT
             # TIMESTAMP onto THIS frame (the fit window and the chart frame
             # are different slices — index coords misplaced every line) and
@@ -3483,10 +3615,48 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception:
                 _pscale8 = _tfscale
             for _ln0 in (_pat.get("lines") or []):
+                # ── R99q14: a line that arrives as its PIVOT POINTS (the
+                # pre-break early-alert lane hands the engine's own geometry,
+                # never a fitted number) has no slope yet. Derive it on THIS
+                # frame — the true angle of the rendered tape — instead of
+                # exploding the whole chart with a KeyError (UNI pre-break
+                # watch: «Chart generation error: 'slope'», no picture at all).
+                if "slope" not in _ln0 or _ln0.get("intercept") is None:
+                    try:
+                        _pp0 = list(_ln0.get("points") or [])
+                        # R99q14: the RENDER contract speaks {"ts","price"} (r59)
+                        # while _viva_points_xs reads {"timestamp"} — feeding it
+                        # the raw "ts" points returned NaN for BOTH ends, the
+                        # slope then collapsed to 0.0 (the `except` below) and
+                        # the edge was painted as a FLAT supply/demand band. The
+                        # honesty veto then killed the whole photo («cites
+                        # TRENDLINE but 0 in-canvas sloped lines») — the exact
+                        # «هندسه نداره» class. Normalise the key, never trust it.
+                        _pp0x = [{"timestamp": (_p.get("timestamp") or _p.get("ts")
+                                                or _p.get("bar_ts")),
+                                  "price": _p.get("price")} for _p in _pp0]
+                        _xs0 = _viva_points_xs(_pp0x, frame)
+                        _ys0 = [float(_p.get("price")) for _p in _pp0]
+                        _ok0 = [(x, y) for x, y in zip(_xs0, _ys0)
+                                if math.isfinite(float(x)) and math.isfinite(float(y))]
+                        if len(_ok0) >= 2:
+                            (_xa0, _ya0), (_xb0, _yb0) = _ok0[0], _ok0[-1]
+                            if abs(float(_xb0) - float(_xa0)) > 1e-9:
+                                _sl0 = (float(_yb0) - float(_ya0)) / (float(_xb0) - float(_xa0))
+                            else:
+                                _sl0 = 0.0
+                            _ln0 = dict(_ln0)
+                            _ln0["slope"] = float(_sl0) / float(_pscale8 or 1.0)
+                            _ln0["intercept"] = float(_ya0) - float(_ln0["slope"]) * float(_xa0)
+                    except Exception as _drv0:
+                        print(f"line-slope derive skipped: {_drv0}")
                 # the stored slope is price per TRIGGER-TF bar; on a stepped-up
                 # display TF a bar spans more time, so the slope rescales by
                 # 1/scale (15m→1h: ×4) — the line keeps its true angle.
-                _sl8 = float(_ln0["slope"]) / _pscale8
+                try:
+                    _sl8 = float(_ln0["slope"]) / _pscale8
+                except Exception:
+                    _sl8 = 0.0
                 _pt8 = _ln0.get("points") or []
                 _ts8 = None
                 try:
@@ -3601,7 +3771,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # far/blue law is RETIRED: every edge keeps its own side hue
                 # and the near/far hierarchy is BOLD vs FAINT weight.
                 # CryptoCove Signature: spot channel and wedge lines are crisp dark mono (#1F2328)
-                _col8 = "#1F2328" if _is_spot else (CHART_THEME["supply"] if _ln.get("side") == "HIGH" else CHART_THEME["demand"])
+                # R99q14: the render contract speaks {upper, lower} while the
+                # detectors speak {HIGH, LOW} — an "upper" edge used to fall
+                # through to the DEMAND hue (a red-above/green-below law
+                # violation: the short edge painted green).
+                _side8 = str(_ln.get("side") or "").upper()
+                _is_upper8 = _side8 in ("HIGH", "UPPER")
+                _col8 = "#1F2328" if _is_spot else (CHART_THEME["supply"] if _is_upper8 else CHART_THEME["demand"])
                 # Viva 09-18 (his AAVE ruling): a FLAT «trendline» is not a
                 # trend — it is the supply/demand box of the base it came
                 # from, so paint it as a zone band instead of a line.
@@ -3620,7 +3796,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                     _y8 + 0.12 * _atr9, color=_col8,
                                     alpha=0.10, linewidth=0, zorder=1)
                     ax.text(_xe - 1.0, _y8,
-                            "SUPPLY" if _ln.get("side") == "HIGH" else "DEMAND",
+                            "SUPPLY" if _is_upper8 else "DEMAND",
                             color=_col8, fontsize=6.5, va="center", ha="right",
                             fontweight="bold", zorder=12)
                     _flat8.append(True)
@@ -4702,7 +4878,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             recent_lo=float(_ll64[-40:].min()),
                             recent_hi=float(_lh64[-40:].max()),
                             log_space=True,
-                            bars=len(frame))
+                            bars=len(frame),
+                            candle_ranges=(_lh64 - _ll64))
                         if _w64:
                             _win28 = (10.0 ** _w64[0], 10.0 ** _w64[1])
             except Exception:
@@ -4719,7 +4896,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     min(_ovs28) if _ovs28 else None, max(_ovs28) if _ovs28 else None,
                     recent_lo=float(_vf["low"].tail(40).min()),
                     recent_hi=float(_vf["high"].tail(40).max()),
-                    bars=len(_vf))
+                    bars=len(_vf),
+                    candle_ranges=(_vf["high"].astype(float).to_numpy()
+                                   - _vf["low"].astype(float).to_numpy()))
             if _win28:
                 ax.set_ylim(*_win28)
                 if _cfm73:
@@ -5020,6 +5199,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         return _png
     except Exception as exc:
         print(f"Chart generation error {candidate.signal_id}: {exc}")
+        if str(os.getenv("VIVA_CHART_TRACEBACK", "") or "").strip() == "1":
+            import traceback as _tb14
+            _tb14.print_exc()
         return None
 
 

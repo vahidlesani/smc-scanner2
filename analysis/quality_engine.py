@@ -1729,6 +1729,27 @@ def evaluate_confirmation(
                 executable_entry = float(_rb["to"])
         except Exception as _rb_exc:
             print(f"confirm rebase skipped {getattr(candidate, 'signal_id', '?')}: {_rb_exc}")
+        # ── R99q14 (Viva 10-15: «تأیید سر وقت برسه») — the stale guard in main
+        # measures the age of the bar the ENTRY comes from (`confirm_entry_bar`).
+        # The rebase DECLINES a chased plan (the close already ran past the old
+        # ladder) and in exactly that case nothing used to be stamped, so the
+        # guard fell back to the OLD break bar and condemned a verdict computed
+        # on the LIVE close («⏳ ۱۶۵ دقیقه» — UNIUSDT·T698813, published 215
+        # minutes after its first valid close). Stamp the bar the entry is
+        # actually taken from, always — a chased ladder is a CAPTION fact, never
+        # a reason to call the fresh close stale.
+        try:
+            _md14 = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+            if _rb_bar and not _md14.get("confirm_entry_bar"):
+                _md14["confirm_entry_bar"] = str(_rb_bar)[:19]
+                try:
+                    _md14["confirm_entry_tf_min"] = float(frame_tf_minutes or 0.0) or None
+                except Exception:
+                    pass
+                _md14["entry_source"] = "CONFIRM_TF_LAST_CLOSE"
+            candidate.metadata = _md14
+        except Exception as _st14:
+            print(f"confirm entry stamp skipped {getattr(candidate, 'signal_id', '?')}: {_st14}")
     # R62-ARENA (audit C6, evaluated): the executable entry stays the NEWEST
     # closed price — that is what a member can actually fill; the confirming
     # close is recorded next to it for the record (a break bar older than two

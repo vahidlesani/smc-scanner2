@@ -86,8 +86,11 @@ def tlbreak_detect(bundle, style="DAYTRADE"):
 
 def tlbreak_find_pivots(highs, lows, left=2, right=2):
     try:
-        _h = [float(x) for x in (highs or [])]
-        _l = [float(x) for x in (lows or [])]
+        # R99q14: `x or []` is a numpy/pandas landmine — `bool(array)` raises
+        # ValueError and the guard below then reports an EMPTY pivot set, i.e.
+        # geometry silently disappears on any engine given arrays/series.
+        _h = [float(x) for x in ([] if highs is None else highs)]
+        _l = [float(x) for x in ([] if lows is None else lows)]
     except Exception:
         return {"highs": [], "lows": []}
     _n = min(len(_h), len(_l))
@@ -114,11 +117,19 @@ _CANDLE_FLOOR = 80   # کف قانونی او؛ VIVA_CANDLE_MIN آن را overri
 
 
 def _candle_floor() -> int:
+    """R99q14 SETUP-CANDLE LAW (Viva 10-15, verbatim: «ستاپ‌ها هم از ۱۲۰ به بالا
+    باید باشه بر اساس انتخاب پترن در زوم درست … چارت‌ها اکثرا نه هندسه دارن نه
+    اینکه زوم درستی دارن»): the setup's own floor is 120 candles now (his 80-floor
+    of 10-15 stayed for the raw detection tape; the PICTURE of a setup must show
+    the pattern), still overridable per deploy.
+    """
     try:
         import os as _os
-        return max(20, int(str(_os.getenv("VIVA_CANDLE_MIN", "") or "").strip() or 80))
+        _own = int(str(_os.getenv("VIVA_SETUP_CANDLE_MIN", "") or "").strip() or 120)
+        _old = int(str(_os.getenv("VIVA_CANDLE_MIN", "") or "").strip() or 80)
+        return max(20, _own, _old)
     except Exception:
-        return 80
+        return 120
 
 
 _TLBREAK_FRAME_PAD = {"15m": 70, "30m": 75, "1h": 85, "2h": 95, "4h": 105, "6h": 110, "8h": 110, "12h": 115, "1d": 125, "3d": 145, "1w": 155}
@@ -275,3 +286,109 @@ def tlbreak_tohom_fired(candidate, lower_closed_df=None, **kw):
         return bool(_ok)
     except Exception:
         return False
+
+
+# ── R99q14 PRE-BREAK EARLY ALERT — TLBREAK's OWN two-pivot watch line (this lane
+# already existed for TLBREAK inside setups_experimental; it now answers through
+# the setup's own engine so every setup speaks the same law pre-break).
+def _prebreak_atr(df) -> float:
+    try:
+        from analysis.brooks_pa import atr as _atr_b
+        _v = float(_atr_b(df))
+        return _v if _v > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def tlbreak_prebreak(df, tf: str, symbol: str = "", bundle=None,
+                     live_price: float = None) -> list:
+    """Pre-break events from TLBREAK's own 2-pivot watch fit."""
+    if df is None or len(df) < 45:
+        return []
+    try:
+        from analysis.viva_tlbreak import fit_two_pivot_watch
+    except Exception:
+        return []
+    atr_v = _prebreak_atr(df)
+    if atr_v <= 0:
+        return []
+    live = live_price
+    if live is None:
+        try:
+            live = float(df["close"].iloc[-1])
+        except Exception:
+            return []
+    n = len(df)
+    out = []
+    band = 1.2
+    try:
+        from analysis.prebreak_lane import band_atr as _band
+        band = max(1.2, float(_band()))
+    except Exception:
+        pass
+    for side in ("HIGH", "LOW"):
+        try:
+            w = fit_two_pivot_watch(df, side)
+        except Exception:
+            w = None
+        if w is None:
+            continue
+        try:
+            edge = float(w.price_at(n - 1))
+        except Exception:
+            continue
+        if edge <= 0:
+            continue
+        _side = "upper" if side == "HIGH" else "lower"
+        _dir = "LONG" if side == "HIGH" else "SHORT"
+        # slope must still be approaching (a high line falls onto price, a low
+        # line rises into it) — the engine's own doctrine
+        try:
+            if side == "HIGH" and float(w.slope) >= 0:
+                continue
+            if side == "LOW" and float(w.slope) <= 0:
+                continue
+        except Exception:
+            pass
+        # already broken → the confirm lane owns it
+        try:
+            closes = df["close"].astype(float).to_numpy()
+            if _side == "upper" and closes[-1] > edge + 0.10 * atr_v:
+                continue
+            if _side == "lower" and closes[-1] < edge - 0.10 * atr_v:
+                continue
+        except Exception:
+            pass
+        dist = abs(live - edge) / atr_v
+        if dist > band:
+            continue
+        try:
+            _pts = [{"ts": str(df["timestamp"].iloc[int(w.first["index"])]),
+                     "price": float(w.first["price"])},
+                    {"ts": str(df["timestamp"].iloc[int(w.last["index"])]),
+                     "price": float(w.last["price"])}]
+        except Exception:
+            _pts = []
+        out.append({
+            "setup": "TLBREAK",
+            "setup_name": "VIVA-TLBREAK",
+            "tf": tf,
+            "pattern_tf": tf,
+            "side": _side,
+            "direction": _dir,
+            "pattern": "TRENDLINE",
+            "pattern_fa": "ترندلاین دو پیوتی",
+            "edge": edge,
+            "distance_atr": round(dist, 3),
+            "line_geo": {"price": edge, "a": edge, "b": float(getattr(w, "slope", 0.0) or 0.0)},
+            "pattern_geo": {},
+            "trendline_points": _pts,
+            "measured": {"from": edge, "to": edge, "pct": 0.0, "height": 0.0},
+            "touches": 2,
+            "score": 6,
+            "atr": atr_v,
+            "state": "EDGE_NEAR",
+            "note_fa": (f"ترندلاین { 'بالایی' if _side == 'upper' else 'پایینی' } دو پیوتی معتبر "
+                        f"و قیمت درون الگو به آن نزدیک شده ({edge:g}) — بریک هنوز تأیید نشده."),
+        })
+    return out

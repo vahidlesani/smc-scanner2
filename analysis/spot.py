@@ -87,8 +87,11 @@ def spot_detect(symbol, bundle):
 def spot_find_pivots(highs, lows, left=3, right=3):
     """SPOT pivots (engine 3): HTF fractals on WICK highs/lows."""
     try:
-        _h = [float(x) for x in (highs or [])]
-        _l = [float(x) for x in (lows or [])]
+        # R99q14: `x or []` is a numpy/pandas landmine — `bool(array)` raises
+        # ValueError and the guard below then reports an EMPTY pivot set, i.e.
+        # geometry silently disappears on any engine given arrays/series.
+        _h = [float(x) for x in ([] if highs is None else highs)]
+        _l = [float(x) for x in ([] if lows is None else lows)]
     except Exception:
         return {"highs": [], "lows": []}
     _n = min(len(_h), len(_l))

@@ -299,22 +299,44 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     if box_drawn:
         bx0 = n + 1
         bx1 = n + 7
-        lo_, hi_ = sorted([float(level), float(target)])
+        # ── R99q14 BOX CALIBRATION (Viva 10-15, verbatim: «باکس باید در انتهای
+        # پترن یا ترندلاین روی بالای ترند بالایی … برای لانگ و زیر ترند پایین
+        # پترن یا زیر ترندلاین برای شورت بصورت کالیبره روی و زیر اضلاع پترن‌ها و
+        # ترندلاین‌ها قرار بگیره»): the pattern-side edge of the box IS the
+        # shape's own line evaluated at the box's own x. A sloped trendline is
+        # not a flat number — the box rides the line (exactly ON it for a long,
+        # exactly UNDER it for a short) at the END of the pattern, and the
+        # target edge sits on the measured-move side. No floating, no gap.
+        _edge_ln = a.get("upper") if up_dir else a.get("lower")
+        _lvl14 = float(level)
+        try:
+            if _edge_ln is not None and hasattr(_edge_ln, "price_at"):
+                _lvl14 = float(_edge_ln.price_at(bx0))
+        except Exception:
+            _lvl14 = float(level)
+        _tgt14 = float(target)
+        _min_h14 = abs(_lvl14) * max(d_span * 0.35, 0.012)
+        if up_dir:
+            lo_ = _lvl14
+            hi_ = max(_tgt14, _lvl14 + _min_h14)          # box sits ON/above the edge
+        else:
+            hi_ = _lvl14
+            lo_ = min(_tgt14, _lvl14 - _min_h14)          # box hangs UNDER the edge
         _fce, _ece, _tcol = (("#A8D49B", "#388E3C", "#1B5E20") if up_dir
                              else ("#F2B8B0", "#C0392B", "#8E2418"))
-        ax.add_patch(Rectangle((bx0, lo_), bx1 - bx0, hi_ - lo_,
+        ax.add_patch(Rectangle((bx0, lo_), bx1 - bx0, max(hi_ - lo_, 1e-12),
                                facecolor=_fce, edgecolor=_ece,
                                linewidth=1.4, alpha=0.65, zorder=5))
-        ax.plot([bx0, bx1], [float(level)] * 2, color=INK, lw=1.2, zorder=6)
-        ax.plot([bx0, bx1], [float(target)] * 2, color=_ece, lw=1.2, zorder=6)
-        ax.annotate("", xy=((bx0 + bx1) / 2, float(target)),
-                    xytext=((bx0 + bx1) / 2, float(level)),
+        ax.plot([bx0, bx1], [_lvl14] * 2, color=INK, lw=1.2, zorder=6)
+        ax.plot([bx0, bx1], [_tgt14] * 2, color=_ece, lw=1.2, zorder=6)
+        ax.annotate("", xy=((bx0 + bx1) / 2, _tgt14),
+                    xytext=((bx0 + bx1) / 2, _lvl14),
                     arrowprops=dict(arrowstyle="-|>", color=INK, lw=1.4,
                                     mutation_scale=14), zorder=7)
-        delta = abs(float(target) - float(level))
-        pct = (float(target) / float(level) - 1.0) * 100.0
-        _ytx = float(target) * math.exp(0.05 * d_span) if up_dir else \
-            float(target) * math.exp(-0.05 * d_span)
+        delta = abs(_tgt14 - _lvl14)
+        pct = (_tgt14 / _lvl14 - 1.0) * 100.0 if _lvl14 else 0.0
+        _ytx = _tgt14 * math.exp(0.05 * d_span) if up_dir else \
+            _tgt14 * math.exp(-0.05 * d_span)
         ax.text((bx0 + bx1) / 2, _ytx, f"{delta:.4g} ({pct:+.2f}%)",
                 ha="center", va="bottom" if up_dir else "top",
                 fontsize=9.5, fontweight="bold", color=_tcol, zorder=8)

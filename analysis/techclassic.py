@@ -196,8 +196,11 @@ def tc_find_pivots(highs, lows, left=2, right=2):
     Returns {"highs": [(i, price)], "lows": [(i, price)]}.
     """
     try:
-        _h = [float(x) for x in (highs or [])]
-        _l = [float(x) for x in (lows or [])]
+        # R99q14: `x or []` is a numpy/pandas landmine — `bool(array)` raises
+        # ValueError and the guard below then reports an EMPTY pivot set, i.e.
+        # geometry silently disappears on any engine given arrays/series.
+        _h = [float(x) for x in ([] if highs is None else highs)]
+        _l = [float(x) for x in ([] if lows is None else lows)]
     except Exception:
         return {"highs": [], "lows": []}
     _n = min(len(_h), len(_l))
@@ -232,11 +235,19 @@ _CANDLE_FLOOR = 80   # کف قانونی او؛ VIVA_CANDLE_MIN آن را overri
 
 
 def _candle_floor() -> int:
+    """R99q14 SETUP-CANDLE LAW (Viva 10-15, verbatim: «ستاپ‌ها هم از ۱۲۰ به بالا
+    باید باشه بر اساس انتخاب پترن در زوم درست … چارت‌ها اکثرا نه هندسه دارن نه
+    اینکه زوم درستی دارن»): the setup's own floor is 120 candles now (his 80-floor
+    of 10-15 stayed for the raw detection tape; the PICTURE of a setup must show
+    the pattern), still overridable per deploy.
+    """
     try:
         import os as _os
-        return max(20, int(str(_os.getenv("VIVA_CANDLE_MIN", "") or "").strip() or 80))
+        _own = int(str(_os.getenv("VIVA_SETUP_CANDLE_MIN", "") or "").strip() or 120)
+        _old = int(str(_os.getenv("VIVA_CANDLE_MIN", "") or "").strip() or 80)
+        return max(20, _own, _old)
     except Exception:
-        return 80
+        return 120
 
 
 def tc_candles_for(tf, pattern_span, pattern=None):
@@ -434,3 +445,86 @@ def tc_refine_geometry(candidate, bundle=None):
         except Exception:
             pass
         return candidate
+
+
+# ── R99q14 PRE-BREAK EARLY ALERT (Viva 10-15, verbatim: «باید قبل از اینکه قیمت
+# به اضلاع الگوها و یا در حال بریک پترنها و ترندلاینها برسه اولین هشدار ابتدایی
+# بده .. و بعد از بریک تایید بده … در همه ستاپها یکسانه … فقط بدون هر ستاپ جدا
+# جدا جراحی بشه»). TECHCLASSIC answers with its OWN engine states — the
+# EDGE_NEAR/BREAK_READY events `scan_edges` already mints while price is still
+# inside the pattern, near the edge, BEFORE the break. The lane owns the
+# cadence; this provider never touches the break lane's cooldown.
+_PREBREAK_TF_BELOW = {"5m": "1m", "15m": "5m", "30m": "15m", "1h": "15m",
+                      "2h": "30m", "4h": "1h", "8h": "2h", "1d": "4h", "3d": "1d"}
+
+
+def _prebreak_atr(df) -> float:
+    try:
+        from analysis.brooks_pa import atr as _atr_b
+        _v = float(_atr_b(df))
+        return _v if _v > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def techclassic_prebreak(df, tf: str, symbol: str = "", bundle=None,
+                         live_price: float = None) -> list:
+    """Pre-break events from the TECHCLASSIC engine itself (never a new detector)."""
+    try:
+        from analysis.pattern_engine import evaluate_prebreak as _pb
+    except Exception:
+        return []
+    if df is None or len(df) < 45:
+        return []
+    _below = _PREBREAK_TF_BELOW.get(str(tf or "").lower())
+    trig = None
+    if bundle is not None and _below:
+        try:
+            trig = bundle.get(_below)
+        except Exception:
+            trig = None
+    if trig is None or len(trig) < 12:
+        trig = df
+    live = live_price
+    if live is None:
+        try:
+            live = float(df["close"].iloc[-1])
+        except Exception:
+            live = None
+    atr_v = _prebreak_atr(df)
+    out = []
+    try:
+        evs = _pb(str(symbol or ""), df, trig, str(tf or ""), live_price=live,
+                  ignore_cooldown=True) or []
+    except Exception as exc:
+        print(f"TC prebreak skipped {symbol} {tf}: {exc}")
+        return []
+    for ev in evs:
+        if str(ev.get("state") or "").upper() not in ("EDGE_NEAR", "BREAK_READY"):
+            continue
+        out.append({
+            "setup": "TECHCLASSIC",
+            "setup_name": "TECNOCLASIC",
+            "tf": tf,
+            "pattern_tf": ev.get("pattern_tf") or tf,
+            "side": ev.get("side"),
+            "direction": ev.get("direction"),
+            "pattern": ev.get("pattern"),
+            "pattern_fa": ev.get("pattern_fa"),
+            "edge": ev.get("line_price"),
+            "distance_atr": ev.get("distance_atr"),
+            "line_geo": ev.get("line_geo") or {},
+            "edge_points": ev.get("edge_points") or [],
+            "pattern_geo": ev.get("pattern_geo") or {},
+            "upper_points": ev.get("upper_points") or [],
+            "lower_points": ev.get("lower_points") or [],
+            "measured": ev.get("measured") or {},
+            "touches": ev.get("touches"),
+            "score": ev.get("structure_score"),
+            "atr": atr_v,
+            "state": ev.get("state"),
+            "pattern_role": ev.get("pattern_role"),
+            "note_fa": (f"قیمت هنوز داخل الگوست و به ضلع {'بالایی' if str(ev.get('side')) == 'upper' else 'پایینی'} "
+                        f"نزدیک شده — شکست هنوز تأیید نشده."),
+        })
+    return out

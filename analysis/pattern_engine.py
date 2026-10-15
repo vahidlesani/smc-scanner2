@@ -1134,13 +1134,25 @@ def _r62_line_geo(line, frame, n, tf):
 
 
 def evaluate_prebreak(symbol: str, pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
-                      pattern_tf: str, live_price: Optional[float] = None) -> List[Dict]:
+                      pattern_tf: str, live_price: Optional[float] = None,
+                      ignore_cooldown: bool = False) -> List[Dict]:
+    """Pre-break events (NEAR/READY) of the TECHCLASSIC engine itself.
+
+    R99q14: `ignore_cooldown=True` is the PRE-BREAK LANE's contract (Viva 10-15:
+    «باید قبل از اینکه قیمت به اضلاع الگوها … برسه اولین هشدار ابتدایی بده»).
+    The 8-hour per-(symbol|tf|pattern|state|side) cooldown here belongs to the
+    old preview channel and it is exactly what swallowed the pre-break warning
+    when the break came hours later (UNI 30m: NEAR stamped 11:21, the break at
+    15:00, the next eligible preview 19:22 — «کار از کار گذشته»). The lane owns
+    its own cadence (prebreak_lane.gap_minutes) so a NEAR that matures into a
+    READY, or a re-approach after leaving the band, always speaks in time.
+    """
     out: List[Dict] = []
     for ev in choose_primary(scan_edges(pattern_df, trigger_df, pattern_tf, live_price=live_price)):
         if ev["state"] == STATE_BREAK:
             continue  # real breaks become candidates via the detector, not previews
         key = f"{symbol}|{pattern_tf}|{ev['pattern']}|{ev['state']}|{ev['side']}"
-        if _cooldown_ok(key, ev["state"]):
+        if ignore_cooldown or _cooldown_ok(key, ev["state"]):
             ev2 = dict(ev)
             ev2["symbol"] = symbol
             out.append(ev2)

@@ -417,9 +417,29 @@ def run_discovery_scan() -> Dict[str, int]:
                 continue
             _LAST_FULL_SCAN_AT[symbol] = time.monotonic()
             candidates = scan_bundle(bundle)
-            # TechnoClassic pre-break previews (4H/1D edges). Never a signal;
-            # cooldown-guarded; silently unavailable on any error.
-            if getattr(SETTINGS, "technoclassic_preview_alerts", True):
+            # ── R99q14 PRE-BREAK EARLY-ALERT LAW (Viva 10-15, verbatim: «باید قبل
+            # از اینکه قیمت به اضلاع الگوها … برسه اولین هشدار ابتدایی بده .. و
+            # بعد از بریک تایید بده … در همه ستاپ‌ها یکسانه … فقط بدون هر ستاپ
+            # جدا جدا جراحی بشه»): every enabled setup answers through its OWN
+            # engine (TECHCLASSIC's NEAR/READY edges, ALBROX's own zones,
+            # PINVAL's own pin lines, TLBREAK's own two-pivot line). The minted
+            # WATCH chains ride the standard educational dispatch below — the
+            # SAME message, chart and reply-chain the confirmation later joins.
+            try:
+                from analysis.prebreak_lane import prebreak_candidates
+                _pb14 = prebreak_candidates(
+                    bundle,
+                    skip_setups={str(getattr(_c, "setup_code", "") or "").upper()
+                                 for _c in candidates})
+                if _pb14:
+                    candidates = list(candidates) + list(_pb14)
+                    stats["prebreak"] = stats.get("prebreak", 0) + len(_pb14)
+            except Exception as exc:
+                print(f"PRE-BREAK lane skipped {symbol}: {exc}")
+            # Legacy TECHCLASSIC preview channel (its flat 8h per-edge cooldown
+            # is what let the pre-break warning slip past the break — retired by
+            # default, R99q14; the lane above is the one law now).
+            if str(os.getenv("TECHCLASSIC_PREVIEW_ALERTS", "0") or "0").strip() == "1":
                 try:
                     from analysis.pattern_engine import send_prebreak_alerts
                     send_prebreak_alerts(bundle)
@@ -2666,9 +2686,11 @@ def monitor_candidates() -> Dict[str, int]:
                     else:
                         candidate.status = "APPROACHING"
                         candidate.metadata["publication_pending"] = True
+                        stats["publish_retry"] = stats.get("publish_retry", 0) + 1
                         print(
-                            f"Confirmation publication pending {candidate.signal_id}; "
-                            "trade results remain disarmed"
+                            f"CONFIRM_PUBLISH_FAILED | {candidate.symbol} | "
+                            f"{candidate.setup_code} | {candidate.signal_id} — retrying next cycle "
+                            "(R99q14: a failed post is retried, never silent)"
                         )
             update_candidate(candidate)
             try:

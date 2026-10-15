@@ -93,8 +93,11 @@ def pinval_detect(bundle, style="DAYTRADE"):
 
 def pinval_find_pivots(highs, lows, left=2, right=2):
     try:
-        _h = [float(x) for x in (highs or [])]
-        _l = [float(x) for x in (lows or [])]
+        # R99q14: `x or []` is a numpy/pandas landmine — `bool(array)` raises
+        # ValueError and the guard below then reports an EMPTY pivot set, i.e.
+        # geometry silently disappears on any engine given arrays/series.
+        _h = [float(x) for x in ([] if highs is None else highs)]
+        _l = [float(x) for x in ([] if lows is None else lows)]
     except Exception:
         return {"highs": [], "lows": []}
     _n = min(len(_h), len(_l))
@@ -121,11 +124,19 @@ _CANDLE_FLOOR = 80   # کف قانونی او؛ VIVA_CANDLE_MIN آن را overri
 
 
 def _candle_floor() -> int:
+    """R99q14 SETUP-CANDLE LAW (Viva 10-15, verbatim: «ستاپ‌ها هم از ۱۲۰ به بالا
+    باید باشه بر اساس انتخاب پترن در زوم درست … چارت‌ها اکثرا نه هندسه دارن نه
+    اینکه زوم درستی دارن»): the setup's own floor is 120 candles now (his 80-floor
+    of 10-15 stayed for the raw detection tape; the PICTURE of a setup must show
+    the pattern), still overridable per deploy.
+    """
     try:
         import os as _os
-        return max(20, int(str(_os.getenv("VIVA_CANDLE_MIN", "") or "").strip() or 80))
+        _own = int(str(_os.getenv("VIVA_SETUP_CANDLE_MIN", "") or "").strip() or 120)
+        _old = int(str(_os.getenv("VIVA_CANDLE_MIN", "") or "").strip() or 80)
+        return max(20, _own, _old)
     except Exception:
-        return 80
+        return 120
 
 
 _PINVAL_FRAME_PAD = {"15m": 65, "30m": 70, "1h": 80, "2h": 90, "4h": 100, "6h": 105, "8h": 105, "12h": 110, "1d": 120, "3d": 140, "1w": 150}
@@ -243,3 +254,122 @@ def pinval_tohom_fired(candidate, lower_closed_df=None, **kw):
         return bool(_ok)
     except Exception:
         return False
+
+
+# ── R99q14 PRE-BREAK EARLY ALERT — PINVAL's OWN pin lines (Viva 10-15: the first
+# alert must arrive while price is still on the pattern side, before the break).
+# The pin's own anatomy rules are the judge (same thresholds the PINVAL detector
+# uses); the edge is the line whose close is the confirmation — the pin's HIGH
+# for a LONG trigger and its LOW for a SHORT.
+_PINVAL_MIN_GAP_BARS = 2
+
+
+def _prebreak_atr(df) -> float:
+    try:
+        from analysis.brooks_pa import atr as _atr_b
+        _v = float(_atr_b(df))
+        return _v if _v > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def pinval_prebreak(df, tf: str, symbol: str = "", bundle=None,
+                    live_price: float = None) -> list:
+    """Pre-break events from PINVAL's own pin-bar anatomy (no foreign detector)."""
+    if df is None or len(df) < 45:
+        return []
+    atr_v = _prebreak_atr(df)
+    if atr_v <= 0:
+        return []
+    try:
+        from config import get_settings
+        min_range = float(getattr(get_settings(), "pinv_min_range_atr", 0.6) or 0.6)
+    except Exception:
+        min_range = 0.6
+    live = live_price
+    if live is None:
+        try:
+            live = float(df["close"].iloc[-1])
+        except Exception:
+            return []
+    band = 0.85
+    try:
+        from analysis.prebreak_lane import band_atr as _band
+        band = float(_band())
+    except Exception:
+        pass
+    n = len(df)
+    out = []
+    seen_sides = set()
+    for i in range(n - 1, max(0, n - 26), -1):
+        if n - 1 - i < _PINVAL_MIN_GAP_BARS:
+            continue
+        try:
+            row = df.iloc[i]
+            o, h, l, c = (float(row["open"]), float(row["high"]),
+                          float(row["low"]), float(row["close"]))
+        except Exception:
+            continue
+        rng = h - l
+        body = abs(c - o)
+        if rng < min_range * atr_v or body <= 0:
+            continue
+        upper_wick = h - max(o, c)
+        lower_wick = min(o, c) - l
+        side = direction = None
+        if lower_wick >= 0.60 * rng and body <= 0.35 * rng and c >= o:
+            edge, side, direction = h, "upper", "LONG"       # reclaim of the pin high
+        elif upper_wick >= 0.60 * rng and body <= 0.35 * rng and c <= o:
+            edge, side, direction = l, "lower", "SHORT"
+        if side is None or side in seen_sides:
+            continue
+        # the edge must NOT be broken yet (that is the confirm lane's moment)
+        if side == "upper" and live > edge + 0.10 * atr_v:
+            continue
+        if side == "lower" and live < edge - 0.10 * atr_v:
+            continue
+        dist = abs(live - edge) / atr_v
+        if dist > 2.4:
+            continue
+        if dist > band:
+            # inside/near the pin body is also a valid watch, but only while the
+            # pin's own zone still holds price (never a far-away edge)
+            if not (l - 0.25 * atr_v <= live <= h + 0.25 * atr_v):
+                continue
+        seen_sides.add(side)
+        out.append({
+            "setup": "PINVAL",
+            "setup_name": "PINVAL",
+            "tf": tf,
+            "pattern_tf": tf,
+            "side": side,
+            "direction": direction,
+            "pattern": "PINBAR",
+            "pattern_fa": "پین‌بار (خط پین)",
+            "edge": edge,
+            "distance_atr": round(dist, 3),
+            "line_geo": {"price": edge, "a": edge, "b": 0.0, "slope": 0.0,
+                         "ts": str(df["timestamp"].iloc[i]) if "timestamp" in df.columns else ""},
+            "pattern_geo": {},
+            "pin_high": h, "pin_low": l,
+            "pin_points": [{"ts": str(df["timestamp"].iloc[i]) if "timestamp" in df.columns else "",
+                            "price": edge}],
+            "measured": {"from": edge, "to": edge, "pct": 0.0, "height": 0.0},
+            "touches": 1,
+            "score": 6,
+            "atr": atr_v,
+            "state": "EDGE_NEAR",
+            "note_fa": ("پین‌بار تازه شکل گرفته و قیمت هنوز خط پین را با کلوز "
+                        f"({edge:g}) نشکسته — تأیید فقط با کلوزِ معتبر."),
+        })
+    return out
+
+
+def pinwall_prebreak(df, tf: str, symbol: str = "", bundle=None,
+                     live_price: float = None) -> list:
+    """PINWALL QUALITY rides the same own-engine pin law (its zones are pins)."""
+    _evs = pinval_prebreak(df, tf, symbol=symbol, bundle=bundle, live_price=live_price)
+    for _e in _evs:
+        _e["setup"] = "PINWALLQ"
+        _e["setup_name"] = "PINWALL QUALITY"
+    return _evs
