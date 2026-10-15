@@ -151,11 +151,13 @@ def daily_count(day=None, lane: Optional[str] = None) -> int:
 
 
 def daily_budget_ok(day=None) -> bool:
-    """True while TOTAL is under the daily cap (fail-open: True)."""
-    try:
-        return daily_count(day) < daily_cap()
-    except Exception:
-        return True
+    """RETIRED (R99q — Viva 10-15, verbatim: «گفتم گیت خشک‌کننده سیگنال‌های
+    ستاپ‌ها رو برداررررر»): the 25-signal/day TOTAL cap used to dry EVERY
+    setup at once (today: 21/25 by 04:40 Tehran, then silence). The licence
+    seats (3 concurrent per symbol/setup/trigger-TF, his 10-15 restatement)
+    and each setup's OWN concurrent slots (R99n) are the only caps now.
+    Kept as a function so old call sites never crash; always True."""
+    return True
 
 
 def daily_count_incr(lane: str, day=None):

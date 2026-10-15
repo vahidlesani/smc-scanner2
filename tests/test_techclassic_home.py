@@ -174,9 +174,11 @@ def test_tc_entry_late_annotated(monkeypatch):
     assert any("LATE" in a for a in _r["alarms"])
 
 
-def test_tc_entry_budget_deferred_never_dropped(monkeypatch):
+def test_tc_entry_budget_gate_retired(monkeypatch):
+    """R99q (his «گیت خشک‌کننده سیگنال‌های ستاپ‌ها رو بردارررر»): the shared
+    25/day budget used to dry every setup at once; now the old counters mean
+    nothing — the entry CONFIRMS."""
     _fake_kv(monkeypatch, {"tier_day_count:2099-02-04:futures": 20,
                            "tier_day_count:2099-02-04:spot": 5})
     _r = tc_entry_check(broke=True, closed_after_break=True, day="2099-02-04")
-    assert _r["decision"] == "DEFERRED_BUDGET"
-    assert any("never dropped" in x for x in _r["reasons"])
+    assert _r["decision"] == "CONFIRM"

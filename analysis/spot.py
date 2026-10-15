@@ -151,15 +151,11 @@ def spot_entry_check(*, broke_closed: bool, foreign_gates=(), day=None):
     if not broke_closed:
         reasons.append("no breaking closed candle yet")
         return {"decision": "WAIT", "alarms": alarms, "reasons": reasons}
-    try:
-        from analysis import tiered_scan as _ts
-        _budget_ok = bool(_ts.daily_budget_ok(day))
-    except Exception:
-        _budget_ok = True
-    if not _budget_ok:
-        reasons.append("daily TOTAL cap reached — deferred, never dropped")
-        return {"decision": "DEFERRED_BUDGET", "alarms": alarms,
-                "reasons": reasons}
+    # R99q (Viva 10-15, verbatim «گفتم گیت خشک‌کننده سیگنال‌های ستاپ‌ها رو
+    # بردارررر»): the daily TOTAL budget is RETIRED — a shared cap that
+    # dried EVERY setup at once (today 21/25 by 04:40 Tehran → silence).
+    # Capacity lives in the licence seats (3 concurrent per symbol/setup/
+    # trigger-TF) and the setup's own concurrent slots. Never deferred.
     try:
         from analysis import tiered_scan as _ts2
         _ts2.daily_count_incr("spot", day)

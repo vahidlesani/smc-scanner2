@@ -34,17 +34,18 @@ def _cand(spot=True):
 
 
 def test_spot_chart_trims_to_scan_window_before_live_row(monkeypatch):
+    """R99q: the single spot path is engine_spot.analyze + the one renderer."""
     import bot.messages_v7 as M
     from analysis.spot_engine import _spot_count
     seen = {}
 
-    def fake_render(df, candidate, confirmed=False):
+    def fake_render(df, a, path=None, symbol="", stage=""):
         seen["n"] = len(df)
         seen["last_ts"] = pd.Timestamp(df["timestamp"].iloc[-1])
         return b"PNG" * 400
 
-    monkeypatch.setattr("analysis.spot_pattern_engine.render_cryptocove_spot_chart",
-                        fake_render)
+    monkeypatch.setattr("tools.render_spot_cryptocove.render", fake_render)
+    monkeypatch.setattr("analysis.engine_spot.analyze", lambda df, tf: {"tf": tf})
     # no live row without live data — capture the trimmed closed window
     monkeypatch.setattr(M, "_frame_with_live_candle", lambda df, c: (df, None))
     monkeypatch.setattr(M, "_chart_cache_get", lambda k: None)
@@ -60,12 +61,12 @@ def test_spot_chart_keeps_short_frames_untouched(monkeypatch):
     import bot.messages_v7 as M
     seen = {}
 
-    def fake_render(df, candidate, confirmed=False):
+    def fake_render(df, a, path=None, symbol="", stage=""):
         seen["n"] = len(df)
         return b"PNG" * 400
 
-    monkeypatch.setattr("analysis.spot_pattern_engine.render_cryptocove_spot_chart",
-                        fake_render)
+    monkeypatch.setattr("tools.render_spot_cryptocove.render", fake_render)
+    monkeypatch.setattr("analysis.engine_spot.analyze", lambda df, tf: {"tf": tf})
     monkeypatch.setattr(M, "_frame_with_live_candle", lambda df, c: (df, None))
     monkeypatch.setattr(M, "_chart_cache_get", lambda k: None)
     monkeypatch.setattr(M, "_chart_cache_set", lambda k, v: None)
@@ -78,14 +79,14 @@ def test_futures_chart_frame_untouched(monkeypatch):
     import bot.messages_v7 as M
     seen = {}
 
-    def fake_render(df, candidate, confirmed=False):
+    def fake_render(df, a, path=None, symbol="", stage=""):
         seen["n"] = len(df)
         return b"PNG" * 400
 
     # futures path renders elsewhere; spot renderer must NOT be reached and
     # the frame must NOT be trimmed — patch the futures renderer instead.
-    monkeypatch.setattr("analysis.spot_pattern_engine.render_cryptocove_spot_chart",
-                        fake_render)
+    monkeypatch.setattr("tools.render_spot_cryptocove.render", fake_render)
+    monkeypatch.setattr("analysis.engine_spot.analyze", lambda df, tf: {"tf": tf})
     monkeypatch.setattr(M, "_frame_with_live_candle", lambda df, c: (df, None))
     monkeypatch.setattr(M, "_chart_cache_get", lambda k: None)
     monkeypatch.setattr(M, "_chart_cache_set", lambda k, v: None)

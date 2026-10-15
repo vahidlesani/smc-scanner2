@@ -75,10 +75,11 @@ def test_tlbreak_entry_side_late_budget(monkeypatch):
                              direction="SHORT", live=95.0, entry=100.0,
                              day="2099-07-01")
     assert any("LATE" in a for a in _l["alarms"])
+    # R99q (his «گیت خشک‌کننده رو بردار»): daily TOTAL budget retired.
     _fake_kv(monkeypatch, {"tier_day_count:2099-07-02:futures": 24,
                            "tier_day_count:2099-07-02:spot": 1})
     assert tlbreak_entry_check(broke=True, closed_after_break=True,
-                               day="2099-07-02")["decision"] == "DEFERRED_BUDGET"
+                               day="2099-07-02")["decision"] == "CONFIRM"
 
 
 def test_tlbreak_trailing_stop_runner():

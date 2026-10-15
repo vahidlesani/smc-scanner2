@@ -115,9 +115,12 @@ def test_position_gate_expires_after_window(monkeypatch):
 
 
 # ── R5 ────────────────────────────────────────────────────────────────
-def test_setup_licence_default_is_one():
+def test_setup_licence_default_is_concurrent_three():
+    """R5's «one per 24h» is SUPERSEDED by Viva 10-15 (verbatim): «اون ۳ زنجیره
+    ۳ سیگنال همزمان روی یک نماد در یک تایم فریمه … نه اینکه سقف هشدار و
+    تایید» — the licence is three CONCURRENT seats, no 24h publish quota."""
     from config import Settings
-    assert Settings().chains_per_symbol_setup_24h == 1
+    assert Settings().chains_per_symbol_setup_24h == 3
 
 
 # ── R6 ────────────────────────────────────────────────────────────────
