@@ -333,3 +333,72 @@ def test_r99q_albrox_under_touched_noise_wedge_dropped():
     assert _kept == []
     _kept2 = albrox_select_patterns([_real], 199)
     assert [str(p.get("type")) for p in _kept2] == ["WEDGE_FALLING"]
+
+
+# ── R99q7: weekly setup licence (his 10-15 «قانون موقت جدید») ──────────
+def test_r99q7_trigger_grid_and_bias_rule():
+    """Five trigger frames everywhere; the daily is bias-only in futures and
+    a legal trigger in spot (his «روزانه هم در اسپات داریم ... فقط بایاس»)."""
+    from analysis import tiered_scan as _ts
+    assert _ts.trigger_tfs("futures") == ("15m", "30m", "1h", "2h", "4h")
+    assert _ts.trigger_tfs("spot") == ("15m", "30m", "1h", "2h", "4h", "1d")
+    assert "1d" not in _ts.trigger_tfs("futures")
+    assert _ts.LICENCE_TF_COUNT == 5
+
+
+def test_r99q7_weekly_cap_env_and_symbols():
+    """His tunable: env wins; default = 5 × scanned symbols (40 → 200)."""
+    import os as _os
+    from analysis import tiered_scan as _ts
+    _keep = {k: _os.environ.get(k) for k in
+             ("VIVA_SETUP_WEEKLY_LICENCE", "VIVA_WEEKLY_LICENCE_PINVAL",
+              "VIVA_LICENCE_SYMBOLS")}
+    try:
+        for _k in _keep:
+            _os.environ.pop(_k, None)
+        _os.environ["VIVA_LICENCE_SYMBOLS"] = "40"
+        assert _ts.weekly_licence_cap("PINVAL") == 200     # his worked example
+        _os.environ["VIVA_LICENCE_SYMBOLS"] = "54"
+        assert _ts.weekly_licence_cap("PINVAL") == 270
+        _os.environ["VIVA_SETUP_WEEKLY_LICENCE"] = "120"
+        assert _ts.weekly_licence_cap("PINVAL") == 120     # global env wins
+        _os.environ["VIVA_WEEKLY_LICENCE_PINVAL"] = "45"
+        assert _ts.weekly_licence_cap("PINVAL") == 45      # per-setup env wins
+        assert _ts.weekly_licence_cap("ALBROX") == 120
+    finally:
+        for _k, _v in _keep.items():
+            if _v is None:
+                _os.environ.pop(_k, None)
+            else:
+                _os.environ[_k] = _v
+
+
+def test_r99q7_week_wallet_spends_and_resets():
+    """One wallet per setup per ISO week: spend, block at the cap, and the
+    NEXT week starts full again (his «ابتدای هر هفته آپدیت بشه»)."""
+    from analysis import tiered_scan as _ts
+    _wk = "1999-W07"          # an old week so the real wallet is untouched
+    _wk2 = "1999-W08"
+    assert _ts.weekly_count(_wk, "PROBE") == 0
+    assert _ts.weekly_licence_ok("PROBE", _wk) is True
+    for _ in range(3):
+        assert _ts.weekly_licence_incr("PROBE", _wk) == _ + 1
+    assert _ts.weekly_count(_wk, "PROBE") == 3
+    _cap = _ts.weekly_licence_cap("PROBE")
+    _ts.weekly_licence_incr("PROBE", _wk, n=_cap)
+    assert _ts.weekly_count(_wk, "PROBE") == 3 + _cap
+    assert _ts.weekly_licence_ok("PROBE", _wk) is False          # wallet empty
+    assert _ts.weekly_licence_ok("PROBE", _wk2) is True          # new week full
+    _snap = _ts.weekly_licence_snapshot(["PROBE"], _wk)
+    assert _snap["PROBE"]["used"] == 3 + _cap and _snap["PROBE"]["left"] == 0
+
+
+def test_r99q7_gates_are_wired_in_main():
+    """Both publish lanes consult the wallet, and the futures lane refuses a
+    1d trigger (bias-only law)."""
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _mn = open(os.path.join(_root, "main.py"), encoding="utf-8").read()
+    assert _mn.count("weekly_licence_ok(") == 2          # futures + spot
+    assert _mn.count("weekly_licence_incr(") == 2
+    assert "not in _tier99j.SETUP_TRIGGER_TFS" in _mn   # bias-only refusal
+    assert '"licence": _lic99' in _mn                   # DB-readable wallet

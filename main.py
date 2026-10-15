@@ -677,6 +677,22 @@ def run_discovery_scan() -> Dict[str, int]:
                         stats["tier_cap_skip"] = stats.get("tier_cap_skip", 0) + 1
                         _t(candidate)["tier_deferred"] = _t(candidate).get("tier_deferred", 0) + 1
                         continue
+                    # R99q7 (Viva 10-15 «قانون موقت جدید»): the daily frame is
+                    # BIAS ONLY in futures — it is never a setup trigger
+                    # («روزانه هم در اسپات داریم ... فقط جهت دیدن بایاس چک
+                    # می‌کنیم»). The 1d chart still prices the bias score.
+                    _trig7 = str(getattr(candidate, "trigger_timeframe", "") or "").lower()
+                    if _trig7 not in _tier99j.SETUP_TRIGGER_TFS:
+                        stats["bias_only_skip"] = stats.get("bias_only_skip", 0) + 1
+                        _t(candidate)["bias_only_skip"] = _t(candidate).get("bias_only_skip", 0) + 1
+                        continue
+                    # R99q7 weekly licence wallet: one pool PER SETUP across the
+                    # five trigger frames, refreshed at the ISO-week start.
+                    if not _tier99j.weekly_licence_ok(
+                            str(getattr(candidate, "setup_code", "") or "")):
+                        stats["weekly_licence_skip"] = stats.get("weekly_licence_skip", 0) + 1
+                        _t(candidate)["weekly_deferred"] = _t(candidate).get("weekly_deferred", 0) + 1
+                        continue
                 except Exception:
                     pass
                 for prior in supersede_alert_lineage(candidate):
@@ -721,6 +737,12 @@ def run_discovery_scan() -> Dict[str, int]:
                     _tier99j2.daily_count_incr("futures")
                 except Exception:
                     pass
+                try:  # R99q7: spend ONE weekly licence for this setup
+                    from analysis import tiered_scan as _tier99j3
+                    _tier99j3.weekly_licence_incr(
+                        str(getattr(candidate, "setup_code", "") or ""))
+                except Exception:
+                    pass
             if index % 10 == 0:
                 print(f"  scanned {index}/{len(symbols)} • new educational setups: {stats['new']}")
         except Exception as exc:
@@ -741,11 +763,16 @@ def run_discovery_scan() -> Dict[str, int]:
             _slots99 = {str(_k): {"open": int(_v),
                                   "cap": int(_tier99s.setup_cap(_k))}
                         for _k, _v in _by99.items()}
+            # R99q7: the weekly wallet must be readable from the DB summary
+            # («چند از ۲۰۰ مجوز این هفته خرج شد؟» without log diving).
+            _lic99 = _tier99s.weekly_licence_snapshot(
+                list(_slots99.keys()) + ["PINVAL", "ALBROX", "TLBREAK",
+                                         "TECHCLASSIC", "SPOT"])
             for _k in ("PINVAL", "ALBROX", "TLBREAK", "TECHCLASSIC", "SPOT"):
                 _slots99.setdefault(_k, {"open": 0,
                                          "cap": int(_tier99s.setup_cap(_k))})
         except Exception:
-            _slots99 = {}
+            _slots99, _lic99 = {}, {}
         _summary = {
             "when": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "streams": _streams,
@@ -761,6 +788,8 @@ def run_discovery_scan() -> Dict[str, int]:
             "deferred": stats.get("edu_cycle_deferred", 0),
             "tally": tally,
             "slots": _slots99,
+            "licence_week": _tier99s.week_key(),
+            "licence": _lic99,
         }
         _skv("scan_summary", _summary)
         # keep the last 24 cycles so «چرا این سیکل پیام نداد» is always
@@ -1151,6 +1180,12 @@ def run_spot_scan() -> Dict[str, int]:
                     _open99):
                 stats["tier_cap_skip"] = stats.get("tier_cap_skip", 0) + 1
                 continue
+            # R99q7: the SAME weekly wallet on the spot lane (spot keeps 1d
+            # as a legal trigger per his law).
+            if not _tier99.weekly_licence_ok(
+                    str(getattr(cand, "setup_code", "") or "SPOT")):
+                stats["weekly_licence_skip"] = stats.get("weekly_licence_skip", 0) + 1
+                continue
         except Exception:
             pass
         # R99h SPOT own-engine consult (fail-open, kill-switch SPOT_OWN_ENGINE_ENABLED=0).
@@ -1213,6 +1248,12 @@ def run_spot_scan() -> Dict[str, int]:
                     reply_to=int(_alert_kv.get("mid") or 0))
                 if _pub_mid:
                     stats["published"] += 1
+                    try:  # R99q7: spend one weekly licence for this spot setup
+                        from analysis import tiered_scan as _tier99w
+                        _tier99w.weekly_licence_incr(
+                            str(getattr(cand, "setup_code", "") or "SPOT"))
+                    except Exception:
+                        pass
                     _spot_stamp(key, window)      # marker ONLY after success
                     _spot_tf_position_commit(cand.symbol, cand.trigger_timeframe)
                     try:

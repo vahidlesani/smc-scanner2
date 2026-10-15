@@ -38,6 +38,130 @@ BASE_TFS = ("5m", "15m", "1h", "4h", "1d")
 LANES = ("futures", "spot")
 
 
+# ══════════════════════════════════════════════════════════════════════
+# R99q7 — WEEKLY SETUP LICENCE (Viva 10-15 «قانون موقت جدید», dictated)
+#   * setups trigger on FIVE frames: 15m, 30m, 1h, 2h, 4h  (the daily is
+#     NOT a setup trigger — it exists only in spot; futures read 1d for
+#     BIAS only, never as an entry trigger).
+#   * each setup owns N licences PER WEEK (N = env; default 5 × scanned
+#     symbols, his 40-symbols → 200 example), refreshed at week start.
+#   * the pool is ONE wallet across the five trigger frames: whichever
+#     frame's pattern/zones/trendlines are cleaner earns the licence
+#     («بر اساس کیفیت پترن ... می‌تونه به هر تایم تریگر که ... بهتری
+#     داشت داده بشه»). No per-frame sub-caps here.
+#   * total Telegram alerts per setup per week never exceed that N.
+# ══════════════════════════════════════════════════════════════════════
+SETUP_TRIGGER_TFS = ("15m", "30m", "1h", "2h", "4h")
+BIAS_TFS = ("1d",)
+SPOT_EXTRA_TRIGGER_TFS = ("1d",)   # daily lives in spot only
+LICENCE_TF_COUNT = len(SETUP_TRIGGER_TFS)
+
+
+def trigger_tfs(venue: str = "futures"):
+    """The law's trigger grid: 5 frames everywhere, +1d in spot."""
+    if str(venue or "").lower() == "spot":
+        return tuple(SETUP_TRIGGER_TFS) + tuple(SPOT_EXTRA_TRIGGER_TFS)
+    return tuple(SETUP_TRIGGER_TFS)
+
+
+def week_key(now=None) -> str:
+    """ISO week stamp of the licence wallet (Monday 00:00 UTC)."""
+    try:
+        _d = now or datetime.now(timezone.utc)
+        _y, _w, _ = _d.isocalendar()
+        return f"{int(_y)}-W{int(_w):02d}"
+    except Exception:
+        return datetime.now(timezone.utc).strftime("%Y-W%W")
+
+
+def scanned_symbol_count() -> int:
+    """How many symbols this licence is priced against (his 5×symbols)."""
+    for _name in ("VIVA_LICENCE_SYMBOLS", "VIVA_SCAN_SYMBOLS"):
+        try:
+            _v = str(os.getenv(_name, "") or "").strip()
+            if _v:
+                return max(1, int(_v))
+        except Exception:
+            pass
+    try:
+        from data.universe import UNIVERSE as _U
+        _syms, _ = _U.get()
+        if _syms:
+            return max(1, len(_syms))
+    except Exception:
+        pass
+    return 40  # his worked example
+
+
+def weekly_licence_cap(setup_code=None) -> int:
+    """Licences per setup per week: env first (his tunable), else 5×symbols."""
+    _code = str(setup_code or "").strip().upper()
+    try:
+        if _code:
+            _v = str(os.getenv(f"VIVA_WEEKLY_LICENCE_{_code}", "") or "").strip()
+            if _v:
+                return max(1, int(_v))
+        _v = str(os.getenv("VIVA_SETUP_WEEKLY_LICENCE", "") or "").strip()
+        if _v:
+            return max(1, int(_v))
+    except Exception:
+        pass
+    try:
+        return max(1, LICENCE_TF_COUNT * scanned_symbol_count())
+    except Exception:
+        return 200
+
+
+def _week_key_name(week: str, setup_code: str) -> str:
+    return f"tier_week_count:{week}:{str(setup_code or '').strip().upper()}"
+
+
+def weekly_count(week=None, setup_code=None) -> int:
+    """Alerts already spent by this setup in the ISO week."""
+    try:
+        return max(0, int(_kv().get_json(
+            _week_key_name(week or week_key(), setup_code), 0) or 0))
+    except Exception:
+        return 0
+
+
+def weekly_licence_ok(setup_code=None, week=None) -> bool:
+    """True while this setup still holds a licence this week."""
+    try:
+        return weekly_count(week, setup_code) < weekly_licence_cap(setup_code)
+    except Exception:
+        return True
+
+
+def weekly_licence_incr(setup_code=None, week=None, n: int = 1) -> int:
+    """Spend n licences after a successful publish. Returns the new count."""
+    try:
+        _wk = week or week_key()
+        _key = _week_key_name(_wk, setup_code)
+        _cur = max(0, int(_kv().get_json(_key, 0) or 0)) + max(1, int(n or 1))
+        _kv().set_json(_key, _cur)
+        return _cur
+    except Exception:
+        return -1
+
+
+def weekly_licence_snapshot(setups=None, week=None) -> dict:
+    """Readable wallet: {setup: {"used", "cap", "left"}} for the summary."""
+    _wk = week or week_key()
+    _codes = list(setups or ("PINVAL", "ALBROX", "TLBREAK", "TECHCLASSIC",
+                             "SPOT", "PINWALL LEGACY"))
+    _out = {}
+    for _c in _codes:
+        try:
+            _cap = weekly_licence_cap(_c)
+            _used = weekly_count(_wk, _c)
+            _out[str(_c)] = {"used": _used, "cap": _cap,
+                             "left": max(0, _cap - _used)}
+        except Exception:
+            continue
+    return _out
+
+
 def aggregate_frame(df, k: int, base_seconds: int = 86400,
                     monday_shift: bool = False):
     """Fold k base candles into one higher-TF candle (pure; tested).
