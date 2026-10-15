@@ -209,6 +209,24 @@ def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
     except Exception as exc:
         for candidate in candidates:
             candidate.metadata["mtf_candle_error"] = str(exc)[:180]
+    # R99o (Viva 10-15, R99i-pattern consult): TC/ALBROX own their geometry.
+    # The shared funnel's grab-bag (contradictory patterns, ancient anchors,
+    # label/chart mismatch) is validated/selected in the setup's OWN file.
+    # Routing only here; fail-open keeps the shared candidate on any error.
+    try:
+        from analysis.techclassic import tc_refine_geometry as _tc99o
+        from analysis.albrox import albrox_refine_geometry as _al99o
+        for _c99o in candidates:
+            try:
+                _s99o = str(getattr(_c99o, "setup_code", "") or "").upper()
+                if _s99o == "TECHCLASSIC":
+                    _tc99o(_c99o, bundle)
+                elif _s99o == "ALBROX":
+                    _al99o(_c99o, bundle)
+            except Exception as _e99o:
+                print(f"[R99o] refine fail-open {getattr(_c99o, 'signal_id', '?')}: {_e99o}")
+    except Exception as _e99o:
+        print(f"[R99o] geometry consult skipped: {_e99o}")
     return candidates
 
 def _as_utc(value: str) -> datetime:

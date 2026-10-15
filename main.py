@@ -241,7 +241,9 @@ _QUIET_RUN = 0
 # Structural quality lanes are exempt from the generic PinWall-oriented
 # unresolved-chain / same-zone / 24h licence suppression. Their own detector
 # geometry, score, sanity and duplicate checks remain active.
-_STRUCTURAL_QUALITY_LANES = frozenset({"ALBROX", "TLBREAK", "TECHCLASSIC"})
+# R99o (Viva 10-15, his order): exemption REMOVED — one licence law for
+# all 4 setups (exception clause: common anti-spam infra, not entry logic).
+_STRUCTURAL_QUALITY_LANES = frozenset()
 
 
 # ── Round-15 cost guard (Viva 09-21: «ببین استفاده الکی نداشته باشیم»).

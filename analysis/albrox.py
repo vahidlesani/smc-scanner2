@@ -210,3 +210,115 @@ def albrox_tohom_fired(candidate, lower_closed_df=None, **kw):
         return bool(_ok)
     except Exception:
         return False
+# ── R99o ALBROX-owned selection (Viva 10-15: keep BEST+NEAREST 2, XLM drew 4
+# incl. identical twins) ──
+_ALBROX_TYPE_ORDER = {"WEDGE": 0, "CHANNEL": 0, "TRIANGLE": 0, "FLAG": 1,
+                      "PENNANT": 1, "TRENDLINE": 2, "DOUBLE": 3, "RANGE": 4}
+
+
+def albrox_select_patterns(patterns, live_idx):
+    """Dedupe → drop stale/noise → keep top 2 (touches, recency, type)."""
+    _seen, _uniq = set(), []
+    for _p in (patterns or []):
+        if not isinstance(_p, dict):
+            continue
+        try:
+            _sig = (str(_p.get("type") or _p.get("name") or "").upper(),
+                    tuple(sorted(
+                        (float(L.get("x0") or 0), float(L.get("x1") or 0),
+                         round(float(L.get("slope") or 0), 10))
+                        for L in (_p.get("lines") or []) if isinstance(L, dict))))
+        except Exception:
+            _sig = (str(_p.get("type") or _p.get("name") or ""), ())
+        if _sig in _seen:
+            continue
+        _seen.add(_sig)
+        _uniq.append(_p)
+    _live = int(live_idx or 0)
+    _filt = []
+    for _p in _uniq:
+        _lines = [L for L in (_p.get("lines") or []) if isinstance(L, dict)]
+        if not _lines:
+            _filt.append(_p)  # band
+            continue
+        try:
+            _x1 = max(int(L.get("x1") or 0) for L in _lines)
+            _x0 = min(int(L.get("x0") or 0) for L in _lines)
+            _touches = sum(len(L.get("points") or []) for L in _lines)
+        except Exception:
+            continue
+        if _live and _x1 < _live - 48:
+            continue  # stale
+        if _touches == 0 and (_x1 - _x0) < 20:
+            continue  # empty noise
+        _filt.append(_p)
+
+    def _key(_p):
+        _lines = [L for L in (_p.get("lines") or []) if isinstance(L, dict)]
+        try:
+            _t = sum(len(L.get("points") or []) for L in _lines) if _lines else 1
+            _x = max(int(L.get("x1") or 0) for L in _lines) if _lines else _live
+        except Exception:
+            _t, _x = 0, 0
+        _fam = str(_p.get("type") or _p.get("name") or "").upper().split("_")[0]
+        return (-_t, -_x, _ALBROX_TYPE_ORDER.get(_fam, 5))
+
+    _filt.sort(key=_key)
+    return _filt[:2]
+
+
+def albrox_refine_geometry(candidate, bundle=None):
+    """ALBROX v2 mint filter (own file). Fail-open: errors return untouched."""
+    try:
+        md = getattr(candidate, "metadata", None)
+        if not isinstance(md, dict):
+            return candidate
+        _pats = list(md.get("render_patterns") or [])
+        _live = 0
+        try:
+            if bundle is not None:
+                _fr = bundle.get(getattr(candidate, "trigger_timeframe", ""))
+                if _fr is not None and len(_fr):
+                    _live = len(_fr) - 1
+        except Exception:
+            _live = 0
+        if not _live:
+            try:
+                _live = max(int(L.get("x1") or 0)
+                            for _p in _pats if isinstance(_p, dict)
+                            for L in (_p.get("lines") or [])
+                            if isinstance(L, dict))
+            except Exception:
+                _live = 0
+        _kept = albrox_select_patterns(_pats, _live)
+        _kept_ids = set(map(id, _kept))
+        md["render_patterns"] = _kept
+        try:
+            _spans = [max(int(L.get("x1") or 0) - int(L.get("x0") or 0), 0)
+                      for _p in _kept for L in (_p.get("lines") or [])
+                      if isinstance(L, dict)]
+            md["albrox_pattern_span"] = max(_spans) if _spans else 0
+        except Exception:
+            md["albrox_pattern_span"] = 0
+        # R99o context honesty (same law as TC): survivors are trigger-native.
+        _trig99o = str(getattr(candidate, "trigger_timeframe", "") or "")
+        if _kept and _trig99o:
+            if str(md.get("tl_context_tf") or "") != _trig99o:
+                md["albrox_context_was"] = md.get("tl_context_tf")
+            md["tl_context_tf"] = _trig99o
+        if _kept:
+            _drawn = str(_kept[0].get("type") or _kept[0].get("name") or "")
+            if _drawn:
+                md["render_htf_pattern"] = _drawn
+        md["albrox_owned"] = True
+        md["albrox_refined"] = True
+        md["albrox_dropped"] = [
+            str(_p.get("type") or _p.get("name")) for _p in _pats
+            if id(_p) not in _kept_ids]
+        return candidate
+    except Exception as _exc:
+        try:
+            print(f"[ALBROX-REFINE] fail-open: {_exc}")
+        except Exception:
+            pass
+        return candidate

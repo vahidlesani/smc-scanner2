@@ -2737,8 +2737,30 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # R99l (Viva 10-15: the right side sits too empty): tighter
         # future on futures; spot keeps its own window.
         future = 45 if _is_spot else (18 if _cfm73 else 16)
+        # R99o (Viva 10-15, R99i-pattern consult): TC owns its window — the
+        # shared count ignored tc_candles_for/tc_zoom_window (ZERO callers).
+        # xlim only (coords intact, no remap); fail-open to shared behavior.
+        _xlim99o = None
+        try:
+            if (str(getattr(candidate, "setup_code", "") or "").upper()
+                    == "TECHCLASSIC" and not _is_spot):
+                from analysis.techclassic import tc_candles_for as _tcc99o
+                from analysis.techclassic import tc_zoom_window as _tcz99o
+                _tf99o = str(((candidate.metadata or {}).get("chart_view_tf")
+                               or getattr(candidate, "trigger_timeframe", "")
+                               or "15m")).lower()
+                _span99o = (candidate.metadata or {}).get("tc_pattern_span") or 0
+                _cnt99o = int(_tcc99o(_tf99o, _span99o) or 0)
+                _n99o = int(count or 0)
+                if _n99o > 10 and _cnt99o > 10:
+                    _xlim99o = _tcz99o(_n99o, min(_cnt99o, _n99o))
+        except Exception:
+            _xlim99o = None
         for chart_ax in axes:
-            chart_ax.set_xlim(-1, count + future)
+            if _xlim99o is not None:
+                chart_ax.set_xlim(_xlim99o[0], count + future)
+            else:
+                chart_ax.set_xlim(-1, count + future)
         if _is_spot:
             try:
                 _mid_y = math.sqrt(float(frame["low"].min()) * float(frame["high"].max()))

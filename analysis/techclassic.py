@@ -270,3 +270,124 @@ def tc_tohom_fired(candidate, lower_closed_df=None, **kw):
         return bool(_ok)
     except Exception:
         return False
+# ── R99o TC-owned geometry (Viva 10-15, DOGE 15m: the shared funnel drew a
+# CHANNEL while the pill cited TRIANGLE, anchored 164 bars back) ──
+TC_MAX_ANCHOR_SPAN = {
+    "1m": 96, "3m": 96, "5m": 96, "15m": 96, "30m": 96,
+    "1h": 72, "2h": 72, "4h": 48, "8h": 48, "12h": 48,
+    "1d": 30, "3d": 30, "1w": 30,
+}
+_TC_MULTI_EDGE = {"WEDGE", "CHANNEL", "TRIANGLE", "FLAG", "PENNANT"}
+
+
+def _tc_fam(ptype) -> str:
+    return str(ptype or "").upper().split("_")[0]
+
+
+def tc_validate_pattern(pat, label_family, live_idx, tf):
+    """(keep, reason, new_type). TC's own honesty gate — see R99o header."""
+    if not isinstance(pat, dict):
+        return (False, "not-a-dict", None)
+    _t = str(pat.get("type") or pat.get("name") or "").upper()
+    _lines = [L for L in (pat.get("lines") or []) if isinstance(L, dict)]
+    if not _lines:
+        return (True, "band-kept", None)  # RANGE band: no lines to lie
+    _live = int(live_idx or 0)
+    try:
+        _x1s = [int(L.get("x1") or 0) for L in _lines]
+        _x0s = [int(L.get("x0") or 0) for L in _lines]
+    except Exception:
+        return (False, "bad-coords", None)
+    if _live and max(_x1s) < _live - 6:
+        return (False, "stale-end", None)  # R4: must reach live
+    _cap = TC_MAX_ANCHOR_SPAN.get(str(tf or "").lower(), 96)
+    if _live and (_live - min(_x0s)) > _cap:
+        return (False, "ancient-anchor", None)  # R2: the long-trash law
+    try:
+        _touches = sum(len(L.get("points") or []) for L in _lines)
+    except Exception:
+        _touches = 0
+    if _touches == 0 and (max(_x1s) - min(_x0s)) < 20:
+        return (False, "empty-noise", None)  # R5
+    if _tc_fam(_t) in _TC_MULTI_EDGE:
+        if label_family and _tc_fam(_t) != str(label_family).upper():
+            if len(_lines) == 1:
+                return (True, "relabel-trendline", "TRENDLINE")
+            return (False, "label-mismatch", None)  # R1: drawn==label
+        if len(_lines) < 2:
+            return (True, "relabel-trendline", "TRENDLINE")  # R3 honest single
+    return (True, "ok", None)
+
+
+def tc_refine_geometry(candidate, bundle=None):
+    """TC v2 mint filter (own file). Fail-open: errors return it untouched."""
+    try:
+        md = getattr(candidate, "metadata", None)
+        if not isinstance(md, dict):
+            return candidate
+        _pats = list(md.get("render_patterns") or [])
+        _tf = str(getattr(candidate, "trigger_timeframe", "") or "").lower()
+        _live = 0
+        try:
+            if bundle is not None:
+                _fr = bundle.get(getattr(candidate, "trigger_timeframe", ""))
+                if _fr is not None and len(_fr):
+                    _live = len(_fr) - 1
+        except Exception:
+            _live = 0
+        if not _live:
+            try:
+                _live = max(int(L.get("x1") or 0)
+                            for _p in _pats if isinstance(_p, dict)
+                            for L in (_p.get("lines") or [])
+                            if isinstance(L, dict))
+            except Exception:
+                _live = 0
+        _label = str(md.get("tl_pattern") or md.get("pattern_type") or "")
+        _fam = _label.split("_")[0].upper() if _label else ""
+        _kept, _dropped, _spans = [], [], []
+        for _p in _pats:
+            _keep, _reason, _newt = tc_validate_pattern(_p, _fam, _live, _tf)
+            if _keep:
+                _q = dict(_p)
+                if _newt:
+                    _q["type"] = _newt
+                _kept.append(_q)
+                try:
+                    _lx = [int(L.get("x1") or 0) - int(L.get("x0") or 0)
+                           for L in (_q.get("lines") or []) if isinstance(L, dict)]
+                    if _lx:
+                        _spans.append(max(_lx))
+                except Exception:
+                    pass
+            else:
+                _dropped.append(f"{(_p.get('type') or _p.get('name'))}:{_reason}")
+        md["render_patterns"] = _kept
+        md["tc_pattern_span"] = max(_spans) if _spans else 0
+        # R99o context honesty (Viva 10-15, honesty-veto class): surviving
+        # lines are TRIGGER-native (x-coords fit the trigger frame, not a 4H
+        # one); the 4H was the dropped pattern's HTF story. Leaving it makes
+        # the painter divide every slope by pattern/trigger (AERO misfire —
+        # the flat green monster) and a kept single collapses into a band
+        # the veto rejects (0 sloped lines → no photo). Certifies survivors.
+        _trig99o = str(getattr(candidate, "trigger_timeframe", "") or "")
+        if _kept and _trig99o:
+            if str(md.get("tl_context_tf") or "") != _trig99o:
+                md["tc_context_was"] = md.get("tl_context_tf")
+            md["tl_context_tf"] = _trig99o
+        if _kept:
+            _drawn = str(_kept[0].get("type") or _kept[0].get("name") or "")
+            if _drawn:  # pill↔chart sync (display keys only; confirm untouched)
+                md["render_htf_pattern"] = _drawn
+                md["tc_label_was"] = _label
+                md["tl_pattern"] = _drawn
+        md["tc_owned"] = True
+        md["tc_refined"] = True
+        md["tc_dropped"] = _dropped
+        return candidate
+    except Exception as _exc:
+        try:
+            print(f"[TC-REFINE] fail-open: {_exc}")
+        except Exception:
+            pass
+        return candidate
