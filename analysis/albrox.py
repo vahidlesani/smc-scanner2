@@ -7,6 +7,11 @@ ALBROX only); foreign gates alarm + veto refused. Late confirm =
 annotation, entry proceeds.
 """
 
+# R99n: this setup OWNS its concurrent-chain allowance (Viva 10-15:
+# no global first-come pool — a full neighbour book never starves us).
+OWN_MAX_CONCURRENT_CHAINS = 30
+
+
 ALBROX_ENGINES = {
     "detection": {"entry": "analysis.albrox.albrox_detect", "status": "wired",
                   "notes": "own wrapper over detect_albrox; tags albrox_owned"},

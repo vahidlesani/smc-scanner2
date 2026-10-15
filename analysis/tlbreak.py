@@ -7,6 +7,11 @@ input exists anywhere in this file, by design (fix zoom/count instead).
 TLBREAK draws NO zones (TLs only).
 """
 
+# R99n: this setup OWNS its concurrent-chain allowance (Viva 10-15:
+# no global first-come pool — a full neighbour book never starves us).
+OWN_MAX_CONCURRENT_CHAINS = 30
+
+
 TLBREAK_ENGINES = {
     "detection": {"entry": "analysis.tlbreak.tlbreak_detect", "status": "wired",
                   "notes": "own wrapper over detect_viva_tlbreak; tags tlbreak_owned"},
@@ -19,7 +24,7 @@ TLBREAK_ENGINES = {
     "zones_render": {"entry": "analysis.tlbreak.tlbreak_zones_from_pivots", "status": "wired",
                      "notes": "TLBREAK draws NO zones by law — always []"},
     "confirm_entry": {"entry": "analysis.tlbreak.tlbreak_entry_check", "status": "wired",
-                      "notes": "TL break + first close = instant confirm"},
+                      "notes": "TL break + first close = instant confirm; R99m refuses stale/late (live beyond TP1 or 30%+ chased)"},
     "trailing": {"entry": "analysis.tlbreak.tlbreak_trailing_check", "status": "wired",
                  "notes": "live beyond stop => STOPPED; 5% runner alarm"},
     "tohom": {"entry": "analysis.tlbreak.tlbreak_tohom_fired", "status": "wired",
@@ -35,6 +40,7 @@ TLBREAK_ENTRY_RULES = {
     "steep_lines_never_vetoed": True,
     "instant_confirm_after_break_close": True,
     "tohom_early_entry": True,
+    "stale_late_veto_r99m": True,
     "forbidden_gates": ["techclassic_veto", "pinval_veto", "pinwall_veto",
                         "albrox_veto", "cross_setup_veto"],
     "zones_may_draw": False,
@@ -140,13 +146,58 @@ def tlbreak_entry_check(*, broke: bool, closed_after_break: bool,
     if not _budget_ok:
         reasons.append("daily TOTAL cap reached — deferred, never dropped")
         return {"decision": "DEFERRED_BUDGET", "alarms": alarms, "reasons": reasons}
+    # R99m (Viva 10-15, FIL-SW: confirmed 7.5h after the break, live 9%
+    # past entry, TP1+TP2 already printed BEFORE the send -- «chase
+    # ممنوع» is a VETO, not a note; the old branch annotated AND confirmed).
+    # NOTE: the caller passes entry=md.entry which on the TOHOM path is a
+    # live-at-freeze STAMP, not the trade entry -- so an inverted entry
+    # (SHORT entry<tp1 / LONG entry>tp1) is diagnosed, and the veto keys
+    # on live-vs-TP1, which stays sane. Any non-CONFIRM makes the R99i
+    # caller stand down (no shared edit needed).
     try:
         _long = str(direction or "LONG").upper() != "SHORT"
-        if live is not None and entry is not None:
-            _late = (float(live) > float(entry)) if _long else (float(live) < float(entry))
-            if _late:
-                alarms.append(tlbreak_alarm("LATE confirm annotated (live beyond entry)"))
-                reasons.append("late annotated")
+        if live is not None:
+            _live = float(live)
+            _entry = None
+            try:
+                _entry = float(entry) if entry is not None else None
+            except Exception:
+                _entry = None
+            _tp1 = None
+            try:
+                _tp1 = float(tp1) if tp1 is not None else None
+            except Exception:
+                _tp1 = None
+            _veto = ""
+            _tp1_sane = bool(_tp1 and _tp1 > 0)
+            _entry_sane = bool(_entry and _entry > 0 and _tp1_sane
+                               and ((_entry < _tp1) if _long else (_entry > _tp1)))
+            if not _entry_sane and _entry and _tp1_sane:
+                alarms.append(tlbreak_alarm(
+                    f"entry {str(_entry)} looks like a live stamp, not a trade "
+                    f"entry (tp1 {str(_tp1)}) -- veto keys on TP1"))
+            if _tp1_sane:
+                _past_tp1 = (_live >= _tp1) if _long else (_live <= _tp1)
+                if _past_tp1:
+                    _veto = (f"STALE: live {str(_live)} already beyond TP1 "
+                             f"{str(_tp1)} -- trade played out, confirm REFUSED")
+            if not _veto and _entry_sane:
+                _leg = (_tp1 - _entry) if _long else (_entry - _tp1)
+                _beyond = (_live - _entry) if _long else (_entry - _live)
+                if _leg > 0 and _beyond >= 0.30 * _leg:
+                    _veto = (f"LATE: live {str(_live)} chased "
+                             f"{(_beyond / _leg) * 100:.0f}% of entry->TP1 "
+                             f"(entry {str(_entry)}) -- chase forbidden, REFUSED")
+            if not _veto and not _tp1_sane and _entry and _entry > 0:
+                _beyond = ((_live - _entry) if _long else (_entry - _live))
+                if _beyond / _entry > 0.015:
+                    _veto = (f"LATE: live {str(_live)} "
+                             f"{(_beyond / _entry) * 100:.1f}% beyond entry "
+                             f"{str(_entry)} (no TP1) -- chase forbidden, REFUSED")
+            if _veto:
+                alarms.append(tlbreak_alarm(_veto))
+                reasons.append(_veto)
+                return {"decision": "STALE", "alarms": alarms, "reasons": reasons}
     except Exception:
         pass
     try:

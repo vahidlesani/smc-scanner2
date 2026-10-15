@@ -631,13 +631,18 @@ def run_discovery_scan() -> Dict[str, int]:
                 # row without a post is a GHOST chain) + incr after _educate.
                 # Not persisted; next scan retries when budget frees. Fail-open.
                 try:
+                    # R99n (Viva 10-15): per-setup slots — EACH setup owns 30
+                    # concurrent chains; the global first-come pool is retired.
                     from analysis import tiered_scan as _tier99j
                     try:
-                        _open99j = len(get_active_candidates() or [])
+                        _open99j = _tier99j.count_open_by_setup(
+                            get_active_candidates() or [])
                     except Exception:
-                        _open99j = 0
+                        _open99j = {}
                     if (not _tier99j.daily_budget_ok()
-                            or not _tier99j.concurrent_ok(_open99j)):
+                            or not _tier99j.concurrent_ok_for_setup(
+                                str(getattr(candidate, "setup_code", "") or ""),
+                                _open99j)):
                         stats["tier_cap_skip"] = stats.get("tier_cap_skip", 0) + 1
                         _t(candidate)["tier_deferred"] = _t(candidate).get("tier_deferred", 0) + 1
                         continue
@@ -698,6 +703,18 @@ def run_discovery_scan() -> Dict[str, int]:
             _streams = ",".join(_ls())
         except Exception:
             _streams = "?"
+        try:
+            from analysis import tiered_scan as _tier99s
+            _by99 = _tier99s.count_open_by_setup(
+                get_active_candidates() or [])
+            _slots99 = {str(_k): {"open": int(_v),
+                                  "cap": int(_tier99s.setup_cap(_k))}
+                        for _k, _v in _by99.items()}
+            for _k in ("PINVAL", "ALBROX", "TLBREAK", "TECHCLASSIC", "SPOT"):
+                _slots99.setdefault(_k, {"open": 0,
+                                         "cap": int(_tier99s.setup_cap(_k))})
+        except Exception:
+            _slots99 = {}
         _summary = {
             "when": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "streams": _streams,
@@ -712,6 +729,7 @@ def run_discovery_scan() -> Dict[str, int]:
             "pre_tp1": stats.get("suppressed_pre_tp1", 0),
             "deferred": stats.get("edu_cycle_deferred", 0),
             "tally": tally,
+            "slots": _slots99,
         }
         _skv("scan_summary", _summary)
         # keep the last 24 cycles so «چرا این سیکل پیام نداد» is always
@@ -1072,12 +1090,18 @@ def run_spot_scan() -> Dict[str, int]:
             stats["tf_position_skip"] = stats.get("tf_position_skip", 0) + 1
             continue
         try:
+            # R99n (Viva 10-15): spot owns its own 30 slots (was choked by
+            # the same global pool as futures).
             from analysis import tiered_scan as _tier99
             try:
-                _open99 = len(get_active_candidates() or [])
+                _open99 = _tier99.count_open_by_setup(
+                    get_active_candidates() or [])
             except Exception:
-                _open99 = 0
-            if not _tier99.daily_budget_ok() or not _tier99.concurrent_ok(_open99):
+                _open99 = {}
+            if (not _tier99.daily_budget_ok()
+                    or not _tier99.concurrent_ok_for_setup(
+                        str(getattr(cand, "setup_code", "") or "SPOT"),
+                        _open99)):
                 stats["tier_cap_skip"] = stats.get("tier_cap_skip", 0) + 1
                 continue
         except Exception:

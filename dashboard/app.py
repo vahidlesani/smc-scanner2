@@ -32,7 +32,13 @@ _BOOT_AT = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 # ── Viva 09-23: the mobile PWA (feed/analytics/control) + THE login lock on
 # every route of this server (the Railway domain is public — nothing leaks).
 from webapp_viva import install_viva_app
-install_viva_app(app)
+# R99l (Viva 10-15: the PWA was believed OFF but was always mounted --
+# every /app/api route incl. chart PNGs served on $PORT with no switch).
+# WEBAPP_ENABLED=1 restores it; /health and the dashboard stay up either way.
+if str(os.getenv("WEBAPP_ENABLED", "0") or "0").strip().lower() not in {"0", "false", "no", "off", ""}:
+    install_viva_app(app)
+else:
+    print("webapp PWA disabled (WEBAPP_ENABLED=0) -- /app/* returns 404")
 
 # r55 (Viva: «اپلیکیشن دقیقا باید مثل تلگرام عمل بکنه»): the 5s lifecycle
 # tailer lives in the web process — it watches confirmed/tp/closed stamps and

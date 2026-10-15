@@ -1311,8 +1311,9 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
         0.024,
         f"{_public_code(candidate)}  •  {_setup_identity(candidate)['brand']}"
         f"  •  {_chart_market_label(candidate)}",
-        color=CHART_THEME["muted"],
-        fontsize=7.5,
+        color=CHART_THEME["text"],
+        fontsize=7.8,
+        fontweight="bold",
         va="center",
         zorder=22,
     )
@@ -1343,7 +1344,7 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
     if os.path.isfile(CHART_LOGO_PATH):
         try:
             mark_ax = ax.inset_axes([0.395, 0.315, 0.21, 0.37], transform=ax.transAxes, zorder=0)
-            mark_ax.imshow(mpimg.imread(CHART_LOGO_PATH), alpha=0.050)
+            mark_ax.imshow(mpimg.imread(CHART_LOGO_PATH), alpha=0.090)
             mark_ax.set_axis_off()
             mark_ax.patch.set_alpha(0)
         except Exception as exc:
@@ -1351,7 +1352,7 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
     ax.text(
         0.50, 0.50, CHART_BRAND_NAME.upper(), transform=ax.transAxes,
         ha="center", va="center", fontsize=31, fontweight="bold",
-        color=CHART_THEME["text"], alpha=0.040, zorder=0,
+        color=CHART_THEME["text"], alpha=0.075, zorder=0,
     )
     # (the in-axes bottom-right brand mark is GONE — Viva 09-23/24: the chart
     # showed TWO watermarks; the figure footer + the center mark are the brand)
@@ -1493,9 +1494,9 @@ def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool =
         _uniq.append(_nt)
     # Viva Law: Clean, single-column unified notes stack (NO chaotic two-column splitting)
     # Filter to most critical 5 structural notes so they never sprawl or collide with candles
-    # R67 (Viva 10-03, INJ): a crowded ledger (>6 items) splits into TWO
-    # columns so the stack never crawls down onto the tape.
-    _cols = 2 if len(_uniq) > 6 else 1
+    # R99l (Viva 10-15): the ledger is ONE unified stack under the left
+    # column -- the wandering mid-chart column is gone (R67 split retired).
+    _cols = 1
     for _i, (text, color) in enumerate(_uniq):
         _ci, _ri = (_i % _cols, _i // _cols) if _cols == 2 else (0, _i)
         ax.text(0.012 + _ci * 0.235, _y0 - _step * _ri, text,
@@ -2733,7 +2734,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # future margin read as «یک سوم خالی» — HALVE it and let real
         # candles fill the reclaimed width (his reference charts keep
         # only a slim right margin for the pills).
-        future = 45 if _is_spot else (28 if _cfm73 else 26)
+        # R99l (Viva 10-15: the right side sits too empty): tighter
+        # future on futures; spot keeps its own window.
+        future = 45 if _is_spot else (18 if _cfm73 else 16)
         for chart_ax in axes:
             chart_ax.set_xlim(-1, count + future)
         if _is_spot:
@@ -4213,7 +4216,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _pmax = float(frame["high"].max())
                     # Viva Trendline Clean Drawing Law: A trendline / pattern edge MUST strictly
                     # start from its own first defining pivot (min(xs)), NEVER extrapolated to chart floor/ceiling!
-                    x0 = max(0.0, min(xs) - 0.03 * max(1.0, max(xs) - min(xs)))
+                    # R99l: AT the first pivot (the 3% air contradicted
+                    # the law above it).
+                    x0 = max(0.0, min(xs))
                     x1 = min(max(xs) + 0.15 * max(1.0, max(xs) - min(xs)), x_edge, count)
                     _xr = max(x1, min(x_edge, count))
                     # r61.3-R62 FAR-FLOAT LAW (Viva 09-30, STX 15M/30M: the
@@ -4643,15 +4648,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _yv9 = min(max(_lv9, _lo2), _hi2)
                     # r39b: sit the tag BELOW the ladder number, not ON it —
                     # the old 1.004/center printed «159.9210.00» mash-ups.
-                    # R99k: price tags are BLACK w/ white text (TV-style);
-                    # the thin edge keeps the tag's line color identity.
-                    ax.text(1.052, _yv9, _pv9, transform=_tr9, color="white",
-                            fontsize=6.3, va="top", ha="right", zorder=13,
+                    # R99l (Viva 10-15: black tags unreadable): the tag
+                    # wears its line color, white bold text, larger --
+                    # parked clear right of the ladder numbers (r39c).
+                    ax.text(1.078, _yv9, _pv9, transform=_tr9, color="white",
+                            fontsize=7.2, fontweight="bold", va="top",
+                            ha="right", zorder=13,
                             clip_on=False,
-                            bbox={"boxstyle": "round,pad=0.22",
-                                  "facecolor": "#1F2328",
-                                  "edgecolor": _cv9, "alpha": 0.95,
-                                  "linewidth": 0.9})
+                            bbox={"boxstyle": "round,pad=0.28",
+                                  "facecolor": _cv9,
+                                  "edgecolor": "none", "alpha": 1.0})
             fig.canvas.draw()
             _rend = fig.canvas.get_renderer()
             _inv = ax.transData.inverted()
@@ -4717,10 +4723,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 fig.text(_pl32.x1 - 0.012, _pl32.y0 + 0.022,
                          "\n".join(_rows32),
                          ha="right", va="bottom", fontsize=7.6, linespacing=1.5,
-                         color=CHART_THEME["text"], zorder=26,
+                         color=CHART_THEME["text"], fontweight="bold",
+                         zorder=26,
                          bbox={"boxstyle": "round,pad=0.5",
                                "facecolor": CHART_THEME["figure"],
-                               "edgecolor": CHART_THEME["grid"], "alpha": 0.9})
+                               "edgecolor": "#4B5563", "linewidth": 0.9,
+                               "alpha": 1.0})
             except Exception as _led_exc:
                 print(f"ledger warning: {_led_exc}")
 
@@ -4816,6 +4824,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         except Exception as _exc74:
             print(f"honesty-veto check skipped: {_exc74}")
 
+        # R99l (Viva 10-15): thin black frame around the whole chart.
+        try:
+            import matplotlib.patches as _mpat99l
+            fig.patches.extend([_mpat99l.Rectangle(
+                (0.004, 0.004), 0.992, 0.992, transform=fig.transFigure,
+                fill=False, edgecolor="black", linewidth=1.0, zorder=100)])
+        except Exception:
+            pass
         buffer = io.BytesIO()
 
 
