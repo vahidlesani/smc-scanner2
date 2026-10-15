@@ -14,6 +14,14 @@ from analysis import viva_geometry as vg
 
 SPOT_TFS = ["4h", "8h", "12h", "1d", "3d", "1w"]
 
+# R99q (Viva 10-15, verbatim: «به پیوت ماژور داخل اون تایم‌فریم و چارتش احترام
+# بذار .. نه اینکه از ۲۰۰ کندل قبل‌تر یک پیوت پیدا بکنی مثل جاده بی‌سر و ته یه
+# دونه بکشی وسط چارت‌ها»): پنچرهٔ تحلیل هر TF کوچک‌تر از کل فریم است — پیوت‌ها
+# فقط از داخل همین پنجره (که همان چیزی است که روی چارت دیده می‌شود) می‌آیند.
+# offset داخلی fit_patterns ایندکس جهانی را حفظ می‌کند؛ چارت و انجین هم‌تراز
+# می‌مانند و مولتی‌تایم‌فریم فقط «تحلیلی» می‌شود، نه یک خط از ماه‌ها قبل.
+SPOT_LOOKBACK = {"4h": 150, "8h": 120, "12h": 100, "1d": 80, "3d": 60, "1w": 50}
+
 _FA = {"CHANNEL_FLAT": "کانال افقی", "BROADENING": "گوهٔ پهن‌شونده",
        "BROADENING_WEDGE_ASC": "کانال پهن‌شوندهٔ صعودی",
        "BROADENING_WEDGE_DESC": "کانال پهن‌شوندهٔ نزولی",
@@ -60,6 +68,8 @@ def analyze(df: pd.DataFrame, tf: str, lookback: Optional[int] = None) -> Option
     """خروجی کامل برای رندر و کارت اسپات؛ هندسه از هستهٔ واحد، بدون کشف دوم."""
     if tf not in SPOT_TFS:
         raise ValueError(f"TF اسپات نامعتبر: {tf} — مجاز: {SPOT_TFS}")
+    if lookback is None:
+        lookback = SPOT_LOOKBACK.get(tf)
     res = best_pattern(df, tf, lookback)
     if res is None:
         return None

@@ -178,6 +178,33 @@ def test_r99q_spot_renderer_design_guards():
                encoding="utf-8").read()
     assert 'ax.scatter(_tix' in _rs          # data-space Circle bug never returns
     assert "Circle((ti" not in _rs
-    assert "_gspan > _dspan * 1.45" in _rs  # GEO: candles are never squashed
-    assert "x_right = max(x_to, bx1 + 2)" in _rs  # frame follows the box
+    assert "1.45 * d_span" in _rs           # GEO: a far box never squashes candles
+    assert "PAD_RIGHT_BARS" in _rs and "MAX_BARS" in _rs  # tight refs zoom
+    assert "and up_dir" in _rs              # box only for upward break (refs law)
     assert "SPOTBREAK" in _rs and "BINANCE SPOT" in _rs
+
+
+def test_r99q_spot_major_pivot_window():
+    """His «به پیوت ماژور داخل اون تایم‌فریم احترام بذار» — the spot analyzer
+    window is bounded per TF, and the best-pattern score rewards the pattern
+    whose BOTH edges live to the live end (the 6-week half-dead road dies)."""
+    from analysis import engine_spot as es
+    assert es.SPOT_LOOKBACK["4h"] == 150
+    assert max(es.SPOT_LOOKBACK.values()) < 300
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _vg = open(os.path.join(_root, "analysis", "viva_geometry.py"),
+               encoding="utf-8").read()
+    assert "_weak >= x0 + 0.75 * _span9" in _vg      # both-edges liveness rank
+    assert "_fresh = 2.5" in _vg
+    assert "_leg_local" in _vg                      # latent flag_stats crash fixed
+
+
+def test_r99q_drying_gate_removed():
+    """His order verbatim: «گفتم گیت خشک‌کننده سیگنال‌های ستاپ‌ها رو بردارررر»."""
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _mp = open(os.path.join(_root, "main.py"), encoding="utf-8").read()
+    assert "not _tier99j.daily_budget_ok()" not in _mp
+    assert "not _tier99.daily_budget_ok()" not in _mp
+    _ts = open(os.path.join(_root, "analysis", "tiered_scan.py"),
+               encoding="utf-8").read()
+    assert "RETIRED (R99q" in _ts

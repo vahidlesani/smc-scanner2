@@ -80,9 +80,11 @@ def test_pinval_entry_polarity_veto_late(monkeypatch):
                             direction="SHORT", live=98.0, entry=100.0,
                             day="2099-05-01")
     assert _l["decision"] == "CONFIRM" and any("LATE" in a for a in _l["alarms"])
+    # R99q (his «گیت خشک‌کننده رو بردار»): daily TOTAL budget retired — the
+    # old 25/25 counter no longer defers anything.
     _fake_kv(monkeypatch, {"tier_day_count:2099-05-02:spot": 25})
     _d = pinval_entry_check(broke=True, closed_after_break=True, day="2099-05-02")
-    assert _d["decision"] == "DEFERRED_BUDGET"
+    assert _d["decision"] == "CONFIRM"
 
 
 def test_pinval_trailing_stop_runner():

@@ -78,9 +78,10 @@ def test_spot_entry_instant_and_veto_refused(monkeypatch):
                           day="2099-03-01")
     assert _r["decision"] == "CONFIRM"
     assert len(_r["alarms"]) == 1
+    # R99q (his «گیت خشک‌کننده رو بردار»): daily TOTAL budget retired.
     _fake_kv(monkeypatch, {"tier_day_count:2099-03-02:futures": 25})
     _d = spot_entry_check(broke_closed=True, day="2099-03-02")
-    assert _d["decision"] == "DEFERRED_BUDGET"
+    assert _d["decision"] == "CONFIRM"
 
 
 def test_spot_trailing_atom_case():

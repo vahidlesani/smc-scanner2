@@ -70,9 +70,11 @@ def test_albrox_entry_structural_late_budget(monkeypatch):
     _l = albrox_entry_check(broke=True, closed_after_break=True,
                             live=105.0, entry=100.0, day="2099-06-01")
     assert any("LATE" in a for a in _l["alarms"])
+    # R99q (his «گیت خشک‌کننده رو بردار»): the daily TOTAL budget is retired —
+    # even with the old counter at 25/25 the entry CONFIRMS, never defers.
     _fake_kv(monkeypatch, {"tier_day_count:2099-06-02:futures": 25})
     assert albrox_entry_check(broke=True, closed_after_break=True,
-                              day="2099-06-02")["decision"] == "DEFERRED_BUDGET"
+                              day="2099-06-02")["decision"] == "CONFIRM"
 
 
 def test_albrox_trailing_stop_runner():

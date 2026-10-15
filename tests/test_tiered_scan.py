@@ -83,10 +83,11 @@ def test_budget_and_caps(monkeypatch):
     assert ts.daily_count("2099-01-01") == 1
     assert ts.daily_count_incr("spot", "2099-01-01") == 1
     assert ts.daily_count("2099-01-01") == 2  # TOTAL across lanes
-    assert ts.daily_budget_ok("2099-01-01") is True
+    # R99q (Viva 10-15): the daily TOTAL cap is RETIRED — the counter still
+    # tracks publishes for telemetry, but it never gates a setup again.
     _store["tier_day_count:2099-01-01:futures"] = 20
     _store["tier_day_count:2099-01-01:spot"] = 5
-    assert ts.daily_budget_ok("2099-01-01") is False  # 25 total = capped
+    assert ts.daily_budget_ok("2099-01-01") is True  # retired: never caps
     assert ts.daily_count_incr("nope", "2099-01-01") == -1
 
 

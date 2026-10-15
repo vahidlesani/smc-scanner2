@@ -662,16 +662,18 @@ def run_discovery_scan() -> Dict[str, int]:
                 try:
                     # R99n (Viva 10-15): per-setup slots — EACH setup owns 30
                     # concurrent chains; the global first-come pool is retired.
+                    # R99q (Viva 10-15, verbatim «گیت خشک‌کننده سیگنال‌های
+                    # ستاپ‌ها رو بردارررر»): the 25/day TOTAL budget no longer
+                    # gates anything — only the setup's own slots remain.
                     from analysis import tiered_scan as _tier99j
                     try:
                         _open99j = _tier99j.count_open_by_setup(
                             get_active_candidates() or [])
                     except Exception:
                         _open99j = {}
-                    if (not _tier99j.daily_budget_ok()
-                            or not _tier99j.concurrent_ok_for_setup(
-                                str(getattr(candidate, "setup_code", "") or ""),
-                                _open99j)):
+                    if not _tier99j.concurrent_ok_for_setup(
+                            str(getattr(candidate, "setup_code", "") or ""),
+                            _open99j):
                         stats["tier_cap_skip"] = stats.get("tier_cap_skip", 0) + 1
                         _t(candidate)["tier_deferred"] = _t(candidate).get("tier_deferred", 0) + 1
                         continue
@@ -1142,10 +1144,11 @@ def run_spot_scan() -> Dict[str, int]:
                     get_active_candidates() or [])
             except Exception:
                 _open99 = {}
-            if (not _tier99.daily_budget_ok()
-                    or not _tier99.concurrent_ok_for_setup(
-                        str(getattr(cand, "setup_code", "") or "SPOT"),
-                        _open99)):
+            # R99q: the daily TOTAL budget is retired (his «گیت خشک‌کننده») —
+            # spot obeys only its own concurrent slots.
+            if not _tier99.concurrent_ok_for_setup(
+                    str(getattr(cand, "setup_code", "") or "SPOT"),
+                    _open99):
                 stats["tier_cap_skip"] = stats.get("tier_cap_skip", 0) + 1
                 continue
         except Exception:

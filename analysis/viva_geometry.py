@@ -435,10 +435,15 @@ def fit_patterns(df: pd.DataFrame, offset: int = 0, lookback: Optional[int] = No
             if m is None:
                 continue
             leg = entry_leg(L, piv, x0 - offset, atr, m["hmax"])
+            # R99q: flag_stats index into L (the TRIMMED frame) — it must get
+            # LOCAL coords; the global conversion below is for the result only.
+            # (Latent crash found when engine_spot gained its own lookback.)
+            _leg_local = leg
             if leg.direction != NONE:
                 leg = Leg(leg.direction, leg.move, leg.bars,
                           leg.start_index + offset, leg.end_price_log)
-            fs = flag_stats_for(L, leg, x0, x1, m["hmax"], atr)
+            fs = flag_stats_for(L, _leg_local, x0 - offset, x1 - offset,
+                                m["hmax"], atr)
             slug, meta = classify_geometry(u, lo, x0, x1, leg, atr, fs)
             if slug == "NONE":
                 continue
@@ -457,8 +462,21 @@ def fit_patterns(df: pd.DataFrame, offset: int = 0, lookback: Optional[int] = No
                 continue
             # پاداشِ تازگی: ساختارِ زندهٔ سمت راست بر الگوهای بایگانی‌شدهٔ چپ اولویت
             # دارد تا با تغییر زوم/تاریخچه، انتخابِ الگو پایدار بماند
+            # R99q (Viva 10-15): «بهترین پترن» = الگویی که هر دو ضلعش تا لبهٔ
+            # لایو زنده است. پاداش فقط به الگویی که هر دو ضلعش ≥۳ پیوت دارد و
+            # ضلع ضعیفش تازه است (الگوهای نیمه‌مرده با یک ضلع ۶۰ کندل عقب و
+            # خط‌های دو-تاچِ چسبیده به نوک کندلِ لایو از صدر می‌افتند).
+            # (پاداش فقط تابع خودِ الگوست — x0/x1 — نه طول فریم؛ پس با رسیدن
+            # کندل زنده یا برش زوم، رتبهٔ برنده جابه‌جا نمی‌شود.)
+            _fresh = 0.0
+            _span9 = max(1, x1 - x0)
+            if len(u.touches) >= 3 and len(lo.touches) >= 3:
+                _weak = min(max(list(u.touches) or [0]), max(list(lo.touches) or [0]))
+                if _weak >= x0 + 0.75 * _span9:
+                    _fresh = 2.5
             score = (2.0 * (len(u.touches) + len(lo.touches))
                      + 0.02 * min(n - x0, 160) + 0.10 * last_touch
+                     + _fresh
                      + 3.0 * meta["geometry_confidence"] - 20.0 * out)
             res = PatternResult(slug, u, lo, x0, x1, float(score), leg, meta)
             res.outlook = both_sides(slug, leg.direction)
