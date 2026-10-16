@@ -32,15 +32,20 @@ def test_green_red_candles_default_with_ink_hatch():
     assert 'os.getenv("CHART_CANDLE_STYLE", "cryptocove")' in _src()
 
 
-def test_designer_signature_atop_futures_charts():
-    # R99q (his 10-15) put «by: Vahid Lesani» there as plain text; R99q21
-    # (his 10-16 evening: «اون عکسی که بهت داده بودم … عکس خوب نشد شلوغ شد»)
-    # replaced the framed banner with the clean LOGO in the same corner —
-    # name kept as the text fallback for hosts with no logo asset.
+def test_designer_signature_is_the_centre_watermark():
+    """R99q (his 10-15) had «by: Vahid Lesani» in the corner, R99q20 tried a
+    framed banner there, and R99q21 (his 10-16: «اونی که بالا گذاشتی هم بردار
+    قشنگ نشد .. عکس خوب نشد شلوغ شد در اسپات و ستاپ‌ها») DELETED every corner
+    credit. ONE signature remains: the author's name over the faint logo mark
+    in the middle of the chart — and nothing else is stamped on the canvas."""
+    _m = _src()                                   # the centre mark is its own helper
+    assert '"VAHID LESANI", transform=ax.transAxes' in _m    # the centre mark
+    assert 'fontsize=38, fontweight="bold"' in _m            # same size, both lanes
+    assert "CHART_LOGO_PATH" in _m                           # logo behind it
     _r = _chart_region()
-    assert "vivasignals-logo.png" in _r
-    assert "VIVA_CREDIT_LOGO_H" in _r
-    assert "\"VAHID LESANI\"" in _r
+    assert "VIVA_CREDIT_LOGO_H" not in _r                    # corner credit retired
+    assert "viva_credit_banner" not in _m
+    assert "by: Vahid Lesani" not in _m
 
 
 def test_price_axis_tags_colored_readable():

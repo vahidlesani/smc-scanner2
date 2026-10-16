@@ -1033,6 +1033,58 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
     return out[:4]
 
 
+
+    # ── R99q21 ACTIONABILITY STAMP (his 10-16, twice: «پترن‌ها در ستاپ‌ها و
+    # اسپات هنوز هم گاهی گذشته مارکت هستند که هیچ فایده‌ای نداره» + «ما پترنی
+    # نیاز داریم که نزدیک به شکست باشه یا ابتدای شکست باشه»). Every returned
+    # shape now carries the law's own verdict on WHERE it stands relative to its
+    # breakout: AT_EDGE / INSIDE / FRESH_BREAK / RETEST stay actionable,
+    # FAR_INSIDE / STALE are past-market and are dropped before they can become
+    # an alert. Env switch: VIVA_NEAR_BREAK_GATE=0.
+    try:
+        import os as _os21
+        from analysis.pattern_law import near_break as _nb21
+        _gate_on21 = str(_os21.getenv("VIVA_NEAR_BREAK_GATE", "1") or "1").strip().lower() \
+            not in ("0", "false", "off", "no")
+        _close21 = float(df["close"].iloc[-1])
+        _atr21 = _atr(df)
+        _n21 = len(df)
+        _kept21 = []
+        for _p21 in out:
+            _lns21 = _p21.get("lines") or []
+            _age21 = None
+            try:
+                _bx21 = next((x.get("break_x") for x in _lns21 if x.get("break_x") is not None), None)
+                if _bx21 is not None:
+                    _age21 = max(0, int(_n21 - 1 - float(_bx21)))
+            except Exception:
+                _age21 = None
+            _u21 = _lns21[0] if len(_lns21) >= 1 else None
+            _l21 = _lns21[1] if len(_lns21) >= 2 else _lns21[0] if _lns21 else None
+            if _u21 is None and _p21.get("hi") is not None and _p21.get("lo") is not None:
+                _u21 = {"slope": 0.0, "intercept": float(_p21["hi"])}
+                _l21 = {"slope": 0.0, "intercept": float(_p21["lo"])}
+            if _u21 is None:
+                _kept21.append(_p21)
+                continue
+            try:
+                _ok21, _info21 = _nb21(_u21, _l21, _n21, _close21, _atr21,
+                                       break_age=_age21)
+            except Exception:
+                _ok21, _info21 = True, {}
+            _p21["near_break"] = bool(_ok21)
+            _p21["break_state"] = (_info21 or {}).get("state")
+            _p21["dist_atr"] = (_info21 or {}).get("dist_atr")
+            if _gate_on21 and not _ok21:
+                print(f"R99q21 past-market pattern dropped: {_p21.get('type')} "
+                      f"[{_p21.get('break_state')} · {_p21.get('dist_atr')} ATR]")
+                continue
+            _kept21.append(_p21)
+        if len(_kept21) != len(out):
+            out = _kept21
+    except Exception as _e21s:
+        print(f"actionability stamp warning: {_e21s}")
+    return out
 def pattern_live_index(md, bundle=None, tf=None, pats=None) -> int:
     """R99q19 — the live bar index **in the PATTERN's own coordinate space**.
 

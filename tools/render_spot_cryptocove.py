@@ -263,13 +263,13 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     # touch bolder (α .26 vs .20) because spot photos get re-compressed harder.
     ax.text(0.5, 0.245, "VAHID LESANI", transform=ax.transAxes,
             ha="center", va="center", fontsize=38, fontweight="bold",
-            color="#B9B3A5", alpha=0.26, zorder=1)
+            color="#B9B3A5", alpha=0.32, zorder=1)
     logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                              "assets", "vivasignals-logo.png")
     if os.path.isfile(logo_path):
         try:
             _w_ax = ax.inset_axes([0.40, 0.30, 0.20, 0.38], zorder=1)
-            _w_ax.imshow(mpimg.imread(logo_path), alpha=0.17)
+            _w_ax.imshow(mpimg.imread(logo_path), alpha=0.20)
             _w_ax.set_axis_off()
             _w_ax.patch.set_alpha(0)
         except Exception:
@@ -431,27 +431,10 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
              f"L {_price_fmt(last_l)}   C {_price_fmt(last_c)}   "
              f"{chg:+.4f} ({chg_pct:+.2f}%)   •   BINANCE SPOT",
              fontsize=10, fontweight="bold", color="#B3261E")
-    # R99q21 TOP-RIGHT CREDIT (his 10-16: «اون عکسی که بهت داده بودم … عکس خوب
-    # نشد شلوغ شد» — in BOTH lanes): the framed gold banner is REMOVED; the clean
-    # small LOGO stands in the corner instead, name-and-logo, never a busy strip.
-    _ban20 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "assets", "vivasignals-logo.png")
-    _ban20_ok = False
-    try:
-        if os.path.isfile(_ban20):
-            _bim = mpimg.imread(_ban20)
-            _bh = float(os.getenv("VIVA_CREDIT_LOGO_H", "0.058") or 0.058)
-            _bw = _bh * (float(_bim.shape[1]) / float(_bim.shape[0])) \
-                * (float(fig.get_figheight()) / float(fig.get_figwidth()))
-            _bax = fig.add_axes([0.984 - _bw, 1.0 - _bh - 0.006, _bw, _bh], zorder=30)
-            _bax.imshow(_bim)
-            _bax.axis("off")
-            _ban20_ok = True
-    except Exception as _e20b:
-        print(f"spot credit logo warning: {_e20b}")
-    if not _ban20_ok:
-        fig.text(0.976, 0.968, "VAHID LESANI", fontsize=12.5,
-                 fontweight="bold", color=INK, ha="right")
+    # R99q21 (his 10-16, verbatim: «اونی که بالا گذاشتی هم بردار قشنگ نشد ..
+    # عکس خوب نشد شلوغ شد در اسپات و ستاپ‌ها»): the TOP-RIGHT CREDIT is GONE.
+    # One clean signature only — the author's name over the faint logo in the
+    # middle of the chart. Nothing else is stamped on the canvas.
 
     # ── 10) فوتر
     fig.text(0.020, 0.024, f"{sym}  •  VIVA  •  SPOT  •  BINANCE SPOT",

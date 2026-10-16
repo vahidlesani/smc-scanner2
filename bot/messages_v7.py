@@ -1351,7 +1351,7 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
     if os.path.isfile(CHART_LOGO_PATH):
         try:
             mark_ax = ax.inset_axes([0.395, 0.315, 0.21, 0.37], transform=ax.transAxes, zorder=0)
-            mark_ax.imshow(mpimg.imread(CHART_LOGO_PATH), alpha=0.17)
+            mark_ax.imshow(mpimg.imread(CHART_LOGO_PATH), alpha=0.20)
             mark_ax.set_axis_off()
             mark_ax.patch.set_alpha(0)
         except Exception as exc:
@@ -1364,7 +1364,7 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
     ax.text(
         0.50, 0.255, "VAHID LESANI", transform=ax.transAxes,
         ha="center", va="center", fontsize=38, fontweight="bold",
-        color=CHART_THEME["text"], alpha=0.20, zorder=0,
+        color=CHART_THEME["text"], alpha=0.22, zorder=0,
     )
     # (the in-axes bottom-right brand mark is GONE — Viva 09-23/24: the chart
     # showed TWO watermarks; the figure footer + the center mark are the brand)
@@ -5898,30 +5898,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             fontsize=8,
             va="center",
         )
-        # R99k/R99q21: designer credit in the top-right corner. The framed
-        # gold banner of R99q20 is REMOVED (his 10-16: «اون عکسی که بهت داده
-        # بودم … عکس خوب نشد شلوغ شد») — the clean LOGO alone stands there now.
-        _ban20 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
-                              "assets", "vivasignals-logo.png")
-        _ban20_ok = False
-        try:
-            if os.path.isfile(_ban20):
-                _bim = mpimg.imread(_ban20)
-                _bh = float(os.getenv("VIVA_CREDIT_LOGO_H", "0.055") or 0.055)
-                _bw = _bh * (float(_bim.shape[1]) / float(_bim.shape[0])) \
-                    * (float(fig.get_figheight()) / float(fig.get_figwidth()))
-                _bax = fig.add_axes([0.982 - _bw, 1.0 - _bh - 0.008, _bw, _bh],
-                                    zorder=30)
-                _bax.imshow(_bim)
-                _bax.axis("off")
-                _ban20_ok = True
-        except Exception as _e20b:
-            print(f"credit logo warning: {_e20b}")
-        if not _ban20_ok:
-            fig.text(
-                0.955, 0.978, "VAHID LESANI", color="#1F2328", fontsize=11,
-                fontweight="bold", ha="right", va="center", zorder=30,
-            )
+        # R99k/R99q21 (his 10-16: «اونی که بالا گذاشتی هم بردار قشنگ نشد ..
+        # شلوغ شد در اسپات و ستاپ‌ها»): the TOP-RIGHT CREDIT (text and frame) is
+        # GONE — the chart carries ONE signature, the author's name over the
+        # faint logo mark in the middle.
+
         # ── Viva 09-21: «چرا چارت پینوال کیو استیکر بنام خودش نداره و بنام viva
         # setup درج میشه در جای استیکر هر ستاپ؟» — the header word is the FALLBACK
         # only. When the setup's own badge exists it is the label; when it does
