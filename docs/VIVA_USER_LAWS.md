@@ -67,3 +67,25 @@
 - ۱۰-۱۴ (تایر T2): لایه عمیق پرپ ۱۰ دقیقه؛ اسپات ۶۰ دقیقه (بدون تغییر)؛ سقف روزانه ۲۵ انتشار جدید در مجموع؛ سقف همزمان ۳. تأیید زنجیره‌های هشدار‌داده‌شده هرگز گیت نمی‌شود.
 - ۱۰-۱۴ (تایر T3): تجمیع پله‌ای (فقط 5m/15m/1h/4h/1d مستقیم، بقیه مشتق) از قبل لایو بود (R64) — راستی‌آزمایی شد؛ منبع حقیقت: AGG_MAP در analysis/tiered_scan.py.
 - (قانون جدید بعدی از اینجا اضافه می‌شود.)
+
+## R99m (10-15, explicit): per-engine surgery law
+- Every bug is fixed in its OWN setup's folder/files. Shared/common code is NOT touched.
+- If a bug exists in ALL setups, each engine is operated on SEPARATELY (one setup per round, own files).
+- «chase ممنوع» (no chasing) is a VETO, not a note: a confirmation whose trade already played out (live beyond TP1, or 30%+ of entry→TP1 gone) must be REFUSED, never annotated-and-sent.
+
+## R99n (10-15, explicit): per-setup slots
+- No global first-come chain pool. EACH setup owns 30 concurrent chain slots (PINVAL/ALBROX/TLBREAK/TECHCLASSIC/SPOT).
+- Allowance lives in each setup's OWN file (OWN_MAX_CONCURRENT_CHAINS); env <SETUP>_MAX_CONCURRENT_CHAINS overrides.
+- Q1's «3» was about POSITIONS (his trading), not CHAINS (alerts) — the code had conflated them.
+
+## R99q16 — قوانین ۱۰-۱۶ (شب)
+1. **سفرِ هفت‌چارتی اسپات:** هر شناسهٔ یکتا → ۳ چارت قبل از تایید (شناسایی/برخورد/بریک)
+   + چارت چهارم با پیام تاییدِ ورود + ۳ چارت هیت = **حداکثر ۷ چارت**؛ بقیهٔ آپدیت‌ها
+   فقط **متنِ شماره‌دار** ریپلای به آخرین چارت همان شناسه.
+2. **یک شناسه:** تایید باید همان کدِ هشدارها را داشته باشد (نه کدِ نو).
+3. **کادنس:** اسکن عمیق هر ۶۰ دقیقه، مگر «موارد خوب» پیدا شود → ۵ دقیقه‌ای.
+4. **دامنهٔ اسپات:** ۲۰۰ کوین برتر مارکت‌کپ، بدون استیبل‌کوین و توکنیزه.
+5. **هزینه:** هر ساعت ۸.۵ دقیقه و مصرفِ ریلوی غیرقابل‌قبول → باید بهینه شود.
+6. **هندسه:** هیچ خطی نباید «بی‌سر و ته» باشد (نه بدون پیوت شروع شود، نه در فضا تمام شود).
+7. **تی‌ال‌بریک:** کلیدِ منسوخِ `EXPERIMENTAL_TLBREAK_ENABLED=false` نباید گمراه کند.
+8. **انجین‌های اسپات دست‌نخورده** (دستور: «داره عالی جلو میره»).
