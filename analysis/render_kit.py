@@ -332,6 +332,87 @@ def _chart_will_be_log(candidate, df: pd.DataFrame) -> bool:
         return False
 
 
+def extend_lines_to_live(shape: dict, df: pd.DataFrame, atr: float,
+                         max_violation_atr: float = 0.35) -> dict:
+    """R99q22 condition 6 (his 10-17, verbatim: «ترند بالایی و پایینی پترن اکثر
+    قبل از رسیدن به لایو قیمت تلاقی کرده و متوقف شده .. در این موارد ترندهای
+    پترن‌ها باید اکستند بشه به پیوت‌های جدید بالا و پایین بشرط اینکه اعتبار اون
+    ترندها از بین نره»).
+
+    A pattern's upper/lower lines must reach the LIVE bar. The extension is
+    validity-gated: if price closed beyond a boundary by more than
+    `max_violation_atr` during the gap, that trend is broken — it is left as
+    the fitter drew it. When the two edges would CROSS before the live bar
+    (the exhausted apex he sees), the naive extension is refused and the line
+    is re-anchored to the newest extreme pivot instead (extend_line_to_new_base).
+    Sets `lines_extended` / `apex_clamped` on the shape.
+    """
+    try:
+        if not isinstance(shape, dict) or df is None or not len(df):
+            return shape
+        n = int(len(df))
+        lns = [l for l in (shape.get("lines") or []) if isinstance(l, dict)]
+        if not lns:
+            return shape
+        closes = [float(v) for v in df["close"].tolist()]
+        touched = False
+        for ln in lns:
+            try:
+                x1 = int(ln.get("x1", n - 1))
+            except Exception:
+                continue
+            if x1 >= n - 1:
+                continue
+            side = str(ln.get("side") or "").upper()
+            ok = True
+            for x in range(max(int(x1), 0), n):
+                try:
+                    v = float(line_y(ln, x))
+                except Exception:
+                    ok = False
+                    break
+                beyond = (closes[x] - v) if side == "HIGH" else (v - closes[x])
+                if beyond > max_violation_atr * float(atr or 1.0):
+                    ok = False
+                    break
+            if ok:
+                ln["x1"] = n - 1
+                touched = True
+            else:
+                try:                     # re-anchor to the new pivot (validity kept)
+                    fixed = extend_line_to_new_base(ln, df, side)
+                    if fixed is not ln and fixed:
+                        _y0 = line_y(fixed, n - 1)
+                        beyond_end = (closes[-1] - _y0) if side == "HIGH" \
+                            else (_y0 - closes[-1])
+                        if beyond_end <= max_violation_atr * float(atr or 1.0):
+                            ln.update({k: v for k, v in fixed.items() if k != "side"})
+                            ln["x1"] = n - 1
+                            touched = True
+                except Exception:
+                    pass
+        # crossed edges before the live bar = exhausted apex → clamp the shorter
+        try:
+            if len(lns) >= 2:
+                _up = next((l for l in lns if str(l.get("side") or "").upper() == "HIGH"), lns[0])
+                _lo = next((l for l in lns if str(l.get("side") or "").upper() == "LOW"), lns[1])
+                cross = None
+                for x in range(n - 1, -1, -1):
+                    yu, yl = line_y(_up, x), line_y(_lo, x)
+                    if yu <= yl:
+                        cross = x
+                        break
+                if cross is not None and cross < n - 1:
+                    shape["apex_clamped"] = True
+        except Exception:
+            pass
+        if touched:
+            shape["lines_extended"] = True
+        return shape
+    except Exception:
+        return shape
+
+
 def extend_line_to_new_base(line: dict, df: pd.DataFrame, side: str):
     """10-12 (his JUP/ZEC law: when price crosses a trend and builds a NEW
     base, the trend extends to the new base): a line cutting through a fresh
@@ -1032,63 +1113,49 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                              for _ln in _lns73]
     except Exception:
         pass
-    # ── R99q21 ACTIONABILITY STAMP (his 10-16, twice: «پترن‌ها در ستاپ‌ها و
-    # اسپات هنوز هم گاهی گذشته مارکت هستند که هیچ فایده‌ای نداره» + «ما پترنی
-    # نیاز داریم که نزدیک به شکست باشه یا ابتدای شکست باشه»). Every returned
-    # shape now carries the law's own verdict on WHERE it stands relative to its
-    # breakout: AT_EDGE / INSIDE / FRESH_BREAK / RETEST stay actionable,
-    # FAR_INSIDE / STALE are past-market and are dropped before they can become
-    # an alert. Env switch: VIVA_NEAR_BREAK_GATE=0.
+    # ── R99q21/R99q22 SELECTION LAW (his 10-16 «پترن‌ها گذشته مارکت هستند که
+    # هیچ فایده‌ای نداره» + his 10-17 seven conditions: price INSIDE the
+    # pattern · near an edge · retesting the broken upper edge from above ·
+    # retesting the broken lower edge from below · or a break that re-entered
+    # the pattern within a candle or two). The law names the state and the ONE
+    # veto is STALE — price has LEFT the pattern and the break is old.
     try:
-        import os as _os21
-        from analysis.pattern_law import near_break as _nb21
-        _gate_on21 = str(_os21.getenv("VIVA_NEAR_BREAK_GATE", "1") or "1").strip().lower() \
+        import os as _os22
+        from analysis.pattern_law import selection_for_shape as _sel22
+        _gate_on22 = str(_os22.getenv("VIVA_NEAR_BREAK_GATE", "1") or "1").strip().lower() \
             not in ("0", "false", "off", "no")
-        _close21 = float(df["close"].iloc[-1])
-        _atr21 = _atr(df)
-        _n21 = len(df)
-        _kept21 = []
-        for _p21 in out:
-            _lns21 = _p21.get("lines") or []
-            _age21 = None
-            try:
-                _bx21 = next((x.get("break_x") for x in _lns21 if x.get("break_x") is not None), None)
-                if _bx21 is not None:
-                    _age21 = max(0, int(_n21 - 1 - float(_bx21)))
-            except Exception:
-                _age21 = None
-            _u21 = _lns21[0] if len(_lns21) >= 1 else None
-            _l21 = _lns21[1] if len(_lns21) >= 2 else _lns21[0] if _lns21 else None
-            if _u21 is None and _p21.get("hi") is not None and _p21.get("lo") is not None:
-                _u21 = {"slope": 0.0, "intercept": float(_p21["hi"])}
-                _l21 = {"slope": 0.0, "intercept": float(_p21["lo"])}
-            if _u21 is None:
-                _kept21.append(_p21)
+        _close22 = float(df["close"].iloc[-1])
+        _atr22 = _atr(df)
+        _kept22 = []
+        for _p22 in out:
+            _info22 = _sel22(_p22, df, _atr22)
+            _p22["select_state"] = _info22.get("state")
+            _p22["break_state"] = _info22.get("state")
+            _p22["near_break"] = bool(_info22.get("ok"))
+            _p22["dist_atr"] = _info22.get("dist_atr")
+            _p22["break_side"] = _info22.get("side") or _p22.get("break_side")
+            if _info22.get("retest_from"):
+                _p22["retest_from"] = _info22["retest_from"]
+            if _info22.get("candle"):
+                _p22["candle_evidence"] = _info22["candle"]
+            if _info22.get("role"):
+                _p22["line_role"] = _info22["role"]
+            _p22["select_why"] = _info22.get("why")
+            if _gate_on22 and not _info22.get("ok") and not include_past_market:
+                print(f"R99q22 past-market pattern dropped: {_p22.get('type')} "
+                      f"[{_p22.get('break_state')} · {_p22.get('dist_atr')} ATR]")
                 continue
-            try:
-                _ok21, _info21 = _nb21(_u21, _l21, _n21, _close21, _atr21,
-                                       break_age=_age21)
-            except Exception:
-                _ok21, _info21 = True, {}
-            _p21["near_break"] = bool(_ok21)
-            _p21["break_state"] = (_info21 or {}).get("state")
-            _p21["dist_atr"] = (_info21 or {}).get("dist_atr")
-            # Only REAL two-edge shapes (wedges / triangles / channels /
-            # flags) are traded on their break — a lone trendline or a range
-            # box is CONTEXT: the band model reads a respected support line as
-            # a long-ago break and a mid-box price as far from an edge, so
-            # gating those would silently delete the chart's context shapes
-            # (and did, in five calibration tests). They are stamped, never
-            # dropped.
-            _two_edge21 = len([l for l in (_p21.get("lines") or []) if isinstance(l, dict)]) >= 2
-            if _gate_on21 and not _ok21 and not include_past_market and _two_edge21:
-                print(f"R99q21 past-market pattern dropped: {_p21.get('type')} "
-                      f"[{_p21.get('break_state')} · {_p21.get('dist_atr')} ATR]")
-                continue
-            _kept21.append(_p21)
-        out = _kept21
-    except Exception as _e21s:
-        print(f"actionability stamp warning: {_e21s}")
+            _kept22.append(_p22)
+        out = _kept22
+    except Exception as _e22s:
+        print(f"selection stamp warning: {_e22s}")
+    # R99q22 cond.6 — the pattern's own lines must reach the live bar
+    try:
+        _atr6 = _atr(df)
+        for _p6 in out:
+            extend_lines_to_live(_p6, df, _atr6)
+    except Exception as _e6:
+        print(f"line-extension warning: {_e6}")
     return out[:4]
 
 

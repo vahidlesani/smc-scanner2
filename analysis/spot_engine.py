@@ -947,12 +947,17 @@ def spot_signals_for(symbol: str, bundle) -> List:
 # the upward valid close stays the ONE confirmation (scan_spot_symbol).
 # ═══════════════════════════════════════════════════════════════════════════
 
-STAGE_RANK = {"TOUCH": 1, "NEAR_BREAK": 2, "BREAK_DOWN": 3, "BREAK_UP": 4, "CONFIRM": 5}
+# R99q22: RETEST (his conditions 3/4 — price back at the broken edge for the
+# break-even pullback) sits between «نزدیک شدن به شکست» and the break itself:
+# it is a real entry the lanes may take, ranked above a plain near-break.
+STAGE_RANK = {"TOUCH": 1, "NEAR_BREAK": 2, "RETEST": 3, "BREAK_DOWN": 3,
+              "BREAK_UP": 4, "CONFIRM": 5}
 _ALERT_TTL_H = 24 * 10                      # ladder state lives ten days
 # 10-10: DOWN refires max 1/day per sig (genuine re-breaks warn again — DOWN
 # has no confirm lane). UP stays never-refire: the confirm lane owns every UP
 # event, the ladder must not echo it.
-_STAGE_COOLDOWN_H = {"TOUCH": 24.0, "NEAR_BREAK": 12.0, "BREAK_DOWN": 24.0, "BREAK_UP": 0.0}
+_STAGE_COOLDOWN_H = {"TOUCH": 24.0, "NEAR_BREAK": 12.0, "RETEST": 6.0,
+                      "BREAK_DOWN": 24.0, "BREAK_UP": 0.0}
 
 
 def _edges_at(pat: dict, n: int) -> tuple:
@@ -973,6 +978,9 @@ def _stage_for_pattern(pat: dict, d: pd.DataFrame, atr: float, n: int) -> Option
     """One CLOSED candle vs one shape → the strongest alert stage it earns.
 
     BREAK_DOWN  valid bearish close ≥0.10·ATR beyond the lower side (body ≥0.25·ATR)
+    RETEST      price is back AT the edge it (or the story) broke — his 10-17
+                conditions 3/4: «ریتست روی ضلع بالای پترن» / «پولبک به محل
+                شکست» — the break-even pullback, a first-class entry
     NEAR_BREAK  close within 0.30·ATR of an edge — the break is imminent
     TOUCH       wick reached an edge (≤0.25·ATR) while the close stayed >0.30·ATR inside
     """
@@ -995,6 +1003,23 @@ def _stage_for_pattern(pat: dict, d: pd.DataFrame, atr: float, n: int) -> Option
     if lower is not None and c < lower - eps_break and (o - c) >= 0.25 * atr:
         return {"stage": "BREAK_DOWN", "side": "LOW", "edge": float(lower),
                 "gap": float(lower - c)}
+    # 1b) R99q22 RETEST (his conditions 3/4): the pattern's own selection law
+    # says price is back at the BROKEN edge (break-even pullback) and THIS
+    # candle actually interacted with it (wick or close within 0.25 ATR).
+    _sel_state = str(pat.get("select_state") or pat.get("break_state") or "").upper()
+    if _sel_state in ("RETEST_UPPER", "RETEST_LOWER"):
+        _side = "HIGH" if _sel_state.endswith("UPPER") else "LOW"
+        _edge = upper if _side == "HIGH" else lower
+        if _edge is not None:
+            _touch = abs(h - _edge) if _side == "HIGH" else abs(l - _edge)
+            if _touch <= eps_wick or (_side == "HIGH" and c >= _edge) \
+                    or (_side == "LOW" and c <= _edge):
+                return {"stage": "RETEST", "side": _side, "edge": float(_edge),
+                        "gap": float(abs(c - _edge))}
+        # the retest is live even if this exact candle did not wick it
+        if _edge is not None and abs(c - _edge) <= 0.75 * atr:
+            return {"stage": "RETEST", "side": _side, "edge": float(_edge),
+                    "gap": float(abs(c - _edge))}
     # 2) break watch — close hugging either edge (the closer side wins)
     near_hits = []
     if upper is not None and c <= upper and (upper - c) <= near:

@@ -7473,6 +7473,9 @@ def send_spot_event(event: dict, chart: Optional[bytes] = None) -> bool:
 _SPOT_ALERT_TITLE = {
     "TOUCH": "🖐 برخورد اولیه به الگو",
     "NEAR_BREAK": "⏳ نزدیک شدن به شکست",
+    # R99q22 (his conditions 3/4): price is back at the broken edge — the
+    # break-even pullback he described («پولبک زده به نزدیکی محل شکست»).
+    "RETEST": "🔁 ریتست لبهٔ شکسته (پولبک به بریک‌ایون)",
     "BREAK_DOWN": "💥 هشدار شکست نزولی",
 }
 

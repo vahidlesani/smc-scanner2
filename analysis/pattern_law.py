@@ -571,6 +571,351 @@ def near_break(upper, lower, n: int, close: float, atr: float,
         return True, info
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# R99q22 — PATTERN SELECTION LAW (his 10-17, verbatim)
+# «باید پترنی انتخاب بشه که حتما قیمت ۱- داخل پترن باشه ۲- نزدیک به ضلع بالا
+#  یا پایین پترن باشه ۳- در حال ریتست روی ضلع بالای پترن باشه ۴- در حال ریتست و
+#  برخورد از پایین به سمت زیر ضلع پترن باشه … ۵- ضلع بالا یا پایین رو بریک کرده
+#  اما در همون کندل یا چند کندل بعدش دوباره وارد پترن شده …»
+#
+# The seven conditions he listed are the LIFECYCLE of a live pattern, so the law
+# now names the state instead of asking one yes/no question:
+#
+#   INSIDE            (1) price inside the pattern (still live, not left behind)
+#   AT_EDGE           (1+2) inside and within `approach_atr` of an edge — the
+#                     classic «نزدیک به شکست» case
+#   FRESH_BREAK       the edge closed through within `fresh_bars` — his «اولین
+#                     ورود ما» (the impulse entry)
+#   RETEST_UPPER      (3) broke UP, price came back DOWN to the broken upper
+#                     edge (break-even retest from above)
+#   RETEST_LOWER      (4) broke DOWN, price came back UP to the broken lower
+#                     edge / approached from below toward the underside of it
+#   FAILED_BREAK      (5) the edge was pierced and price RE-ENTERED the pattern
+#                     in the same candle or the next few — a trap, still live
+#   STALE             price has LEFT the pattern and the break is old: the ONLY
+#                     veto (his «پترن گذشته مارکت»)
+#
+# Single trendlines (his condition 7) are judged by trendline_state() —
+# TOUCH / REJECTED / COMPRESSION / FRESH_BREAK / RETEST_BE with the trigger-TF
+# candle evidence (pin-bar, doji) attached.
+#
+# Numeric starting points follow the engine spec he was shown (GPT-5.5 file):
+# approach 0.75 ATR, close buffer 0.10 ATR, touch 0.35 ATR, retest 1.0 ATR,
+# wick violation 0.65 ATR.
+# ═══════════════════════════════════════════════════════════════════════════
+SELECTION_STATES = ("INSIDE", "AT_EDGE", "FRESH_BREAK", "RETEST_UPPER",
+                    "RETEST_LOWER", "FAILED_BREAK", "STALE")
+#: every state except STALE is tradeable-adjacent
+ACTIONABLE_STATES = tuple(x for x in SELECTION_STATES if x != "STALE")
+
+APPROACH_ATR = 0.75      # «نزدیک به ضلع»
+CLOSE_BUFFER_ATR = 0.10  # a break needs this much close beyond the edge
+TOUCH_ATR = 0.35         # a real touch of a line
+RETEST_ATR = 1.00        # a retest hugs the broken edge this closely
+INSIDE_LIVE_ATR = 6.0    # deeper than this inside a band = the pattern's own
+                         # height dwarfs the distance; still INSIDE (cond. 1)
+
+
+def _frame_cols(df) -> Tuple[list, list, list]:
+    """(closes, highs, lows) as plain lists in index space of df."""
+    try:
+        c = [float(v) for v in df["close"].tolist()]
+        h = [float(v) for v in df["high"].tolist()]
+        lo = [float(v) for v in df["low"].tolist()]
+        return c, h, lo
+    except Exception:
+        return [], [], []
+
+
+def select_state(df, upper, lower, atr: float,
+                 lookback: int = 90, fresh_bars: int = 18,
+                 reenter_bars: int = 3, approach_atr: float = APPROACH_ATR,
+                 retest_atr: float = RETEST_ATR) -> Dict:
+    """Judge WHERE price stands against a two-edge pattern.
+
+    Returns {state, ok, side, dist_atr, break_age, retest_from, reenter,
+             failed_break, why}. `ok=False` ONLY for STALE (پترن گذشته‌مارکت).
+    Lenient by design: missing data or an unreadable line returns ok=True.
+    """
+    info: Dict = {"state": "UNKNOWN", "ok": True, "side": None,
+                  "dist_atr": None, "break_age": None, "retest_from": None,
+                  "reenter": False, "failed_break": False, "why": ""}
+    try:
+        if df is None or not atr or atr <= 0:
+            return info
+        n = int(len(df))
+        if n < 5:
+            return info
+        closes, highs, lows = _frame_cols(df)
+        if len(closes) != n:
+            return info
+        close = closes[-1]
+        u = _price_at(upper, n - 1)
+        l = _price_at(lower, n - 1)
+        if u is None and l is None:
+            return info
+        if l is None:
+            l = u
+        if u is None:
+            u = l
+        if u < l:
+            u, l = l, u
+        du = abs(close - u) / atr
+        dl = abs(close - l) / atr
+        side = "UPPER" if du <= dl else "LOWER"
+        info["side"] = side
+        info["dist_atr"] = round(min(du, dl), 3)
+        inside = (l - 1e-12) <= close <= (u + 1e-12)
+        # ── walk the tail: when did each edge last close through? did price
+        # come back inside right after (his condition 5)?
+        i0 = max(0, n - max(10, int(lookback)))
+        buf = CLOSE_BUFFER_ATR * atr
+        up_age = dn_age = None
+        crossings = []          # (age, side) of every edge crossing in the tail
+        for x in range(n - 1, max(i0, 1) - 1, -1):
+            _u = _price_at(upper, x)
+            _l = _price_at(lower, x)
+            _u0 = _price_at(upper, x - 1)
+            _l0 = _price_at(lower, x - 1)
+            if _u is None or _l is None or _u0 is None or _l0 is None:
+                continue
+            _c, _c0 = closes[x], closes[x - 1]
+            # a BREAK is a CROSSING (he means «شکست»): the previous close was
+            # not beyond the edge and this one is. Without this test a price
+            # that merely STAYS above a falling edge reads as a fresh break on
+            # every bar — the root of «پترن شکسته‌شده اشتباه تازه تشخیص داده شد».
+            if _c > _u + buf and _c0 <= _u0 + buf:
+                crossings.append((n - 1 - x, "UP"))
+                if up_age is None:
+                    up_age = n - 1 - x
+            if _c < _l - buf and _c0 >= _l0 - buf:
+                crossings.append((n - 1 - x, "DN"))
+                if dn_age is None:
+                    dn_age = n - 1 - x
+        info["break_age"] = min([a for a in (up_age, dn_age) if a is not None],
+                                default=None)
+        # Every crossing is kept, not just the newest: his condition 5 asks
+        # whether a break was FOLLOWED by a re-entry inside the pattern.
+        for _age, _s in crossings[:8]:
+            _x = n - 1 - _age
+            for y in range(_x + 1, min(n, _x + 1 + reenter_bars + 1)):
+                _u2 = _price_at(upper, y)
+                _l2 = _price_at(lower, y)
+                if _u2 is None or _l2 is None:
+                    continue
+                if _l2 <= closes[y] <= _u2:
+                    info["reenter"] = True
+                    info["failed_break"] = True
+                    break
+            if info["failed_break"]:
+                break
+        # ── the decision
+        if inside:
+            inside = True
+            info["state"] = "AT_EDGE" if min(du, dl) <= approach_atr else "INSIDE"
+            info["why"] = (f"price inside the band, {info['dist_atr']} ATR off the "
+                           f"nearest edge ({side})")
+            return info
+        if up_age is not None and up_age <= fresh_bars:
+            info["state"] = "FRESH_BREAK"
+            info["retest_from"] = "ABOVE" if close > u else None
+            info["why"] = f"upper edge closed through {up_age} bars ago"
+            return info
+        if dn_age is not None and dn_age <= fresh_bars:
+            info["state"] = "FRESH_BREAK"
+            info["retest_from"] = "BELOW" if close < l else None
+            info["why"] = f"lower edge closed through {dn_age} bars ago"
+            return info
+        # price left the band — is it coming BACK to the broken edge?
+        if du <= retest_atr and close > u:
+            info["state"] = "RETEST_UPPER"
+            info["retest_from"] = "ABOVE"
+            info["why"] = (f"broke up, price back within {round(du, 2)} ATR of the "
+                           f"broken upper edge (break-even pullback)")
+            return info
+        if dl <= retest_atr and close < l:
+            info["state"] = "RETEST_LOWER"
+            info["retest_from"] = "BELOW"
+            info["why"] = (f"broke down, price back within {round(dl, 2)} ATR of the "
+                           f"broken lower edge (break-even pullback)")
+            return info
+        if info["failed_break"] and min(du, dl) <= retest_atr * 2.0:
+            info["state"] = "FAILED_BREAK"
+            info["why"] = ("edge pierced then price re-entered the pattern within "
+                           f"{reenter_bars} bars — trap, still live")
+            return info
+        info["state"] = "STALE"
+        info["ok"] = False
+        info["why"] = (f"price left the pattern ({min(du, dl):.2f} ATR off the "
+                       f"nearest edge) and the break is {info['break_age']} bars old")
+        return info
+    except Exception as exc:
+        info["why"] = f"selector error: {exc}"
+        return info
+
+
+def trendline_state(df, line, atr: float, lookback: int = 40,
+                    fresh_bars: int = 18, touch_atr: float = TOUCH_ATR,
+                    retest_atr: float = 0.60) -> Dict:
+    """Condition 7 — the SINGLE-trendline lane.
+
+    States: FRESH_BREAK · RETEST_BE (magnet back to the break-even after a
+    closed breakthrough) · REJECTED (touched and closed away) · TOUCH (hugging
+    the line now) · COMPRESSION (candles squeezing under/over it) · STALE.
+    Also returns `role` (SUPPORT when price is above the line, RESISTANCE when
+    below) and `candle` — the trigger-TF evidence (PINBAR / INV_PINBAR / DOJI).
+    """
+    info: Dict = {"state": "UNKNOWN", "ok": True, "role": None,
+                  "dist_atr": None, "side": None, "candle": None,
+                  "touches": 0, "why": ""}
+    try:
+        if df is None or not atr or atr <= 0 or line is None:
+            return info
+        n = int(len(df))
+        if n < 5:
+            return info
+        closes, highs, lows = _frame_cols(df)
+        if len(closes) != n:
+            return info
+        close = closes[-1]
+        v = _price_at(line, n - 1)
+        if v is None:
+            return info
+        d = (close - v) / atr
+        info["dist_atr"] = round(abs(d), 3)
+        info["role"] = "SUPPORT" if d >= 0 else "RESISTANCE"
+        info["side"] = "LOW" if d >= 0 else "HIGH"
+        # last closed candle's evidence (his pin-bar / doji clause)
+        try:
+            o, h, lo, c = (float(df["open"].iloc[-1]), highs[-1], lows[-1], closes[-1])
+            rng = max(h - lo, 1e-12)
+            body = abs(c - o)
+            up_wick = h - max(o, c)
+            dn_wick = min(o, c) - lo
+            if body <= 0.10 * rng:
+                info["candle"] = "DOJI"
+            elif dn_wick >= 2.0 * max(body, 1e-12) and dn_wick >= 0.35 * rng:
+                info["candle"] = "PINBAR"
+            elif up_wick >= 2.0 * max(body, 1e-12) and up_wick >= 0.35 * rng:
+                info["candle"] = "INV_PINBAR"
+        except Exception:
+            pass
+        # interaction history on the line
+        i0 = max(1, n - max(6, int(lookback)))
+        touched = rejected = 0
+        break_age = None
+        for x in range(i0, n):
+            vx = _price_at(line, x)
+            if vx is None:
+                continue
+            if abs(closes[x] - vx) <= touch_atr * atr:
+                touched += 1
+            if x > 0:
+                vp = _price_at(line, x - 1)
+                if vp is not None:
+                    if closes[x - 1] < vp and closes[x] > vx + CLOSE_BUFFER_ATR * atr:
+                        break_age = n - 1 - x
+                    if closes[x - 1] > vp and closes[x] < vx - CLOSE_BUFFER_ATR * atr:
+                        break_age = n - 1 - x
+        info["touches"] = touched
+        for x in range(max(1, n - 6), n):
+            vx = _price_at(line, x)
+            if vx is None:
+                continue
+            wick = (highs[x] - vx) if d >= 0 else (vx - lows[x])
+            if 0 <= wick <= touch_atr * 1.5 * atr and abs(closes[x] - vx) > touch_atr * atr:
+                rejected += 1
+        if break_age is not None and break_age <= fresh_bars:
+            info["state"] = "FRESH_BREAK"
+            info["why"] = f"line closed through {break_age} bars ago"
+            return info
+        if break_age is not None and abs(d) <= retest_atr:
+            info["state"] = "RETEST_BE"
+            info["why"] = ("price magnetised back to the break-even of the broken "
+                           f"line ({round(abs(d), 2)} ATR) after {break_age} bars")
+            return info
+        if rejected >= 1 and abs(d) <= retest_atr * 2.0:
+            info["state"] = "REJECTED"
+            info["why"] = f"{rejected} touch-and-reject(s) on the line in the last bars"
+            return info
+        if abs(d) <= approach_atr_default():
+            info["state"] = "TOUCH"
+            info["why"] = (f"price at the line ({round(abs(d), 2)} ATR) — "
+                           f"{'approaching from below' if d < 0 else 'holding above'}")
+            return info
+        # compression: three shrinking candles hugging the line
+        if abs(d) <= 1.2:
+            try:
+                rs = [highs[x] - lows[x] for x in range(n - 3, n)]
+                rs0 = [highs[x] - lows[x] for x in range(max(0, n - 6), n - 3)]
+                if rs0 and (sum(rs) / 3.0) < 0.65 * (sum(rs0) / max(len(rs0), 1)):
+                    info["state"] = "COMPRESSION"
+                    info["why"] = "candles compressing against the line"
+                    return info
+            except Exception:
+                pass
+        if abs(d) <= 2.5:
+            info["state"] = "NEAR"
+            info["why"] = f"price {round(abs(d), 2)} ATR from the line"
+            return info
+        info["state"] = "STALE"
+        info["ok"] = False
+        info["why"] = f"price {round(abs(d), 2)} ATR from the line, no recent touch"
+        return info
+    except Exception as exc:
+        info["why"] = f"trendline selector error: {exc}"
+        return info
+
+
+def approach_atr_default() -> float:
+    """The «نزدیک به ضلع» distance, overridable per deploy."""
+    try:
+        return float(os.getenv("VIVA_PATTERN_APPROACH_ATR", "") or APPROACH_ATR)
+    except Exception:
+        return APPROACH_ATR
+
+
+def selection_for_shape(shape: dict, df, atr: float) -> Dict:
+    """Stamp ONE render command with the R99q22 selection verdict.
+
+    Two-edge commands (wedges / triangles / channels / flags) go through
+    select_state(); a single-trendline command goes through trendline_state().
+    Because his law has no veto except «پترن گذشته‌مارکت», the band's STALE is
+    the only state that returns ok=False — and a single trendline is NEVER
+    dropped here (the renderer keeps context lines; only its label changes).
+    """
+    info: Dict = {"state": "UNKNOWN", "ok": True, "dist_atr": None,
+                  "side": None, "why": ""}
+    try:
+        if not isinstance(shape, dict):
+            return info
+        lns = [l for l in (shape.get("lines") or []) if isinstance(l, dict)]
+        if len(lns) >= 2:
+            up, lo = lns[0], lns[1]
+            if str(up.get("side") or "").upper() == "LOW" and \
+                    str(lo.get("side") or "").upper() == "HIGH":
+                up, lo = lo, up
+            info = select_state(df, up, lo, atr)
+        elif len(lns) == 1:
+            info = trendline_state(df, lns[0], atr)
+        elif shape.get("hi") is not None and shape.get("lo") is not None:
+            info = select_state(df,
+                                {"slope": 0.0, "intercept": float(shape["hi"])},
+                                {"slope": 0.0, "intercept": float(shape["lo"])},
+                                atr)
+        info["one_line"] = len(lns) == 1
+        if info["one_line"]:
+            # A single trendline is the chart's CONTEXT line: his condition 7
+            # asks the law to NAME what price is doing with it (TOUCH /
+            # REJECTED / COMPRESSION / FRESH_BREAK / RETEST_BE), never to
+            # delete it — only a two-edge pattern price has LEFT is stale.
+            info["ok"] = True
+        return info
+    except Exception as exc:
+        info["why"] = f"selection error: {exc}"
+        return info
+
+
 def label_fa(slug: str) -> str:
     k = str(slug or "").upper()
     d = PATTERN_LAW.get(k)
