@@ -296,7 +296,15 @@ def test_budget_checked_before_supersede_and_ghost_retired():
     i_budget = src.index('if (not _is_watch62 and not _budget_ok(candidate))')  # R63 W3
     i_super = src.index("for prior in supersede_alert_lineage(candidate):")
     assert i_budget < i_super
-    assert '_set_st62(candidate.signal_id, "UNPOSTED")' in src
+    # R99q15: a BUDGET deferral no longer ghost-retires the chain on the spot.
+    # The candidate is queued and retried at the end of the cycle; only a chain
+    # that fails BOTH passes is retired as UNPOSTED (the old instant retire is
+    # what lost 22 ALBROX early alerts in prod).
+    assert "_deferred_edu.append((candidate, _cand_frame))" in src
+    i_retry = src.index("for _dc, _dfr in _deferred_edu:")
+    i_ghost = src.index('_set_st62b(_dc.signal_id, "UNPOSTED")')
+    i_cleanup = src.index("cleanup_candidates()\n    try:  # Viva 2026-09-13")
+    assert i_retry < i_ghost < i_cleanup
 
 
 def test_mint_guard_allows_never_persisted_ids():

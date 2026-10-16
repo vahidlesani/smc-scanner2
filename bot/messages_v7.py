@@ -526,8 +526,12 @@ def _tg_post(url: str, *, data: dict, files: Optional[dict] = None, timeout: int
     """POST with 429-retry honoring retry_after (max 3 attempts)."""
     for attempt in range(3):
         try:
-            _tg_pace()
-            response = requests.post(url, data=data, files=files, timeout=timeout)
+            # R99q15: the whole request — pacing included — holds this chat's
+            # lock, so a parallel sender can never land between a package's
+            # chart and its text («چارت میاد بعد پیامش چند پیام بعد»).
+            with _chat_send_lock((data or {}).get("chat_id")):
+                _tg_pace()
+                response = requests.post(url, data=data, files=files, timeout=timeout)
         except Exception as exc:
             print(f"Telegram API error: {exc}")
             return None
@@ -5819,13 +5823,43 @@ def _send_photo_file_id(file_id: str, chat_id: str, label: str = "",
     return mid
 
 
-_CHAT_SEND_LOCKS: Dict[str, threading.Lock] = {}
+_CHAT_SEND_LOCKS: Dict[str, threading.RLock] = {}
 _CHAT_SEND_LOCKS_GUARD = threading.Lock()
 
 
-def _chat_send_lock(target) -> threading.Lock:
+def _chat_send_lock(target) -> threading.RLock:
+    """Per-chat REENTRANT lock: a package holds it across its own sends while
+    each individual send re-enters it (RLock, never a bare Lock — a nested
+    acquire on the same thread would deadlock the whole publisher)."""
     with _CHAT_SEND_LOCKS_GUARD:
-        return _CHAT_SEND_LOCKS.setdefault(str(target), threading.Lock())
+        _lk = _CHAT_SEND_LOCKS.get(str(target))
+        if _lk is None:
+            _lk = threading.RLock()
+            _CHAT_SEND_LOCKS[str(target)] = _lk
+        return _lk
+
+
+class _package:
+    """R99q15 (his 10-16 ruling: «کاری بکن که همیشه چارت و پیامش باهم و پشت
+    سرهم بیان»): a chart + its text (and any separator that belongs to the same
+    package) are published ATOMICALLY per chat. Every sender takes the chat's
+    lock for its own request, so no other lane can slip a foreign message
+    between a package's chart and its text."""
+
+    def __init__(self, chat_id):
+        self._target = chat_id
+
+    def __enter__(self):
+        self._lock = _chat_send_lock(self._target)
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            self._lock.release()
+        except Exception:
+            pass
+        return False
 
 
 def _post_chart_then_text(chart, text: str, target, reply_to=None,
@@ -6016,27 +6050,35 @@ def send_educational_setup(candidate: SignalCandidate, chart_df: Optional[pd.Dat
         candidate.metadata["stale_detection"] = int(_late_min)
         print(f"⏳ STALE_DETECTION {candidate.signal_id}: source candle closed "
               f"{_late_min} minutes ago (> 2×{candidate.trigger_timeframe}) — analysis note only")
-    if not candidate.metadata.get("education_separator_attempted"):
-        send_signal_separator(target)
-        candidate.metadata["education_separator_attempted"] = True
-    chart = generate_chart(chart_df, candidate, confirmed=False) if chart_df is not None else None
-    # r49 (Viva 09-27 05:43, «کپشن چارت پینوال رو برداری مثل بقیه بشه —
-    # همه شبیه هم باشن»): ONE uniform caption for EVERY alert chart; the pin
-    # zone/polarity/rules live in the message text, never on the photo.
-    caption = (
-        f"📚 {_e(candidate.symbol)} • {_e(candidate.style)} • {_e(candidate.setup_code)}\n"
-        f"⛔ تأیید ورود نیست\n🕓 ایران: {_iran_time(candidate)}\n🆔 <code>{_e(_public_code(candidate))}</code>"
-    )
-    if chart:
-        _store_alert_message_id(candidate, "education_chart_message_id",
-                                send_photo(chart, caption, target))
-    mid = send_message(build_educational_message(candidate), target)
-    if not mid:  # Viva 09-17: the DETAILED alert must never silent-die
-        print(f"DETAILED alert post failed {candidate.signal_id}; retrying once")
+    # ── R99q15 PACKAGE ATOMICITY (his 10-16 ruling, verbatim: «در کانال هشدارها
+    # چارت میاد بعدش یک پیام دیگه میاد … کاری بکن که همیشه چارت و پیامش باهم و
+    # پشت سرهم بیان»): the separator, the chart and the detailed alert are ONE
+    # package on ONE chat lock — no other lane (monitor, spot, another symbol's
+    # discovery) can post between them. Chart rendering happens INSIDE the lock
+    # too: a render that finishes after a foreign message would otherwise be
+    # exactly the reported detachment.
+    with _package(target):
+        if not candidate.metadata.get("education_separator_attempted"):
+            send_signal_separator(target)
+            candidate.metadata["education_separator_attempted"] = True
+        chart = generate_chart(chart_df, candidate, confirmed=False) if chart_df is not None else None
+        # r49 (Viva 09-27 05:43, «کپشن چارت پینوال رو برداری مثل بقیه بشه —
+        # همه شبیه هم باشن»): ONE uniform caption for EVERY alert chart; the pin
+        # zone/polarity/rules live in the message text, never on the photo.
+        caption = (
+            f"📚 {_e(candidate.symbol)} • {_e(candidate.style)} • {_e(candidate.setup_code)}\n"
+            f"⛔ تأیید ورود نیست\n🕓 ایران: {_iran_time(candidate)}\n🆔 <code>{_e(_public_code(candidate))}</code>"
+        )
+        if chart:
+            _store_alert_message_id(candidate, "education_chart_message_id",
+                                    send_photo(chart, caption, target))
         mid = send_message(build_educational_message(candidate), target)
-        if not mid:
-            print(f"DETAILED alert post FAILED twice {candidate.signal_id}")
-    _store_alert_message_id(candidate, "education_message_id", mid)
+        if not mid:  # Viva 09-17: the DETAILED alert must never silent-die
+            print(f"DETAILED alert post failed {candidate.signal_id}; retrying once")
+            mid = send_message(build_educational_message(candidate), target)
+            if not mid:
+                print(f"DETAILED alert post FAILED twice {candidate.signal_id}")
+        _store_alert_message_id(candidate, "education_message_id", mid)
     # Viva 2026-09-11 (final doctrine, verbatim): the main channel receives
     # ONLY the final alert (and later the Confirmed which replaces it) — the
     # education phase must never put a text-only watch post there («عالمه

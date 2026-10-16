@@ -47,15 +47,43 @@ PROVIDERS: Dict[str, tuple] = {
     "TLBREAK": ("analysis.tlbreak", "tlbreak_prebreak"),
 }
 
-# Each setup's own pattern timeframes (its own engine decides; these are the
-# frames the lane feeds it — never a fetch of its own).
-SETUP_TFS: Dict[str, tuple] = {
-    "TECHCLASSIC": ("30m", "1h", "2h", "4h"),
-    "ALBROX": ("30m", "1h", "2h", "4h"),
-    "PINVAL": ("15m", "30m", "1h"),
-    "PINWALLQ": ("15m", "30m", "1h"),
-    "TLBREAK": ("30m", "1h", "4h"),
-}
+# ── R99q15 ONE GRID LAW (Viva 10-16, verbatim: «مهم‌ترین قسمت اینه که همه
+# چارت‌ها در تایم‌فریم های همه ستاپ ها قبل از شکست تشخیص داده بشن تا با شکست و
+# کلوز سریع تایید بشه»): EVERY setup answers on EVERY trigger frame of the
+# weekly-licence law (15m/30m/1h/2h/4h — the 1d is BIAS only in futures, R99q7).
+# The old per-setup subsets made a 2h ALBROX edge or a 4h PINVAL pin invisible
+# to the early lane, so those charts only ever spoke AFTER the break.
+# Tunable per setup: VIVA_PREBREAK_TFS_<SETUP>="15m,30m,1h" (csv), and the whole
+# grid with VIVA_PREBREAK_TFS. Never a fetch of its own — the scan bundle feeds
+# every frame (derived ones included).
+_DEFAULT_SETUP_TFS = ("15m", "30m", "1h", "2h", "4h")
+
+
+def _grid_tfs() -> tuple:
+    _raw = str(os.getenv("VIVA_PREBREAK_TFS", "") or "").strip()
+    if _raw:
+        _tfs = tuple(x.strip().lower() for x in _raw.split(",") if x.strip())
+        if _tfs:
+            return _tfs
+    return _DEFAULT_SETUP_TFS
+
+
+def setup_tfs(setup) -> tuple:
+    """The trigger frames this setup is watched on (env-overridable)."""
+    _code = str(setup or "").strip().upper()
+    try:
+        _raw = str(os.getenv(f"VIVA_PREBREAK_TFS_{_code}", "") or "").strip()
+        if _raw:
+            _tfs = tuple(x.strip().lower() for x in _raw.split(",") if x.strip())
+            if _tfs:
+                return _tfs
+    except Exception:
+        pass
+    return _grid_tfs()
+
+
+# kept for callers that still read the table (it always mirrors the law grid)
+SETUP_TFS: Dict[str, tuple] = {_k: _DEFAULT_SETUP_TFS for _k in PROVIDERS}
 
 
 def _env_float(name: str, default: float) -> float:
@@ -162,6 +190,17 @@ def provide(setup: str) -> Optional[Callable]:
 
 
 def setup_enabled(setup: str) -> bool:
+    """A setup is pre-break watched when its own master switch is ON (the same
+    switch the break lane obeys) — plus a per-setup opt-OUT for this lane:
+    `VIVA_PREBREAK_OFF_<SETUP>=1`."""
+    _code = str(setup or "").upper()
+    try:
+        if str(os.getenv(f"VIVA_PREBREAK_OFF_{_code}", "0") or "0").strip() == "1":
+            return False
+        if str(os.getenv(f"VIVA_PREBREAK_ON_{_code}", "") or "").strip() == "1":
+            return True
+    except Exception:
+        pass
     try:
         from config import get_settings
         s = get_settings()
@@ -171,7 +210,7 @@ def setup_enabled(setup: str) -> bool:
             "PINVAL": getattr(s, "pinv_enabled", False),
             "PINWALLQ": getattr(s, "pinwall_quality_enabled", False),
             "TLBREAK": getattr(s, "tlbreak_enabled", True),
-        }.get(str(setup or "").upper(), False))
+        }.get(_code, False))
     except Exception:
         return False
 
@@ -229,7 +268,7 @@ def collect(bundle, *, setups: Optional[List[str]] = None,
         fn = provide(setup)
         if fn is None:
             continue
-        for tf in SETUP_TFS.get(str(setup).upper(), ()):
+        for tf in setup_tfs(setup):
             df = (frames or {}).get(tf)
             if df is None and bundle is not None:
                 try:
@@ -492,7 +531,7 @@ def prebreak_candidates(bundle, *, cap: Optional[int] = None,
         if fn is None:
             continue
         _minted: List[Dict[str, Any]] = []
-        for tf in SETUP_TFS.get(str(setup).upper(), ()):
+        for tf in setup_tfs(setup):
             try:
                 df = bundle.get(tf)
             except Exception:

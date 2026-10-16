@@ -1030,3 +1030,84 @@ def test_r99q14_pinval_chains_get_their_validated_edges():
     assert 'or (_has_edges9 and not _is_spot)' in _src
     assert "def _covered9" in _src
     assert "_covered9(key, _y_now9)" in _src
+
+
+# ── R99q15 (his 10-16 four questions) ───────────────────────────────────────
+def test_r99q15_every_setup_watches_every_trigger_frame():
+    """«مهم‌ترین قسمت اینه که همه چارت‌ها در تایم‌فریم‌های همه ستاپ‌ها قبل از
+    شکست تشخیص داده بشن» — the early lane answers on the FULL trigger grid
+    (15m/30m/1h/2h/4h) for EVERY setup, env-overridable per setup."""
+    import os as _os
+    import analysis.prebreak_lane as pb
+    _grid = ("15m", "30m", "1h", "2h", "4h")
+    for _setup in ("TECHCLASSIC", "ALBROX", "PINVAL", "PINWALLQ", "TLBREAK"):
+        assert pb.setup_tfs(_setup) == _grid, _setup
+        assert _os.getenv(f"VIVA_PREBREAK_TFS_{_setup}") is None
+        _os.environ[f"VIVA_PREBREAK_TFS_{_setup}"] = "1h,4h"
+        try:
+            assert pb.setup_tfs(_setup) == ("1h", "4h")
+        finally:
+            _os.environ.pop(f"VIVA_PREBREAK_TFS_{_setup}", None)
+    _os.environ["VIVA_PREBREAK_TFS"] = "30m,1h"
+    try:
+        assert pb.setup_tfs("PINVAL") == ("30m", "1h")
+    finally:
+        _os.environ.pop("VIVA_PREBREAK_TFS", None)
+    # the lane actually walks the grid for every provider
+    assert all(pb.SETUP_TFS[_s] == _grid for _s in pb.SETUP_TFS)
+
+
+def test_r99q15_watches_run_first_on_their_own_budget():
+    """The early alerts are dispatched FIRST for each symbol and own a separate
+    cycle budget (env `VIVA_WATCH_PER_SCAN`) — a burst of watches can never
+    starve the break lanes and vice-versa."""
+    import inspect
+    import main
+    src = inspect.getsource(main)
+    assert 'os.getenv("VIVA_WATCH_PER_SCAN", "6")' in src
+    assert "candidates = list(_pb14) + list(candidates)" in src
+
+
+def test_r99q15_chart_and_text_are_one_package_per_chat():
+    """His 10-16: «کاری بکن که همیشه چارت و پیامش باهم و پشت سرهم بیان» — the
+    education package (separator + chart + detailed alert) holds its chat's
+    lock, and every Telegram post serializes on the same chat lock."""
+    import inspect
+    import threading
+    import bot.messages_v7 as B7
+    src = inspect.getsource(B7)
+    assert "with _package(target):" in src
+    assert 'with _chat_send_lock((data or {}).get("chat_id")):' in src
+    # the lock must be REENTRANT (a package re-enters it through its own sends)
+    _lk = B7._chat_send_lock("TEST-CHAT")
+    # threading.RLock is a FACTORY function, not a type — test the behaviour
+    assert "RLock" in type(_lk).__name__, type(_lk)
+    with B7._package("TEST-CHAT"):
+        assert _lk.acquire(blocking=False), "a package must be re-entrant"
+        _lk.release()
+        _blocked = {"v": None}
+
+        def _other():
+            _blocked["v"] = _lk.acquire(blocking=False)
+            if _blocked["v"]:
+                _lk.release()
+
+        _t = threading.Thread(target=_other)
+        _t.start()
+        _t.join(timeout=2)
+        assert _blocked["v"] is False, "another thread must NOT enter the package"
+
+
+def test_r99q15_mplfinance_and_evictions_did_not_regress_the_ladder():
+    """Q2 guard: confirmation fires on the FIRST closed candle of the confirm
+    TF — one step BELOW the trigger (smaller than the pattern) — or through the
+    illusion engine one step below that. Never on the trigger TF itself."""
+    from analysis.confirm_r62 import (confirm_tf_for_trigger as _ctf,
+                                      tohom_sub_tf as _sub, CONFIRM_LADDER)
+    assert CONFIRM_LADDER == {"5m": "1m", "15m": "5m", "30m": "15m",
+                              "1h": "15m", "2h": "30m", "4h": "1h", "1d": "4h"}
+    for _trig, _want in (("15m", "5m"), ("30m", "15m"), ("1h", "15m"),
+                         ("2h", "30m"), ("4h", "1h")):
+        assert _ctf(_trig) == _want
+        assert _sub(_trig) is not None, _trig
+        assert _sub(_trig) != _trig

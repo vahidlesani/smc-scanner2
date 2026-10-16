@@ -313,7 +313,11 @@ def run_discovery_scan() -> Dict[str, int]:
     _edu_budget = {"left": max(1, int(getattr(SETTINGS, "education_max_per_scan", 8) or 8))}
     # Viva 09-17 seesaw fix: WATCH/previews live on a SEPARATE small budget —
     # a flood of two-pivot watches can never starve pins/other families again.
-    _watch_budget = {"left": 4}
+    # R99q15 (his 10-16 «مهم‌ترین قسمت اینه که همه چارت‌ها … قبل از شکست تشخیص
+    # داده بشن»): the early-alert lane is the priority lane, so it gets a bigger
+    # slice of the cycle than the old 4 — still its OWN pool, so a burst of
+    # watches can never starve the break lanes' education budget.
+    _watch_budget = {"left": max(1, int(os.getenv("VIVA_WATCH_PER_SCAN", "6") or 6))}
     # R63 (audit W3): the 8-alert cycle budget was FIRST-COME across all
     # setups — the symbol loop order let one noisy family (zones/pins on the
     # first symbols) eat the whole budget and defer time-critical pattern
@@ -322,6 +326,7 @@ def run_discovery_scan() -> Dict[str, int]:
     # small reserve on top of the shared pool.
     _per_setup_cap = max(2, int(getattr(SETTINGS, "education_max_per_setup_per_scan", 4) or 4))
     _setup_used: Dict[str, int] = {}
+    _deferred_edu: list = []          # R99q15: education retry queue (see below)
     _break_reserve = {"left": 2}
     _BREAK_LANES63 = {"TECHCLASSIC", "ALBROX", "TLBREAK"}
 
@@ -432,7 +437,10 @@ def run_discovery_scan() -> Dict[str, int]:
                     skip_setups={str(getattr(_c, "setup_code", "") or "").upper()
                                  for _c in candidates})
                 if _pb14:
-                    candidates = list(candidates) + list(_pb14)
+                    # R99q15: the early alerts are dispatched FIRST for the
+                    # symbol (they carry their own budget, so ordering only
+                    # decides who gets the cycle's slots while they last).
+                    candidates = list(_pb14) + list(candidates)
                     stats["prebreak"] = stats.get("prebreak", 0) + len(_pb14)
             except Exception as exc:
                 print(f"PRE-BREAK lane skipped {symbol}: {exc}")
@@ -739,16 +747,20 @@ def run_discovery_scan() -> Dict[str, int]:
                 # chain — when the cycle budget is exhausted the candidate is
                 # left unpersisted so the very next scan retries it (nothing
                 # lost, only smoothed).
-                if not _educate(candidate, _chart_frame(candidate, bundle)):
+                _cand_frame = _chart_frame(candidate, bundle)
+                if not _educate(candidate, _cand_frame):
                     _t(candidate)["educate_failed"] = _t(candidate).get("educate_failed", 0) + 1
-                    # R62-ARENA (audit W2): a stored row whose alert never
-                    # posted is a GHOST chain (monitored, confirmable, with no
-                    # message to reply to). Retire it so the next scan re-mints.
-                    try:
-                        from database.candidate_store import set_status as _set_st62
-                        _set_st62(candidate.signal_id, "UNPOSTED")
-                    except Exception as _gh_exc:
-                        print(f"ghost-chain retire failed {candidate.signal_id}: {_gh_exc}")
+                    # R99q15 (his 10-16 question «چرا … ۹۰ درصد پینوال هشدار
+                    # داده و بعدش کمی آلبروکس و …»): a BUDGET deferral is not a
+                    # ghost. ALBROX/TC/TLBREAK chains were minted, deferred by
+                    # the cycle budget and retired as UNPOSTED in the same
+                    # breath — 22 ALBROX mints are sitting UNPOSTED in prod
+                    # right now, i.e. their early alert never reached the
+                    # channel. Deferred candidates are now held here and retried
+                    # at the END of the cycle (the budget frees as other setups
+                    # finish); only a candidate that fails BOTH passes is
+                    # ghost-retired as UNPOSTED.
+                    _deferred_edu.append((candidate, _cand_frame))
                     continue
                 stats["new"] += 1
                 _t(candidate)["ready_new"] += 1
@@ -768,6 +780,25 @@ def run_discovery_scan() -> Dict[str, int]:
         except Exception as exc:
             stats["errors"] += 1
             print(f"Discovery error {symbol}: {exc}")
+    # ── R99q15 DEFERRED-EDUCATION RETRY (see the deferral above): every chain
+    # the cycle budget could not post gets ONE more chance with the freed
+    # budget. A candidate that still cannot post is retired as a ghost so the
+    # next scan re-mints it (nothing is left monitored-but-unposted).
+    for _dc, _dfr in _deferred_edu:
+        if _SHUTDOWN:
+            break
+        try:
+            if _educate(_dc, _dfr):
+                stats["edu_retry_posted"] = stats.get("edu_retry_posted", 0) + 1
+                stats["new"] += 1
+                continue
+        except Exception as _dr_exc:
+            print(f"deferred education retry error {getattr(_dc, 'signal_id', '?')}: {_dr_exc}")
+        try:
+            from database.candidate_store import set_status as _set_st62b
+            _set_st62b(_dc.signal_id, "UNPOSTED")
+        except Exception as _gh_exc2:
+            print(f"ghost-chain retire failed {getattr(_dc, 'signal_id', '?')}: {_gh_exc2}")
     cleanup_candidates()
     try:  # Viva 2026-09-13: the funnel must be READABLE from the DB
         from database.bot_kv import get_json as _gkv, set_json as _skv
