@@ -39,8 +39,13 @@ def test_designer_signature_is_the_centre_watermark():
     credit. ONE signature remains: the author's name over the faint logo mark
     in the middle of the chart — and nothing else is stamped on the canvas."""
     _m = _src()                                   # the centre mark is its own helper
-    assert '"VAHID LESANI", transform=ax.transAxes' in _m    # the centre mark
-    assert 'fontsize=38, fontweight="bold"' in _m            # same size, both lanes
+    # R99q23: the mark reads «VAHID LESANI ANALYSIS» and the corner badge is
+    # replaced by the author's name + logo («اون برچسب جدید … نمی‌خواد، فقط به
+    # کنار اسم من بالای سمت راست چارت لوگو رو اضافه کن»).
+    assert '"VAHID LESANI ANALYSIS", transform=ax.transAxes' in _m
+    assert 'fontsize=34, fontweight="bold"' in _m            # same size, both lanes
+    assert "_add_author_credit(fig)" in _m                   # name + logo, top-right
+    assert "_add_setup_sticker(fig, candidate)" not in _m     # badge retired from canvas
     assert "CHART_LOGO_PATH" in _m                           # logo behind it
     _r = _chart_region()
     assert "VIVA_CREDIT_LOGO_H" not in _r                    # corner credit retired

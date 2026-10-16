@@ -278,14 +278,22 @@ def test_r99q_signature_and_watermark_wired():
     # R99q21 (his 10-16 evening): the CENTRE of every chart carries the
     # author's own name instead of the brand, and the top-right credit is the
     # clean logo (the framed banner «شلوغ» was removed).
-    assert '"VAHID LESANI", transform=ax.transAxes' in _mv
-    assert '"VAHID LESANI", transform=ax.transAxes' in _rs
+    # R99q23 (his 10-17): the centre mark reads «VAHID LESANI ANALYSIS», the
+    # brand word is gone from both designs, and the top-right corner carries
+    # the author's name with the logo BESIDE it.
+    assert '"VAHID LESANI ANALYSIS", transform=ax.transAxes' in _mv
+    assert '"VAHID LESANI ANALYSIS", transform=ax.transAxes' in _rs
+    assert "VIVA SIGNALS PRO" not in _mv.replace('CHART_BRAND_NAME = os.getenv("CHART_BRAND_NAME", "VIVA SIGNALS PRO").upper()', "")
+    assert "_add_author_credit(fig)" in _mv
     assert "viva_credit_banner" not in _mv and "viva_credit_banner" not in _rs
     assert "VIVA SIGNALS PRO\" , transform=ax.transAxes" not in _rs
     assert "VIVA SIGNALS PRO\", transform=ax.transAxes" not in _rs
-    # «و با همون اندازه» — ONE centre size in spot AND setups (38, bold)
-    assert 'fontsize=38, fontweight="bold"' in _mv
-    assert 'fontsize=38, fontweight="bold"' in _rs
+    # «و با همون اندازه» — ONE centre size in spot AND setups (34, bold, since
+    # the mark now carries the word ANALYSIS)
+    assert 'fontsize=34, fontweight="bold"' in _mv
+    assert 'fontsize=34, fontweight="bold"' in _rs
+    # spot watermark a touch BOLDER than the setups one (his 10-17)
+    assert 'alpha=0.42, zorder=1' in _rs and 'alpha=0.22, zorder=0' in _mv
     assert "vivasignals-logo.png" in _rs
     assert "nice_price_ticks" in _rs                 # shared dense axis kit
 
@@ -333,9 +341,8 @@ def test_r99q_spot_red_breakdown_box_and_brand_center():
     assert "قرمز بذار" in _src and "#F2B8B0" in _src
     assert '("#F2B8B0", "#C0392B", "#8E2418")' in _src and "if up_dir" in _src
     assert 'f"{sym},{tf}"' not in _src          # symbol watermark removed
-    assert '"VAHID LESANI", transform=ax.transAxes' in _src
-    assert '"VAHID LESANI", transform=ax.transAxes' in _src
-    assert 'ax.text(0.5, 0.245, "VAHID LESANI"' in _src   # name under the logo mark
+    assert '"VAHID LESANI ANALYSIS", transform=ax.transAxes' in _src
+    assert 'ax.text(0.5, 0.245, "VAHID LESANI ANALYSIS"' in _src
     assert 'ax.text(0.5, 0.52, "VIVA SIGNALS PRO"' not in _src
 
 

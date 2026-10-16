@@ -12,7 +12,7 @@
 4. هیستوگرام ولوم کم‌رنگ در پایین پنل (یادداشت خودش: «هیستوگرام ولوم کجاست؟»).
 5. واترمارک: لوگوی VIVA محو وسط + نام «Vahid Lesani» بالا-راست + متن محو
    SYMBOL,TF (رفرنس ENA).
-6. هدر: SYMBOL • TF • SPOTBREAK / VIVA SIGNALS PRO • STAGE • Pattern • Log Scale
+6. هدر: SYMBOL • TF • SPOTBREAK / STAGE • Pattern • Log Scale (R99q23: brand word removed)
    / خط OHLC قرمز + BINANCE SPOT. فوتر: چپ SYMBOL • VIVA • SPOT • BINANCE SPOT.
 7. پیل قیمت لایو (صورتی، رفرنس ENA) روی محور راست + خط نقطه‌ای لایو +
    استمپ «LIVE: dd Mon yyyy • HH:MM (Tehran)» (سبک رفرنس‌ها).
@@ -261,9 +261,9 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     # پررنگ‌تر»): «VIVA SIGNALS PRO» is GONE from the centre — the AUTHOR's name
     # stands there instead, at the SETUPS chart's own size (38, bold), spot a
     # touch bolder (α .26 vs .20) because spot photos get re-compressed harder.
-    ax.text(0.5, 0.245, "VAHID LESANI", transform=ax.transAxes,
-            ha="center", va="center", fontsize=38, fontweight="bold",
-            color="#B9B3A5", alpha=0.32, zorder=1)
+    ax.text(0.5, 0.245, "VAHID LESANI ANALYSIS", transform=ax.transAxes,
+            ha="center", va="center", fontsize=34, fontweight="bold",
+            color="#B9B3A5", alpha=0.42, zorder=1)
     logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                              "assets", "vivasignals-logo.png")
     if os.path.isfile(logo_path):
@@ -424,23 +424,38 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     stage_lab = str(stage or _STAGE_LABEL.get(str(brk.get("status") or ""), "PUBLISH")).upper()
     fig.text(0.020, 0.968, f"{sym}  •  {tf.upper()}  •  SPOTBREAK",
              fontsize=16, fontweight="bold", color=INK)
-    fig.text(0.020, 0.941, f"VIVA SIGNALS PRO  •  {stage_lab}  •  {title}  •  Log Scale",
+    # R99q23 (his 10-17: «ویوا سیگنالز پرو رو از هر دو دیزاین ستاپ‌ها و اسپات
+    # حذف کن»): the brand word is GONE from the header as well — the stage line
+    # now starts with the fact, and the author's own mark carries the chart.
+    fig.text(0.020, 0.941, f"{stage_lab}  •  {title}  •  Log Scale",
              fontsize=11, color=MUTED)
     fig.text(0.020, 0.916,
              f"O {_price_fmt(last_o)}   H {_price_fmt(last_h)}   "
              f"L {_price_fmt(last_l)}   C {_price_fmt(last_c)}   "
              f"{chg:+.4f} ({chg_pct:+.2f}%)   •   BINANCE SPOT",
              fontsize=10, fontweight="bold", color="#B3261E")
-    # R99q21 (his 10-16, verbatim: «اونی که بالا گذاشتی هم بردار قشنگ نشد ..
-    # عکس خوب نشد شلوغ شد در اسپات و ستاپ‌ها»): the TOP-RIGHT CREDIT is GONE.
-    # One clean signature only — the author's name over the faint logo in the
-    # middle of the chart. Nothing else is stamped on the canvas.
+    # ── R99q23 TOP-RIGHT CREDIT (his 10-17, verbatim: «اون برچسب جدید چند دور
+    # قبل هم نمی‌خواد، فقط به کنار اسم من بالای سمت راست چارت لوگو رو اضافه
+    # کن»): no banner, no badge, no extra label — the NAME and the LOGO, side
+    # by side, in the top-right corner of both designs.
+    fig.text(0.888, 0.968, "VAHID LESANI", fontsize=11.5, fontweight="bold",
+             color=INK, ha="right", va="center")
+    if os.path.isfile(logo_path):
+        try:
+            _lim = mpimg.imread(logo_path)
+            _lh = 0.055
+            _lw = _lh * (float(_lim.shape[1]) / float(_lim.shape[0])) \
+                * (float(fig.get_figheight()) / float(fig.get_figwidth()))
+            _lax = fig.add_axes([0.898, 0.968 - _lh / 2.0, _lw, _lh], zorder=12)
+            _lax.imshow(_lim, alpha=0.95)
+            _lax.axis("off")
+        except Exception as _e23:
+            print(f"spot credit logo warning: {_e23}")
 
     # ── 10) فوتر
     fig.text(0.020, 0.024, f"{sym}  •  VIVA  •  SPOT  •  BINANCE SPOT",
              fontsize=11, color=INK)
-    fig.text(0.952, 0.024, "VIVA SIGNALS PRO", fontsize=13, fontweight="bold",
-             color=INK, ha="right")
+    # R99q23: the footer brand word is GONE too — only the mark remains.
     if os.path.isfile(logo_path):
         try:
             b_ax = fig.add_axes([0.956, 0.010, 0.026, 0.046], zorder=10)

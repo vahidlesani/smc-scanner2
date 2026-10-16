@@ -1284,7 +1284,32 @@ def _scenario_path(ax, start, end, color: str, alpha: float = 0.88) -> None:
     ))
 
 
+def _add_author_credit(fig) -> bool:
+    """R99q23 TOP-RIGHT CREDIT — «VAHID LESANI» + the logo beside it.
+
+    Replaces the corner badge/plate on the setups canvas (his «اون برچسب جدید
+    … نمی‌خواد»): two elements only, name and mark, top-right, same as spot.
+    """
+    try:
+        fig.text(0.888, 0.936, "VAHID LESANI", fontsize=11.5, fontweight="bold",
+                 color=CHART_THEME["text"], ha="right", va="center", zorder=24)
+        if os.path.isfile(CHART_LOGO_PATH):
+            _lim = mpimg.imread(CHART_LOGO_PATH)
+            _lh = 0.058
+            _lw = _lh * (float(_lim.shape[1]) / float(_lim.shape[0])) \
+                * (float(fig.get_figheight()) / float(fig.get_figwidth()))
+            _lax = fig.add_axes([0.898, 0.936 - _lh / 2.0, _lw, _lh], zorder=24)
+            _lax.imshow(_lim, alpha=0.95)
+            _lax.axis("off")
+        return True
+    except Exception as exc:
+        print(f"Author credit warning: {exc}")
+        return False
+
+
 def _add_setup_sticker(fig, candidate: SignalCandidate) -> bool:
+    """The chart-canvas badge is RETIRED (R99q23) — kept for callers that still
+    ask; `_add_author_credit` is what the chart shows now."""
     """Draw the setup's own badge; True when one was drawn."""
     path = _setup_identity(candidate)["sticker"]   # one source of truth
     if not os.path.isfile(path):
@@ -1333,19 +1358,8 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
             brand_x = 0.912
         except Exception as exc:
             print(f"Chart logo warning: {exc}")
-    brand_line = CHART_BRAND_NAME + (f"  {CHART_BRAND_HANDLE}" if CHART_BRAND_HANDLE else "")
-    fig.text(
-        brand_x,
-        0.024,
-        brand_line,
-        color=CHART_THEME["text"],
-        fontsize=10.5,
-        fontweight="bold",
-        ha="right",
-        va="center",
-        alpha=0.82,
-        zorder=22,
-    )
+    # R99q23 («ویوا سیگنالز پرو رو از هر دو دیزاین حذف کن»): the footer brand
+    # WORD is gone — the small logo mark (above) is the whole footer credit.
     # Signature watermark lives behind price, deliberately subtle like a
     # TradingView publication watermark: actual logo + text, never above candles.
     if os.path.isfile(CHART_LOGO_PATH):
@@ -1362,8 +1376,8 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
     # «VAHID LESANI» over it, at the same size in spot and in setups (spot a
     # touch bolder so it survives the spot chat's own compression).
     ax.text(
-        0.50, 0.255, "VAHID LESANI", transform=ax.transAxes,
-        ha="center", va="center", fontsize=38, fontweight="bold",
+        0.50, 0.255, "VAHID LESANI ANALYSIS", transform=ax.transAxes,
+        ha="center", va="center", fontsize=34, fontweight="bold",
         color=CHART_THEME["text"], alpha=0.22, zorder=0,
     )
     # (the in-axes bottom-right brand mark is GONE — Viva 09-23/24: the chart
@@ -5903,16 +5917,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # GONE — the chart carries ONE signature, the author's name over the
         # faint logo mark in the middle.
 
-        # ── Viva 09-21: «چرا چارت پینوال کیو استیکر بنام خودش نداره و بنام viva
-        # setup درج میشه در جای استیکر هر ستاپ؟» — the header word is the FALLBACK
-        # only. When the setup's own badge exists it is the label; when it does
-        # not, the setup's own name stands there (never a generic brand word
-        # pretending to be a setup badge). Every setup in the live DB now has a
-        # badge file: PINVAL · PINWALLQ · TLBREAK · TECHCLASSIC · ALBROX.
-        _has_sticker = _add_setup_sticker(fig, candidate)
-        if not _has_sticker:
-            fig.text(0.762, 0.931, str(candidate.setup_code or "").upper(),
-                     color=CHART_THEME["text"], fontsize=9.5, fontweight="bold", va="center")
+        # ── R99q23 (his 10-17, verbatim: «اون برچسب جدید چند دور قبل هم
+        # نمی‌خواد، فقط به کنار اسم من بالای سمت راست چارت لوگو رو اضافه کن»):
+        # the corner BADGE is gone from the chart canvas — the top-right corner
+        # carries the author's NAME with the LOGO beside it. The setup's own
+        # sticker keeps its job in the MESSAGE (caption attachment), so identity
+        # is still delivered with every alert.
+        _credit23 = _add_author_credit(fig)
         _add_branding(fig, ax, candidate)
 
         # ── Viva 09-23 («در کندل لایو حتماً تاریخ و ساعت مشخص باشه که متوجه
