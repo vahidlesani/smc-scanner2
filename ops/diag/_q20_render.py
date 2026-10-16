@@ -23,7 +23,7 @@ mode_setup = "--spot-only" not in sys.argv
 if mode_spot:
     from analysis.spot_engine import SPOT_TRIGGERS, scan_spot_alerts, build_spot_alert_candidate
     import bot.messages_v7 as B7
-    SPOT = [("STXUSDT", "12h"), ("XMRUSDT", "4h"), ("ATOMUSDT", "3d"), ("DASHUSDT", "12h")]
+    SPOT = [("DASHUSDT", "12h"), ("INJUSDT", "3d"), ("APTUSDT", "3d"), ("STXUSDT", "12h")]
     for sym, tf in SPOT:
         b = get_market_bundle(sym, tuple(SPOT_TRIGGERS), limits=fetch_limits())
         items = [i for i in scan_spot_alerts(sym, b) if str(i.get("tf")) == tf]
