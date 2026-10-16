@@ -4519,22 +4519,45 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             try:
                 _atr_ov9 = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
 
-                def _covered9(_key, _y_now):
+                def _covered9(_key, _y_now, _y_prev=None):
                     """True when a DRAWN pattern line of the same side already sits
                     on this level (his «دید رو کور می‌کنه»): never paint an edge
-                    twice. 0.45 ATR at the live bar."""
+                    twice. 0.45 ATR at the live bar — plus, since R99q17, a
+                    RELATIVE tolerance (0.35 % of price): on a 15m frame the ATR
+                    is a fraction of a percent, so the detector's own fit of an
+                    edge and the validated-pivots fit of the SAME edge sat a
+                    whole trendline apart and both were painted (his ETH 15M
+                    PINVAL showed one trendline twice)."""
                     try:
                         if _atr_ov9 <= 0:
                             return False
+                        # R99q17 (his ETH 15M PINVAL: the SAME upper trendline
+                        # painted twice, 0.6 % apart): two fits of one edge
+                        # (the detector's and the validated-pivots fit) never
+                        # agree to the cent, so a cents-tight tolerance could
+                        # not see them. The test is now a STRUCTURAL one — same
+                        # side within 2 % of price — and the 60-bar witness
+                        # below keeps genuinely different edges alive.
+                        _tol9 = max(0.9 * _atr_ov9, 0.02 * float(frame["close"].iloc[-1]))
                         _want = (("HIGH", "UPPER") if _key == "viva_upper_points"
                                  else ("LOW", "LOWER"))
                         for _pp9 in (_draw_pats or []):
                             for _ll9 in (_pp9.get("lines") or []):
                                 if str(_ll9.get("side") or "").upper() not in _want:
                                     continue
-                                if abs(float(_line_y_cal(_ll9, int(count))) - float(_y_now)) \
-                                        <= 0.45 * _atr_ov9:
-                                    return True
+                                if abs(float(_line_y_cal(_ll9, int(count))) - float(_y_now)) > _tol9:
+                                    continue
+                                # R99q17: a coincidence at ONE bar is not enough —
+                                # the two fits of the same edge stay close along
+                                # the tape, a genuinely different edge diverges.
+                                if _y_prev is not None:
+                                    try:
+                                        if abs(float(_line_y_cal(_ll9, int(count) - 60))
+                                               - float(_y_prev)) > _tol9:
+                                            continue
+                                    except Exception:
+                                        pass
+                                return True
                     except Exception:
                         return False
                     return False
@@ -4608,7 +4631,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # drawn this very edge — then the validated line adds noise.
                     _y_now9 = (10 ** (slope * count + intercept)) if _mode9 == "log" \
                         else (slope * count + intercept)
-                    if _covered9(key, _y_now9):
+                    _y_prev9 = None
+                    try:
+                        _y_prev9 = (10 ** (slope * max(0, count - 60) + intercept)) \
+                            if _mode9 == "log" else (slope * max(0, count - 60) + intercept)
+                    except Exception:
+                        _y_prev9 = None
+                    if _covered9(key, _y_now9, _y_prev9):
                         continue
                     _fits9[key] = (xs, ys, _mode9, slope, intercept, color, label)
                 # r613 ZONE-LANE GUARANTEE: a zone-lane chain with NO stored
@@ -4654,8 +4683,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         # partner is drawn only when price trades near it.
                         if _atr61 > 0 and abs(_y61 - _cl61) > 2.5 * _atr61:
                             continue
+                        # R99q17: a REFIT shell is context, never a second copy of
+                        # an edge the pattern painter already drew (his ETH 15M
+                        # PINVAL carried a heavy grey diagonal duplicating the
+                        # detector's own rising support) — and it is painted
+                        # thin/faint so it can never read as a validated line.
+                        if _covered9(_ky9, _y61):
+                            continue
                         _fits9[_ky9] = (_xs9, _ys9, _m9, _s9, _b9,
-                                        CHART_THEME.get("muted", _cl9c), _lb9)
+                                        CHART_THEME.get("muted", _cl9c),
+                                        (_lb9 + " · REFIT"))
                 # r54 (his «ترند بالا و پایین دو تا روی هم افتاده»): a converging
                 # pair must END AT ITS APEX — projecting both dashed edges to
                 # the canvas edge paints collapsed overlapping lines across the
@@ -4768,7 +4805,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # gray hair (INJ/RENDER/FIL round-7 charts). De-emphasis
                     # is alpha + a thinner projection dash, never recoloring.
                     _col9 = color
+                    _refit99q17 = "REFIT" in str(label)
                     _lw9, _al9 = (1.6, 0.72) if _far9 else (2.3, 0.95)
+                    if _refit99q17:
+                        _lw9, _al9 = 1.15, 0.5      # context, not a trade line
+
                     ax.plot([x0, _xr], [_fy9(x0), _fy9(_xr)],
                             color=_col9, linewidth=_lw9, alpha=_al9, zorder=7, solid_capstyle="round")
                     _resolved99 = bool(_apex9 is not None and _apex9 <= count + 0.6)

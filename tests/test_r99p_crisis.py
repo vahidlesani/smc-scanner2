@@ -1029,7 +1029,12 @@ def test_r99q14_pinval_chains_get_their_validated_edges():
     _src = open(_os.path.join(_root, "bot", "messages_v7.py"), encoding="utf-8").read()
     assert 'or (_has_edges9 and not _is_spot)' in _src
     assert "def _covered9" in _src
-    assert "_covered9(key, _y_now9)" in _src
+    # R99q17: the dedupe now takes the 60-bar witness too (his ETH 15M PINVAL
+    # painted the SAME upper trendline twice, 0.6 % apart — a one-bar
+    # coincidence test could not see it) and the refit shell yields to it.
+    assert "_covered9(key, _y_now9, _y_prev9)" in _src
+    assert "0.02 * float(frame[\"close\"].iloc[-1])" in _src
+    assert "if _covered9(_ky9, _y61):" in _src
 
 
 # ── R99q15 (his 10-16 four questions) ───────────────────────────────────────
@@ -1242,3 +1247,18 @@ def test_r99q15_headless_line_and_resolved_apex_laws_are_in_the_painter():
     assert "_headless99q15" in src
     # a RESOLVED pair (apex at/before LIVE) paints no forward tail at all
     assert "_resolved99 = bool(_apex9 is not None and _apex9 <= count + 0.6)" in src
+
+
+def test_r99q17_edge_identity_law_no_duplicated_trendline():
+    """His ETH 15M PINVAL: the same upper trendline was painted twice, 0.6 %
+    apart (the detector's fit and the validated-pivots fit of ONE edge)."""
+    import os as _os
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    _src = open(_os.path.join(_root, "bot", "messages_v7.py"), encoding="utf-8").read()
+    # structural tolerance + the second witness point at count-60
+    assert "_tol9 = max(0.9 * _atr_ov9, 0.02 * float(frame[\"close\"].iloc[-1]))" in _src
+    assert "if _covered9(key, _y_now9, _y_prev9):" in _src
+    assert "_y_prev9 = (10 ** (slope * max(0, count - 60) + intercept))" in _src
+    # and a duplicated REFIT shell is skipped and painted faint when kept
+    assert "if _covered9(_ky9, _y61):" in _src
+    assert "_lw9, _al9 = 1.15, 0.5" in _src
