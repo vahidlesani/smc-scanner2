@@ -1361,6 +1361,20 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
         ha="center", va="center", fontsize=34, fontweight="bold",
         color=CHART_THEME["text"], alpha=0.13, zorder=0,
     )
+    # ── R99q20 CREDIT LAW (his 10-16, verbatim: «در مورد واتر مارک وسط به نظرم
+    # اسم من واتر مارک بشه زیر لوگو بهتره .. اونجوری کسی نمیتونه زحمات من و تو
+    # رو بدزده .. مثلا زیر واتر مارک لوگو بزن VAHID LESANI»): the author's name
+    # sits UNDER the logo mark — letter-spaced, same faint watermark weight, so
+    # the whole signature is one mark that survives re-uploads.
+    try:
+        if str(os.getenv("VIVA_CREDIT_BANNER", "0") or "0").strip() in ("1", "true", "True"):
+            ax.text(
+                0.50, 0.295, "V A H I D   L E S A N I", transform=ax.transAxes,
+                ha="center", va="center", fontsize=17, fontweight="bold",
+                color=CHART_THEME["text"], alpha=0.16, zorder=0,
+            )
+    except Exception:
+        pass
     # (the in-axes bottom-right brand mark is GONE — Viva 09-23/24: the chart
     # showed TWO watermarks; the figure footer + the center mark are the brand)
 
@@ -1791,12 +1805,51 @@ def _chart_cache_key(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bo
     only reused while the market on it is genuinely unchanged.
     """
     try:
-        _last_px = round(float(df["close"].iloc[-1]), 10)
+        _px_now = float(df["close"].iloc[-1])
+        # R99q20: a tick smaller than one PIXEL of the window cannot change the
+        # picture — quantise the key to the visible range's pixel step (800 px
+        # panel) so a 0.01 % wiggle no longer re-renders the same chart.
+        # VIVA_CHART_CACHE_PX=0 restores the exact-price key.
+        _pxb = float(os.getenv("VIVA_CHART_CACHE_PX", "1") or 0)
+        if _pxb > 0:
+            try:
+                _rng = float(df["high"].tail(60).max() - df["low"].tail(60).min())
+            except Exception:
+                _rng = 0.0
+            _step = (_rng / 800.0) if _rng > 0 else max(abs(_px_now) * 1e-6, 1e-12)
+            _last_px = int(round(_px_now / _step))
+        else:
+            _last_px = round(_px_now, 10)
     except Exception:
         _last_px = 0.0
     return (str(getattr(candidate, "signal_id", "")), (str(mode) or bool(confirmed)),
             str(df["timestamp"].iloc[-1]), len(df),
             str((candidate.metadata or {}).get("chart_view_tf") or ""), _last_px)
+
+
+def _encode_png(png_bytes: bytes) -> bytes:
+    """R99q20 RAILWAY LEVER — 8-bit palette encode (his 10-16 ask: «روشی به
+    ذهنت نرسید که مصرف ریلوی پایین‌تر بیاد اما کیفیت بالاتر بره»). Measured on
+    the current canvases: LIT 1h 579 KB → 174 KB, ZEC 3d spot 197 KB → 52 KB —
+    a ~70 % byte cut with a mean |ΔL| of 0.33/255 (text and lines stay crisp,
+    p99 6/255 only on anti-aliased edges). Same pixels, ~1/3 the upload. Set
+    VIVA_PNG_PALETTE=0 for the old encoder, VIVA_PNG_PALETTE_COLORS to tune.
+    """
+    try:
+        if str(os.getenv("VIVA_PNG_PALETTE", "1") or "1").strip().lower() \
+                in ("0", "false", "no", "off"):
+            return png_bytes
+        import io as _io
+        from PIL import Image as _Im
+        _im = _Im.open(_io.BytesIO(png_bytes)).convert("RGB")
+        _cols = int(os.getenv("VIVA_PNG_PALETTE_COLORS", "256") or 256)
+        _out = _io.BytesIO()
+        _im.convert("P", palette=_Im.ADAPTIVE, colors=_cols).save(
+            _out, "PNG", optimize=True)
+        _new = _out.getvalue()
+        return _new if len(_new) < len(png_bytes) else png_bytes
+    except Exception:
+        return png_bytes
 
 
 def _chart_cache_get(key: tuple):
@@ -1810,6 +1863,120 @@ def _chart_cache_set(key: tuple, val: bytes) -> None:
     if len(_CHART_CACHE) > 6:
         for _k in list(_CHART_CACHE.keys())[:len(_CHART_CACHE) - 6]:
             _CHART_CACHE.pop(_k, None)
+
+
+
+# ── R99q20 PATTERN-COMPLETENESS (Viva 10-16 evening: «کندل‌ها و وج از بالای وسط
+# چارت وارد شده بودند … باید تعداد بیشتری کندل وارد چارت کرد … حتی اگر از بالا
+# وارد می‌شه از گوشهٔ بالای سمت چپ وارد بشه تا اون پترن بهترین نما رو داشته باشه و
+# کامل باشه»). Two module-level laws, unit-tested in
+# tests/test_r99q20_zoom_log_laws.py — the painter only calls them:
+#   anchors  — where the stored edges begin, in THIS frame's index space (by
+#              pivot TIME, exactly like the painter's own touch circles; the
+#              stored x0 is a detection-frame coordinate and must never be
+#              offset into the render frame — that is how the widen no-opped).
+#   y-lift   — the upper edge's own price at the VISIBLE LEFT EDGE, so the line
+#              is on canvas from the first column (top-left corner entry), never
+#              from the top border mid-frame. Same for a lower edge at the floor.
+def pattern_frame_anchors(metadata, stamps) -> list:
+    """Frame rows of every stored pivot (pattern ts0 + line points)."""
+    out = []
+    if stamps is None:
+        return out
+    try:
+        _idx = pd.DatetimeIndex(pd.to_datetime(stamps))
+    except Exception:
+        try:
+            _idx = pd.DatetimeIndex(stamps)
+        except Exception:
+            return out
+    for _p in ((metadata or {}).get("render_patterns") or []):
+        if not isinstance(_p, dict):
+            continue
+        _tss = []
+        try:
+            if _p.get("ts0"):
+                _tss.append(str(_p["ts0"]))
+        except Exception:
+            pass
+        for _L in (_p.get("lines") or []):
+            if not isinstance(_L, dict):
+                continue
+            for _q in (_L.get("points") or []):
+                try:
+                    _ts = _q.get("ts") or _q.get("timestamp")
+                    if _ts:
+                        _tss.append(str(_ts))
+                except Exception:
+                    pass
+        for _ts in _tss:
+            try:
+                _r = int(_idx.searchsorted(pd.Timestamp(_ts)))
+                if 0 <= _r <= len(_idx):
+                    out.append(_r)
+            except Exception:
+                pass
+    return out
+
+
+from analysis.render_kit import line_y as line_y  # noqa: E402  (R99q20 lift law)
+
+
+def pattern_window_lift(frame, draw_pats, fits9, x_left, cap_mult=8.0) -> tuple:
+    """(top, bottom) prices the y-window must reach so every drawn edge starts
+    ON canvas. Reads both the pattern edges and the r613 shell (the heavy pair
+    the eye reads as the pattern); a line beyond cap_mult × ATR from the tape
+    is far context and never crushes the candles."""
+    try:
+        _atr = float((frame["high"] - frame["low"]).tail(14).mean())
+        _hi = float(frame["high"].max())
+        _lo = float(frame["low"].min())
+    except Exception:
+        return (None, None)
+    _cap = float(cap_mult or 0.0) * _atr
+    tops, bots = [], []
+
+    def _ylog(_mode, _s, _b, _x):
+        return (10.0 ** (float(_s) * _x + float(_b))) if _mode == "log" \
+            else (float(_s) * _x + float(_b))
+
+    for _pat in (draw_pats or []):
+        for _ln in (_pat.get("lines") or []):
+            try:
+                _side = str(_ln.get("side") or "").upper()
+                _y = float(line_y(_ln, max(0.0, float(x_left))))
+                if not math.isfinite(_y) or _y <= 0:
+                    continue
+                if _side in ("HIGH", "UPPER", ""):
+                    if _atr > 0 and _y > _hi + _cap:
+                        continue
+                    tops.append(_y)
+                else:
+                    if _atr > 0 and _y < _lo - _cap:
+                        continue
+                    bots.append(_y)
+            except Exception:
+                continue
+    try:
+        for _ky, _f in list((fits9 or {}).items()):
+            try:
+                _y = float(_ylog(_f[2], _f[3], _f[4], max(0.0, float(x_left))))
+                if not math.isfinite(_y) or _y <= 0:
+                    continue
+                _up = ("upper" in str(_ky)) or (str(_ky) == "high")
+                if _up:
+                    if _atr > 0 and _y > _hi + _cap:
+                        continue
+                    tops.append(_y)
+                else:
+                    if _atr > 0 and _y < _lo - _cap:
+                        continue
+                    bots.append(_y)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return (max(tops) if tops else None, min(bots) if bots else None)
 
 
 def _clean_render_frame(df: pd.DataFrame, window: int = 150) -> pd.DataFrame:
@@ -3121,6 +3288,45 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _n99o = int(count or 0)
                 if _n99o > 10 and _cnt99o > 10:
                     _xlim99o = _tcz99o(_n99o, min(_cnt99o, _n99o))
+                    # ── R99q20 PATTERN-COMPLETENESS ZOOM (his 10-16, verbatim:
+                    # «کندل‌ها و وج از بالای وسط چارت وارد شده بودند .. در این
+                    # مواقع باید تعداد بیشتری کندل وارد چارت کرد .. زوم رو طوری
+                    # تنظیم کرد که … حتی اگر از بالا وارد می‌شه از گوشهٔ بالای
+                    # سمت چپ وارد بشه تا اون پترن بهترین نما رو داشته باشه و
+                    # کامل باشه»). LIT 1H (T700976): the wedge's first pivot sat
+                    # 18 bars LEFT of the window edge, so the upper edge entered
+                    # the picture mid-frame at the top border — a half pattern.
+                    # Law: the window MUST contain every drawn edge's first
+                    # anchor (+ a few candles of context); extra candles are
+                    # added on the LEFT until the pattern stands whole.
+                    try:
+                        _off20 = int((candidate.metadata or {}).get("pattern_frame_offset") or 0)
+                        _fb20 = int((candidate.metadata or {}).get("pattern_frame_bars") or 0)
+                        if not _fb20:
+                            _fb20 = max(0, _n99o + 1 - _off20) if _off20 else 0
+                        # Anchors live by TIME, never by fit-space index (see
+                        # pattern_frame_anchors): the stored x0/x1 belong to the
+                        # DETECTION frame, while the painter maps pivot times
+                        # against THIS frame — a fit-space offset lands in the
+                        # wrong place and the widen silently no-ops.
+                        try:
+                            _stamps20 = frame["timestamp"] if "timestamp" in frame.columns \
+                                else frame.index
+                        except Exception:
+                            _stamps20 = None
+                        _anchors20 = pattern_frame_anchors(candidate.metadata, _stamps20)
+                        if _anchors20:
+                            _left20 = max(0, int(min(_anchors20)) - 6)
+                            if _left20 < int(min(_xlim99o[0], _xlim99o[1])):
+                                _xlim99o = (float(_left20),
+                                            float(max(_xlim99o[0], _xlim99o[1])))
+                                if os.getenv("VIVA_Q20_DEBUG"):
+                                    print(f"[q20] window widened left: first anchor="
+                                          f"{min(_anchors20)} -> from={_left20} "
+                                          f"(span={int(_xlim99o[1] - _xlim99o[0])})")
+                    except Exception as _e20:
+                        if os.getenv("VIVA_Q20_DEBUG"):
+                            print(f"[q20] widen skipped: {_e20}")
         except Exception:
             _xlim99o = None
         for chart_ax in axes:
@@ -5061,6 +5267,30 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     if _refit99q17:
                         _lw9, _al9 = 1.15, 0.5      # context, not a trade line
 
+                    # ── R99q20 EDGE-HEAD AT THE WINDOW EDGE (his 10-16: «حتی اگر
+                    # از بالا وارد می‌شه از گوشهٔ بالای سمت چپ وارد بشه تا اون
+                    # پترن بهترین نما رو داشته باشه»). The r-99q15 head law stops
+                    # a line at its oldest pivot — right for a HEADLESS line, but
+                    # it also leaves a live edge entering the picture 30 % across
+                    # the top border. When the head IS inside the window and the
+                    # line's value at the window's left edge stays within the ATR
+                    # envelope, the edge is drawn from that left edge: it enters
+                    # at the top-left corner, TradingView-style. Off by default
+                    # until he approves the test render (VIVA_PATTERN_EXTEND_LEFT).
+                    try:
+                        if str(os.getenv("VIVA_PATTERN_EXTEND_LEFT", "0") or "0").strip() \
+                                in ("1", "true", "True") and _in_xs9:
+                            _xw9 = float(ax.get_xlim()[0])
+                            if x0 > _xw9 + 1.0:
+                                _yw9 = float(_fy9(_xw9))
+                                _atr9w = float((frame["high"] - frame["low"]).tail(14).mean() or 0.0)
+                                _cap9w = _atr9w * float(os.getenv("VIVA_PATTERN_TOP_ATR", "8.0") or 8.0)
+                                if (math.isfinite(_yw9) and _yw9 > 0
+                                        and (not _atr9w or _yw9 <= _pmax + _cap9w)
+                                        and (not _atr9w or _yw9 >= _pmin - _cap9w)):
+                                    x0 = _xw9
+                    except Exception:
+                        pass
                     ax.plot([x0, _xr], [_fy9(x0), _fy9(_xr)],
                             color=_col9, linewidth=_lw9, alpha=_al9, zorder=7, solid_capstyle="round")
                     _resolved99 = bool(_apex9 is not None and _apex9 <= count + 0.6)
@@ -5304,8 +5534,60 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _froz28 = None
             except Exception:
                 pass
+        # ── R99q20 PATTERN-TOP LIFT (his 10-16: «کندل‌ها و وج از بالای وسط چارت
+        # وارد شده بودند … حتی اگر از بالا وارد می‌شه از گوشهٔ بالای سمت چپ وارد
+        # بشه تا اون پترن بهترین نما رو داشته باشه و کامل باشه»). Widening the
+        # x-window is not enough: an upper edge already above the y-window at the
+        # VISIBLE LEFT EDGE still pushes into the picture from the top border
+        # mid-frame (LIT 1h entered at ~30 % across, wedge head off-canvas). The
+        # edge's own price at the left edge joins the y-window, so the line is
+        # on-canvas from the first column — it enters at the top-LEFT corner,
+        # wedge whole, apex in-frame. Bounded twice: only a HIGH/UPPER edge, and
+        # never one more than VIVA_PATTERN_TOP_ATR (8×ATR) above the visible tape
+        # (a far context line never crushes the candles). Applies to a FROZEN
+        # window too — the cut is a canvas defect, not a scale preference.
+        _lift20 = None
+        _drop20 = None
+        try:
+            _x0p20 = float(ax.get_xlim()[0])
+            _lift20, _drop20 = pattern_window_lift(
+                frame, _draw_pats, _fits9, _x0p20,
+                cap_mult=float(os.getenv("VIVA_PATTERN_TOP_ATR", "8.0") or 8.0))
+            if os.getenv("VIVA_Q20_DEBUG"):
+                print(f"[q20] top-lift={_lift20} bottom-drop={_drop20} at x_left={_x0p20:.1f}")
+        except Exception as _e20y:
+            if os.getenv("VIVA_Q20_DEBUG"):
+                print(f"[q20] top-lift skipped: {_e20y}")
+
         if _froz28 and _froz28[0] < _live28 < _froz28[1]:
-            ax.set_ylim(*_froz28)
+            _top28f = float(_froz28[1])
+            _bot28f = float(_froz28[0])
+            _chg28f = False
+            if _lift20 and _lift20 > _top28f:
+                _top28f = float(_lift20)
+                _chg28f = True
+            if _drop20 and _drop20 < _bot28f:
+                _bot28f = float(_drop20)
+                _chg28f = True
+            if _chg28f:
+                if os.getenv("VIVA_Q20_DEBUG"):
+                    print(f"[q20] frozen window re-framed: "
+                          f"({_froz28[0]:.4f},{_froz28[1]:.4f}) -> "
+                          f"({_bot28f:.4f},{_top28f:.4f})")
+                try:
+                    if os.getenv("VIVA_NO_FREEZE_WRITE"):
+                        raise RuntimeError("freeze write disabled (proof render)")
+                    _md29f = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+                    _md29f["chart_zoom_frozen"] = [_bot28f, _top28f]
+                    candidate.metadata = _md29f
+                    try:
+                        from database.bot_kv import set_json as _sj34f
+                        _sj34f(f"zoom_freeze:{candidate.signal_id}", [_bot28f, _top28f])
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            ax.set_ylim(_bot28f, _top28f)
         else:
             _ovs28 = [float(candidate.entry_zone_bottom), float(candidate.entry_zone_top),
                       float(candidate.sl)]
@@ -5336,6 +5618,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     pass
             _ovs28 = [v for v in _ovs28 if v is not None and math.isfinite(v) and v > 0]
             _atr28 = float((frame["high"] - frame["low"]).tail(14).mean())
+            # R99q20: the pattern-top lift (computed above, bounded by
+            # VIVA_PATTERN_TOP_ATR) joins the window overlays so the same law
+            # holds on a computed window.
+            try:
+                if _lift20 and _lift20 > max(_ovs28 or [0.0]):
+                    _ovs28.append(float(_lift20))
+                if _drop20 and _drop20 < min(_ovs28 or [1e18]):
+                    _ovs28.append(float(_drop20))
+            except Exception:
+                pass
             _win28 = None
             # R99q v2 (his 10-15 tight-zoom verdicts): the Y-window follows
             # the VISIBLE candles. Before this, a tight x-zoom still inherited
@@ -5406,7 +5698,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                    - _vf["low"].astype(float).to_numpy()))
             if _win28:
                 ax.set_ylim(*_win28)
-                if _cfm73:
+                if _cfm73 and not os.getenv("VIVA_NO_FREEZE_WRITE"):
                     try:
                         _md29 = candidate.metadata if isinstance(candidate.metadata, dict) else {}
                         _md29["chart_zoom_frozen"] = [float(_win28[0]), float(_win28[1])]
@@ -5617,10 +5909,30 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         )
         # R99k: designer signature atop every futures chart (spot-v2
         # parity) — above the title row so the setup sticker never collides.
-        fig.text(
-            0.955, 0.978, "by: Vahid Lesani", color="#1F2328", fontsize=11,
-            fontweight="bold", ha="right", va="center", zorder=30,
-        )
+        # R99q20: his own gold credit banner replaces the plain text when
+        # VIVA_CREDIT_BANNER=1 («عکسی که دادم هم جای اسمم در جای فعلی قرار بده
+        # یعنی گوشهٔ بالای چارت»); until he approves it the text stays.
+        _ban20 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                              "assets", "viva_credit_banner.png")
+        _ban20_ok = False
+        if str(os.getenv("VIVA_CREDIT_BANNER", "0") or "0").strip() in ("1", "true", "True"):
+            try:
+                if os.path.isfile(_ban20):
+                    _bim = mpimg.imread(_ban20)
+                    _bh = float(os.getenv("VIVA_CREDIT_BANNER_H", "0.052") or 0.052)
+                    _bw = _bh * (float(_bim.shape[1]) / float(_bim.shape[0]))                         * (float(fig.get_figheight()) / float(fig.get_figwidth()))
+                    _bax = fig.add_axes([0.982 - _bw, 1.0 - _bh - 0.008, _bw, _bh],
+                                        zorder=30)
+                    _bax.imshow(_bim)
+                    _bax.axis("off")
+                    _ban20_ok = True
+            except Exception as _e20b:
+                print(f"credit banner warning: {_e20b}")
+        if not _ban20_ok:
+            fig.text(
+                0.955, 0.978, "by: Vahid Lesani", color="#1F2328", fontsize=11,
+                fontweight="bold", ha="right", va="center", zorder=30,
+            )
         # ── Viva 09-21: «چرا چارت پینوال کیو استیکر بنام خودش نداره و بنام viva
         # setup درج میشه در جای استیکر هر ستاپ؟» — the header word is the FALLBACK
         # only. When the setup's own badge exists it is the label; when it does
@@ -5703,7 +6015,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         )
         plt.close(fig)
         buffer.seek(0)
-        _png = buffer.read()
+        _png = _encode_png(buffer.read())
         _chart_cache_set(_ck, _png)
         return _png
     except Exception as exc:

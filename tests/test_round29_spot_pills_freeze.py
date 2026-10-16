@@ -50,7 +50,10 @@ def test_render_freeze_law_is_wired():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     src = open(os.path.join(root, "bot", "messages_v7.py"), encoding="utf-8").read()
     assert '"chart_zoom_frozen"' in src
-    assert "ax.set_ylim(*_froz28)" in src
+    # R99q20: the frozen window is applied as (bottom, top) after the
+    # pattern-completeness re-frame («حتی اگر از بالا وارد می‌شه از گوشهٔ بالای
+    # سمت چپ وارد بشه») — the law is the freeze REUSE, not the call shape.
+    assert "ax.set_ylim(_bot28f, _top28f)" in src or "ax.set_ylim(*_froz28)" in src
     assert "_froz28[0] < _live28 < _froz28[1]" in src
 
 

@@ -262,6 +262,15 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     ax.text(0.5, 0.52, "VIVA SIGNALS PRO", transform=ax.transAxes,
             ha="center", va="center", fontsize=40, fontweight="bold",
             color="#B9B3A5", alpha=0.20, zorder=1)
+    # ── R99q20 CREDIT LAW (his 10-16: «اسم من واتر مارک بشه زیر لوگو … مثلا
+    # زیر واتر مارک لوگو بزن VAHID LESANI»): one signature mark = logo + name.
+    try:
+        if str(os.getenv("VIVA_CREDIT_BANNER", "0") or "0").strip() in ("1", "true", "True"):
+            ax.text(0.5, 0.305, "V A H I D   L E S A N I", transform=ax.transAxes,
+                    ha="center", va="center", fontsize=17, fontweight="bold",
+                    color="#B9B3A5", alpha=0.26, zorder=1)
+    except Exception:
+        pass
     logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                              "assets", "vivasignals-logo.png")
     if os.path.isfile(logo_path):
@@ -429,8 +438,25 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
              f"L {_price_fmt(last_l)}   C {_price_fmt(last_c)}   "
              f"{chg:+.4f} ({chg_pct:+.2f}%)   •   BINANCE SPOT",
              fontsize=10, fontweight="bold", color="#B3261E")
-    fig.text(0.976, 0.968, "by: Vahid Lesani", fontsize=12.5,
-             fontweight="bold", color=INK, ha="right")
+    _ban20 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "assets", "viva_credit_banner.png")
+    _ban20_ok = False
+    if str(os.getenv("VIVA_CREDIT_BANNER", "0") or "0").strip() in ("1", "true", "True"):
+        try:
+            if os.path.isfile(_ban20):
+                _bim = mpimg.imread(_ban20)
+                _bh = float(os.getenv("VIVA_CREDIT_BANNER_H", "0.055") or 0.055)
+                _bw = _bh * (float(_bim.shape[1]) / float(_bim.shape[0])) \
+                    * (float(fig.get_figheight()) / float(fig.get_figwidth()))
+                _bax = fig.add_axes([0.984 - _bw, 1.0 - _bh - 0.006, _bw, _bh], zorder=30)
+                _bax.imshow(_bim)
+                _bax.axis("off")
+                _ban20_ok = True
+        except Exception as _e20b:
+            print(f"spot credit banner warning: {_e20b}")
+    if not _ban20_ok:
+        fig.text(0.976, 0.968, "by: Vahid Lesani", fontsize=12.5,
+                 fontweight="bold", color=INK, ha="right")
 
     # ── 10) فوتر
     fig.text(0.020, 0.024, f"{sym}  •  VIVA  •  SPOT  •  BINANCE SPOT",
@@ -479,7 +505,15 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
         buf = io.BytesIO()
         fig.savefig(buf, format="png", facecolor=fig.get_facecolor())
         plt.close(fig)
-        return buf.getvalue()
+        _png = buf.getvalue()
+        # R99q20 RAILWAY LEVER: the 8-bit palette encode (same pixels, ~70 %
+        # fewer bytes — ZEC 3d 197 KB → 52 KB) rides the futures encoder.
+        try:
+            from bot.messages_v7 import _encode_png as _enc20
+            _png = _enc20(_png)
+        except Exception:
+            pass
+        return _png
     fig.savefig(path, facecolor=fig.get_facecolor())
     plt.close(fig)
     return path

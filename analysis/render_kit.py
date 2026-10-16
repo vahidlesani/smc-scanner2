@@ -298,32 +298,38 @@ def _line_contradicts(line, side: str, direction: str, df: pd.DataFrame,
         return False
 
 def _chart_will_be_log(candidate, df: pd.DataFrame) -> bool:
-    """Mirror the renderer's own decision (`generate_chart`): is THIS chart
-    drawn on a log price axis? Only then may lines be log-calibrated — the
-    futures look must not change on charts that stay linear."""
+    """Is THIS chart drawn on a log price axis?  (R99q20 LOG-FIT TRUTH.)
+
+    Viva 10-16 (verbatim): «دقت بکن ببین الان از نماگر کندل بصورت هوشمند
+    لگاریتمی استفاده می‌شه؟؟ اگر بصورت لگاریتمی استفاده بشه و از قوانین درست
+    استفاده بشه بنظرم کمک می‌کنه». The painter has drawn EVERY chart on a log
+    axis since r57 («چارت حتماً لگاریتمی باشه، در اسپات و فیوچرز») — but the
+    FITTER still used the old conditional test (ratio>1.03 / 1h+1.35 / TC-4h),
+    so on the remaining frames the geometry was fitted LINEAR and then painted
+    LOG: the line is straight in percent space only when it was fitted there,
+    a linear fit bows away from its pivots on a log canvas.
+
+    One rule now — the fit space IS the paint space: log whenever the prices are
+    positive (log domain), for every system and every TF. `VIVA_LOG_FIT_OFF=1`
+    is the emergency switch back to the legacy conditional behaviour.
+    """
     md = getattr(candidate, "metadata", None) or {}
     if md.get("log_scale"):
         return True                                   # spot engine: always log
     try:
-        from config import get_settings
-        settings = get_settings()
-    except Exception:
-        return False
+        import os as _os
+        if str(_os.getenv("VIVA_LOG_FIT_OFF", "") or "").strip() in ("1", "true", "True"):
+            raise RuntimeError("legacy path")
+    except RuntimeError:
+        try:
+            lo = float(df["low"].min()); hi = float(df["high"].max())
+            return (hi / lo) > 1.03 if lo > 0 else False
+        except Exception:
+            return False
     try:
-        lo = float(df["low"].min())
-        hi = float(df["high"].max())
-        ratio = (hi / lo) if lo > 0 else 1.0
+        return float(df["low"].min()) > 0
     except Exception:
-        ratio = 1.0
-    if bool(getattr(settings, "chart_log_all", False)):
-        return ratio > 1.03
-    if not bool(getattr(settings, "chart_log_htf", True)):
         return False
-    setup = str(getattr(candidate, "setup_code", "") or "").upper()
-    ctx_tf = str(md.get("tl_context_tf") or "").lower()
-    if setup in ("TLBREAK", "TECHCLASSIC") and ctx_tf in ("4h", "1d"):
-        return True
-    return str(getattr(candidate, "trigger_timeframe", "") or "").lower() == "1h" and ratio > 1.35
 
 
 def extend_line_to_new_base(line: dict, df: pd.DataFrame, side: str):
