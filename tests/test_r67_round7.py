@@ -410,7 +410,11 @@ def test_far_edges_are_side_hues_never_blue():
     assert "_cTop9 = _cBot9 = _PATTERN_BLUE" not in src
     # R99p: the faint hierarchy now also covers main-set far shapes
     # (paint-only key far_faint99p) — same hue, still never blue.
-    assert "_lw8 = 1.3 if (_pat.get(\"far_major\") or _pat.get(\"far_faint99p\"))" in src
+    # R99q15 adds the headless edge (a stored line whose pivots all sit off the
+    # visible window) to the SAME faint tier — it is context, never the trade
+    # line, and still keeps its own side hue.
+    assert "far_faint99p" in src and "_head99q15" in src
+    assert '_col8 = "#1F2328" if _is_spot else (CHART_THEME["supply"] if _is_upper8 else CHART_THEME["demand"])' in src
 
 
 # ── ⑧ R67.2 — Railway cost gates (Viva 10-04) ──────────────────────────────

@@ -940,6 +940,20 @@ def run_discovery_scan() -> Dict[str, int]:
               f"candles_dl={_c68.get('candles_downloaded',0)}")
     except Exception:
         pass
+    # ── R99q15 ADAPTIVE DEEP CADENCE (his 10-16 verbatim: «هر ۶۰ دقیقه نیازه که
+    # دوباره اسکن عمیق بکنه .. مگر اینکه موارد خوبی پیدا بکنه بین ۲۰۰ کوین برتر
+    # اول مارکت کپ بجز استیبل‌کوین ها و توکنیزه ها»). A pass that produced real
+    # new setups opens a burst window: the next deep passes then run on the fast
+    # cadence (5 min) instead of 60, and the window closes by itself when the
+    # market goes quiet again.
+    try:
+        from analysis.tiered_scan import mark_deep_result as _mark_deep
+        _good = int(stats.get("new", 0) or 0) + int(stats.get("detected", 0) or 0)
+        _mark_deep(_good)
+        from analysis.tiered_scan import deep_minutes as _deep_min15
+        print(f"  deep-cadence: good_finds={_good} interval_now={_deep_min15()}m")
+    except Exception as _e15:
+        print(f"deep-cadence mark skipped: {_e15}")
     return stats
 
 
@@ -1015,6 +1029,123 @@ def _spot_tf_position_commit(symbol: str, tf: str) -> None:
         _s("spot_tf_position", data)
     except Exception:
         pass
+
+
+def _spot_hit_pass(bundles: dict) -> int:
+    """R99q15 SPOT HIT LANE (charts five…seven of a unique id, his 10-16 law:
+    «بعد ۳ تا هیت شدن .. هر شناسه از لحظه شناسایی تا پایان مسیر ۷ چارت نهایتاً
+    بیشتر نشه»).
+
+    Runs inside the spot pass and spends NO extra request: the live price of
+    each open position is the last (in-progress) close of the frame the pass
+    already fetched. Each rung is claimed through the journey ledger, so a
+    position can never grow past its unique id's 7-chart budget; when the
+    budget is spent the hit still posts — as a numbered TEXT-ONLY reply.
+    """
+    posted = 0
+    try:
+        from analysis.spot_engine import (spot_positions_open as _spo,
+                                          spot_hit_scan as _shs,
+                                          spot_position_commit as _spc,
+                                          spot_hit_candidate as _shc,
+                                          _spot_journey_slot as _js15)
+        from bot.messages_v7 import send_spot_hit as _ssh15
+        from database.bot_kv import get_json as _g15
+        import time as _t15
+        _open = _spo()
+        if not _open:
+            return 0
+        for _code, _pos in list(_open.items()):
+            try:
+                if _pos.get("closed"):
+                    continue
+                _b = bundles.get(str(_pos.get("symbol") or "").upper())
+                if _b is None:
+                    continue
+                _frame = _b.get(str(_pos.get("tf") or ""))
+                if _frame is None or not len(_frame):
+                    continue
+                _price15 = float(_frame["close"].iloc[-1])
+                _hit15 = _shs(_pos, _price15)
+                if not _hit15:
+                    continue
+                _key15 = (f"spot_chain|{str(_pos.get('symbol') or '').upper()}"
+                          f"|{str(_pos.get('tf') or '').upper()}")
+                _m15 = dict(_g15(_key15, {}) or {})
+                _slot15 = _js15(_m15, f"h{int(_hit15.get('index') or 1)}", _t15.time())
+                _chart15 = None
+                if _slot15:
+                    _cand15 = _shc(_pos)
+                    if _cand15 is not None:
+                        _chart15 = generate_chart(_frame, _cand15, confirmed=True)
+                _mid15 = _ssh15(_pos, _hit15, chart=_chart15, slot=str(_slot15 or ""))
+                if _mid15:
+                    _spc(_code, str(_hit15.get("kind") or ""), int(_mid15))
+                    posted += 1
+                    print(f"🪙 spot hit {_hit15.get('kind')} {_pos.get('symbol')} "
+                          f"{_pos.get('tf')} slot={_slot15 or 'text-only'} mid={_mid15}")
+            except Exception as _he15:
+                print(f"spot hit skip {_code}: {_he15}")
+        return posted
+    except Exception as _e15:
+        print(f"spot hit lane skipped: {_e15}")
+        return posted
+
+
+def _spot_journey_book(symbol: str, tf: str, slot: str = "", chart: bool = False,
+                       mid: int = 0, alert_mid: int = 0) -> dict:
+    """R99q15 SEVEN-CHART JOURNEY ledger (his 10-16 law, verbatim: «چارت چهارم
+    همراه پیام تایید ورود به پوزیشن میاد و بعد ۳ تا هیت شدن یعنی هر شناسه از
+    لحظه شناسایی تا پایان مسیر ۷ چارت نهایتاً بیشتر نشه»).
+
+    One unique id owns: s1 recognition → s2 touch → s3 break → s4 confirmation
+    → h1/h2/h3 hits = at most 7 charts; every other update is a numbered
+    TEXT-ONLY reply. The ledger lives in `spot_chain|SYM|TF`, the same key the
+    ladder sender and the number counter already use.
+    """
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        import time as _t
+        key = f"spot_chain|{str(symbol or '').upper()}|{str(tf or '').upper()}"
+        m = dict(_g(key, {}) or {})
+        if not m.get("code"):
+            return {}
+        if slot and mid:
+            m[str(slot)] = int(mid)
+        if chart:
+            m["charts"] = int(m.get("charts") or 0) + 1
+        if mid:
+            _mid = int(mid)
+            m["mid"] = _mid
+            m["head"] = int(m.get("head") or 0) or _mid
+            m["n"] = int(m.get("n") or 0) + 1
+            if str(slot) == "s4":
+                m["confirm"] = _mid
+            else:
+                m["last"] = _mid
+        if alert_mid:
+            m["alert"] = int(alert_mid)
+        m["ts"] = _t.time()
+        _s(key, m)
+        return m
+    except Exception:
+        return {}
+
+
+def _spot_confirm_book(cand, mid: int, alert_mid: int = 0) -> None:
+    """Chart #4 = the confirmation of the SAME unique id (slot s4)."""
+    _spot_journey_book(getattr(cand, "symbol", ""), getattr(cand, "trigger_timeframe", ""),
+                       slot="s4", chart=True, mid=int(mid or 0),
+                       alert_mid=int(alert_mid or 0))
+    # the position is now OPEN: the hit lane (h1/h2/h3) needs its ladder
+    try:
+        from analysis.spot_engine import spot_position_open as _spo65
+        md = cand.metadata or {}
+        _lad = (md.get("target_ladder") or {}).get("targets") or []
+        if _lad:
+            _spo65(cand, [float(x) for x in _lad], int(mid or 0))
+    except Exception as _spe65:
+        print(f"spot position store skipped: {_spe65}")
 
 
 def _spot_update_events_enabled() -> bool:
@@ -1094,7 +1225,28 @@ def run_spot_scan() -> Dict[str, int]:
         symbols, _metrics = UNIVERSE.get()
     except Exception:
         symbols = []
-    limit = max(5, int(os.getenv("SPOT_SYMBOL_LIMIT", "24") or 24))
+    # R99q15 (his 10-16: «هر ۶۰ دقیقه … بین ۲۰۰ کوین برتر اول مارکت کپ بجز
+    # استیبل‌کوین ها و توکنیزه ها»): the spot deep pass now covers the TOP-200
+    # by default — affordable because the per-TF closed-bar gate below stops
+    # re-fitting frames that had no new candle (see tiered_scan.spot_due_tfs).
+    limit = max(5, int(os.getenv("SPOT_SYMBOL_LIMIT", "200") or 200))
+    # stablecoins and tokenized metals are not patterns — never spend a frame on
+    # them (env SPOT_EXCLUDE extra csv is appended).
+    _spot_excl = {"USDCUSDT", "FDUSDUSDT", "TUSDUSDT", "DAIUSDT", "USDEUSDT",
+                  "USDPUSDT", "PYUSDUSDT", "USD1USDT", "EURUSDT", "XAUTUSDT",
+                  "PAXGUSDT", "USDDUSDT", "BUSDUSDT", "USDTUSDT", "BFUSDUSDT"}
+    try:
+        _spot_excl |= {x.strip().upper() for x in
+                       str(os.getenv("SPOT_EXCLUDE", "") or "").split(",") if x.strip()}
+    except Exception:
+        pass
+    try:
+        _before_excl = len(symbols)
+        symbols = [s for s in symbols if str(s).upper() not in _spot_excl]
+        if len(symbols) != _before_excl:
+            stats["excluded"] = _before_excl - len(symbols)
+    except Exception:
+        pass
     # ── free flow context (fail-open, never a gate) ──────────────────────
     # The spot pass owns a small symbol budget, so it is the one lane where
     # ORDER decides what gets looked at. The first few names of the watchlist
@@ -1122,6 +1274,7 @@ def run_spot_scan() -> Dict[str, int]:
     if _flow_note:
         print(f"Spot lane order (context only, never a gate){_flow_note}")
     started = time.monotonic()
+    _tfs_due = []
     pending = []
     ladder = []          # round 16: TOUCH / NEAR_BREAK / BREAK_DOWN warnings
     bundles = {}         # one fetched bundle per symbol; charts reuse it
@@ -1145,13 +1298,39 @@ def run_spot_scan() -> Dict[str, int]:
                     continue
             except Exception:
                 pass
-            for cand in spot_signals_for(symbol, bundle):
+            # ── R99q15 PER-TF CLOSED-BAR GATE (cost): only the frames whose
+            # newest CLOSED candle is new are handed to the engine this pass;
+            # frames with an open watch pin stay in as well. First pass after
+            # boot (and any unreadable stamp) scans everything — fail-open.
+            _tfs_due = list(SPOT_TRIGGERS)
+            try:
+                from analysis import tiered_scan as _tier15
+                _pins15 = []
+                try:
+                    from database.bot_kv import get_json as _g15
+                    _w15 = _g15("spot_urgent_watch", {}) or {}
+                    _pins15 = [str(k).partition("|")[2] for k in _w15
+                               if str(k).startswith(f"{symbol.upper()}|")]
+                except Exception:
+                    _pins15 = []
+                _tfs_due = _tier15.spot_due_tfs(symbol, bundle,
+                                                tfs=tuple(SPOT_TRIGGERS),
+                                                force=False,
+                                                pinned=_pins15)
+                if not _tfs_due:
+                    stats["spot_tf_gate_skip"] = stats.get("spot_tf_gate_skip", 0) + 1
+                    continue
+                stats["spot_tfs_scanned"] = stats.get("spot_tfs_scanned", 0) + len(_tfs_due)
+                _view15 = _tier15._TfSubset(bundle, _tfs_due)
+            except Exception:
+                _view15 = bundle
+            for cand in spot_signals_for(symbol, _view15):
                 stats["found"] += 1
                 pending.append(cand)
             # the ladder rides the SAME fetched frames — zero extra downloads
             try:
                 from analysis.spot_engine import scan_spot_alerts
-                _items58 = scan_spot_alerts(symbol, bundle)
+                _items58 = scan_spot_alerts(symbol, _view15)
                 ladder.extend(_items58)
                 # pin per SYMBOL|TF so the recheck scans one TF, not six
                 import time as _time      # R62: `_time` was undefined → spot pins never saved
@@ -1199,6 +1378,13 @@ def run_spot_scan() -> Dict[str, int]:
             # Viva Law: No noisy volume/displacement spam in spot channel.
             # Spot updates strictly restricted to 3 stages: TOUCH, BREAK, and CONFIRM.
             # Zero unnecessary event spam to protect channel and server resources.
+            # R99q15: the processed bars are stamped ONLY now (a crash mid-pass
+            # never eats a candle — the next pass re-scans that TF).
+            try:
+                if _tfs_due:
+                    _tier15.spot_tf_mark(symbol, bundle, _tfs_due)
+            except Exception:
+                pass
         except Exception as exc:
             stats["errors"] += 1
             print(f"spot scan warning {symbol}: {exc}")
@@ -1324,6 +1510,8 @@ def run_spot_scan() -> Dict[str, int]:
                         _scs57(_code57, _chain57)
                     except Exception as _ch57_exc:
                         print(f"spot chain store skipped: {_ch57_exc}")
+                    _spot_confirm_book(cand, _pub_mid,
+                                       alert_mid=int(_alert_kv.get("mid") or 0))
                 else:
                     stats["send_fail"] = stats.get("send_fail", 0) + 1
                     stats["last_error"] = f"publish returned 0 {cand.symbol} code={str((cand.metadata or {}).get('public_code') or cand.signal_id)[:28]}"
@@ -1381,9 +1569,26 @@ def run_spot_scan() -> Dict[str, int]:
                     _ckey73 = _ck73(str(aitem.get('symbol') or ''), str(aitem.get('tf') or ''), str(aitem.get('pattern') or ''))
                     _jm73 = _gj73(_ckey73, {}) or {}
                     _now73 = _t73.time()
-                    _slot73 = _js73f(_jm73, "s1", _now73)
-                    if _slot73 is None and _stage73s in ('BREAK_UP', 'BREAK_DOWN'):
-                        _slot73 = _js73f(_jm73, "s2", _now73)
+                    # R99q15 SEVEN-CHART JOURNEY (his 10-16 law): the FIRST
+                    # warning of a chain is the recognition chart (s1), a later
+                    # press to either side is the touch chart (s2) and the break
+                    # is the third (s3); the confirmation claims s4 and the three
+                    # hits claim h1…h3 — seven charts for one unique id, and
+                    # never more (spot_engine.spot_chain_chart_cap).
+                    _want73 = []
+                    if not int(_jm73.get("charts") or 0):
+                        _want73 = ["s1"]
+                    elif _stage73s in ("BREAK_UP", "BREAK_DOWN"):
+                        _want73 = ["s3"]
+                    else:
+                        _want73 = ["s2"]
+                    if not int(_jm73.get("s1") or 0):
+                        _want73 = ["s1"] + [x for x in _want73 if x != "s1"]
+                    _slot73 = None
+                    for _w73 in _want73:
+                        _slot73 = _js73f(_jm73, _w73, _now73)
+                        if _slot73 is not None:
+                            break
                     if _slot73 is not None:
                         _jm73[f"{_slot73}p"] = _now73
                         _sj73(_ckey73, _jm73)
@@ -1422,6 +1627,12 @@ def run_spot_scan() -> Dict[str, int]:
         _spot_status_write("zero_sent", stats)
     else:
         _spot_status_write("ok", stats)
+    # ── R99q15 SPOT HIT LANE (charts five…seven of each unique id, his 10-16
+    # law). Rides the frames this pass already holds — zero extra requests.
+    try:
+        stats["hits_posted"] = _spot_hit_pass(bundles)
+    except Exception as _hp15:
+        print(f"spot hit lane warning: {_hp15}")
     print(f"🪙 SPOT pass finished in {stats['dur_s']}s • "
           f"symbols={stats['symbols']} found={stats['found']} "
           f"published={stats['published']} stamp_skip={stats.get('stamp_skip', 0)} "
@@ -2979,6 +3190,8 @@ def _spot_urgent_recheck() -> int:
                             _scs(_pc(_uc58), _chain)
                         except Exception:
                             pass
+                        _spot_confirm_book(_uc58, mid,
+                                           alert_mid=int(_alert_kv.get("mid") or 0))
                 # R64.4 THE SPOT CHART ECONOMY (Viva 10-03: «آپدیت‌ها هنوز همگی
                 # با چارت لایو میان و مصرف بشدت بالا بردن»): generic r57 update
                 # events are TEXT-ONLY replies; charts render only at the

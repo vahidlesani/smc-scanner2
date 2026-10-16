@@ -3771,6 +3771,60 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _pat["far_faint99p"] = True
                 except Exception:
                     pass
+            # ── R99q15 APEX-CLIP LAW (his 10-16, verbatim: «هنوز یک خط بی‌سر و
+            # ته می‌کشه»). His UNI 30M TECHCLASSIC: both falling-wedge edges ran
+            # PAST their own intersection into the empty margin as two dashes
+            # that crossed in mid-air — a line with no head and no tail, and a
+            # red dash pointing DOWN under a LONG signal. A pattern ENDS where
+            # its two edges meet: every converging pair is solved for its apex
+            # (bisection on the y-gap) and each edge is clipped there; when the
+            # apex is at/before the live bar no dashed tail is painted at all.
+            _apex99q15 = None
+            try:
+                if len(_lns) >= 2:
+                    def _yy99(q, xx):
+                        try:
+                            return float(_line_y_cal(q, xx))
+                        except Exception:
+                            return float(q["slope"]) * xx + float(q["intercept"])
+                    _best99 = None
+                    for _i9 in range(len(_lns)):
+                        for _j9 in range(_i9 + 1, len(_lns)):
+                            _a99, _b99 = _lns[_i9], _lns[_j9]
+                            if abs(float(_a99["slope"]) - float(_b99["slope"])) <= 1e-12:
+                                continue
+                            # R99q15: the search starts at the canvas head, not
+                            # at the live bar — his UNI chart's apex sat LEFT of
+                            # the live candle (the pair had already converged),
+                            # so a [count-2 …] window found no crossing at all.
+                            _lo99, _hi99 = 0.0, float(count + future)
+                            _glo99 = _yy99(_a99, _lo99) - _yy99(_b99, _lo99)
+                            _ghi99 = _yy99(_a99, _hi99) - _yy99(_b99, _hi99)
+                            if _glo99 == 0.0:
+                                _xr99 = _lo99
+                            elif _glo99 * _ghi99 > 0:
+                                continue           # never meet inside the span
+                            else:
+                                for _k9 in range(48):
+                                    _md99 = 0.5 * (_lo99 + _hi99)
+                                    _gm99 = _yy99(_a99, _md99) - _yy99(_b99, _md99)
+                                    if _gm99 * _glo99 > 0:
+                                        _lo99 = _md99
+                                    else:
+                                        _hi99 = _md99
+                                _xr99 = 0.5 * (_lo99 + _hi99)
+                            if _best99 is None or _xr99 < _best99:
+                                _best99 = _xr99
+                    _apex99q15 = _best99
+            except Exception:
+                _apex99q15 = None
+            try:
+                if os.getenv("VIVA_Q15_DEBUG"):
+                    print(f"[q15] nlns={len(_lns)} apex={_apex99q15} "
+                          f"count={count} future={future} "
+                          f"slopes={[round(float(q['slope']), 6) for q in _lns]}")
+            except Exception:
+                pass
             _flat8 = []
             _brk8 = []
             for _ln in _lns:
@@ -3789,8 +3843,29 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 if _pts_x:
                     _xa = max(0.0, min(_pts_x) - 1.0)
                 else:
-                    _xa = max(0.0, float(_ln.get("x0", 0)))
+                    # R99q15 HEADLESS-LINE LAW: a stored line whose pivots are all
+                    # off-frame must not enter the canvas as a bold line from
+                    # x=0 — head it at its own time-projected first pivot (clamped)
+                    # and let the far-faint path carry it as context.
+                    try:
+                        _hx = [float(_x) for _x in _viva_points_xs(
+                            [{"timestamp": (q.get("ts") or q.get("timestamp"))}
+                             for q in (_ln.get("points") or [])], frame)
+                               if math.isfinite(float(_x))]
+                    except Exception:
+                        _hx = []
+                    _xa = max(0.0, (min(_hx) - 1.0) if _hx else float(_ln.get("x0", 0) or 0.0))
+                    if not _hx or (min(_hx) < -1.5 if _hx else False):
+                        # (a) NO in-frame pivot at all, or (b) its head is off
+                        # the left edge — both read as «خط بی‌سروته» when bold.
+                        _ln["_headless99q15"] = True
                 _xe = count + future - 0.5
+                if _apex99q15 is not None and _apex99q15 > _xa - 1.0:
+                    # R99q15: an edge may not run past the pattern's own apex —
+                    # that is where the pattern ends (and where the old chart
+                    # grew its two headless dashes). Guarded: an apex BEHIND the
+                    # head describes another pair, never this edge's tail.
+                    _xe = min(_xe, _apex99q15 + 0.5)
                 # R67.1 (Viva 10-03: «آبی نازک خوب نبود همون قرمز و سبز ..
                 # با پررنگ و کمرنگ اگر چند ترند بود تغییرش مشخص باشه») — the
                 # far/blue law is RETIRED: every edge keeps its own side hue
@@ -3873,9 +3948,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # spec §13: parent patterns thick & solid, children thin;
                 # r59 far-majors sit between (a thin BLUE background major)
                 # R67.1: faint far / thin child / bold parent — same hue
-                _lw8 = 1.3 if (_pat.get("far_major") or _pat.get("far_faint99p")) else (
+                _head99q15 = bool(_ln.get("_headless99q15"))
+                _lw8 = 1.3 if (_pat.get("far_major") or _pat.get("far_faint99p")
+                               or _head99q15) else (
                     1.2 if _pat.get("child") else 2.0)
-                _al8 = 0.55 if (_pat.get("far_major") or _pat.get("far_faint99p")) else (
+                _al8 = 0.55 if (_pat.get("far_major") or _pat.get("far_faint99p")
+                                or _head99q15) else (
                     0.60 if _pat.get("child") else 0.95)
                 # R16 phase 3: draw the CALIBRATED geometry. A log-fitted line
                 # is a curve on a log axis, so it is painted as a polyline
@@ -4594,6 +4672,36 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                 _apex9 = _ax9
                         except Exception:
                             _apex9 = None
+                # R99q15: the algebra above needs BOTH edges in the SAME fit mode
+                # (log/log or lin/lin). On his UNI 30M the pair was mixed, so the
+                # apex was None and the projection ran to the canvas edge as two
+                # headless dashes. The meeting point is now solved by bisection on
+                # the painter's own y-function — mode-agnostic.
+                if _apex9 is None and len(_fits9) >= 2:
+                    try:
+                        _ks9 = sorted(_fits9)
+                        _u9b = _fits9["viva_upper_points"] if "viva_upper_points" in _fits9 else _fits9[_ks9[-1]]
+                        _l9b = _fits9["viva_lower_points"] if "viva_lower_points" in _fits9 else _fits9[_ks9[0]]
+                        _fu9 = (lambda _x: 10 ** (_u9b[3] * _x + _u9b[4])) if _u9b[2] == "log" \
+                            else (lambda _x: _u9b[3] * _x + _u9b[4])
+                        _fl9 = (lambda _x: 10 ** (_l9b[3] * _x + _l9b[4])) if _l9b[2] == "log" \
+                            else (lambda _x: _l9b[3] * _x + _l9b[4])
+                        _lo9b, _hi9b = float(max(0.0, min(_u9b[0][0], _l9b[0][0]))), \
+                            float(count + future)
+                        _ga9 = _fu9(_lo9b) - _fl9(_lo9b)
+                        _gb9 = _fu9(_hi9b) - _fl9(_hi9b)
+                        if _ga9 == 0.0:
+                            _apex9 = _lo9b
+                        elif _ga9 * _gb9 < 0:
+                            for _ in range(48):
+                                _md9b = 0.5 * (_lo9b + _hi9b)
+                                if (_fu9(_md9b) - _fl9(_md9b)) * _ga9 > 0:
+                                    _lo9b = _md9b
+                                else:
+                                    _hi9b = _md9b
+                            _apex9 = 0.5 * (_lo9b + _hi9b)
+                    except Exception:
+                        _apex9 = None
                 # ── R64.1f CHANNEL GUIDE (his 10-03 ADA 4h: «کانال این چارت
                 # چرا رسم نشده؟») ── only ONE structural edge validated, yet a
                 # true parallel through the strongest OPPOSITE extreme makes
@@ -4622,7 +4730,19 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # start from its own first defining pivot (min(xs)), NEVER extrapolated to chart floor/ceiling!
                     # R99l: AT the first pivot (the 3% air contradicted
                     # the law above it).
-                    x0 = max(0.0, min(xs))
+                    # ── R99q15 HEADLESS-LINE LAW (his 10-16, verbatim: «تکنوکلاسیک
+                    # هنوز … یک خط بی‌سرو ته میکشه»): a stored edge whose oldest
+                    # pivots sit BEFORE the visible window used to be clamped to
+                    # x=0 — a bold line entering the frame from nowhere, with no
+                    # pivot anywhere near its head (UNI 30M TECHCLASSIC). The
+                    # solid line now starts at the first pivot INSIDE the frame;
+                    # an edge with NO in-frame pivot at all is context, not the
+                    # trade line, so it paints faint (far style).
+                    _in_xs9 = [float(_x) for _x in xs if -1.5 <= float(_x) <= count + 0.5]
+                    if _in_xs9:
+                        x0 = max(0.0, min(_in_xs9) - 1.0)
+                    else:
+                        x0 = max(0.0, min(xs))
                     x1 = min(max(xs) + 0.15 * max(1.0, max(xs) - min(xs)), x_edge, count)
                     _xr = max(x1, min(x_edge, count))
                     # r61.3-R62 FAR-FLOAT LAW (Viva 09-30, STX 15M/30M: the
@@ -4638,6 +4758,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         _y9v = _fy9(min(_xr, count))
                         _far9 = bool(_atr9v > 0 and max(xs) < count - 40
                                      and abs(_y9v - _cl9v) > 2.5 * _atr9v)
+                        if not _in_xs9:
+                            _far9 = True       # headless (R99q15): context only
                     except Exception:
                         _far9 = False
                     # R67 (Viva 10-03: «چرا نازک و خاکستری و ادامه خط چین
@@ -4649,23 +4771,41 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _lw9, _al9 = (1.6, 0.72) if _far9 else (2.3, 0.95)
                     ax.plot([x0, _xr], [_fy9(x0), _fy9(_xr)],
                             color=_col9, linewidth=_lw9, alpha=_al9, zorder=7, solid_capstyle="round")
-                    if count < x_edge - 0.6:
+                    _resolved99 = bool(_apex9 is not None and _apex9 <= count + 0.6)
+                    if _resolved99:
+                        # ── R99q15 RESOLVED-PATTERN NO-TAIL LAW (his 10-16,
+                        # verbatim: «هنوز یک خط بی‌سر و ته می‌کشه»). Once the two
+                        # edges have MET (apex at/before LIVE) the pattern is
+                        # finished: the old code fanned BOTH edges from the apex
+                        # to LIVE and, on a mixed fit mode, on to the canvas
+                        # edge — two headless dashes crossing the live candles
+                        # (UNI 30M TECHCLASSIC: a red dash descending under a
+                        # LONG signal). The trade tool owns the forward story;
+                        # the pattern now STOPS at its apex.
+                        pass
+                    elif count < x_edge - 0.6:
                         # r60.6 (his ONDO note): the projection past LIVE is
                         # the actionable half of a broken line — draw it BOLD
                         # so the break + projection read at a glance.
+                        # R99q15: reached only when the pair is STILL converging
+                        # ahead of LIVE (apex > count) — the dash then has a head
+                        # at LIVE and a tail AT the apex.
                         ax.plot([count, x_edge], [_fy9(count), _fy9(x_edge)],
                                 color=_col9, linewidth=2.0 if not _far9 else 1.0,
                                 alpha=.95 if not _far9 else 0.5, zorder=6,
                                 linestyle=(0, (5, 3)), solid_capstyle="butt")
-                    if _apex9 is not None and count > _apex9 + 0.6:
-                        # r61.3-R62 APEX law completion (SUI 30M / DOT 30M:
-                        # converging pairs STOPPED at their apex mid-chart —
-                        # r54's scissors guard) — the structure now still
-                        # REACHES LIVE, dashed past the meeting point.
-                        ax.plot([_apex9, count], [_fy9(_apex9), _fy9(count)],
-                                color=color, linewidth=1.3, alpha=0.8,
-                                zorder=6, linestyle=(0, (5, 3)),
-                                solid_capstyle="butt")
+                    try:
+                        if os.getenv("VIVA_Q15_DEBUG"):
+                            print(f"[q15ov] {label} x0={x0:.1f} xr={_xr:.1f} count={count} "
+                                  f"x_edge={x_edge:.1f} apex={_apex9} far={_far9} "
+                                  f"fits={sorted(_fits9)}")
+                    except Exception:
+                        pass
+                    # r61.3-R62 legacy: «the structure must still REACH LIVE» drew a
+                    # dash from the apex to the live bar. R99q15 RETIRES it — on a
+                    # resolved pair that dash is exactly his «خط بی‌سر و ته» (no head
+                    # at the apex, no tail in the future). A converging pair ahead of
+                    # LIVE keeps its projection through the branch above.
                     ax.scatter(xs, ys, s=42, color=CHART_THEME["panel"], edgecolors=_col9, linewidths=1.7, zorder=9)
                     notes.append((f"{label} · {len(xs)} PIVOTS" + (" · FAR" if _far9 else ""), _col9))
                 # ── r61.3-R62 SHELL GUARANTEE: a stored set may still paint
@@ -6594,6 +6734,96 @@ def _spot_event_candidate(event: dict):
                   "update_event": True})
 
 
+def send_spot_hit(pos: dict, hit: dict, chart: Optional[bytes] = None,
+                  slot: str = "", path_pct: float = 0.0) -> int:
+    """R99q15 SPOT HIT (charts five…seven of the unique id, his 10-16 law).
+
+    A TP1/TP2/TP3 hit of an open spot position is a NUMBERED reply to the
+    chain's newest chart of the SAME code. It carries its own chart when the
+    journey ledger still has an h-slot (the 7-chart cap), otherwise it is a
+    text-only reply — «بقیه آپدیت‌ها بدون چارت فقط متن شماره‌گذاری میشن».
+    """
+    chat = str(CHAT_ID_SPOT or "")
+    if not chat:
+        return 0
+    sym = str(pos.get("symbol") or "")
+    tf = str(pos.get("tf") or "").upper()
+    code = str(pos.get("code") or "")
+    kind = str(hit.get("kind") or "tp1")
+    _lvl = float(hit.get("level") or 0.0)
+    _px = float(hit.get("price") or 0.0)
+    _entry = float(pos.get("entry") or 0.0)
+    _gain = float(hit.get("gain_pct") or 0.0)
+    _fa = {"tp1": "هدف اول", "tp2": "هدف دوم", "tp3": "هدف سوم"}.get(kind, kind)
+    # chain ledger (same key the ladder + confirm use)
+    _n, _reply, _last_text, _meta = 1, 0, 0, {}
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        _key = f"spot_chain|{sym.upper()}|{tf}"
+        _meta = dict(_g(_key, {}) or {})
+        _n = int(_meta.get("n") or 0) + 1
+        _reply = int(_meta.get("mid") or 0) or int(_meta.get("head") or 0)
+        _last_text = int(_meta.get("last_text") or 0)
+    except Exception:
+        pass
+    lines = [
+        _SPOT_DIV73,
+        "🪙 <b>VIVA-SPOT-MON</b>",
+        f"🎯 <b>هیت {_fa}</b> <code>#{_n}</code>",
+        f"<code>{_e(sym)}/USDT · {_e(tf)} · {_e('اسپات')}</code>",
+        "",
+        f"سطح هدف: <code>{_price(_lvl)}</code> · قیمت لایو: <code>{_price(_px)}</code>",
+        (f"سود از ورود <code>{_price(_entry)}</code> ≈ <b>{_gain:.2f}٪</b>"
+         + (f" · مسیر پیموده‌شده {path_pct:.0f}٪" if path_pct else "")),
+    ]
+    if code:
+        lines += ["", "━━━━━━━━━━━━━━━━━━", f"🆔 <code>{_e(code)}</code>"]
+    text = "\n".join(lines)
+    try:
+        kwargs = {}
+        try:
+            import inspect as _insp
+            _names = set(_insp.signature(send_photo).parameters) | set(
+                _insp.signature(send_message).parameters)
+            if "reply_to" in _names:
+                kwargs = {"reply_to": _reply}
+            elif "reply_to_message_id" in _names:
+                kwargs = {"reply_to_message_id": _reply}
+        except Exception:
+            kwargs = {}
+        if _last_text:
+            try:
+                delete_message(chat, _last_text)
+            except Exception:
+                pass
+        mid = int((send_photo(chart, text, chat, **kwargs) if chart
+                   else send_message(text, chat, **kwargs)) or 0)
+        if mid:
+            try:
+                from database.bot_kv import get_json as _g2, set_json as _s2
+                _key = f"spot_chain|{sym.upper()}|{tf}"
+                _m2 = dict(_g2(_key, {}) or {})
+                if _m2.get("code"):
+                    _slot_ok = bool(slot) and str(slot)[1:].isdigit()
+                    if _slot_ok:
+                        _m2[str(slot)] = mid
+                    if chart:
+                        _m2["charts"] = int(_m2.get("charts") or 0) + 1
+                        _m2["last_text"] = 0
+                    else:
+                        _m2["last_text"] = mid
+                    _m2.update({"mid": mid, "n": _n, "ts": time.time(),
+                                "head": int(_m2.get("head") or 0) or mid,
+                                "last": int(mid)})
+                    _s2(_key, _m2)
+            except Exception:
+                pass
+        return mid
+    except Exception as exc:
+        print(f"spot hit send error {sym}: {exc}")
+        return 0
+
+
 def send_spot_event(event: dict, chart: Optional[bytes] = None) -> bool:
     """r57 (Viva: «الکی آپدیت نده — فقط شکست هر جهت، برخورد به هردو جهت،
     بالارفتن حجم، دایرکشنِ پرحجم‌تر …»): the ONLY spot update post. Compact
@@ -6814,8 +7044,24 @@ def send_spot_alert(item: dict, chart: Optional[bytes] = None) -> bool:
                     _m64b.update({"mid": mid, "ts": time.time(), "n": _n64,
                                   "head": int(_m64b.get("head") or 0) or mid})
                     _js73 = str(item.get("_journey_slot") or "")
-                    if _js73 in ("s1", "s2"):
-                        _m64b[_js73] = mid
+                    # R99q15 SEVEN-CHART JOURNEY: any claimed slot is recorded
+                    # (s1 recognition / s2 touch / s3 break / h1…h3 hits) and
+                    # every posted CHART increments the chain's chart counter —
+                    # the ledger that enforces «۷ چارت نهایتاً» per unique id.
+                    try:
+                        from analysis.spot_engine import (SPOT_JOURNEY_SLOTS as _SJS15,
+                                                          spot_chain_chart_cap as _CAP15)
+                        if _js73 in _SJS15:
+                            _m64b[_js73] = mid
+                        if chart:
+                            _m64b["charts"] = int(_m64b.get("charts") or 0) + 1
+                        if int(_m64b.get("charts") or 0) > _CAP15():
+                            _m64b["charts"] = _CAP15()
+                    except Exception:
+                        if _js73 in ("s1", "s2", "s3", "s4", "h1", "h2", "h3"):
+                            _m64b[_js73] = mid
+                        if chart:
+                            _m64b["charts"] = int(_m64b.get("charts") or 0) + 1
                     if chart:
                         _m64b["first"] = int(_m64b.get("first") or 0) or mid
                         _m64b["last_text"] = 0   # consumed by the chart upgrade

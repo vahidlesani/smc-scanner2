@@ -1111,3 +1111,134 @@ def test_r99q15_mplfinance_and_evictions_did_not_regress_the_ladder():
         assert _ctf(_trig) == _want
         assert _sub(_trig) is not None, _trig
         assert _sub(_trig) != _trig
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# R99q15b — his 10-16 laws (seven-chart spot journey, one unique id, adaptive
+# deep cadence, per-TF spot gate, the headless/apex chart laws)
+# ══════════════════════════════════════════════════════════════════════════
+def test_r99q15_journey_claims_seven_chart_slots_and_never_more(monkeypatch):
+    """«هر شناسه از لحظه شناسایی تا پایان مسیر ۷ چارت نهایتاً بیشتر نشه»."""
+    from analysis import spot_engine as SE
+    monkeypatch.delenv("VIVA_SPOT_CHAIN_CHARTS", raising=False)
+    assert SE.spot_chain_chart_cap() == 7
+    meta = {}
+    for slot in ("s1", "s2", "s3", "s4", "h1", "h2", "h3"):
+        assert SE._spot_journey_slot(meta, slot, 1000.0) == slot
+    assert SE._spot_journey_slot(meta, "s5", 1000.0) is None
+    assert SE._spot_journey_slot({"charts": 7}, "s1", 1000.0) is None
+    # a taken slot is spent, a fresh pending claim blocks reuse for 10 minutes
+    assert SE._spot_journey_slot({"s2": 55}, "s2", 1000.0) is None
+    assert SE._spot_journey_slot({"s3p": 999.0}, "s3", 1000.0) is None
+    assert SE._spot_journey_slot({"s3p": 100.0}, "s3", 1000.0) == "s3"
+    assert SE.spot_chain_chart_commit({"charts": 1})["charts"] == 2
+
+
+def test_r99q15_the_confirmation_is_chart_four_of_the_same_id():
+    """«چارت چهارم همراه پیام تایید ورود به پوزیشن میاد» — with the SAME code."""
+    import database.bot_kv as kv
+    mem = {"spot_chain|UNIUSDT|30M": {"code": "VIVA-SPOT-Y123456", "charts": 3}}
+    kv.get_json = lambda k, d=None: mem.get(k, d)
+    kv.set_json = lambda k, v: mem.__setitem__(k, v)
+    from analysis.spot_engine import build_spot_candidate
+    base = {"symbol": "UNIUSDT", "tf": "30m", "entry": 7.391, "sl": 7.225,
+            "targets": [7.492, 7.593, 7.694], "atr": 0.05,
+            "pattern": "WEDGE_FALLING", "weights": [0.4, 0.3, 0.3]}
+    c = build_spot_candidate(dict(base))
+    assert c.metadata["public_code"] == "VIVA-SPOT-Y123456"
+    assert c.metadata["spot_chain_one_id"] is True
+    c2 = build_spot_candidate(dict(base, symbol="ZZZUSDT", tf="4h"))
+    assert c2.metadata["public_code"].startswith("VIVA-SPOT-")
+    assert c2.metadata["public_code"] != "VIVA-SPOT-Y123456"
+
+
+def test_r99q15_spot_hits_are_runged_and_close_the_position():
+    """«بعد ۳ تا هیت شدن» — TP1→TP2→TP3 in order, then the position closes."""
+    import database.bot_kv as kv
+    mem = {}
+    kv.get_json = lambda k, d=None: mem.get(k, d)
+    kv.set_json = lambda k, v: mem.__setitem__(k, v)
+    from analysis.spot_engine import (spot_position_open, spot_hit_scan,
+                                      spot_position_commit, spot_hit_candidate)
+    class _C:
+        symbol, trigger_timeframe, entry, stop_loss, signal_id = (
+            "UNIUSDT", "30m", 7.391, 7.225, "x")
+        metadata = {"public_code": "VIVA-SPOT-Y123456",
+                    "pattern_type": "WEDGE_FALLING", "render_patterns": []}
+    pos = spot_position_open(_C(), [7.492, 7.593, 7.694], 555)
+    assert pos["hits"] == [] and pos["targets"] == [7.492, 7.593, 7.694]
+    assert spot_hit_scan(pos, 7.40) is None          # rungs are hit in ORDER
+    h1 = spot_hit_scan(pos, 7.50)
+    assert h1["kind"] == "tp1" and abs(h1["level"] - 7.492) < 1e-9
+    pos = spot_position_commit("VIVA-SPOT-Y123456", "tp1", 901)
+    assert spot_hit_scan(pos, 7.50) is None          # tp1 is spent
+    assert spot_hit_scan(pos, 7.60)["kind"] == "tp2"
+    pos = spot_position_commit("VIVA-SPOT-Y123456", "tp2", 902)
+    pos = spot_position_commit("VIVA-SPOT-Y123456", "tp3", 903)
+    assert pos["hits"] == ["tp1", "tp2", "tp3"] and pos["closed"] == "ALL_TARGETS"
+    cand = spot_hit_candidate(pos)
+    assert cand is not None and cand.trigger_timeframe == "30m"
+    assert cand.metadata["public_code"] == "VIVA-SPOT-Y123456"
+
+
+def test_r99q15_adaptive_deep_cadence_bursts_on_good_finds(monkeypatch):
+    """«هر ۶۰ دقیقه ... مگر اینکه موارد خوبی پیدا بکنه» — then the fast lane."""
+    import time as _t
+    import database.bot_kv as kv
+    mem = {}
+    kv.get_json = lambda k, d=None: mem.get(k, d)
+    kv.set_json = lambda k, v: mem.__setitem__(k, v)
+    from analysis import tiered_scan as TS
+    monkeypatch.setenv("TIER_DEEP_MINUTES", "60")
+    monkeypatch.delenv("TIER_DEEP_BURST_MINUTES", raising=False)
+    monkeypatch.delenv("TIER_DEEP_BURST_WINDOW_MINUTES", raising=False)
+    assert TS.deep_minutes() == 60
+    TS.mark_deep_result(0)
+    assert TS.deep_minutes() == 60          # a quiet market keeps the 60-min beat
+    TS.mark_deep_result(3)
+    assert TS.deep_minutes() == 5           # good finds → the fast lane
+    mem["tier_deep_burst_until"] = "2000-01-01T00:00:00Z"
+    assert TS.deep_minutes() == 60          # expired window falls back
+    monkeypatch.setenv("TIER_DEEP_BURST_MINUTES", "4")
+    mem["tier_deep_burst_until"] = "2999-01-01T00:00:00Z"
+    assert TS.deep_minutes() == 4
+    _ = _t
+
+
+def test_r99q15_spot_per_tf_gate_skips_frames_without_a_new_close():
+    """Cost law: an hourly pass must not re-fit 6 frames per symbol."""
+    import database.bot_kv as kv
+    mem = {}
+    kv.get_json = lambda k, d=None: mem.get(k, d)
+    kv.set_json = lambda k, v: mem.__setitem__(k, v)
+    import pandas as pd
+    from analysis import tiered_scan as TS
+
+    def _frame(ts):
+        return pd.DataFrame({"timestamp": [ts], "open": [1.0], "high": [1.1],
+                             "low": [0.9], "close": [1.0], "volume": [10.0]})
+
+    bundle = {"4h": _frame("2026-10-16 00:00:00"),
+              "1d": _frame("2026-10-16 00:00:00"),
+              "1w": None}
+    due = TS.spot_due_tfs("BTCUSDT", bundle, tfs=("4h", "1d", "1w"))
+    assert due == ["4h", "1d", "1w"]        # cold KV → fail-open
+    TS.spot_tf_mark("BTCUSDT", bundle, ("4h", "1d"))
+    # nothing closed → nothing due; an unreadable frame (1w) is still scanned
+    assert TS.spot_due_tfs("BTCUSDT", bundle, tfs=("4h", "1d")) == []
+    assert TS.spot_due_tfs("BTCUSDT", bundle, tfs=("4h", "1w")) == ["1w"]
+    # a new close (or a live pin) pulls the frame back in
+    bundle["4h"] = _frame("2026-10-16 04:00:00")
+    assert TS.spot_due_tfs("BTCUSDT", bundle, tfs=("4h", "1d")) == ["4h"]
+    assert TS.spot_due_tfs("BTCUSDT", bundle, tfs=("1d",), pinned=("1d",)) == ["1d"]
+
+
+def test_r99q15_headless_line_and_resolved_apex_laws_are_in_the_painter():
+    """His «یک خط بی‌سر و ته می‌کشه» — the two paint laws that remove it."""
+    src = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "bot", "messages_v7.py"), encoding="utf-8").read()
+    # a stored line with no in-frame pivot is context (faint), never the trade line
+    assert "_in_xs9 = [float(_x) for _x in xs if -1.5 <= float(_x) <= count + 0.5]" in src
+    assert "_headless99q15" in src
+    # a RESOLVED pair (apex at/before LIVE) paints no forward tail at all
+    assert "_resolved99 = bool(_apex9 is not None and _apex9 <= count + 0.6)" in src

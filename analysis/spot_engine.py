@@ -865,10 +865,25 @@ def build_spot_candidate(item: dict):
     if not targets:
         targets = [entry * 1.05, entry * 1.10]
     weights = [float(x) for x in (item.get("weights") or SPOT_WEIGHTS)]
+    # ── R99q15 ONE-ID LAW (his 10-16, verbatim: «دیگه آپدیت‌ها بدون چارت فقط
+    # متن شماره‌گذاری میشن به آخرین چارت اون شناسه یکتا .. و چارت چهارم همراه
+    # پیام تایید ورود به پوزیشن میاد»). The confirmation is CHART #4 of the same
+    # unique id the three pre-break charts carried — the old builder minted a
+    # FRESH VIVA-SPOT-Y code for it, so the confirm read as a different signal
+    # and its numbered replies never attached to the alert's chart.
+    _one_id15 = ""
+    try:
+        from database.bot_kv import get_json as _g15
+        _m15 = _g15(f"spot_chain|{str(item.get('symbol') or '').upper()}"
+                    f"|{str(tf or '').upper()}", {}) or {}
+        _one_id15 = str(_m15.get("code") or "").strip()
+    except Exception:
+        _one_id15 = ""
     meta = {
         "market": "SPOT", "engine": "SPOT", "log_scale": True,
         "spot_measured_box": True,
-        "public_code": _next_spot_public_code(),
+        "public_code": _one_id15 or _next_spot_public_code(),
+        "spot_chain_one_id": bool(_one_id15),
         "atr": float(item.get("atr") or 0.0),
         "pattern_type": str(item.get("pattern") or ""),
         "spot_horizon": str(item.get("horizon") or ""),
@@ -1321,17 +1336,47 @@ def spot_break_lock_commit(item: dict) -> None:
         pass
 
 
-def _spot_journey_slot(chain_meta: dict, slot: str, now: float):
-    """10-12 journey (chain side): may this chain claim slot s1/s2? Pending
-    claims older than 10 min are stale (crashed claimer) and reusable.
-    Pure (unit-tested)."""
+# ═══════════════════════════════════════════════════════════════════════════
+# R99q15 SEVEN-CHART JOURNEY (Viva 10-16, verbatim): «قبل از تایید ۳ چارت داریم
+# شناسایی پترن میشه هشدار ابتدایی .. برخورد به هر سمت پترن یا ترندلاین میشه
+# دومین .. بریک میشه سومین .. دیگه آپدیت‌ها بدون چارت فقط متن شماره‌گذاری میشن به
+# آخرین چارت اون شناسه یکتا .. و چارت چهارم همراه پیام تایید ورود به پوزیشن میاد و
+# بعد ۳ تا هیت شدن یعنی هر شناسه از لحظه شناسایی تا پایان مسیر ۷ چارت نهایتا
+# بیشتر نشه»
+#   s1 = pattern recognised      → the initial alert
+#   s2 = touch to either side    → second chart
+#   s3 = the break               → third chart
+#   s4 = CONFIRMATION with entry → fourth chart (the confirm lane claims it)
+#   h1/h2/h3 = TP1/TP2/TP3 hits  → charts five, six, seven
+# Every other update is a numbered TEXT-ONLY reply to the chain's newest chart.
+# ═══════════════════════════════════════════════════════════════════════════
+SPOT_JOURNEY_SLOTS = ("s1", "s2", "s3", "s4", "h1", "h2", "h3")
+
+
+def spot_chain_chart_cap() -> int:
+    """Hard cap of CHARTS per unique spot chain (7 unless Railway says otherwise)."""
     try:
-        if slot not in ("s1", "s2"):
+        import os as _os
+        return max(4, int(str(_os.getenv("VIVA_SPOT_CHAIN_CHARTS", "") or 7)))
+    except Exception:
+        return 7
+
+
+def _spot_journey_slot(chain_meta: dict, slot: str, now: float):
+    """The chain-side slot ledger: may this chain claim slot s1…s4/h1…h3?
+
+    Pending claims older than 10 min are stale (crashed claimer) and reusable.
+    The TOTAL number of charts of one unique id never exceeds
+    `spot_chain_chart_cap()` (7) — his 10-16 law. Pure (unit-tested)."""
+    try:
+        if slot not in SPOT_JOURNEY_SLOTS:
             return None
         m = chain_meta or {}
         if int(m.get(slot) or 0):
             return None
         if float(m.get(f"{slot}p") or 0.0) and now - float(m.get(f"{slot}p")) <= 600.0:
+            return None
+        if int(m.get("charts") or 0) >= spot_chain_chart_cap():
             return None
         return slot
     except Exception:
@@ -1380,3 +1425,145 @@ def build_spot_alert_candidate(item: dict):
         created_at=str(item.get("detected_at") or ""), confirmed_at="",
         metadata=meta,
     )
+
+
+def spot_chain_chart_commit(chain_meta: dict) -> dict:
+    """Increment the chain's chart counter (call ONLY after a chart posted)."""
+    m = dict(chain_meta or {})
+    try:
+        m["charts"] = int(m.get("charts") or 0) + 1
+    except Exception:
+        m["charts"] = 1
+    return m
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R99q15 SPOT HIT LANE (his 10-16 law, verbatim: «و چارت چهارم همراه پیام تایید
+# ورود به پوزیشن میاد و بعد ۳ تا هیت شدن یعنی هر شناسه از لحظه شناسایی تا پایان
+# مسیر ۷ چارت نهایتاً بیشتر نشه»). The confirmation OPENS a spot position; the
+# three ladder hits (TP1…TP3, h1…h3) are the next — and last — three charts of
+# the SAME unique id. Nothing here touches the detection engines: it only
+# records what chart #4 published, judges the live price against the ladder, and
+# lets the sender claim h1/h2/h3 through the same 7-chart ledger.
+# ═══════════════════════════════════════════════════════════════════════════
+SPOT_POSITIONS_KEY = "spot_positions"
+
+
+def spot_positions_open() -> dict:
+    try:
+        from database.bot_kv import get_json
+        return dict(get_json(SPOT_POSITIONS_KEY, {}) or {})
+    except Exception:
+        return {}
+
+
+def spot_position_open(candidate, targets, confirm_mid: int = 0) -> dict:
+    """Record the spot position chart #4 opened (keyed by the unique id)."""
+    try:
+        md = dict(getattr(candidate, "metadata", None) or {})
+        code = str(md.get("public_code") or getattr(candidate, "signal_id", "") or "")
+        if not code:
+            return {}
+        _entry = float(getattr(candidate, "entry", 0) or md.get("entry") or 0.0)
+        _stop = float(getattr(candidate, "stop_loss", 0) or md.get("stop_loss") or 0.0)
+        _tg = [float(x) for x in (targets or []) if float(x) > 0]
+        if _entry <= 0 or not _tg:
+            return {}
+        from database.bot_kv import get_json, set_json
+        store = dict(get_json(SPOT_POSITIONS_KEY, {}) or {})
+        import time as _t
+        store[code] = {
+            "code": code, "symbol": str(getattr(candidate, "symbol", "") or ""),
+            "tf": str(getattr(candidate, "trigger_timeframe", "") or "").lower(),
+            "entry": _entry, "stop": _stop, "targets": _tg[:3],
+            "hits": [], "opened": _t.time(), "confirm": int(confirm_mid or 0),
+            "alert": int(md.get("spot_alert_mid") or 0),
+            "pattern": str(md.get("pattern_type") or ""),
+            "render_patterns": list(md.get("render_patterns") or []),
+        }
+        set_json(SPOT_POSITIONS_KEY, store)
+        return store[code]
+    except Exception:
+        return {}
+
+
+def spot_hit_scan(pos: dict, price: float):
+    """The next unhit rung of one open spot position, or None.
+
+    Pure: `price` is the live/close price the caller already has in hand — the
+    lane never spends an extra request of its own.
+    """
+    try:
+        p = float(price or 0.0)
+        entry = float(pos.get("entry") or 0.0)
+        if p <= 0 or entry <= 0:
+            return None
+        hits = set(str(x) for x in (pos.get("hits") or []))
+        for i, tgt in enumerate(list(pos.get("targets") or [])[:3], start=1):
+            key = f"tp{i}"
+            if key in hits:
+                continue
+            if p >= float(tgt):
+                return {"kind": key, "level": float(tgt), "price": p,
+                        "gain_pct": ((p - entry) / entry) * 100.0,
+                        "index": i}
+            return None              # rungs are hit in order
+        return None
+    except Exception:
+        return None
+
+
+def spot_position_commit(code: str, kind: str, mid: int = 0) -> dict:
+    """Mark one rung hit (call ONLY after the message really posted)."""
+    try:
+        from database.bot_kv import get_json, set_json
+        store = dict(get_json(SPOT_POSITIONS_KEY, {}) or {})
+        pos = dict(store.get(str(code)) or {})
+        if not pos:
+            return {}
+        hits = list(pos.get("hits") or [])
+        if str(kind) not in hits:
+            hits.append(str(kind))
+        pos["hits"] = hits
+        if mid:
+            pos["last"] = int(mid)
+        import time as _t
+        pos["updated"] = _t.time()
+        if len([h for h in hits if str(h).startswith("tp")]) >= len(list(pos.get("targets") or [])):
+            pos["closed"] = "ALL_TARGETS"
+        store[str(code)] = pos
+        set_json(SPOT_POSITIONS_KEY, store)
+        return pos
+    except Exception:
+        return {}
+
+
+def spot_hit_candidate(pos: dict):
+    """A CONFIRMED render-only candidate for one hit chart (same unique id)."""
+    try:
+        from analysis.models import SignalCandidate
+        md = {"market": "SPOT", "engine": "SPOT", "log_scale": True,
+              "spot_measured_box": True, "public_code": str(pos.get("code") or ""),
+              "pattern_type": str(pos.get("pattern") or ""),
+              "render_patterns": list(pos.get("render_patterns") or [])}
+        _entry = float(pos.get("entry") or 0.0)
+        _tg = [float(x) for x in (pos.get("targets") or []) if float(x) > 0]
+        _sl = float(pos.get("stop") or 0.0) or _entry * 0.9
+        from datetime import datetime, timezone
+        _now = datetime.now(timezone.utc).isoformat()
+        _rr = lambda _t: (((_t - _entry) / (_entry - _sl)) if _entry > _sl > 0 else 0.0)
+        return SignalCandidate(
+            signal_id=str(pos.get("code") or "SPOT-HIT"), symbol=str(pos.get("symbol") or ""),
+            style="SPOT", setup_name="SPOTBREAK", strategy_fa="اسپات",
+            direction="LONG", setup_code=SPOT_SETUP_CODE,
+            trigger_timeframe=str(pos.get("tf") or "4h"),
+            score=10.0, status="CONFIRMED",
+            entry_zone_bottom=_entry, entry_zone_top=_entry, planned_entry=_entry,
+            sl=_sl, tp1=(_tg[0] if _tg else _entry * 1.05),
+            tp2=(_tg[1] if len(_tg) > 1 else _entry * 1.10),
+            rr_tp1=_rr(_tg[0] if _tg else _entry * 1.05),
+            rr_tp2=_rr(_tg[1] if len(_tg) > 1 else _entry * 1.10),
+            bias="LONG", evidence=[], confirmations=[], warnings=[],
+            mandatory_gates=[], market="SPOT", metadata=md,
+            created_at=_now, confirmed_at=_now)
+    except Exception:
+        return None

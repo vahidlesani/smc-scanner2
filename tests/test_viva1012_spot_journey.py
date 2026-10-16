@@ -33,7 +33,14 @@ def test_chain_slot_table():
     assert S({"s1p": now - 700}, "s1", now) == "s1"      # stale pending frees
     assert S({}, "s2", now) == "s2"
     assert S({"s2": 9}, "s2", now) is None
-    assert S({}, "s3", now) is None
+    # R99q15 (his 10-16 «۷ چارت نهایتاً»): the journey grew from s1+s2 to the
+    # full seven-slot table — s3 the break, s4 the confirmation, h1…h3 the hits
+    assert S({}, "s3", now) == "s3"
+    assert S({}, "s4", now) == "s4"
+    assert S({}, "h1", now) == "h1"
+    assert S({}, "h3", now) == "h3"
+    assert S({}, "s5", now) is None
+    assert S({"charts": 7}, "s1", now) is None             # the 7-chart cap
     assert S(None, "s1", now) == "s1"
 
 

@@ -215,11 +215,50 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _now_utc_s() -> str:
+    try:
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return ""
+
+
 def deep_minutes() -> int:
-    """Discovery cadence: TIER_DEEP_MINUTES or FULL_SCAN_MINUTES or 10."""
+    """Discovery cadence (R99q15, his 10-16 verbatim: «هر ۶۰ دقیقه نیازه که
+    دوباره اسکن عمیق بکنه .. مگر اینکه موارد خوبی پیدا بکنه بین ۲۰۰ کوین برتر
+    اول مارکت کپ»).
+
+    base = TIER_DEEP_MINUTES else FULL_SCAN_MINUTES else 10 — and while a recent
+    pass DID find good setups among the top-200 the cadence bursts to
+    TIER_DEEP_BURST_MINUTES until the burst window expires. So the market is
+    watched every 60 min when it is quiet and every 5 min while it is paying.
+    """
     if str(os.getenv("TIER_DEEP_MINUTES", "") or "").strip():
-        return max(2, _int_env("TIER_DEEP_MINUTES", 10))
-    return max(2, _int_env("FULL_SCAN_MINUTES", 10))
+        base = max(2, _int_env("TIER_DEEP_MINUTES", 60))
+    else:
+        base = max(2, _int_env("FULL_SCAN_MINUTES", 10))
+    try:
+        _until = str(_kv().get_json("tier_deep_burst_until", "") or "")
+        if _until and _now_utc_s() and _until > _now_utc_s():
+            return max(2, _int_env("TIER_DEEP_BURST_MINUTES", 5))
+    except Exception:
+        pass
+    return base
+
+
+def mark_deep_result(hits: int) -> None:
+    """A deep pass that found good setups starts/extends the burst window."""
+    try:
+        _thr = max(1, _int_env("TIER_DEEP_BURST_MIN_HITS", 1))
+        if int(hits or 0) < _thr:
+            return
+        from datetime import datetime, timedelta, timezone
+        _win = max(1, _int_env("TIER_DEEP_BURST_WINDOW_MINUTES", 30))
+        _until = ((datetime.now(timezone.utc) + timedelta(minutes=_win))
+                  .strftime("%Y-%m-%dT%H:%M:%SZ"))
+        _kv().set_json("tier_deep_burst_until", _until)
+    except Exception:
+        pass
 
 
 def guard_seconds() -> int:
@@ -330,6 +369,93 @@ def spot_unchanged_skip(symbol: str, bundle,
     except Exception:
         return False
 
+
+
+# ══════════════════════════════════════════════════════════════════════
+# R99q15 — SPOT PER-TF CLOSED-BAR GATE (Viva 10-16, verbatim: «هر ۶۰دقیقه
+# نیازه که دوباره اسکن عمیق بکنه … هر ساعت ۸.۵ دقیقه رو من نمی‌فهمم چرا
+# باید اینقدر زمان ببره و مصرف بکنه ریلوی رو … قطعا راه حلی می‌تونی بکار
+# ببری که این مشکل و مصرف ریلوی بهینه و اصلاح بشه»)
+#
+# A pattern can only CHANGE when one of its candles closes, so an hourly pass
+# over the top-200 symbols does NOT need to re-fit 6 frames × 200 symbols: it
+# only needs the frames whose newest CLOSED candle is new. The stamps are per
+# (symbol, TF) in durable KV and are written only after a TF has actually been
+# processed, so a crash mid-pass can never eat a bar.
+#   * 4h → 6 closes/day · 8h → 3 · 12h → 2 · 1d → 1 · 3d → ⅓ · 1w → 1/7
+#   * naive hourly deep pass = 6 frames/symbol/hour
+#   * gated = ≈0.52 frames/symbol/hour  → ~11× less engine work
+# ══════════════════════════════════════════════════════════════════════
+SPOT_GATE_TFS = ("4h", "8h", "12h", "1d", "3d", "1w")
+
+
+def spot_bar_ts(bundle, tf) -> str:
+    """Newest CLOSED candle stamp of one frame ('' when unreadable)."""
+    try:
+        df = bundle.get(tf)
+        if df is None or not len(df):
+            return ""
+        try:
+            return str(df["timestamp"].iloc[-1])
+        except Exception:
+            return str(df.index[-1])
+    except Exception:
+        return ""
+
+
+def spot_due_tfs(symbol: str, bundle, tfs=SPOT_GATE_TFS,
+                 force: bool = False, pinned=()) -> list:
+    """Which spot TFs closed a NEW candle since the last pass (R99q15).
+
+    `pinned` = TFs with an open urgent-watch pin (a live edge must stay
+    watched even between closes — the ticker line-watch replies on touch).
+    Fail-open: an unreadable frame or KV means the TF IS scanned."""
+    _out = []
+    for _tf in tfs:
+        try:
+            _ts = spot_bar_ts(bundle, _tf)
+            if not _ts:
+                _out.append(_tf)
+                continue
+            if force or str(_tf) in {str(x) for x in (pinned or ())}:
+                _out.append(_tf)
+                continue
+            _prev = _kv().get_json(f"spot_tf_bar:{str(symbol or '').upper()}|{_tf}", None)
+            if _prev != _ts:
+                _out.append(_tf)
+        except Exception:
+            _out.append(_tf)
+    return _out
+
+
+def spot_tf_mark(symbol: str, bundle, tfs) -> None:
+    """Stamp the bars a TF was PROCESSED on (call only after the work ran)."""
+    for _tf in (tfs or ()):
+        try:
+            _ts = spot_bar_ts(bundle, _tf)
+            if _ts:
+                _kv().set_json(f"spot_tf_bar:{str(symbol or '').upper()}|{_tf}", _ts)
+        except Exception:
+            pass
+
+
+class _TfSubset:
+    """A read-only bundle view exposing only the due TFs (spot lane R99q15).
+
+    The engines keep their own fetch policy — this only decides WHICH frames
+    they are handed this pass; the full bundle stays cached for the chart."""
+
+    def __init__(self, bundle, tfs):
+        self._b = bundle
+        self._tfs = set(str(x) for x in (tfs or ()))
+
+    def get(self, tf):
+        if str(tf) not in self._tfs:
+            return None
+        return self._b.get(tf) if self._b is not None else None
+
+    def __getattr__(self, item):
+        return getattr(self._b, item)
 
 def dist_to_entry_pct(side: str, entry, live) -> Optional[float]:
     """|live-entry|/entry in % (None when unusable)."""
