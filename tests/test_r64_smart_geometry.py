@@ -62,20 +62,15 @@ class _Line:
 
 
 def test_head_label_never_on_the_opposite_break():
+    """RETIRED hook, LAW KEPT (Viva 10-16): the pivot-shape relabel is gone, so
+    a «head» can no longer ride an edge whose break goes the other way — the
+    geometric name always stands, whatever the direction is."""
     from analysis.pattern_engine import _structural_refine
     df = _hs_frame()
-    # upper-edge break = LONG → a «head» above is a failed head, never H&S
-    pat, note = _structural_refine(df, _Line(), "upper", 59, 2.0, "HORIZONTAL_SR",
-                                   direction="LONG")
-    assert pat == "HORIZONTAL_SR" and note == ""
-    pat, _ = _structural_refine(df, _Line(), "upper", 59, 2.0, "HORIZONTAL_SR",
-                                direction="SHORT")
-    assert pat == "HEAD_SHOULDERS"
-    # legacy call (no direction) unchanged
-    pat, _ = _structural_refine(df, _Line(), "upper", 59, 2.0, "HORIZONTAL_SR")
-    assert pat == "HEAD_SHOULDERS"
-
-
+    for d in ("LONG", "SHORT", ""):
+        pat, note = _structural_refine(df, _Line(), "upper", 59, 2.0,
+                                       "HORIZONTAL_SR", direction=d)
+        assert pat == "HORIZONTAL_SR" and note == ""
 # ── 4. smart geometry: robust, scale-honest ruler ─────────────────────────
 def _tape(n=300, seed=7, base=100.0):
     rng = np.random.default_rng(seed)

@@ -226,15 +226,17 @@ def test_classify16_widths_use_the_lower_edge():
 
 # ── P5: double-top neckline is SUPPORT ──────────────────────────────────────
 def test_double_top_neckline_is_low_side():
+    """RETIRED (Viva 10-16): detect_pivot_patterns no longer mints the pivots
+    family. The doctrine it encoded is not lost — a flat-bottomed triangle /
+    rectangle keeps its neckline on the LOW side as a lower edge (see
+    test_round61_patterns16 / pattern_law)."""
     import numpy as np
     from analysis.patterns16 import detect_pivot_patterns
     xs = np.arange(80)
     base = 100 + 8 * np.exp(-((xs - 30) / 5.0) ** 2) + 8 * np.exp(-((xs - 55) / 5.0) ** 2)
     df = pd.DataFrame({"open": base, "high": base + 0.3, "low": base - 0.3,
                        "close": base, "volume": 1.0})
-    found = [p for p in detect_pivot_patterns(df, 1.0) if p["type"] == "DOUBLE_TOP"]
-    assert found, "fixture must form a double top"
-    assert found[0]["lines"][0]["side"] == "LOW"
+    assert detect_pivot_patterns(df, 1.0) == []
 
 
 # ── K1 / K2: candle vocabulary honesty ─────────────────────────────────────

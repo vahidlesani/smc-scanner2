@@ -146,37 +146,37 @@ def _w_shape():
 
 
 def test_double_top_detected():
+    """RETIRED (Viva 10-16: «دبل تاپ و دبل باتم و سر و شانه رو از اون ۱۶ پترن کم
+    بکن») — the pivots-only family is gone from the engines; the 13 live patterns
+    in analysis.pattern_law are the vocabulary now."""
     from analysis.patterns16 import detect_pivot_patterns
-    df = _frame(_m_shape())
-    atr = float((df["high"] - df["low"]).tail(14).mean())
-    pats = detect_pivot_patterns(df, atr)
-    kinds = [p["type"] for p in pats]
-    assert "DOUBLE_TOP" in kinds or "HEAD_SHOULDERS" in kinds, kinds
-    item = next(p for p in pats if p["type"] in ("DOUBLE_TOP", "HEAD_SHOULDERS"))
-    assert item["neckline"] > 0 and item["measured"] > 0
-    assert item["entry_side"] == "ABOVE"
-
-
+    from analysis.pattern_law import PATTERN_LAW, pattern_is_live
+    assert detect_pivot_patterns(_frame([100] * 80), 1.0) == []
+    assert not pattern_is_live("DOUBLE_TOP")
+    assert not pattern_is_live("DOUBLE_BOTTOM")
+    assert not pattern_is_live("HEAD_SHOULDERS")
+    live = [k for k in PATTERN_LAW if pattern_is_live(k)]
+    assert len(live) >= 13, live
 def test_double_bottom_detected():
-    from analysis.patterns16 import detect_pivot_patterns
-    df = _frame(_w_shape())
-    atr = float((df["high"] - df["low"]).tail(14).mean())
-    kinds = [p["type"] for p in detect_pivot_patterns(df, atr)]
-    assert "DOUBLE_BOTTOM" in kinds or "INV_HEAD_SHOULDERS" in kinds, kinds
-
-
+    """RETIRED — see test_double_top_detected."""
+    from analysis.pattern_law import RETIRED_PATTERNS
+    for k in ("DOUBLE_TOP", "DOUBLE_BOTTOM", "HEAD_SHOULDERS", "INV_HEAD_SHOULDERS"):
+        assert k in RETIRED_PATTERNS
 def test_detect_patterns_exposes_pivot_family():
-    """The render/spot detector must carry the pivot family too (one item,
-    alive near price)."""
+    """RETIRED — detect_patterns speaks the 13-pattern edge law only; the
+    pivot family may never appear in its output again."""
+    import numpy as np
+    import pandas as pd
     from analysis.render_kit import detect_patterns
-    df = _frame(_w_shape())
-    out = detect_patterns(df, "LONG")
-    kinds = [p.get("type") for p in out]
-    assert any(k in ("DOUBLE_BOTTOM", "INV_HEAD_SHOULDERS", "TRIANGLE",
-                     "TRIANGLE_ASCENDING") for k in kinds), kinds
-
-
-# ── the chart diet ─────────────────────────────────────────────────────────
+    n = 160
+    xs = np.arange(n, dtype=float)
+    base = 100 + 6 * np.exp(-((xs - 45) / 6.0) ** 2) + 6 * np.exp(-((xs - 95) / 6.0) ** 2)
+    df = pd.DataFrame({"timestamp": pd.date_range(end="2026-09-30", periods=n, freq="1h"),
+                       "open": base, "high": base + 0.4, "low": base - 0.4,
+                       "close": base, "volume": np.full(n, 1e5)})
+    kinds = {p["type"] for p in detect_patterns(df, "SHORT")}
+    assert not (kinds & {"DOUBLE_TOP", "DOUBLE_BOTTOM", "HEAD_SHOULDERS",
+                         "INV_HEAD_SHOULDERS", "TRIPLE_TOP", "TRIPLE_BOTTOM"}), kinds
 def test_chart_gate_flag_exists_and_gates(monkeypatch):
     """r61 diet experiment → r61.1: default ON again (Telegram charts ARE the
     product); the gate still kills every render when the env flag is 0."""

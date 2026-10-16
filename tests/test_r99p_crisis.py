@@ -273,12 +273,20 @@ def test_r99q_signature_and_watermark_wired():
     import os as _os
     _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
     _mv = open(_os.path.join(_root, "bot", "messages_v7.py"), encoding="utf-8").read()
-    assert '"by: Vahid Lesani"' in _mv               # his «بنوس by :»
-    assert "alpha=0.17" in _mv                       # logo watermark stronger
     _rs = open(_os.path.join(_root, "tools", "render_spot_cryptocove.py"),
                encoding="utf-8").read()
-    assert '"by: Vahid Lesani"' in _rs
+    # R99q21 (his 10-16 evening): the CENTRE of every chart carries the
+    # author's own name instead of the brand, and the top-right credit is the
+    # clean logo (the framed banner «شلوغ» was removed).
+    assert '"VAHID LESANI", transform=ax.transAxes' in _mv
+    assert '"VAHID LESANI", transform=ax.transAxes' in _rs
+    assert "viva_credit_banner" not in _mv and "viva_credit_banner" not in _rs
     assert "VIVA SIGNALS PRO\" , transform=ax.transAxes" not in _rs
+    assert "VIVA SIGNALS PRO\", transform=ax.transAxes" not in _rs
+    # «و با همون اندازه» — ONE centre size in spot AND setups (38, bold)
+    assert 'fontsize=38, fontweight="bold"' in _mv
+    assert 'fontsize=38, fontweight="bold"' in _rs
+    assert "vivasignals-logo.png" in _rs
     assert "nice_price_ticks" in _rs                 # shared dense axis kit
 
 
@@ -314,8 +322,10 @@ def test_r99q_tc_v2_frame_and_noise_wedge():
 
 def test_r99q_spot_red_breakdown_box_and_brand_center():
     """His 10-15 update: break boxes on SPOT are RED on breakdowns (the older
-    green up-box ref is superseded), and the centre watermark is the BRAND
-    «VIVA SIGNALS PRO» — never the symbol name."""
+    green up-box ref is superseded). R99q21 (10-16 evening) superseded the
+    centre BRAND: «ویوا سیگنالز پرو رو از وسطش بردار» — the centre mark is the
+    author's own name now, at the setups chart's size; the brand word stays in
+    the header/footer rows only."""
     import os as _os
     _src = open(_os.path.join(_os.path.dirname(_os.path.dirname(
         _os.path.abspath(__file__))), "tools", "render_spot_cryptocove.py"),
@@ -323,7 +333,10 @@ def test_r99q_spot_red_breakdown_box_and_brand_center():
     assert "قرمز بذار" in _src and "#F2B8B0" in _src
     assert '("#F2B8B0", "#C0392B", "#8E2418")' in _src and "if up_dir" in _src
     assert 'f"{sym},{tf}"' not in _src          # symbol watermark removed
-    assert '"VIVA SIGNALS PRO"' in _src and "0.52" in _src
+    assert '"VAHID LESANI", transform=ax.transAxes' in _src
+    assert '"VAHID LESANI", transform=ax.transAxes' in _src
+    assert 'ax.text(0.5, 0.245, "VAHID LESANI"' in _src   # name under the logo mark
+    assert 'ax.text(0.5, 0.52, "VIVA SIGNALS PRO"' not in _src
 
 
 def test_r99q_albrox_under_touched_noise_wedge_dropped():

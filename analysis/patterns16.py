@@ -193,97 +193,28 @@ def entry_side(df, start: int, upper_at_n: float, lower_at_n: float) -> str:
 
 
 def classify16(upper, lower, n: int, df=None, tail: int = 12) -> Tuple[str, Dict]:
-    """The 16-pattern two-edge law. Returns (slug, meta).
+    """R99q21 — DELEGATES to the single reference law (analysis.pattern_law).
 
-    Corrections over the legacy classifier (all HYPE-09-30 driven):
-      ① edge-ROLE sanity — the edge that sits ABOVE at x=n is the upper edge;
-        an inverted pair is swapped, never returned as a nonsense label;
-      ② TAIL slopes decide the wedge/triangle matrix (not window OLS);
-      ③ WEDGE labels must match the entry side (rising wedge only when price
-        entered from BELOW; entered-from-above converging structure reads by
-        its tails — his «اگر ضلع بالا رسم بشه فالینگ وج هست»).
-    meta: entry side, tail slopes, width data — the message layer may show it.
+    Returns (slug, meta) exactly as before, but the verdict now comes from
+    PATTERN_LAW — the same code the renderer, the spot engine and the setup
+    engines call — so one structure can no longer be named three different
+    things in three lanes. `meta` carries the measured numbers and the `why`
+    trail.
+
+    The pivots-only trio (DOUBLE_TOP / DOUBLE_BOTTOM / HEAD_SHOULDERS and their
+    inverses) is RETIRED per Viva 10-16 and is never returned from here.
     """
-    meta: Dict = {"entry_side": "ANY", "tail_upper": 0.0, "tail_lower": 0.0}
     try:
-        if upper is None and lower is None:
-            return "NONE", meta
-        if upper is None or lower is None:
-            return "TRENDLINE", meta
-        start = max(int(upper.first_index), int(lower.first_index))
-        # R62-ARENA (audit P3): l_n is the LOWER edge at the live bar (was
-        # upper.price_at(start) — every width below was garbage).
-        u_n, l_n = float(upper.price_at(n)), float(lower.price_at(n))
-        # ① role sanity at the LIVE end
-        if u_n < l_n:
-            upper, lower = lower, upper
-            u_n, l_n = float(upper.price_at(n)), float(lower.price_at(n))
-        width_now = u_n - l_n
-        if width_now <= 0:
-            return "NONE", meta
-        span = max(1, n - start)
-        width_then = float(upper.price_at(start)) - float(lower.price_at(start))
-        width_mid = (float(upper.price_at(start + span // 2))
-                     - float(lower.price_at(start + span // 2)))
-        converging = bool(width_then > 0 and width_now < 0.85 * width_then
-                          and width_mid < 0.97 * width_then)
-        # ② TAIL slopes — the honest reading
-        tu = tail_slope(upper.price_at, n, start, tail)
-        tl = tail_slope(lower.price_at, n, start, tail)
-        meta.update({"tail_upper": round(tu, 6), "tail_lower": round(tl, 6),
-                     "width_now": round(width_now, 6),
-                     "width_then": round(width_then, 6)})
-        # deadband: drift under ~2.5% of height over the tail is FLAT
-        tol = (0.025 * width_now) / max(1, min(tail, span))
-        su = (tu > tol) - (tu < -tol)     # +1 up, -1 down, 0 flat
-        sl = (tl > tol) - (tl < -tol)
-        # ③ entry side (needs the frame)
-        es = entry_side(df, start, u_n, l_n) if df is not None else "ANY"
-        meta["entry_side"] = es
-        if converging:
-            if su == 0 and sl > 0:
-                return "TRIANGLE_ASCENDING", meta
-            if sl == 0 and su < 0:
-                return "TRIANGLE_DESCENDING", meta
-            if su < 0 and sl > 0:
-                return "TRIANGLE_SYMMETRICAL", meta
-            if su < 0 and sl < 0:
-                # both edges fall — a falling wedge ONLY if price came from
-                # above (his HYPE ruling); entered from below it is a falling
-                # channel-shaped drift, keep the honest tail name anyway.
-                return "WEDGE_FALLING", meta
-            if su > 0 and sl > 0:
-                # both edges rise: a rising wedge ONLY when price ENTERED from
-                # below («حتی مهمه که ببینیم قیمت از کدام سمت وارد شده»).
-                # Entered from ABOVE after a vertical rally, the structure is
-                # a top being carved — the upper edge that price actually
-                # tests is what the eye names it (HYPE 09-30).
-                if es == "ABOVE" and df is not None:
-                    if tu < 0:
-                        return "WEDGE_FALLING", meta   # falling upper governs
-                    return "TRIANGLE_SYMMETRICAL", meta
-                return "WEDGE_RISING", meta
-            if su == 0 and sl == 0:
-                return "RECTANGLE", meta
-            return "TRIANGLE", meta
-        # non-converging family
-        diverging = width_then > 0 and width_now > 1.18 * width_then and su > 0 and sl < 0
-        if diverging:
-            return "BROADENING", meta
-        if su == 0 and sl == 0:
-            return "CHANNEL_FLAT", meta
-        if su and sl and su == sl:
-            return ("CHANNEL_ASCENDING" if su > 0 else "CHANNEL_DESCENDING"), meta
-        if su or sl:
-            return ("CHANNEL_ASCENDING" if (su or 0) > 0
-                    else "CHANNEL_DESCENDING" if (su or 0) < 0
-                    else "CHANNEL_FLAT"), meta
-        return "CHANNEL_FLAT", meta
-    except Exception:
-        return "NONE", meta
+        from analysis.pattern_law import pair_metrics, classify_pair
+        m = pair_metrics(upper, lower, int(n), df=df)
+        meta: Dict = {"entry_side": m.get("entry_side", "ANY")}
+        slug = classify_pair(m, meta)
+        meta.update({k: m.get(k) for k in ("rel_u", "rel_l", "conv_ratio",
+                                           "width_then", "width_now", "span")})
+        return slug, meta
+    except Exception as exc:            # never silent, never a wrong label
+        return "NONE", {"error": str(exc)}
 
-
-# ─────────────────── flag / pennant (R67 render vocabulary) ───────────────────
 def detect_flag_pennant(df, atr_v: float, pole_bars: int = 12,
                         flag_bars: int = 22) -> list:
     """Pole → counter-drift consolidation, coded for the RENDER vocabulary
@@ -422,10 +353,21 @@ def _neckline(lows: List[Dict], i0: int, i1: int) -> float:
 
 
 def detect_pivot_patterns(df, atr: float) -> List[Dict]:
-    """The pivot-sequence family of his poster: double top/bottom, head &
-    shoulders (+inverse), cup & handle (+inverted). Each result carries the
-    NECKLINE as a renderable flat line plus pivots, entry side and measured
-    target height (Bulkowski). Tolerances in ATR — scale-free."""
+    """RETIRED (Viva 10-16, verbatim: «دبل تاپ و دبل باتم و سر و شانه رو از اون ۱۶
+    پترن کم بکن»). The pivots-only family is removed from the pattern set: those
+    shapes have no reliable near-break geometry on a live scanner, and their
+    necklines kept being published long after the move. The set the engines now
+    speak is the 13 live patterns in analysis.pattern_law (wedges, triangles,
+    channels, flags/pennants, rectangle, broadening) — each an edge-pair with
+    an auditable breakout side.
+
+    Kept (old payloads and call sites reference it) and returns an empty list,
+    so nothing can resurrect the trio.
+    """
+    return []
+
+
+def _detect_pivot_patterns_retired(df, atr: float) -> List[Dict]:
     out: List[Dict] = []
     try:
         if df is None or len(df) < 40 or atr <= 0:

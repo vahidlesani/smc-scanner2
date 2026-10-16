@@ -16,7 +16,7 @@ from analysis.candle_counts import fetch_limits
 from data.fetcher import get_market_bundle, get_klines
 
 OUT = "/home/user"
-TAG = "q20b" if "--banner" in sys.argv else "q20"
+TAG = os.environ.get("VIVA_RENDER_TAG") or ("q20b" if "--banner" in sys.argv else "q20")
 mode_spot = "--setup-only" not in sys.argv
 mode_setup = "--spot-only" not in sys.argv
 
@@ -64,6 +64,14 @@ if mode_setup:
         known = {f.name for f in dataclasses.fields(SignalCandidate)}
         cand = SignalCandidate(**{k: v for k, v in pl.items() if k in known})
         md.pop("snapshot_locked", None)
+        # R99q21: run the real restore path so the law re-stamp is exercised
+        # exactly as prod's confirmation turn does.
+        try:
+            from analysis.snapshot_lock import lock_render_geometry as _lrg21
+            cand.metadata = md
+            print(f"  [lock] {code}: {_lrg21(cand, frame=None)}")
+        except Exception as _e21:
+            print(f"  [lock] {code}: skipped ({_e21})")
         cand.metadata = md
         chart_tf = str(md.get("chart_view_tf") or tf).lower()
         bundle = get_market_bundle(sym, ("5m", "15m", "30m", "1h", "2h", "4h", "1d"),
@@ -73,6 +81,11 @@ if mode_setup:
             trig = get_klines(sym, tf, 400)
         cand.metadata["render_patterns"] = []
         enrich_render(cand, trig)
+        try:
+            from analysis.snapshot_lock import lock_render_geometry as _lrg21b
+            _lrg21b(cand, frame=trig)
+        except Exception as _e21b:
+            print(f"  [lock2] {code}: skipped ({_e21b})")
         if str(setup).upper() == "TECHCLASSIC":
             from analysis.techclassic import tc_refine_geometry
             tc_refine_geometry(cand, bundle)
@@ -85,7 +98,7 @@ if mode_setup:
         open(p, "wb").write(png or b"")
         md2 = cand.metadata
         print(f"{code} {sym:9s} {chart_tf:>3s} {str(setup):10s} "
-              f"patterns={[q.get('type') for q in (md2.get('render_patterns') or [])]} "
+              f"patterns={[(q.get('type'), q.get('law_slug'), q.get('near_break'), q.get('break_state')) for q in (md2.get('render_patterns') or [])]} "
               f"span={md2.get('tc_pattern_span') or md2.get('albrox_pattern_span') or 0} "
               f"{len(png or b'')//1024}KB -> {os.path.basename(p)}")
     cn.close()

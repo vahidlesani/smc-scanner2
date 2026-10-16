@@ -1356,25 +1356,16 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
             mark_ax.patch.set_alpha(0)
         except Exception as exc:
             print(f"Chart watermark warning: {exc}")
+    # ── R99q21 CENTRE-WATERMARK LAW (his 10-16 evening, verbatim: «ویوا سیگنالز
+    # پرو رو از وسطش بردار … واتر مارک وسط اسم خودم باشه»): the centre of every
+    # chart carries the AUTHOR's name — ONE mark, the faint logo behind it and
+    # «VAHID LESANI» over it, at the same size in spot and in setups (spot a
+    # touch bolder so it survives the spot chat's own compression).
     ax.text(
-        0.50, 0.50, CHART_BRAND_NAME.upper(), transform=ax.transAxes,
-        ha="center", va="center", fontsize=34, fontweight="bold",
-        color=CHART_THEME["text"], alpha=0.13, zorder=0,
+        0.50, 0.255, "VAHID LESANI", transform=ax.transAxes,
+        ha="center", va="center", fontsize=38, fontweight="bold",
+        color=CHART_THEME["text"], alpha=0.20, zorder=0,
     )
-    # ── R99q20 CREDIT LAW (his 10-16, verbatim: «در مورد واتر مارک وسط به نظرم
-    # اسم من واتر مارک بشه زیر لوگو بهتره .. اونجوری کسی نمیتونه زحمات من و تو
-    # رو بدزده .. مثلا زیر واتر مارک لوگو بزن VAHID LESANI»): the author's name
-    # sits UNDER the logo mark — letter-spaced, same faint watermark weight, so
-    # the whole signature is one mark that survives re-uploads.
-    try:
-        if str(os.getenv("VIVA_CREDIT_BANNER", "0") or "0").strip() in ("1", "true", "True"):
-            ax.text(
-                0.50, 0.295, "V A H I D   L E S A N I", transform=ax.transAxes,
-                ha="center", va="center", fontsize=17, fontweight="bold",
-                color=CHART_THEME["text"], alpha=0.16, zorder=0,
-            )
-    except Exception:
-        pass
     # (the in-axes bottom-right brand mark is GONE — Viva 09-23/24: the chart
     # showed TWO watermarks; the figure footer + the center mark are the brand)
 
@@ -5907,30 +5898,28 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             fontsize=8,
             va="center",
         )
-        # R99k: designer signature atop every futures chart (spot-v2
-        # parity) — above the title row so the setup sticker never collides.
-        # R99q20: his own gold credit banner replaces the plain text when
-        # VIVA_CREDIT_BANNER=1 («عکسی که دادم هم جای اسمم در جای فعلی قرار بده
-        # یعنی گوشهٔ بالای چارت»); until he approves it the text stays.
+        # R99k/R99q21: designer credit in the top-right corner. The framed
+        # gold banner of R99q20 is REMOVED (his 10-16: «اون عکسی که بهت داده
+        # بودم … عکس خوب نشد شلوغ شد») — the clean LOGO alone stands there now.
         _ban20 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
-                              "assets", "viva_credit_banner.png")
+                              "assets", "vivasignals-logo.png")
         _ban20_ok = False
-        if str(os.getenv("VIVA_CREDIT_BANNER", "0") or "0").strip() in ("1", "true", "True"):
-            try:
-                if os.path.isfile(_ban20):
-                    _bim = mpimg.imread(_ban20)
-                    _bh = float(os.getenv("VIVA_CREDIT_BANNER_H", "0.052") or 0.052)
-                    _bw = _bh * (float(_bim.shape[1]) / float(_bim.shape[0]))                         * (float(fig.get_figheight()) / float(fig.get_figwidth()))
-                    _bax = fig.add_axes([0.982 - _bw, 1.0 - _bh - 0.008, _bw, _bh],
-                                        zorder=30)
-                    _bax.imshow(_bim)
-                    _bax.axis("off")
-                    _ban20_ok = True
-            except Exception as _e20b:
-                print(f"credit banner warning: {_e20b}")
+        try:
+            if os.path.isfile(_ban20):
+                _bim = mpimg.imread(_ban20)
+                _bh = float(os.getenv("VIVA_CREDIT_LOGO_H", "0.055") or 0.055)
+                _bw = _bh * (float(_bim.shape[1]) / float(_bim.shape[0])) \
+                    * (float(fig.get_figheight()) / float(fig.get_figwidth()))
+                _bax = fig.add_axes([0.982 - _bw, 1.0 - _bh - 0.008, _bw, _bh],
+                                    zorder=30)
+                _bax.imshow(_bim)
+                _bax.axis("off")
+                _ban20_ok = True
+        except Exception as _e20b:
+            print(f"credit logo warning: {_e20b}")
         if not _ban20_ok:
             fig.text(
-                0.955, 0.978, "by: Vahid Lesani", color="#1F2328", fontsize=11,
+                0.955, 0.978, "VAHID LESANI", color="#1F2328", fontsize=11,
                 fontweight="bold", ha="right", va="center", zorder=30,
             )
         # ── Viva 09-21: «چرا چارت پینوال کیو استیکر بنام خودش نداره و بنام viva

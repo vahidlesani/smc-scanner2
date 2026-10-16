@@ -449,6 +449,55 @@ def extend_line_to_new_base(line: dict, df: pd.DataFrame, side: str):
         return line
 
 
+def _law_stamp(cmd: dict, df, upper, lower, replace_type: bool = False) -> dict:
+    """R99q21 — ONE reference law stamps EVERY drawn shape.
+
+    Viva 10-16: «شرایط درست تشخیص پترن‌ها در رندر یا انجین تشخیص پترن‌ها کد
+    نشده» — so no shape leaves this module without the law's own verdict: the
+    final slug, its bias, the breakout side it trades, and whether the pattern
+    is still actionable (near the break / at the start of it). Spot, setups and
+    the message layer read these fields instead of re-guessing from a name.
+    `replace_type=True` lets the law RENAME the old engine's label (the legacy
+    wedge/triangle ifs), while band/trendline commands keep their paint type
+    and carry the law verdict alongside as `law_slug`.
+    """
+    try:
+        from analysis.pattern_law import (pair_metrics as _pm, classify_pair as _cp,
+                                          near_break as _nb, bias_of as _bias,
+                                          break_side_of as _bs)
+        n = len(df)
+        meta: dict = {}
+        try:
+            slug = str(_cp(_pm(upper, lower, n, df=df), meta) or "")
+        except Exception:
+            slug = ""
+        if slug and slug != "NONE":
+            if replace_type:
+                cmd["type"] = slug
+            if str(cmd.get("type")) in ("TRENDLINE", "RANGE", "TRIANGLE", "NONE", ""):
+                cmd["law_slug"] = slug
+        _up, _lo = upper, lower
+        if _up is None and _lo is None:
+            _up = _lo = {"slope": 0.0, "intercept": float(df["close"].iloc[-1])}
+        elif _up is None:
+            _up = _lo
+        elif _lo is None:
+            _lo = _up
+        _ok, _info = _nb(_up, _lo, n, float(df["close"].iloc[-1]), _atr(df))
+        _key = str(cmd.get("law_slug") or cmd.get("type") or "")
+        cmd.update({
+            "law_bias": _bias(_key),
+            "break_side": _bs(_key),
+            "near_break": bool(_ok),
+            "break_state": (_info or {}).get("state"),
+            "dist_atr": (_info or {}).get("dist_atr"),
+            "law_why": (meta.get("why") or [])[:6],
+        })
+    except Exception as _exc:
+        print(f"law stamp warning: {_exc}")
+    return cmd
+
+
 def detect_patterns(df: pd.DataFrame, direction: str = "",
                     log_axis: Optional[bool] = None) -> List[Dict]:
     """Validated edge geometry + honest shape classification (doctrine:
@@ -654,7 +703,15 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                                or _c < min(_u, _l) - 4.0 * _a):
                     shape = "NONE"
             if shape not in ("NONE", ""):
-                out.append({"type": str(shape), "lines": [gu, gl]})
+                # ── R99q21 LAW STAMP (Viva 10-16: «شرایط درست تشخیص پترن‌ها
+                # … کد نشده»): every drawn shape carries the ONE reference
+                # law's own verdict — the final slug, its bias, its breakout
+                # side and whether the pattern is still actionable (near the
+                # break or freshly broken). Spot and the message layer read
+                # these fields instead of re-guessing from the name.
+                _cmd20 = _law_stamp({"type": str(shape), "lines": [gu, gl]},
+                                      df, _ns(gu), _ns(gl), replace_type=True)
+                out.append(_cmd20)
             else:
                 # No classified shape: BOTH lines still paint, each as its
                 # own TRENDLINE (CRV ruling 09-17: his two hand-drawn blue
@@ -664,9 +721,12 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                         continue
                     if _line_contradicts(_ln, _side, direction, df, sub=bool(getattr(_ln, 'child', False))):
                         continue
-                    out.append({"type": "TRENDLINE", "lines": [_ln]})
+                    out.append(_law_stamp({"type": "TRENDLINE", "lines": [_ln]},
+                                          df, _ns(_ln), None))
         elif gu is not None or gl is not None:
-            out.append({"type": "TRENDLINE", "lines": [gu if gu is not None else gl]})
+            _only = gu if gu is not None else gl
+            out.append(_law_stamp({"type": "TRENDLINE", "lines": [_only]},
+                                  df, _ns(_only), None))
         for _sub in (sub_u, sub_l):
             if _sub is not None:
                 # spec §13: child patterns paint thinner & lighter
@@ -828,9 +888,12 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                             if "timestamp" in df.columns else "")
                 except Exception:
                     _rts = ""
-                out.append({"type": "RANGE", "hi": rhi, "lo": rlo,
-                            "x0": int(max(0, _rx)), "ts0": _rts,
-                            **({"broken": _rect_brk} if _rect_brk else {})})
+                out.append(_law_stamp(
+                    {"type": "RANGE", "hi": rhi, "lo": rlo,
+                     "x0": int(max(0, _rx)), "ts0": _rts,
+                     **({"broken": _rect_brk} if _rect_brk else {})},
+                    df, {"slope": 0.0, "intercept": float(rhi)},
+                    {"slope": 0.0, "intercept": float(rlo)}))
     except Exception:
         pass
     # ── Viva 09-20 (his AAVE correction chart): three near-parallel descending
@@ -906,13 +969,25 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
             # vocabulary only, alert detection untouched this round.
             try:
                 # Viva Rule: Mini flag/pennants must NEVER conflict with or clutter major patterns!
-                _has_major_shape = any(p.get("type") in ("TRIANGLE", "WEDGE_FALLING", "WEDGE_RISING", "CHANNEL", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING") for p in out)
+                _MAJOR21 = ("TRIANGLE", "TRIANGLE_SYMMETRICAL", "TRIANGLE_ASCENDING",
+                            "TRIANGLE_DESCENDING", "WEDGE_FALLING", "WEDGE_RISING",
+                            "CHANNEL", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING",
+                            "CHANNEL_FLAT", "RECTANGLE", "BROADENING")
+                _has_major_shape = any(str(p.get("type")) in _MAJOR21 for p in out)
                 if not _has_major_shape:
                     from analysis.patterns16 import detect_flag_pennant as _dfp67
                     for _fp67 in _dfp67(df.reset_index(drop=True), _atr_p):
                         _neck67 = float(_fp67.get("neckline") or 0.0)
                         if abs(_neck67 - float(df["close"].iloc[-1])) > 4.0 * _atr_p:
                             continue
+                        # R99q21: the flag/pennant carries the SAME law verdict
+                        # as every other shape (its mini-channel pair is the
+                        # pair the law reads) — no shape ships without one.
+                        _fl67 = [x for x in (_fp67.get("lines") or []) if isinstance(x, dict)]
+                        if len(_fl67) >= 2:
+                            _fp67 = _law_stamp(_fp67, df, _fl67[0], _fl67[1])
+                        elif _fl67:
+                            _fp67 = _law_stamp(_fp67, df, _fl67[0], None)
                         out.append(_fp67)
                         break
             except Exception:
@@ -1025,6 +1100,20 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
     pats = detect_patterns(trigger_df.tail(_rw64),
                            getattr(candidate, "direction", ""),
                            log_axis=_log_axis)
+    # R99q21 NEAR-BREAK GATE (his 10-16: «پترن‌ها در ستاپ‌ها و اسپات هنوز هم
+    # گاهی گذشته مارکت هستند»): a pattern the law stamps `near_break=False`
+    # (FAR_INSIDE / STALE) is not drawn and not cited — past-market shapes were
+    # the single most repeated complaint in this round.
+    _pats_ungated21 = list(pats)      # the confirmation layer's own geometry
+    try:
+        from analysis.pattern_law import gate_patterns as _gate21
+        pats = _gate21(pats, tag=str(getattr(candidate, "signal_id", "") or ""))
+    except Exception as _e21g:
+        print(f"near-break gate warning: {_e21g}")
+    # The gate silences PATTERNS (nothing past-market is drawn or cited) — it
+    # must NEVER starve the confirmation/entry layer: `render_line_watch` (the
+    # calibrated projections the confirm turn reads) is built from the UNGATED
+    # set below, exactly as before this law.
     md["render_patterns"] = pats
     # ── R99q19 COORDINATE-SPACE TRUTH (his 10-16, verbatim: «چرا تکنوکلاسیک
     # هنوز حتی یک پترن درست نمی‌ده ؟؟ ترندلاین‌های ول از گذشته .. پترن رو
@@ -1129,7 +1218,7 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
          "p0": ((l.get("points") or [{}])[0] if (l.get("points") or []) else {}),
          "p1": ((l.get("points") or [{}])[-1] if (l.get("points") or []) else {}),
          "break_x": l.get("break_x")}
-        for pp in pats for l in (pp.get("lines") or [])][:4]
+        for pp in _pats_ungated21 for l in (pp.get("lines") or [])][:4]
     # Viva 09-18 (his CRV note): the higher-TF pattern must be ANNOUNCED on
     # the trigger chart — «وج باید در ۴ ساعته یا روزانه پیدا بشه و اعلام بشه».
     try:

@@ -33,8 +33,14 @@ def test_green_red_candles_default_with_ink_hatch():
 
 
 def test_designer_signature_atop_futures_charts():
-    # R99q (his 10-15): the signature now wears «by: » per his dictation
-    assert '"by: Vahid Lesani"' in _chart_region()
+    # R99q (his 10-15) put «by: Vahid Lesani» there as plain text; R99q21
+    # (his 10-16 evening: «اون عکسی که بهت داده بودم … عکس خوب نشد شلوغ شد»)
+    # replaced the framed banner with the clean LOGO in the same corner —
+    # name kept as the text fallback for hosts with no logo asset.
+    _r = _chart_region()
+    assert "vivasignals-logo.png" in _r
+    assert "VIVA_CREDIT_LOGO_H" in _r
+    assert "\"VAHID LESANI\"" in _r
 
 
 def test_price_axis_tags_colored_readable():

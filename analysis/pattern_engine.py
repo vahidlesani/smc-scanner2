@@ -292,113 +292,31 @@ def base_side_bonus(df: pd.DataFrame, price: float, direction: str) -> float:
 
 # ── geometry validity (the "reality" gate; fixes the screenshot bugs) ──────
 def classify_shape(upper, lower, n, df=None) -> str:
-    """Wedge-vs-triangle honest classifier: 'flat' only when TOTAL drift is
-    small vs pattern height (per-bar slope comparisons mislabel wedges).
+    """R99q21 — DELEGATES to the one reference law (analysis.pattern_law).
 
-    r61 HYPE law (Viva 09-30: «این الان کجاش رایزینگ وج هست؟؟ … اگر ضلع بالا
-    رسم بشه فالینگ وج هست»): a WEDGE_RISING claim must survive the TAIL test —
-    the upper edge's LAST segment (the one the eye reads) may not contradict
-    the window-OLS slope — and, when the frame is given, the ENTRY-SIDE test:
-    a converging both-slopes-up structure that price entered from ABOVE after
-    a vertical rally is a top being carved, never a rising wedge."""
-    from analysis.patterns16 import tail_slope as _ts61, entry_side as _es61
-    if upper is None and lower is None:
+    The old body was a long if-chain with per-case patches (HYPE/P2/P3/§29/§31/
+    r61...). Every lane had its own variant of that chain, which is exactly how
+    the same structure ended up FALLING_WEDGE on one chart and CHANNEL/TRIANGLE
+    on the next, and how wedges with a spent apex kept being published. The law
+    now lives in ONE auditable module with explicit numeric conditions and a
+    `why` trail per decision; this function is a thin adapter so every existing
+    caller keeps working.
+
+    `upper`/`lower` may be the fitter's Line (slope/first_index/price_at) or the
+    renderer's serialized dict — pattern_law reads both.
+    """
+    try:
+        from analysis.pattern_law import pair_metrics, classify_pair
+        m = pair_metrics(upper, lower, int(n), df=df)
+        meta: dict = {}
+        slug = classify_pair(m, meta)
+        try:
+            classify_shape.last_meta = meta
+        except Exception:
+            pass
+        return slug
+    except Exception:
         return "NONE"
-    if upper is None or lower is None:
-        return "TRENDLINE"
-    width_now = upper.price_at(n) - lower.price_at(n)
-    if width_now <= 0:
-        return "NONE"
-    start = max(upper.first_index, lower.first_index)
-    span = max(1, n - start)
-    drift_u = abs(upper.slope) * span
-    drift_l = abs(lower.slope) * span
-    width_then = upper.price_at(start) - lower.price_at(start)
-    # R62-ARENA (audit P1): «flat» is judged against the pattern HEIGHT (its
-    # widest point, E&M), not the width at the apex. Near the apex a converging
-    # pattern is thin, so the old width_now yardstick called every flat top a
-    # slope → ascending triangles were published as RISING WEDGES (bearish!).
-    height = max(float(width_now), float(width_then or 0.0))
-    flat_u = drift_u <= 0.12 * height
-    flat_l = drift_l <= 0.12 * height
-    # V3 §5/§29: contraction must be PROGRESSIVE, not an endpoint-noise
-    # artifact — the mid-span width has to sit clearly below the start width
-    # before any wedge/triangle claim. A true channel keeps width_mid ≈ width_then
-    # and can never flip to a wedge under small noise (his «کانال، وج شده» bug).
-    width_mid = upper.price_at(start + span // 2) - lower.price_at(start + span // 2)
-    converging = (width_then > 0 and width_now < 0.85 * width_then
-                  and width_mid < 0.97 * width_then)
-    # V3 §5 slope-delta evidence: a WEDGE claim needs the two fitted lines to
-    # genuinely APPROACH (Δdrift > 15% of the dominant drift). Noise-parallel
-    # fits (measured: channels Δ/max ≤ 0.09, real wedges ≥ 0.24) stay channels
-    # no matter what the noisy endpoint width suggests — this is the
-    # «کانال، وج شد» flip killer (same symbol, two charts, two labels).
-    if abs(drift_u - drift_l) <= 0.15 * max(drift_u, drift_l, 1e-12):
-        converging = False
-    # slope deadband: a drift under 2% of height over the span IS horizontal
-    tol = 0.02 * height / span
-    if not converging:
-        if width_then > 0 and width_now > 1.18 * width_then and upper.slope > tol and lower.slope < -tol:
-            return "BROADENING"          # E&M megaphone: both edges fan outward
-        # V3 §31: flat-top/flat-bottom triangles are judged BEFORE the channel
-        # branch (a slowly-descending triangle is NOT a descending channel)
-        flat_u25 = drift_u <= 0.25 * width_now
-        flat_l25 = drift_l <= 0.25 * width_now
-        if flat_u25 and not flat_l25 and lower.slope > tol:
-            return "TRIANGLE_ASCENDING"
-        if flat_l25 and not flat_u25 and upper.slope < -tol:
-            return "TRIANGLE_DESCENDING"
-        # V3 §29: a channel needs parallelism evidence — BOTH edges moving the
-        # same way. Opposing drifts that never converged are an honest triangle.
-        sgn_u = (upper.slope > tol) - (upper.slope < -tol)
-        sgn_l = (lower.slope > tol) - (lower.slope < -tol)
-        if sgn_u and sgn_l and sgn_u != sgn_l:
-            return "TRIANGLE"
-        # V3 §29: a channel needs BOTH edges meaningful — a one-slope shape is
-        # «نه کانال» (his sheets); it renders as two honest trendlines.
-        if (sgn_u == 0) != (sgn_l == 0):
-            return "TRIANGLE"
-        # V3 §29: a channel needs SIMILAR slopes («both lines rise with
-        # similar slope»). When one edge DOMINATES (drift > 2.2× the other)
-        # the pair is a triangle hugging a dominant line, not a parallel
-        # channel — measured live: SHIB 1H rising-bottom + mildly-rising top
-        # was labelled CHANNEL_ASCENDING and read wrong to the eye.
-        _span_c = max(1, int(n) - max(int(getattr(upper, "first_index", 0)),
-                                      int(getattr(lower, "first_index", 0))))
-        _du = abs(float(upper.slope)) * _span_c
-        _dl = abs(float(lower.slope)) * _span_c
-        if max(_du, _dl) > 2.2 * max(min(_du, _dl), 1e-12):
-            return "TRIANGLE"
-        sgn = sgn_u or sgn_l
-        return "CHANNEL_ASCENDING" if sgn > 0 else "CHANNEL_DESCENDING" if sgn < 0 else "CHANNEL_FLAT"
-    if flat_u and not flat_l and lower.slope > tol:
-        return "TRIANGLE_ASCENDING"
-    if flat_l and not flat_u and upper.slope < -tol:
-        return "TRIANGLE_DESCENDING"
-    if upper.slope < -tol < lower.slope:
-        return "TRIANGLE_SYMMETRICAL"
-    if upper.slope <= 0 and lower.slope <= 0:
-        return "WEDGE_FALLING"
-    if upper.slope >= 0 and lower.slope >= 0:
-        # r61 honest-tail + entry-side audit (docstring)
-        start = max(int(upper.first_index), int(lower.first_index))
-        tol_t = 0.025 * width_now / max(1, min(12, span))
-        tu = _ts61(upper.price_at, n, start)
-        tl = _ts61(lower.price_at, n, start)
-        # R62-ARENA (audit P2): the entry side is read against the band AT
-        # the pattern start (where price entered), not at the live bar.
-        es = _es61(df, start, float(upper.price_at(start)), float(lower.price_at(start))) \
-            if df is not None else "ANY"
-        if tu < -tol_t or es == "ABOVE":
-            # the upper edge price actually tests LATE is FALLING (or price
-            # came in from above) — «فالینگ وج» by the eye's honest edges
-            if tl < -tol_t:
-                return "WEDGE_FALLING"
-            if tl > tol_t:
-                return "TRIANGLE_SYMMETRICAL"
-            return "TRIANGLE_DESCENDING"
-        return "WEDGE_RISING"
-    return "TRIANGLE"
 
 
 def _line_alive(line, n) -> bool:
@@ -521,52 +439,26 @@ def fit_edge_line(df: pd.DataFrame, side: str, cfg, n: int):
 
 def _structural_refine(df: pd.DataFrame, line, side: str, n: int,
                        height: float, pattern: str, direction: str = ""):
-    """Edwards & Magee special formations layered on a validated FLAT line:
-    a swing that protrudes beyond the line between its first two touches is a
-    HEAD (H&S); a flat 3+ touch edge with no head is a multiple top/bottom.
-    Labels are informational — geometry and edge rules are untouched."""
-    try:
-        pts = [int(p.get("index", -1)) for p in (line.points or ())
-               if int(p.get("index", -1)) >= 0]
-        if len(pts) < 3 or height <= 0 or pts[-1] - pts[0] < 6:
-            return pattern, ""
-        if abs(float(line.slope)) * (pts[-1] - pts[0]) > 0.20 * height:
-            return pattern, ""           # not flat: wedge/triangle/channel stands
-        i0, i1 = pts[0], pts[1]
-        if side == "upper":
-            seg = df["high"].iloc[i0:i1 + 1].astype(float)
-            shoulder = max(float(df["high"].iloc[i0]), float(df["high"].iloc[i1]))
-            ext = float(seg.max()) if len(seg) else shoulder
-            protrude = ext - shoulder
-        else:
-            seg = df["low"].iloc[i0:i1 + 1].astype(float)
-            shoulder = min(float(df["low"].iloc[i0]), float(df["low"].iloc[i1]))
-            ext = float(seg.min()) if len(seg) else shoulder
-            protrude = shoulder - ext
-        if len(seg) >= 3 and protrude >= 0.25 * height:
-            # R64 (label bug, SOL 09-14 «SHORT INVERSE_HEAD_SHOULDERS»): the
-            # head label is bearish for H&S and bullish for its inverse — it
-            # may only ride an event whose direction IS that doctrine. The
-            # edge's own break goes the other way (an upper-edge break is a
-            # LONG, a lower-edge break a SHORT): that is a failed head /
-            # spring, never an H&S — the geometric name stands.
-            _d64 = str(direction or "").upper()
-            if _d64 and ((side == "upper" and _d64 != "SHORT")
-                         or (side != "upper" and _d64 != "LONG")):
-                return pattern, ""
-            if side == "upper":
-                return ("HEAD_SHOULDERS",
-                        "سر و شانه: سر ≥۲۵٪ِ ارتفاع بالاتر از خطِ شانه‌ها — "
-                        "تأییدِ کلاسیک با شکستِ خطِ گردن (ضلعِ مقابل) است")
-            return ("INVERSE_HEAD_SHOULDERS",
-                    "سر و شانه معکوس: سرِ عمیق‌تر از خطِ کف‌ها — "
-                    "تأییدِ کلاسیک با شکستِ خطِ گردن (ضلعِ مقابل) است")
-        if pattern in ("CHANNEL_FLAT", "HORIZONTAL_SR", "TRENDLINE"):
-            return ("TRIPLE_TOP" if side == "upper" else "TRIPLE_BOTTOM",
-                    "خطِ افقیِ ۳برخوردی — ادواردز/مجی: هر برخوردِ بیشتر، اعتبارِ بیشتر")
-        return pattern, ""
-    except Exception:
-        return pattern, ""
+    """R99q21 — RETIRED (Viva 10-16: «دبل تاپ و دبل باتم و سر و شانه رو از اون ۱۶
+    پترن کم بکن»).
+
+    This hook used to relabel a validated flat edge as HEAD_SHOULDERS /
+    INVERSE_HEAD_SHOULDERS / TRIPLE_TOP / TRIPLE_BOTTOM from pivot shape alone.
+    Those names then travelled into events, messages and charts while the
+    geometry underneath stayed a flat line — one of the ways a chart could show
+    «یه چیز دیگه» at confirmation. The event now keeps the GEOMETRIC name the
+    fitter validated (RECTANGLE / CHANNEL_* / TRENDLINE …), the same name the
+    render draws.
+
+    Kept (call sites unchanged) and returns the pattern as-is.
+    """
+    return pattern, ""
+
+
+def _structural_refine_retired(df: pd.DataFrame, line, side: str, n: int,
+                               height: float, pattern: str, direction: str = ""):
+    """The old pivot-shape relabel hook, kept for reference only."""
+    return pattern, ""
 
 
 def _flagpole_strength(df: pd.DataFrame, line, side: str, n: int,

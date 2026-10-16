@@ -25,6 +25,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+import os
 import pandas as pd
 
 SPOT_SHORT_TFS = ("4h", "8h")
@@ -1074,6 +1075,21 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                     continue
                 if str(pat.get("shape") or "single") in ("converging", "parallel") \
                         and len(_lns) < 2:
+                    continue
+                # ── R99q21 NEAR-BREAK LAW (Viva 10-16, verbatim: «حتما یادت باشه
+                # ما پترنی نیاز داریم که نزدیک به شکست باشه یا ابتدای شکست باشه ..
+                # پترن‌ها در ستاپ‌ها و اسپات هنوز هم گاهی گذشته مارکت هستند که
+                # هیچ فایده‌ای نداره»). A pattern whose breakout is long gone —
+                # price many ATR away, or a break older than the fresh window —
+                # is HISTORY: it may paint as context on a chart, but it may
+                # never become a spot alert. The state comes from the one
+                # reference law (pattern_law.near_break), not from a name list.
+                try:
+                    from analysis.pattern_law import near_break_gate_on as _nbgo21
+                    _gate21 = _nbgo21()
+                except Exception:
+                    _gate21 = True
+                if _gate21 and pat.get("near_break") is False:
                     continue
                 hit = _stage_for_pattern(pat, d, atr, n)
                 if not hit:

@@ -50,10 +50,14 @@ def test_similar_slopes_stay_a_channel():
 
 
 def test_channel_similarity_gate_is_in_source():
+    """R99q21: the §29 parallelism gate (a dominant edge pair is NOT a channel)
+    now lives in the ONE reference law — same door, audited numeric conditions
+    instead of a bare slope ratio."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    src = open(os.path.join(root, "analysis", "pattern_engine.py"),
+    src = open(os.path.join(root, "analysis", "pattern_law.py"),
                encoding="utf-8").read()
-    assert "2.2 * max(min(_du, _dl)" in src
+    assert "speed >= 0.62" in src
+    assert "drifts near-parallel" in src
     web = open(os.path.join(root, "bot", "messages_v7.py"), encoding="utf-8").read()
     # the chip fallback must consult the candle envelope before printing
     assert "_hi9[_a9:_b9] >= _y9" in web and "_lo9[_a9:_b9] <= _y9" in web

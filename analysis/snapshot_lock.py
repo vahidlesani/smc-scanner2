@@ -167,6 +167,45 @@ def lock_render_geometry(candidate, kv_get=None, kv_set=None, frame=None) -> str
         # drifted again. A snapshot missing a key that the CURRENT chart
         # just fitted is upgraded ONCE: the fresh fit is frozen into the
         # stored snapshot (from this update on the chain is immutable).
+        # ── R99q21 LAW RE-STAMP ON RESTORE (his 10-16, verbatim: «در برخی
+        # شناسه‌های یکتا دقت کن هشدار ابتدایی بصورت صحیح پترن رسم شده بوده
+        # الان در زمان تایید یه چیز دیگه میده یا اصلا پترنی وجود نداره»).
+        # A snapshot frozen BEFORE the pattern law carries bare labels
+        # (RANGE / TRENDLINE / old engine slugs) and NO verdict. On restore
+        # every stored pattern is re-judged by the SAME law the live lane
+        # uses — geometry untouched, only the verdict added — so the locked
+        # chart speaks the law's language (slug · bias · break side ·
+        # near-break) and can never contradict its own first alert.
+        try:
+            from analysis.render_kit import _law_stamp as _stamp21
+            _fr21 = frame if frame is not None else None
+            if _fr21 is not None and len(_fr21):
+                _pats21 = []
+                for _p21 in (md.get("render_patterns") or []):
+                    if not isinstance(_p21, dict):
+                        continue
+                    try:
+                        _ln21 = [x for x in (_p21.get("lines") or []) if isinstance(x, dict)]
+                        if len(_ln21) >= 2:
+                            _p21 = _stamp21(dict(_p21), _fr21, _ln21[0], _ln21[1])
+                        elif len(_ln21) == 1:
+                            _p21 = _stamp21(dict(_p21), _fr21, _ln21[0], None)
+                        elif _p21.get("hi") and _p21.get("lo"):
+                            _p21 = _stamp21(dict(_p21), _fr21,
+                                            {"slope": 0.0, "intercept": float(_p21["hi"])},
+                                            {"slope": 0.0, "intercept": float(_p21["lo"])})
+                    except Exception:
+                        pass
+                    _pats21.append(_p21)
+                if _pats21:
+                    try:
+                        from analysis.pattern_law import gate_patterns as _g21
+                        _pats21 = _g21(_pats21, tag=f"{sid} restore")
+                    except Exception:
+                        pass
+                    md["render_patterns"] = _pats21
+        except Exception as _e21:
+            print(f"R99q21 law re-stamp warning: {_e21}")
         for _k64 in ("viva_upper_points", "viva_lower_points",
                      "viva_retest_zone", "tc_projection", "tc_base",
                      "pattern_geo", "break_line_geo"):

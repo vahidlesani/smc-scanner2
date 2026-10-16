@@ -357,22 +357,28 @@ def test_head_shoulders_label_and_note():
     assert events[0]["direction"] == "LONG"
     assert events[0]["pattern"] != "HEAD_SHOULDERS"
     assert "گردن" not in (events[0].get("struct_note") or "")
+    # RETIRED (Viva 10-16): the pivot-shape relabel hook no longer rewrites a
+    # validated flat edge into H&S — the geometric name stands, everywhere.
     from analysis.pattern_engine import _structural_refine
     class _L:
         slope = 0.0
         points = tuple({"index": i} for i in (45, 105, 132))
     lab, note = _structural_refine(pat, _L(), "upper", len(pat) - 1, 20.0,
                                    "HORIZONTAL_SR", direction="SHORT")
-    assert lab == "HEAD_SHOULDERS" and "گردن" in note
+    assert lab == "HORIZONTAL_SR" and note == ""
 
 
 def test_triple_top_label():
+    """RETIRED (Viva 10-16): a flat 3-touch edge keeps its GEOMETRIC name — the
+    informational TRIPLE_TOP/HEAD_SHOULDERS relabel is gone, so the event label
+    and the drawn geometry can no longer disagree."""
     m = _mod()
     pat, trig = _flat_frames()
     events = [e for e in m.scan_edges(pat, trig, "4h") if e["side"] == "upper"]
-    assert events and events[0]["pattern"] == "TRIPLE_TOP"
-
-
+    assert events
+    assert events[0]["pattern"] not in ("TRIPLE_TOP", "TRIPLE_BOTTOM",
+                                        "DOUBLE_TOP", "DOUBLE_BOTTOM",
+                                        "HEAD_SHOULDERS", "INV_HEAD_SHOULDERS")
 def test_flag_relabels_small_channel_after_pole():
     m = _mod()
     pat, trig = _flat_frames(l0=95.0, extra=[(35, 70.0)])
