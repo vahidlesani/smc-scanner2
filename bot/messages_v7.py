@@ -2612,6 +2612,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         return None
     _cfm73 = bool(confirmed or preconfirm_tool)  # 10-10 READY-mode: a pre-confirm chart draws confirm-grade tools
     candidate = _final_stop_guard(candidate)
+    # ── R99q19: the ALERT'S OWN geometry, snapshotted BEFORE any enrichment —
+    # the later safety net (and the window refit) may write detected patterns
+    # into the metadata mid-render; "the alert's own edges" must mean only what
+    # the chain carried when the picture was asked for.
+    try:
+        _alert_geo99q19 = list((getattr(candidate, "metadata", None) or {}
+                                ).get("render_patterns") or [])
+    except Exception:
+        _alert_geo99q19 = []
     # Persian labels (setup notes, spot charts) must shape correctly; the font
     # is bundled in assets/fonts and registered once per process.
     try:
@@ -3645,6 +3654,32 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
 
         _draw_pats = _dedupe_draw_patterns(
             _draw_pats, frame, float((frame["high"] - frame["low"]).tail(14).mean()))
+        # ── R99q19 EXACT-TWIN DROP (his 10-16 DASH 4H: the SAME triangle was
+        # stored three times — identical type, identical line commands — and
+        # painted three times). The painter draws a shape once per geometry;
+        # detection/setups are untouched (this is a canvas rule).
+        try:
+            _seen19 = set()
+            _uniq19 = []
+            for _p19 in _draw_pats:
+                try:
+                    _sig19 = (str(_p19.get("type") or _p19.get("name") or "").upper(),
+                              tuple(sorted(
+                                  (str(L.get("side") or "").upper(),
+                                   int(L.get("x0") or 0), int(L.get("x1") or 0),
+                                   round(float(L.get("slope") or 0.0), 10),
+                                   round(float(L.get("intercept") or 0.0), 6))
+                                  for L in (_p19.get("lines") or []) if isinstance(L, dict))))
+                except Exception:
+                    _sig19 = None
+                if _sig19 is not None and _sig19 in _seen19:
+                    continue
+                if _sig19 is not None:
+                    _seen19.add(_sig19)
+                _uniq19.append(_p19)
+            _draw_pats = _uniq19
+        except Exception:
+            pass
 
         for _pat in _draw_pats:
             if _pat.get("type") == "RANGE":
@@ -4705,6 +4740,41 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     except Exception:
                         return False
                     return False
+                def _wild_line9(_mode, _sl, _ic, _fr, _sides):
+                    """R99q19 WILD-LINE GATE (his 10-16: «ترندلاین‌های ول از گذشته»).
+
+                    A fitted edge must live near the tape WHERE IT IS DRAWN. The
+                    test is LOCAL: at each end of the drawn segment, the line's
+                    value is compared with the candle envelope of that stretch
+                    (±20 bars) plus 2 ATR. The global envelope was not enough —
+                    his DASH 4H carried a hull that started 25 points (18 ATR)
+                    above the local highs while still passing the whole-window
+                    check, because an older peak sat inside the frame.
+                    The alert's OWN pattern lines never come through here: this
+                    gate guards the fitted fallbacks only.
+                    """
+                    try:
+                        _n9 = int(count)
+                        _a9 = float((_fr["high"] - _fr["low"]).tail(14).mean() or 0.0)
+                        if _a9 <= 0:
+                            return False
+                        _hi = _fr["high"].to_numpy(dtype=float)
+                        _lo = _fr["low"].to_numpy(dtype=float)
+                        for _x9 in (int(max(0, _sides)), _n9):
+                            _i0 = max(0, _x9 - 20)
+                            _i1 = min(len(_hi), _x9 + 21)
+                            if _i1 <= _i0:
+                                continue
+                            _lv = float(_hi[_i0:_i1].max())
+                            _ll = float(_lo[_i0:_i1].min())
+                            _y9 = (10 ** (_sl * _x9 + _ic)) if _mode == "log" \
+                                else (_sl * _x9 + _ic)
+                            if _y9 > _lv + 2.0 * _a9 or _y9 < _ll - 2.0 * _a9:
+                                return True
+                    except Exception:
+                        return False
+                    return False
+
                 _up0 = md.get("viva_upper_points") or []
                 _lo0 = md.get("viva_lower_points") or []
                 # r51 (Viva 09-27): on a chart TF whose window predates the
@@ -4783,11 +4853,34 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         _y_prev9 = None
                     if _covered9(key, _y_now9, _y_prev9):
                         continue
+                    if _wild_line9(_mode9, slope, intercept, frame, min(xs)):
+                        continue
                     _fits9[key] = (xs, ys, _mode9, slope, intercept, color, label)
                 # r613 ZONE-LANE GUARANTEE: a zone-lane chain with NO stored
                 # edges fits BOTH sides on this frame as real family-colored
                 # edges («یک ترند میکشه بالایی رو نمیکشه»).
-                if str(md.get("strategy_variant")) == "ALBROX_ZONE" and not _fits9:
+                # ── R99q19 NO-INVENTED-EDGE (his 10-16, verbatim: «ترندلاین‌های
+                # ول از گذشته .. زوم اشتباه .. پترن رو نمی‌شناسه»). This fallback
+                # fitted a hull on BOTH sides whenever the chain had no stored
+                # viva points — even when the pattern painter had ALREADY drawn
+                # the alert's own edges — and painted the hull HEAVY (lw 2.3,
+                # solid, family color) as if it were the traded edge. On his
+                # DASH 4H that added a red 73→48 line 36 ATR above the tape; on
+                # NEAR/XLM/AAVE it added pairs that converge at the live bar.
+                # Two locks now: (1) never when this canvas already paints the
+                # alert's own pattern lines; (2) the fitted line must live NEAR
+                # the tape at the live bar (ALBROX's own 2.5-ATR far-single law)
+                # — remotely-placed hulls are context that was never spoken.
+                # (the check reads the ALERT'S OWN stored set — the canvas may
+                # also carry REFITTED shells, and a zone-lane chain whose alert
+                # carried no geometry must still gain its two edges, R613.)
+                _painted99q19 = any(
+                    (L.get("side") or "")
+                    for _p in _alert_geo99q19
+                    if isinstance(_p, dict)
+                    for L in (_p.get("lines") or []) if isinstance(L, dict))
+                if (str(md.get("strategy_variant")) == "ALBROX_ZONE" and not _fits9
+                        and not _painted99q19):
                     for _sd9, _ky9, _cl9c, _lb9 in (
                             ("HIGH", "viva_upper_points", CHART_THEME["supply"], "VALID UPPER LINE"),
                             ("LOW", "viva_lower_points", CHART_THEME["demand"], "VALID LOWER LINE")):
@@ -4800,6 +4893,20 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                 or max(_xs9) - min(_xs9) < 1e-9:
                             continue
                         _m9, _s9, _b9 = _pivot_line_fit(ax, frame, _xs9, _ys9)
+                        # ── R99q19 WILD HULL = CONTEXT (not silence, not a bold
+                        # line). R613 keeps BOTH edges on a zone-lane canvas
+                        # («یک ترند میکشه بالایی رو نمیکشه»); his 10-16 verdict
+                        # forbids a wild fitted line reading as the trade edge.
+                        # A hull leaving the LOCAL tape by >2 ATR paints in the
+                        # muted refit weight (· REFIT): visible context, never a
+                        # trade line. (The earlier far-at-live test is retired —
+                        # a steep channel legitimately ends several ATR under its
+                        # last swing high; the LOCAL envelope is the honest test.)
+                        if _wild_line9(_m9, _s9, _b9, frame, min(_xs9)):
+                            _fits9[_ky9] = (_xs9, _ys9, _m9, _s9, _b9,
+                                            CHART_THEME.get("muted", _cl9c),
+                                            (_lb9 + " · REFIT"))
+                            continue
                         _fits9[_ky9] = (_xs9, _ys9, _m9, _s9, _b9, _cl9c, _lb9)
                 # r613 SHELL GUARANTEE: a one-sided stored set gains the
                 # missing side as a MUTED refit (DOT/LTC/ETHFI one-sided).

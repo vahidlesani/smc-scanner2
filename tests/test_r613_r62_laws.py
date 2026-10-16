@@ -96,17 +96,26 @@ def test_broken_leg_dashes_through_live(monkeypatch):
 # ── 2. zone lane with no stored points → BOTH edges ─────────────────────────
 
 def test_zone_lane_gets_both_edges(monkeypatch):
+    """R613 «یک ترند میکشه بالایی رو نمیکشه» — the zone-lane canvas carries BOTH
+    edges. R99q19 refinement (his 10-16 «ترندلاین‌های ول از گذشته»): an edge
+    whose FIT leaves the local tape by >2 ATR paints as muted context (· REFIT)
+    instead of reading as the trade line — but it is still on the canvas."""
     tape = _tape()
     cand = _cand(tape, variant="ALBROX_ZONE", status="EDUCATIONAL")
     ax = _capture(monkeypatch, tape, cand)
     supply, demand = M.CHART_THEME["supply"], M.CHART_THEME["demand"]
+    muted = M.CHART_THEME["muted"]
 
-    def _solid(col):
-        return [ln for ln in ax.lines if ln.get_color() == col
-                and ln.get_linestyle() == "-" and ln.get_linewidth() >= 1.5]
+    def _long(colors, min_lw=0.0):
+        return [ln for ln in ax.lines if ln.get_color() in colors
+                and ln.get_linestyle() == "-"
+                and (ln.get_linewidth() or 0) >= min_lw
+                and max(ln.get_xdata()) - min(ln.get_xdata()) >= 8]
 
-    assert _solid(supply), "no upper edge fitted"
-    assert _solid(demand), "no lower edge fitted"
+    assert _long((supply, muted)), "no upper edge fitted"
+    assert _long((demand, muted)), "no lower edge fitted"
+    # an edge that IS near the tape stays at trade weight in its own hue
+    assert _long((demand,), min_lw=1.5) or _long((supply,), min_lw=1.5)
 
 
 # ── 3. TP rows stop at TP3 ──────────────────────────────────────────────────

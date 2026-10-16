@@ -952,6 +952,41 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
     return out[:4]
 
 
+def pattern_live_index(md, bundle=None, tf=None, pats=None) -> int:
+    """R99q19 — the live bar index **in the PATTERN's own coordinate space**.
+
+    The render patterns are fitted on a tail window (render_count) and carry
+    x coords in THAT space; every validator that judged them against the full
+    frame's length silently dropped 100 % of the sloped geometry (his TC
+    «حتی یک پترن درست نمی‌ده»). The fit frame length is stamped by
+    `enrich_render` (`pattern_frame_bars`); legacy chains without it fall back
+    to the longest stored x1 — still the pattern's space — and only then to
+    the bundle frame.
+    """
+    try:
+        _fb = int((md or {}).get("pattern_frame_bars") or 0)
+        if _fb > 0:
+            return _fb - 1
+    except Exception:
+        pass
+    try:
+        _xs = [int(L.get("x1") or 0) for _p in (pats or ())
+               if isinstance(_p, dict)
+               for L in (_p.get("lines") or []) if isinstance(L, dict)]
+        if _xs:
+            return max(_xs)
+    except Exception:
+        pass
+    try:
+        if bundle is not None and tf:
+            _fr = bundle.get(tf)
+            if _fr is not None and len(_fr):
+                return int(len(_fr)) - 1
+    except Exception:
+        pass
+    return 0
+
+
 def enrich_render(candidate, trigger_df: pd.DataFrame,
                   htf_df: Optional[pd.DataFrame] = None):
     """THE order-to-render call every setup makes: zones + patterns of the
@@ -985,6 +1020,20 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
                            getattr(candidate, "direction", ""),
                            log_axis=_log_axis)
     md["render_patterns"] = pats
+    # ── R99q19 COORDINATE-SPACE TRUTH (his 10-16, verbatim: «چرا تکنوکلاسیک
+    # هنوز حتی یک پترن درست نمی‌ده ؟؟ ترندلاین‌های ول از گذشته .. پترن رو
+    # نمی‌شناسه»). These patterns are FITTED ON tail(_rw64) — their x coords
+    # live in that window's index space. The setup validators (TC/ALBROX)
+    # compared them with the FULL trigger frame's live index (LIT 1h: 340-bar
+    # frame vs 205-bar fit window) so EVERY sloped pattern failed
+    # «stale-end» and was thrown away; only the RANGE band survived, and the
+    # chart then invented lines from a hull refit. The fit frame is stamped
+    # here so every validator measures in the space the geometry was born in.
+    try:
+        md["pattern_frame_bars"] = int(len(trigger_df.tail(_rw64)))
+        md["pattern_frame_offset"] = int(max(0, len(trigger_df) - _rw64))
+    except Exception:
+        pass
     # broken legs need a TIME for their break bar too: on a higher display TF
     # a bare bar index would land the break marker on the wrong candle.
     try:

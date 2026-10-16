@@ -266,6 +266,10 @@ def tc_candles_for(tf, pattern_span, pattern=None):
         _fam = str(pattern or "").upper()
         if any(_k in _fam for _k in _TC_LINE_FAMILIES):
             _base = _span + 2 * _pad
+        # R99q19 note: the per-TF ceiling stays the R99q9 law (15m→160, 4h→200
+        # …). The zoom bug was never the cap — it was pattern_span collapsing
+        # to 0 because the validators dropped every sloped pattern; with the
+        # span real (LIT 1h: 168) the frame reaches 170 = the cap honestly.
         return max(_candle_floor(), min(_cap, _base))
     except Exception:
         return 120
@@ -342,13 +346,26 @@ def tc_validate_pattern(pat, label_family, live_idx, tf):
         return (False, "bad-coords", None)
     if _live and max(_x1s) < _live - 6:
         return (False, "stale-end", None)  # R4: must reach live
-    _cap = TC_MAX_ANCHOR_SPAN.get(str(tf or "").lower(), 96)
-    if _live and (_live - min(_x0s)) > _cap:
-        return (False, "ancient-anchor", None)  # R2: the long-trash law
     try:
         _touches = sum(len(L.get("points") or []) for L in _lines)
     except Exception:
         _touches = 0
+    # R99q19 (his 10-16: «چرا تکنوکلاسیک حتی یک پترن درست نمی‌ده .. ترندلاین‌های
+    # ول از گذشته .. زوم اشتباه»): the anchor cap used to be a fixed 72 bars on
+    # 1h / 48 on 4h, so a REAL 7-day falling wedge on 4 pivots died as
+    # «ancient-anchor» — while his own candle law says the frame's ceiling
+    # follows the shape («سقفش با توجه شکل و نوع پترن، تایم‌فریم و ترندلاین»).
+    # A multi-edge shape standing on ≥3 pivots now earns the TF's own legal
+    # picture cap (_TC_FRAME_CAP); single lines and under-touched junk keep the
+    # tight cap, so the long-trash law still kills the 1000-bar relics.
+    _cap = TC_MAX_ANCHOR_SPAN.get(str(tf or "").lower(), 96)
+    try:
+        if (_tc_fam(_t) in _TC_MULTI_EDGE and len(_lines) >= 2 and _touches >= 3):
+            _cap = max(_cap, int(_TC_FRAME_CAP.get(str(tf or "").lower(), _cap)))
+    except Exception:
+        pass
+    if _live and (_live - min(_x0s)) > _cap:
+        return (False, "ancient-anchor", None)  # R2: the long-trash law
     if _touches == 0 and (max(_x1s) - min(_x0s)) < 20:
         return (False, "empty-noise", None)  # R5
     if _tc_fam(_t) in _TC_MULTI_EDGE and len(_lines) >= 2 and _touches < 3:
@@ -358,7 +375,17 @@ def tc_validate_pattern(pat, label_family, live_idx, tf):
         if label_family and _tc_fam(_t) != str(label_family).upper():
             if len(_lines) == 1:
                 return (True, "relabel-trendline", "TRENDLINE")
-            return (False, "label-mismatch", None)  # R1: drawn==label
+            # R99q19 (his 10-16: «از پترن‌ها فقط فالینگ وج رو گاهی درست می‌کشن
+            # بقیه پترن‌ها رو انگار اصلا نمی‌شناسن»): a TWO-line shape standing on
+            # ≥3 real pivots is a pattern the tape actually shows — killing it
+            # for a naming difference (TC says CHANNEL_ASCENDING, the shared
+            # descriptor fits WEDGE_FALLING on this frame) left the canvas with
+            # NO geometry and the painter then invented hull lines. The shape is
+            # KEPT and honestly relabeled to its own geometry family; the
+            # pill/label then follows the drawn type (display keys only —
+            # confirm/entry logic untouched). Under-touched two-liners keep
+            # dying above as «under-touched».
+            return (True, "relabel-shape", _t if _t.endswith(tuple("0123456789")) is False else _t)
         if len(_lines) < 2:
             return (True, "relabel-trendline", "TRENDLINE")  # R3 honest single
     return (True, "ok", None)
@@ -372,22 +399,15 @@ def tc_refine_geometry(candidate, bundle=None):
             return candidate
         _pats = list(md.get("render_patterns") or [])
         _tf = str(getattr(candidate, "trigger_timeframe", "") or "").lower()
-        _live = 0
+        # R99q19: the live bar index in the PATTERN's coordinate space (the fit
+        # window stamped by render_kit) — never the full frame's length, which
+        # made every sloped pattern look «stale» and killed the whole set.
         try:
-            if bundle is not None:
-                _fr = bundle.get(getattr(candidate, "trigger_timeframe", ""))
-                if _fr is not None and len(_fr):
-                    _live = len(_fr) - 1
+            from analysis.render_kit import pattern_live_index as _pli19
+            _live = int(_pli19(md, bundle, str(getattr(candidate, "trigger_timeframe", "")
+                                               or ""), _pats) or 0)
         except Exception:
             _live = 0
-        if not _live:
-            try:
-                _live = max(int(L.get("x1") or 0)
-                            for _p in _pats if isinstance(_p, dict)
-                            for L in (_p.get("lines") or [])
-                            if isinstance(L, dict))
-            except Exception:
-                _live = 0
         _label = str(md.get("tl_pattern") or md.get("pattern_type") or "")
         _fam = _label.split("_")[0].upper() if _label else ""
         _kept, _dropped, _spans = [], [], []
@@ -438,6 +458,13 @@ def tc_refine_geometry(candidate, bundle=None):
         md["tc_owned"] = True
         md["tc_refined"] = True
         md["tc_dropped"] = _dropped
+        try:
+            if __import__("os").getenv("VIVA_TC_DEBUG"):
+                print(f"[tc19] live={_live} label={_label!r} kept="
+                      f"{[(q.get('type'), [(L.get('side'), L.get('x0'), L.get('x1'), len(L.get('points') or [])) for L in (q.get('lines') or [])]) for q in _kept]} "
+                      f"dropped={_dropped} span={md.get('tc_pattern_span')}")
+        except Exception:
+            pass
         return candidate
     except Exception as _exc:
         try:

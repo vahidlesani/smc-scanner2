@@ -50,6 +50,10 @@ def albrox_candles_for(tf, pattern_span, pattern=None):
         _fam = str(pattern or "").upper()
         if any(_k in _fam for _k in _ALBROX_LINE_FAMILIES):
             _base = _span + 2 * _pad        # ترندلاین/کانال ⇒ قاب پرتر
+        # R99q19 note: the per-TF ceiling stays the R99q9 law (15m→160, 4h→200
+        # …). The zoom bug was never the cap — it was pattern_span collapsing
+        # to 0 because the validators dropped every sloped pattern; with the
+        # span real (LIT 1h: 168) the frame reaches 170 = the cap honestly.
         return max(_candle_floor(), min(_cap, _base))
     except Exception:
         return 120
@@ -297,7 +301,7 @@ def albrox_select_patterns(patterns, live_idx, live_price=None, atr=None):
         except Exception:
             continue
         if _live and _x1 < _live - 48:
-            continue  # stale
+            continue  # stale (R99q19: _live is now the pattern-space live bar)
         if _touches == 0 and (_x1 - _x0) < 20:
             continue  # empty noise
         if len(_lines) == 1 and not _p.get("pivots_ts"):
@@ -340,22 +344,16 @@ def albrox_refine_geometry(candidate, bundle=None):
         if not isinstance(md, dict):
             return candidate
         _pats = list(md.get("render_patterns") or [])
-        _live = 0
+        # R99q19: the live index in the PATTERN's own coordinate space (the fit
+        # window stamped by render_kit) — the full-frame length made every
+        # sloped pattern fail the staleness test and dropped the whole set
+        # (his 10-16: «ترندلاین‌های ول از گذشته .. پترن رو نمی‌شناسه»).
         try:
-            if bundle is not None:
-                _fr = bundle.get(getattr(candidate, "trigger_timeframe", ""))
-                if _fr is not None and len(_fr):
-                    _live = len(_fr) - 1
+            from analysis.render_kit import pattern_live_index as _pli19
+            _live = int(_pli19(md, bundle, str(getattr(candidate, "trigger_timeframe", "")
+                                               or ""), _pats) or 0)
         except Exception:
             _live = 0
-        if not _live:
-            try:
-                _live = max(int(L.get("x1") or 0)
-                            for _p in _pats if isinstance(_p, dict)
-                            for L in (_p.get("lines") or [])
-                            if isinstance(L, dict))
-            except Exception:
-                _live = 0
         _live_px99p, _atr99p = None, None
         try:
             if bundle is not None:
