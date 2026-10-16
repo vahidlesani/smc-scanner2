@@ -55,8 +55,18 @@ BASKET = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "DOGEUSDT",
           "TIAUSDT", "ZROUSDT", "HYPEUSDT", "AEROUSDT")
 
 
+#: a sheet may be filled by an equivalent slug (the RANGE box IS the rectangle)
+ALIASES = {"RECTANGLE": {"RECTANGLE", "CHANNEL_FLAT", "RANGE"},
+           "CHANNEL_FLAT": {"CHANNEL_FLAT", "RANGE", "RECTANGLE"}}
+
+
 def slug_of(p: dict) -> str:
     return str(p.get("law_slug") or p.get("type") or "").upper()
+
+
+def matches(p: dict, target: str) -> bool:
+    slug = slug_of(p)
+    return slug == target or slug in ALIASES.get(target, set())
 
 
 def state_rank(s: str) -> int:
@@ -112,8 +122,9 @@ def db_samples(target: str):
         except Exception as exc:
             print(f"    db row {sid[:28]} failed: {exc}")
             continue
-        all_slugs = {slug_of(p) for p in (md.get("pattern_law_all") or md.get("render_patterns") or [])}
-        if target not in all_slugs:
+        _judged = [p for p in (md.get("pattern_law_all") or md.get("render_patterns") or [])
+                   if isinstance(p, dict)]
+        if not any(matches(p, target) for p in _judged):
             continue
         chart_tf = str(md.get("chart_view_tf") or tf).lower()
         df = get_klines(sym, chart_tf, 400)
@@ -144,7 +155,7 @@ def live_sample(target: str):
             except Exception:
                 continue
             for p in pats:
-                if slug_of(p) != target:
+                if not matches(p, target):
                     continue
                 st = str(p.get("break_state") or "")
                 score = (state_rank(st), 0 if p.get("lines_extended") else 1)
@@ -248,7 +259,30 @@ def compose(chart_png: bytes, slug: str, sample_tag: str, extra: dict) -> str:
     return path
 
 
+def build_index():
+    paths = sorted(p for p in (os.path.join(OUT, f) for f in os.listdir(OUT))
+                   if p.endswith(".png") and "index" not in os.path.basename(p))
+    if len(paths) < 2:
+        return None
+    cols, tw = 3, 520
+    thumbs = [Image.open(p) for p in paths]
+    scaled = [t.resize((tw, int(t.height * tw / t.width))) for t in thumbs]
+    th = max(s.height for s in scaled)
+    rows = (len(scaled) + cols - 1) // cols
+    sheet = Image.new("RGB", (cols * (tw + 10) + 10, rows * (th + 10) + 10),
+                      (245, 245, 245))
+    for i, s2 in enumerate(scaled):
+        sheet.paste(s2, (10 + (i % cols) * (tw + 10), 10 + (i // cols) * (th + 10)))
+    idx = os.path.join(OUT, "q22refs_index.png")
+    sheet.save(idx)
+    print(f"index -> {idx} ({len(paths)} sheets)")
+    return idx
+
+
 def main():
+    if "--index-only" in sys.argv:
+        build_index()
+        return
     targets = ONLY or [k for k in PATTERN_LAW
                        if k not in ("NONE", "TRENDLINE")][:14]
     made = []
@@ -261,14 +295,25 @@ def main():
         cand, df, tag = got[0]
         md = cand.metadata or {}
         pats = md.get("pattern_law_all") or md.get("render_patterns") or []
-        hit = next((p for p in pats if slug_of(p) == slug), {})
+        hit = next((p for p in pats if matches(p, slug)), {})
         try:
             png = B7.generate_chart(df, cand, confirmed=False)
         except Exception as exc:
             print(f"   render failed: {exc}")
-            continue
+            png = None
         if not png:
-            print("   render returned nothing")
+            # a dead exchange feed (Bybit 403 on that symbol) must not cost the
+            # sheet — fall back to a live sample from the scan basket
+            print("   render returned nothing from that sample — falling back")
+            alt = live_sample(slug)
+            if alt:
+                cand, df, tag = alt[0]
+                md = cand.metadata or {}
+                pats = md.get("pattern_law_all") or md.get("render_patterns") or []
+                hit = next((p for p in pats if matches(p, slug)), {})
+                png = B7.generate_chart(df, cand, confirmed=False)
+        if not png:
+            print("   no render for this pattern")
             continue
         path = compose(png, slug, tag,
                        {"state": hit.get("select_state") or hit.get("break_state"),
@@ -276,20 +321,8 @@ def main():
                         "why": (hit.get("select_why") or "")[:90]})
         print(f"   -> {os.path.basename(path)}")
         made.append(path)
-    if len(made) > 2:
-        cols = 3
-        thumbs = [Image.open(p) for p in made]
-        tw = 520
-        scaled = [t.resize((tw, int(t.height * tw / t.width))) for t in thumbs]
-        th = max(s.height for s in scaled)
-        rows = (len(scaled) + cols - 1) // cols
-        sheet = Image.new("RGB", (cols * (tw + 10) + 10, rows * (th + 10) + 10),
-                          (245, 245, 245))
-        for i, s in enumerate(scaled):
-            sheet.paste(s, (10 + (i % cols) * (tw + 10), 10 + (i // cols) * (th + 10)))
-        idx = os.path.join(OUT, "q22refs_index.png")
-        sheet.save(idx)
-        print(f"index -> {idx} ({len(made)} sheets)")
+    if made:
+        build_index()
 
 
 if __name__ == "__main__":
