@@ -638,6 +638,66 @@ def sync_labels(md: dict, pats=None) -> str:
     return slug
 
 
+def setup_gate_on() -> bool:
+    """Per-engine law gate (his 10-16: «انجین‌های ستاپ‌ها هم جدا جدا تصحیح بکن»).
+    `VIVA_SETUP_LAW_GATE=0` switches it off."""
+    return str(os.getenv("VIVA_SETUP_LAW_GATE", "1") or "1").strip().lower() \
+        not in ("0", "false", "off", "no")
+
+
+_CONTEXT_ONLY = ("RANGE", "TRENDLINE", "NONE", "")
+
+
+def real_shapes(pats) -> list:
+    """The patterns a chart can be ABOUT — the context band and a lone
+    trendline are geometry, not a pattern."""
+    out = []
+    for p in (pats or []):
+        if not isinstance(p, dict):
+            continue
+        slug = str(p.get("law_slug") or p.get("type") or "").upper()
+        if slug and slug not in _CONTEXT_ONLY:
+            out.append(p)
+    return out
+
+
+def setup_gate(md: dict, setup_code: str = "") -> tuple:
+    """R99q21 ENGINE-BY-ENGINE GATE (phase 1: the presence + freshness law).
+
+      TECHCLASSIC : a pattern is REQUIRED — a bare band/trendline is not a TC
+                    setup (his «حتی یک پترن درست نمی‌ده» + the XRP/JUP rows that
+                    announced a pattern and drew none).
+      TLBREAK     : the traded edge must be near its break (or freshly broken);
+                    a broken-long-ago edge is history, not a trade.
+      PINVAL / ALBROX / others: a pattern is optional (zone / candle-window
+                    engines) — but CITING a pattern that is not drawn, or that is
+                    past-market, vetoes the candidate.
+
+    Returns (ok, reason). Env: VIVA_SETUP_LAW_GATE (default 1).
+    """
+    if not isinstance(md, dict) or not setup_gate_on():
+        return True, "OFF"
+    code = str(setup_code or md.get("setup_code") or "").upper()
+    pats = real_shapes(md.get("render_patterns"))
+    cited = str(md.get("pattern_type") or md.get("viva_pattern") or "").upper()
+    cited_real = bool(cited) and cited not in _CONTEXT_ONLY and cited not in RETIRED_PATTERNS
+    if not pats:
+        if cited_real:
+            return False, f"CITED-NOT-DRAWN:{cited}"
+        if code == "TECHCLASSIC":
+            return False, "TC-NO-PATTERN"
+        return True, "NO-SHAPE-OK"
+    fresh = [p for p in pats if p.get("near_break") is not False]
+    if not fresh:
+        return False, "PAST-MARKET:" + ",".join(
+            f"{p.get('law_slug') or p.get('type')}/{p.get('break_state')}" for p in pats[:3])
+    if cited_real and all(
+            str(p.get("law_slug") or p.get("type") or "").upper() != cited for p in pats):
+        # the cited engine name is nowhere on the canvas — the law renamed it
+        return True, f"RENAMED:{cited}->{dominant_slug(pats)}"
+    return True, "OK"
+
+
 def near_break_gate_on() -> bool:
     """The gate is ON by default (his 10-16: «پترن‌ها در ستاپ‌ها و اسپات هنوز هم
     گاهی گذشته مارکت هستند») — `VIVA_NEAR_BREAK_GATE=0` switches it off."""
