@@ -148,3 +148,38 @@ def test_the_gate_never_starves_the_confirmation_watch():
                             "analysis", "render_kit.py"), encoding="utf-8").read()
     assert "_pats_ungated21" in src and "render_line_watch" in src
     assert "for pp in _pats_ungated21" in src
+
+
+# ─────────── ONE NAME (the 10-16 audit on his own unique ids) ───────────
+def test_the_three_label_sources_collapse_into_one():
+    """On his own ids the same chart was announced as CHANNEL_ASCENDING (setup
+    engine), drawn as RANGE (renderer pill) and confirmed as a third name.
+    After the law, every label key carries the LAW's dominant drawn slug."""
+    from analysis.pattern_law import sync_labels
+    md = {"pattern_type": "CHANNEL_ASCENDING", "tl_pattern": "RANGE",
+          "render_htf_pattern": "RANGE", "viva_pattern": "RANGE",
+          "render_patterns": [{"type": "RANGE", "law_slug": "CHANNEL_FLAT",
+                               "near_break": True},
+                              {"type": "WEDGE_FALLING", "near_break": True}]}
+    assert sync_labels(md, md["render_patterns"]) == "WEDGE_FALLING"
+    for k in ("pattern_type", "tl_pattern", "render_htf_pattern", "viva_pattern"):
+        assert md[k] == "WEDGE_FALLING", f"{k} still disagrees"
+    assert md["pattern_label_fa"] == "گوه نزولی"
+
+
+def test_a_past_market_shape_never_gets_to_name_the_chart():
+    from analysis.pattern_law import sync_labels
+    md = {"pattern_type": "", "tl_pattern": "",
+          "render_patterns": [{"type": "WEDGE_FALLING", "near_break": False,
+                               "break_state": "STALE"},
+                              {"type": "RANGE", "law_slug": "CHANNEL_FLAT",
+                               "near_break": True}]}
+    assert sync_labels(md, md["render_patterns"]) == "CHANNEL_FLAT"
+
+
+def test_the_database_audit_tool_exists_and_reports_drift():
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "ops", "diag", "_q21_audit.py")
+    assert os.path.isfile(path), "the unique-id drift audit must be re-runnable"
+    src = open(path, encoding="utf-8").read()
+    assert "pattern_type" in src and "tl_pattern" in src and "DRIFT" in src

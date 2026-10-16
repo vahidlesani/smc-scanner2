@@ -204,6 +204,11 @@ def lock_render_geometry(candidate, kv_get=None, kv_set=None, frame=None) -> str
                     except Exception:
                         pass
                     md["render_patterns"] = _pats21
+                    try:
+                        from analysis.pattern_law import sync_labels as _s21
+                        _s21(md, _pats21)
+                    except Exception:
+                        pass
         except Exception as _e21:
             print(f"R99q21 law re-stamp warning: {_e21}")
         for _k64 in ("viva_upper_points", "viva_lower_points",

@@ -1115,6 +1115,14 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
     # calibrated projections the confirm turn reads) is built from the UNGATED
     # set below, exactly as before this law.
     md["render_patterns"] = pats
+    # R99q21 ONE NAME (his 10-16: the same unique id was announced as one
+    # pattern and confirmed as another): every label key is set from the law's
+    # dominant drawn slug, never from three different detectors.
+    try:
+        from analysis.pattern_law import sync_labels as _sync21
+        _sync21(md, pats)
+    except Exception as _e21s:
+        print(f"label sync warning: {_e21s}")
     # ── R99q19 COORDINATE-SPACE TRUTH (his 10-16, verbatim: «چرا تکنوکلاسیک
     # هنوز حتی یک پترن درست نمی‌ده ؟؟ ترندلاین‌های ول از گذشته .. پترن رو
     # نمی‌شناسه»). These patterns are FITTED ON tail(_rw64) — their x coords

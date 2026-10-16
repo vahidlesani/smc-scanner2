@@ -571,6 +571,73 @@ def label_fa(slug: str) -> str:
     return str(d.get("fa")) if d else k.replace("_", " ")
 
 
+LABEL_KEYS = ("pattern_type", "tl_pattern", "render_htf_pattern", "viva_pattern")
+
+# the label the message layer should cite: the TRADEABLE shape first, the
+# context band last (a chart with a wedge AND a range box is a WEDGE chart).
+_LABEL_RANK = ("WEDGE_FALLING", "WEDGE_RISING", "TRIANGLE_ASCENDING",
+               "TRIANGLE_DESCENDING", "TRIANGLE_SYMMETRICAL", "CHANNEL_ASCENDING",
+               "CHANNEL_DESCENDING", "FLAG_BULL", "FLAG_BEAR", "PENNANT_BULL",
+               "PENNANT_BEAR", "BROADENING", "RECTANGLE", "CHANNEL_FLAT",
+               "TRIANGLE", "TRENDLINE", "RANGE")
+
+
+def label_sync_on() -> bool:
+    return str(os.getenv("VIVA_LAW_LABEL_SYNC", "1") or "1").strip().lower() \
+        not in ("0", "false", "off", "no")
+
+
+def dominant_slug(pats) -> str:
+    """The one pattern a chart is ABOUT (tradeable shapes beat context bands)."""
+    best, best_rank = "", len(_LABEL_RANK) + 5
+    for p in (pats or []):
+        if not isinstance(p, dict):
+            continue
+        slug = str(p.get("law_slug") or p.get("type") or "").upper()
+        if not slug:
+            continue
+        if slug in RETIRED_PATTERNS:
+            continue
+        rank = _LABEL_RANK.index(slug) if slug in _LABEL_RANK else len(_LABEL_RANK)
+        if p.get("near_break") is False:
+            rank += len(_LABEL_RANK)          # a past-market shape never leads
+        if rank < best_rank:
+            best, best_rank = slug, rank
+    return best
+
+
+def sync_labels(md: dict, pats=None) -> str:
+    """ONE chart, ONE pattern name (his 10-16 audit finding: on his own unique
+    ids the first alert named one pattern, «tl_pattern» named another and the
+    confirmation a third — «در زمان تایید یه چیز دیگه میده»).
+
+    Every label key the pipeline reads (setup engine's `pattern_type`, the
+    renderer's `tl_pattern` / `render_htf_pattern`, the legacy `viva_pattern`)
+    is set from the LAW's dominant slug of what is actually drawn.
+    """
+    if not isinstance(md, dict) or not label_sync_on():
+        return ""
+    try:
+        slug = dominant_slug(pats if pats is not None
+                             else (md.get("render_patterns") or []))
+    except Exception:
+        slug = ""
+    if not slug:
+        return ""
+    _keys = LABEL_KEYS
+    _env = str(os.getenv("VIVA_LAW_LABEL_KEYS") or "").strip()
+    if _env:
+        _keys = tuple(x.strip().upper() for x in _env.split(",") if x.strip())
+    for k in _keys:
+        if k in md or k in ("pattern_type", "tl_pattern"):
+            md[k] = slug
+    try:
+        md["pattern_label_fa"] = label_fa(slug)
+    except Exception:
+        pass
+    return slug
+
+
 def near_break_gate_on() -> bool:
     """The gate is ON by default (his 10-16: «پترن‌ها در ستاپ‌ها و اسپات هنوز هم
     گاهی گذشته مارکت هستند») — `VIVA_NEAR_BREAK_GATE=0` switches it off."""

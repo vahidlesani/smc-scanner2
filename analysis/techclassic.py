@@ -455,6 +455,15 @@ def tc_refine_geometry(candidate, bundle=None):
                 md["render_htf_pattern"] = _drawn
                 md["tc_label_was"] = _label
                 md["tl_pattern"] = _drawn
+            # R99q21 ONE NAME: the setup engine's own `pattern_type` was minted
+            # by a DIFFERENT detector than the drawn geometry — on his LIT id it
+            # said CHANNEL_ASCENDING while the chart drew a falling wedge and
+            # the pill said RANGE. The law decides now (all keys = one slug).
+            try:
+                from analysis.pattern_law import sync_labels as _sync21
+                _sync21(md, _kept)
+            except Exception as _e21t:
+                print(f"tc label sync warning: {_e21t}")
         md["tc_owned"] = True
         md["tc_refined"] = True
         md["tc_dropped"] = _dropped

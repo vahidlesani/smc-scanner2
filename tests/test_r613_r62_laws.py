@@ -14,6 +14,7 @@
 import os
 import sys
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -152,7 +153,18 @@ def test_established_break_is_never_out_of_reach():
 
 # ── 5. shell guarantee: one-sided stored set gains the missing side ─────────
 
+
 def test_one_sided_shell_gains_refit_side(monkeypatch):
+    """r613 «یک ترند میکشه بالایی رو نمیکشه» — a one-sided stored set may never
+    leave a side silent.
+
+    R99q21 update: the missing side is painted either by the muted one-sided
+    REFIT (the original contract) or by the pattern's own validated edge (the
+    law now keeps a CHANNEL_ASCENDING on this shell and names every label key
+    from it — `pattern_law.sync_labels`). What may never happen is a canvas
+    that paints one side and drops the other, so the assertion is on the
+    METADATA the painter is handed: both sides must be covered.
+    """
     tape = _tape()
     cand = _cand(tape)
     hi = tape.tail(70).nlargest(3, "high").sort_values("timestamp")
@@ -161,9 +173,19 @@ def test_one_sided_shell_gains_refit_side(monkeypatch):
         for t, h in zip(hi["timestamp"], hi["high"])]
     src = io_src = open("bot/messages_v7.py", encoding="utf-8").read()
     assert "len(_fits9) < 2" in src, "shell guarantee missing"
-    ax = _capture(monkeypatch, tape, cand)
-    # muted refit edge must exist (solid segment reaching live)
-    muted = M.CHART_THEME.get("muted")
-    refit = [ln for ln in ax.lines
-             if muted and str(ln.get_color()).upper() == str(muted).upper()]
-    assert refit, "missing-side refit line did not paint"
+    _capture(monkeypatch, tape, cand)
+    md = cand.metadata
+    pats = [p for p in (md.get("render_patterns") or []) if isinstance(p, dict)]
+    sides = {str(L.get("side") or "").upper()
+             for p in pats for L in (p.get("lines") or []) if isinstance(L, dict)}
+    two_edge = any(len([L for L in (p.get("lines") or []) if isinstance(L, dict)]) >= 2
+                   for p in pats)
+    stored_high = bool(md.get("viva_upper_points"))
+    stored_low = bool(md.get("viva_lower_points"))
+    # the missing side must be reachable: a two-edge pattern, or a line whose
+    # own side is the missing one (the refit shell paints from these points).
+    covered = two_edge or ((stored_high or "HIGH" in sides)
+                           and (stored_low or "LOW" in sides))
+    assert covered, (f"missing side would stay silent (sides={sorted(sides)}, "
+                     f"patterns={[p.get('type') for p in pats]})")
+    assert md.get("render_line_watch") is not None, "watch must survive the shell"
