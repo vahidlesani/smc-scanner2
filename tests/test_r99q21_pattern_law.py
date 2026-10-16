@@ -183,3 +183,51 @@ def test_the_database_audit_tool_exists_and_reports_drift():
     assert os.path.isfile(path), "the unique-id drift audit must be re-runnable"
     src = open(path, encoding="utf-8").read()
     assert "pattern_type" in src and "tl_pattern" in src and "DRIFT" in src
+
+
+# ───────────── per-engine gate (enforced at the publish boundary) ─────────────
+def test_setup_gate_blocks_a_cited_pattern_that_is_not_drawn():
+    from analysis.pattern_law import setup_gate
+    md = {"pattern_type": "WEDGE_FALLING", "render_patterns": [
+        {"type": "TRENDLINE"}, {"type": "RANGE", "law_slug": "CHANNEL_FLAT"}]}
+    ok, why = setup_gate(md, "TECHCLASSIC")
+    assert not ok and why.startswith("CITED-NOT-DRAWN")
+
+
+def test_setup_gate_blocks_a_past_market_story():
+    from analysis.pattern_law import setup_gate
+    md = {"pattern_type": "WEDGE_FALLING", "render_patterns": [
+        {"type": "WEDGE_FALLING", "near_break": False, "break_state": "STALE",
+         "dist_atr": 5.2}]}
+    ok, why = setup_gate(md, "TECHCLASSIC")
+    assert not ok and why.startswith("PAST-MARKET")
+
+
+def test_zone_engines_may_trade_without_a_pattern_but_not_on_a_stale_one():
+    from analysis.pattern_law import setup_gate
+    empty = {"render_patterns": [{"type": "RANGE", "law_slug": "CHANNEL_FLAT",
+                                  "near_break": True}]}
+    assert setup_gate(empty, "PINVAL")[0] is True       # zone lane: no pattern OK
+    assert setup_gate(empty, "ALBROX")[0] is True
+    stale = {"render_patterns": [{"type": "CHANNEL_DESCENDING", "near_break": False,
+                                  "break_state": "STALE"}]}
+    assert setup_gate(stale, "ALBROX")[0] is False
+
+
+def test_the_gate_is_enforced_when_a_setup_is_published():
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "bot", "messages_v7.py"), encoding="utf-8").read()
+    i = src.index("def send_setup_update(")
+    j = src.index("def ", i + 10)
+    assert "setup_gate" in src[i:j], "the publish boundary must run the law"
+    assert "NOT published" in src[i:j]
+
+
+def test_the_engines_themselves_are_not_silenced():
+    """The gate lives at the boundary — the detectors must still build and
+    measure candidates (silencing them inside the engines killed five
+    calibration tests)."""
+    for rel in ("analysis/setups_experimental.py", "analysis/setups_v7.py"):
+        src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                rel), encoding="utf-8").read()
+        assert "setup_gate" not in src, f"{rel} must not run the publish gate"

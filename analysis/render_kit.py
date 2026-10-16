@@ -1114,6 +1114,13 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
     # must NEVER starve the confirmation/entry layer: `render_line_watch` (the
     # calibrated projections the confirm turn reads) is built from the UNGATED
     # set below, exactly as before this law.
+    # every judged shape (drawn or gated out) is kept here so the ENGINE gate
+    # can tell «this setup stands on a past-market pattern» from «this setup
+    # never had one» — the chart stays clean, the engines stay honest.
+    try:
+        md["pattern_law_all"] = [dict(p) for p in _pats_ungated21 if isinstance(p, dict)]
+    except Exception:
+        md["pattern_law_all"] = []
     md["render_patterns"] = pats
     # R99q21 ONE NAME (his 10-16: the same unique id was announced as one
     # pattern and confirmed as another): every label key is set from the law's

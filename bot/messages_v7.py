@@ -6924,6 +6924,28 @@ def send_setup_update(candidate: SignalCandidate, chart_df=None,
     permanent detailed alert). Every newer update EDITS the same message; a
     chain never accumulates more than one — Viva's «آپدیت جدید با آپدیت قبلی
     جایگزین میشه» rule. Carries the live chart like every other message."""
+    # ── R99q21 ENGINE-BY-ENGINE LAW GATE (his 10-16: «انجین‌های ستاپ‌ها هم جدا
+    # جدا تصحیح بکن») — enforced at the PUBLISH boundary: a setup may not go out
+    # citing a pattern that is not drawn, nor stand on a breakout that is long
+    # past («پترن‌ها هنوز هم گاهی گذشته مارکت هستند»). TECHCLASSIC must carry a
+    # real pattern at all; the zone/candle engines (PINVAL · ALBROX · TLBREAK)
+    # may trade without a pattern, but never on a past-market story.
+    # (Enforced here, NOT inside the detectors: the engines must still be able
+    # to measure/calibrate a candidate that never gets published.)
+    try:
+        from analysis.pattern_law import setup_gate as _sg21s
+        _ok21s, _why21s = _sg21s(candidate.metadata or {},
+                                 getattr(candidate, "setup_code", ""))
+        try:
+            (candidate.metadata or {})["law_gate"] = _why21s
+        except Exception:
+            pass
+        if not _ok21s:
+            print(f"R99q21 setup gate {getattr(candidate, 'setup_code', '?')}: "
+                  f"{_why21s} — NOT published")
+            return False
+    except Exception as _e21s:
+        print(f"setup gate warning: {_e21s}")
     target = CHAT_ID_EXECUTION or CHAT_ID_ADMIN
     edu_chat = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
     chain = _setup_chain_get(candidate)

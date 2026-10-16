@@ -1098,21 +1098,6 @@ def _base_candidate(
         enrich_render(_cand, trigger_df, htf_df=context_df)
     except Exception as exc:
         print(f"render kit warning {setup_code}: {exc}")
-    # ── R99q21 ENGINE-BY-ENGINE LAW GATE (his 10-16: «انجین‌های ستاپ‌ها هم جدا
-    # جدا تصحیح بکن»): a setup may not cite a pattern that is not drawn, and may
-    # not stand on a pattern whose breakout is long past. TECHCLASSIC needs a
-    # real pattern at all; zone engines may trade without one but never with a
-    # past-market story.
-    try:
-        from analysis.pattern_law import setup_gate as _sg21
-        _ok21, _why21 = _sg21(_cand.metadata or {}, _cand.setup_code)
-        (_cand.metadata or {})["law_gate"] = _why21
-        if not _ok21:
-            print(f"R99q21 setup gate {setup_code}: {_why21} — candidate dropped")
-            return None
-        print(f"R99q21 setup gate {setup_code}: {_why21}")
-    except Exception as _e21g:
-        print(f"setup gate warning: {_e21g}")
     # continuation doctrine: mid-box / wrong-edge candidates do not trade —
     # EXCEPT the break/watch streams, which ARE the doctrine's own trigger
     # (break + first close = entry; watch = the warning itself)

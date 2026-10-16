@@ -555,9 +555,15 @@ def near_break(upper, lower, n: int, close: float, atr: float,
         if inside:
             info["state"] = "FAR_INSIDE"
             return False, info
-        # outside the band: only a fresh break keeps it alive
+        # outside the band: a fresh break keeps it alive — and so does a
+        # RETEST (price back hugging the edge it broke; his «ابتدای شکست»
+        # includes the first retest, and a 0.4-ATR retest is not «گذشته
+        # مارکت» — only a pattern that price has LEFT far behind is).
         if break_age is not None and 0 <= break_age <= fresh_bars:
             info["state"] = "FRESH_BREAK"
+            return True, info
+        if min(du, dl) <= 1.0:
+            info["state"] = "RETEST"
             return True, info
         info["state"] = "STALE"
         return False, info
@@ -678,13 +684,18 @@ def setup_gate(md: dict, setup_code: str = "") -> tuple:
     if not isinstance(md, dict) or not setup_gate_on():
         return True, "OFF"
     code = str(setup_code or md.get("setup_code") or "").upper()
-    pats = real_shapes(md.get("render_patterns"))
+    # judge on EVERY shape the law saw (drawn or gated out) — the engine must
+    # not be silenced by the display gate that removed the pattern it cites.
+    _all = md.get("pattern_law_all") or md.get("render_patterns")
+    pats = real_shapes(_all)
+    drawn = real_shapes(md.get("render_patterns"))
     cited = str(md.get("pattern_type") or md.get("viva_pattern") or "").upper()
     cited_real = bool(cited) and cited not in _CONTEXT_ONLY and cited not in RETIRED_PATTERNS
     if not pats:
         if cited_real:
+            # it announced a pattern the law cannot draw for it
             return False, f"CITED-NOT-DRAWN:{cited}"
-        if code == "TECHCLASSIC":
+        if code == "TECHCLASSIC" and not drawn and not cited:
             return False, "TC-NO-PATTERN"
         return True, "NO-SHAPE-OK"
     fresh = [p for p in pats if p.get("near_break") is not False]
@@ -693,7 +704,11 @@ def setup_gate(md: dict, setup_code: str = "") -> tuple:
             f"{p.get('law_slug') or p.get('type')}/{p.get('break_state')}" for p in pats[:3])
     if cited_real and all(
             str(p.get("law_slug") or p.get("type") or "").upper() != cited for p in pats):
-        # the cited engine name is nowhere on the canvas — the law renamed it
+        # the cited engine name is nowhere on the canvas: TECHCLASSIC's whole
+        # premise is that named pattern (his «حتی یک پترن درست نمی‌ده») → block;
+        # a zone/candle engine is only CITING it → allow, renamed by the law.
+        if code == "TECHCLASSIC":
+            return False, f"CITED-NOT-DRAWN:{cited}"
         return True, f"RENAMED:{cited}->{dominant_slug(pats)}"
     return True, "OK"
 
