@@ -39,8 +39,10 @@ def test_spot_chart_trims_to_scan_window_before_live_row(monkeypatch):
     from analysis.spot_engine import _spot_count
     seen = {}
 
-    def fake_render(df, a, path=None, symbol="", stage=""):
+    def fake_render(df, a, path=None, symbol="", stage="", title=""):
+        # R99q18: the spot call now also carries the ALERT's own pattern title
         seen["n"] = len(df)
+        seen["title"] = title
         seen["last_ts"] = pd.Timestamp(df["timestamp"].iloc[-1])
         return b"PNG" * 400
 
@@ -61,8 +63,9 @@ def test_spot_chart_keeps_short_frames_untouched(monkeypatch):
     import bot.messages_v7 as M
     seen = {}
 
-    def fake_render(df, a, path=None, symbol="", stage=""):
+    def fake_render(df, a, path=None, symbol="", stage="", title=""):
         seen["n"] = len(df)
+        seen["title"] = title
         return b"PNG" * 400
 
     monkeypatch.setattr("tools.render_spot_cryptocove.render", fake_render)
@@ -79,8 +82,9 @@ def test_futures_chart_frame_untouched(monkeypatch):
     import bot.messages_v7 as M
     seen = {}
 
-    def fake_render(df, a, path=None, symbol="", stage=""):
+    def fake_render(df, a, path=None, symbol="", stage="", title=""):
         seen["n"] = len(df)
+        seen["title"] = title
         return b"PNG" * 400
 
     # futures path renders elsewhere; spot renderer must NOT be reached and
@@ -95,3 +99,37 @@ def test_futures_chart_frame_untouched(monkeypatch):
     except Exception:
         pass
     assert "n" not in seen   # spot renderer never called for futures
+
+
+def test_spot_alert_geometry_never_calls_the_second_engine(monkeypatch):
+    """R99q18 (his 10-16: «هندسه خرابه … تشخیص پترن»): when the candidate
+    carries its own render commands, the chart is built from THEM and the
+    second engine is never consulted — a broken/throwing engine cannot
+    change the picture or the title."""
+    import bot.messages_v7 as M
+    seen = {}
+
+    def fake_render(df, a, path=None, symbol="", stage="", title=""):
+        seen["a"] = a
+        seen["title"] = title
+        return b"PNG" * 400
+
+    def boom(*a, **kw):
+        raise AssertionError("engine_spot.analyze must not run for a geometry alert")
+
+    monkeypatch.setattr("tools.render_spot_cryptocove.render", fake_render)
+    monkeypatch.setattr("analysis.engine_spot.analyze", boom)
+    monkeypatch.setattr(M, "_frame_with_live_candle", lambda df, c: (df, None))
+    monkeypatch.setattr(M, "_chart_cache_get", lambda k: None)
+    monkeypatch.setattr(M, "_chart_cache_set", lambda k, v: None)
+    c = _cand(spot=True)
+    c.metadata = {**c.metadata, "pattern_type": "DOUBLE_BOTTOM",
+                  "spot_alert_stage": "TOUCH", "spot_alert_side": "HIGH",
+                  "render_patterns": [{"type": "DOUBLE_BOTTOM", "lines": [
+                      {"side": "HIGH", "log_fit": False, "slope": 0.0,
+                       "intercept": 100.0, "x0": 5, "x1": 100,
+                       "points": [{"ts": "2026-06-01 00:00:00", "price": 100.0},
+                                  {"ts": "2026-06-20 00:00:00", "price": 100.0}]}]}]}
+    assert M.generate_chart(_df(300), c, confirmed=False) is not None
+    assert seen["title"] == "Double Bottom"
+    assert seen["a"]["level"] == 100.0          # the alert's own line, not a refit

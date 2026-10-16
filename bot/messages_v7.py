@@ -2467,6 +2467,140 @@ def _count_incanvas_sloped_lines(fig) -> int:
         return -1
 
 
+def _spot_alert_view(candidate: SignalCandidate, df: pd.DataFrame, tf: str):
+    """R99q18 — THE SPOT CHART DRAWS THE ALERT'S OWN PATTERN.
+
+    Viva 10-16 (verbatim): «در تایم‌فریم‌های اسپات بیشترشون هم هندسه خرابه هم
+    توضیحات هم تشخیص پترن هم زوم خرابه هم ارتفاع ۷۲ درصد رعایت نشده». Root cause:
+    the spot chart was re-detected by a SECOND engine (`engine_spot.analyze`),
+    while the message spoke the LADDER's pattern — so a chart could announce a
+    «Descending Channel» under a «کف دویل» alert, with geometry from neither the
+    alert nor its stage. The chart now renders the alert's own render commands
+    (the same lines the detection engine judged), and the stage decides whether a
+    target box exists at all (his law: باکس فقط برای شکست).
+
+    Returns the renderer's `a` dict, or None when the alert carries no geometry
+    (then the legacy engine path still runs — no regression, only a fallback).
+    """
+    try:
+        md = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+        rps = [p for p in (md.get("render_patterns") or []) if isinstance(p, dict)]
+        lines = []
+        for p in rps:
+            for L in (p.get("lines") or []):
+                if isinstance(L, dict):
+                    lines.append(L)
+        if not lines:
+            return None
+        from analysis.render_kit import line_y as _ly18
+        import pandas as _pd18
+        try:
+            _stamps = _pd18.to_datetime(df["timestamp"])
+        except Exception:
+            _stamps = None
+
+        def _row_of(_ts):
+            try:
+                if _stamps is None or _ts in (None, ""):
+                    return None
+                _t = _pd18.Timestamp(str(_ts))
+                _i = int(_stamps.searchsorted(_t))
+                return _i if 0 <= _i < len(df) else None
+            except Exception:
+                return None
+
+        class _CmdLine:
+            """The renderer's Line contract over a stored render command."""
+
+            def __init__(self, cmd, side):
+                self._c = cmd
+                self.side = side
+                _xs = []
+                for _q in (cmd.get("points") or []):
+                    try:
+                        _r = _row_of(_q.get("ts") or _q.get("timestamp"))
+                        if _r is not None:
+                            _xs.append(_r)
+                    except Exception:
+                        pass
+                _x0c = None
+                try:
+                    _x0c = int(cmd.get("x0")) if cmd.get("x0") is not None else None
+                except Exception:
+                    _x0c = None
+                self.touches = tuple(sorted(set(_xs)))
+                self.first_index = (min(_xs) if _xs
+                                    else (_x0c if _x0c is not None else 0))
+                self._x1c = None
+                try:
+                    self._x1c = int(cmd.get("x1")) if cmd.get("x1") is not None else None
+                except Exception:
+                    self._x1c = None
+                self.slope = float(cmd.get("slope") or 0.0)
+                self.intercept = float(cmd.get("intercept") or 0.0)
+
+            def price_at(self, x):
+                return float(_ly18(self._c, x))
+
+            def at(self, x):
+                try:
+                    return math.log(max(self.price_at(x), 1e-12))
+                except Exception:
+                    return 0.0
+
+        _up = _lo = None
+        for L in lines:
+            _side = str(L.get("side") or "").upper()
+            _is_up = _side in ("HIGH", "UPPER", "")
+            if _is_up and _up is None:
+                _up = _CmdLine(L, "HIGH")
+            elif (not _is_up) and _lo is None:
+                _lo = _CmdLine(L, "LOW")
+        if _up is None and _lo is None:
+            return None
+        _stage18 = str(md.get("spot_alert_stage") or "").upper()
+        _side18 = str(md.get("spot_alert_side") or "").upper()
+        _status18 = {"BREAK_UP": "BREAK_UP_CLOSED", "BREAK_DOWN": "BREAK_DOWN_CLOSED",
+                     "CONFIRM": "BREAK_UP_CLOSED"}.get(_stage18, "INSIDE")
+        edge18 = "UPPER" if _side18 in ("HIGH", "UPPER") else (
+            "LOWER" if _side18 in ("LOW", "LOWER") else
+            ("UPPER" if str(getattr(candidate, "direction", "")).upper() == "LONG" else "LOWER"))
+        _edge_ln = _up if edge18 == "UPPER" else _lo
+        if _edge_ln is None:
+            _edge_ln = _up or _lo
+            edge18 = "UPPER" if _edge_ln is _up else "LOWER"
+        _n18 = len(df) - 1
+        try:
+            _lvl18 = float(_edge_ln.price_at(_n18))
+        except Exception:
+            _lvl18 = float(getattr(candidate, "planned_entry", 0) or 0.0)
+        _top18 = float(md.get("spot_box_top") or 0.0)
+        _x0s = [ln.first_index for ln in (_up, _lo) if ln is not None]
+        return {
+            "engine": "SPOT", "tf": tf,
+            "slug": str(md.get("pattern_type") or ""),
+            "name_slug": str(md.get("pattern_type") or ""),
+            "kind": "two_line",
+            "upper": _up, "lower": _lo, "neckline": None,
+            "x0": (min(_x0s) if _x0s else 0),
+            "x1": _n18,
+            "entry_side": edge18,
+            "direction": "UP" if str(getattr(candidate, "direction", "")).upper() == "LONG" else "DOWN",
+            "breakout": {"edge": edge18, "status": _status18,
+                         "quality": "OK", "event_index": None},
+            "level": _lvl18,
+            # his box law: باکس فقط برای شکست — a TOUCH/INSIDE stage must not
+            # pass a target at all, or the renderer's box_drawn would paint a
+            # break box under a TOUCH title.
+            "target": (_top18 if (_top18 > _lvl18 and _status18 != "INSIDE") else None),
+            "atr": float(md.get("atr") or 0.0),
+            "alert_stage": _stage18,
+        }
+    except Exception as _e18:
+        print(f"spot alert view skipped: {_e18}")
+        return None
+
+
 def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool = False, preconfirm_tool: bool = False) -> Optional[bytes]:
     # r61 CHART-DIET LAW (Viva 09-30: «چارت رو از اپلیکیشن فعلا حذف بکن ببینم
     # مصرف ریلوی پایینتر میاد»): one gate for every render in the product.
@@ -2530,16 +2664,26 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # قربانی نمی‌شود). رندرِ قدیمیِ spot_pattern_engine از مسیر حذف شد.
         try:
             from analysis import engine_spot as _es2
-            from tools.render_spot_cryptocove import render as _rs2
+            from tools.render_spot_cryptocove import (render as _rs2,
+                                                      pattern_title as _spt18)
             _tf2 = str((candidate.metadata or {}).get("chart_view_tf")
                        or getattr(candidate, "trigger_timeframe", "4h")).lower()
-            _a2 = _es2.analyze(df, _tf2) if _tf2 in _es2.SPOT_TFS else None
+            # R99q18: the ALERT's own geometry owns the picture (same engine that
+            # judged the stage), so title, lines, stage and zoom all agree with
+            # the message. engine_spot.analyze stays only as a fallback for a
+            # candidate that carries no render commands at all.
+            _a2 = _spot_alert_view(candidate, df, _tf2)
+            _title18 = None
+            if _a2:
+                _title18 = _spt18(_a2.get("name_slug"))
+            elif _tf2 in _es2.SPOT_TFS:
+                _a2 = _es2.analyze(df, _tf2)
             if _a2:
                 _stage2 = str((candidate.metadata or {}).get("spot_alert_stage")
                               or candidate.status or "")
                 _spot_png = _rs2(df, _a2, None,
                                  symbol=str(getattr(candidate, "symbol", "")),
-                                 stage=_stage2)
+                                 stage=_stage2, title=(_title18 or ""))
                 if _spot_png and len(_spot_png) > 1000:
                     _chart_cache_set(_ck, _spot_png)
                     return _spot_png

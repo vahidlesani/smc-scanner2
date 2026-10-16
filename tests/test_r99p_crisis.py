@@ -171,7 +171,10 @@ def test_r99q_spot_single_render_path():
                encoding="utf-8").read()
     _seg = _mv[_mv.find("if _is_spot:"):]
     _seg = _seg[:_seg.find("# Always initialize chart-only price-axis tags")]
-    assert "tools.render_spot_cryptocove import render" in _seg
+    # R99q18: still ONE renderer — it now also brings the alert's own title
+    # helper, because the geometry drawn is the alert's own (not a 2nd engine).
+    assert ("from tools.render_spot_cryptocove import (render as _rs2,\n"
+            "                                                      pattern_title as _spt18)" in _seg)
     assert "render_cryptocove_spot_chart" not in _seg   # old renderer off-path
     assert "return b\"\"" in _seg                       # no chart → text-only
 

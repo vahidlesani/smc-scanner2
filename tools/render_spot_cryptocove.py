@@ -219,6 +219,26 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
                       - math.log(max(float(level), 1e-12)))
         if _t_span <= 1.5 * d_span:
             y_hi = max(y_hi, float(target) * math.exp(0.035 * d_span))
+    # ── R99q18 ENVELOPE GUARD (Viva 10-16 verbatim: «ارتفاع ۷۲ درصد رعایت نشده
+    # … زوم خرابه» on spot TFs). A far target box used to stretch the price
+    # window until the candles shrank to 34–57 % of the panel — the GEO law
+    # («باکسِ دور کندل‌ها را له نمی‌کند») broken by the box the alert itself
+    # asked for. The candle block now always owns ≥60 % of the panel; a taller
+    # box is simply cut by the frame edge (its target line/label sit above the
+    # picture), which is honest: the target is beyond the visible range.
+    try:
+        _block18 = (math.log(d_hi) - math.log(d_lo)) / (math.log(y_hi) - math.log(y_lo))
+        if _block18 < 0.60:
+            _y_hi_max = math.exp(math.log(y_lo)
+                                 + (math.log(d_hi) - math.log(d_lo)) / 0.60)
+            y_hi = min(y_hi, _y_hi_max)
+        if os.getenv("VIVA_Q18_DEBUG"):
+            _blk_after = (math.log(d_hi) - math.log(d_lo)) / (math.log(y_hi) - math.log(y_lo))
+            print(f"[q18] blk={_blk_after*100:.1f}% before={_block18*100:.1f}% "
+                  f"y=[{y_lo:.6g}..{y_hi:.6g}] d=[{d_lo:.6g}..{d_hi:.6g}] "
+                  f"box={'YES' if box_drawn else 'NO'}")
+    except Exception:
+        pass
 
     fig, ax = plt.subplots(figsize=(16, 9), dpi=130)
     fig.patch.set_facecolor("#FFFFFF")
@@ -362,6 +382,14 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
         pct = (_tgt14 / _lvl14 - 1.0) * 100.0 if _lvl14 else 0.0
         _ytx = _tgt14 * math.exp(0.05 * d_span) if up_dir else \
             _tgt14 * math.exp(-0.05 * d_span)
+        try:   # R99q18: keep the label inside the frame (a clipped box)
+            _ylim_now = ax.get_ylim()
+            if _ytx >= _ylim_now[1]:
+                _ytx = _ylim_now[1] * math.exp(-0.03 * d_span)
+            elif _ytx <= _ylim_now[0]:
+                _ytx = _ylim_now[0] * math.exp(0.03 * d_span)
+        except Exception:
+            pass
         ax.text((bx0 + bx1) / 2, _ytx, f"{delta:.4g} ({pct:+.2f}%)",
                 ha="center", va="bottom" if up_dir else "top",
                 fontsize=9.5, fontweight="bold", color=_tcol, zorder=8)
