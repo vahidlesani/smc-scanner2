@@ -499,13 +499,15 @@ def _law_stamp(cmd: dict, df, upper, lower, replace_type: bool = False) -> dict:
 
 
 def detect_patterns(df: pd.DataFrame, direction: str = "",
-                    log_axis: Optional[bool] = None) -> List[Dict]:
+                    log_axis: Optional[bool] = None,
+                    include_past_market: bool = False) -> List[Dict]:
     """Validated edge geometry + honest shape classification (doctrine:
     Edwards & Magee / Brooks / E&M) as render commands; plus a trading-range
     box when the window is flat between two tested horizontals.
 
     Viva 09-20 (round 10, his crossed-out «این ترند قرمز لنگ در هوا چه اژه؟»
-    BNB chart): a line that contradicts the trade's own trend context is
+    BNB chart,
+): a line that contradicts the trade's own trend context is
     noise — an ASCENDING high-side line on a SHORT, or a support line price
     left long ago. When a slope-consistent line exists on the same side it
     wins the slot; the contradicting twin is dropped instead of drawn."""
@@ -1030,10 +1032,6 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                              for _ln in _lns73]
     except Exception:
         pass
-    return out[:4]
-
-
-
     # ── R99q21 ACTIONABILITY STAMP (his 10-16, twice: «پترن‌ها در ستاپ‌ها و
     # اسپات هنوز هم گاهی گذشته مارکت هستند که هیچ فایده‌ای نداره» + «ما پترنی
     # نیاز داریم که نزدیک به شکست باشه یا ابتدای شکست باشه»). Every returned
@@ -1075,16 +1073,27 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
             _p21["near_break"] = bool(_ok21)
             _p21["break_state"] = (_info21 or {}).get("state")
             _p21["dist_atr"] = (_info21 or {}).get("dist_atr")
-            if _gate_on21 and not _ok21:
+            # Only REAL two-edge shapes (wedges / triangles / channels /
+            # flags) are traded on their break — a lone trendline or a range
+            # box is CONTEXT: the band model reads a respected support line as
+            # a long-ago break and a mid-box price as far from an edge, so
+            # gating those would silently delete the chart's context shapes
+            # (and did, in five calibration tests). They are stamped, never
+            # dropped.
+            _two_edge21 = len([l for l in (_p21.get("lines") or []) if isinstance(l, dict)]) >= 2
+            if _gate_on21 and not _ok21 and not include_past_market and _two_edge21:
                 print(f"R99q21 past-market pattern dropped: {_p21.get('type')} "
                       f"[{_p21.get('break_state')} · {_p21.get('dist_atr')} ATR]")
                 continue
             _kept21.append(_p21)
-        if len(_kept21) != len(out):
-            out = _kept21
+        out = _kept21
     except Exception as _e21s:
         print(f"actionability stamp warning: {_e21s}")
-    return out
+    return out[:4]
+
+
+
+
 def pattern_live_index(md, bundle=None, tf=None, pats=None) -> int:
     """R99q19 — the live bar index **in the PATTERN's own coordinate space**.
 
@@ -1151,7 +1160,8 @@ def enrich_render(candidate, trigger_df: pd.DataFrame,
         _rw64 = 300
     pats = detect_patterns(trigger_df.tail(_rw64),
                            getattr(candidate, "direction", ""),
-                           log_axis=_log_axis)
+                           log_axis=_log_axis,
+                           include_past_market=True)
     # R99q21 NEAR-BREAK GATE (his 10-16: «پترن‌ها در ستاپ‌ها و اسپات هنوز هم
     # گاهی گذشته مارکت هستند»): a pattern the law stamps `near_break=False`
     # (FAR_INSIDE / STALE) is not drawn and not cited — past-market shapes were
