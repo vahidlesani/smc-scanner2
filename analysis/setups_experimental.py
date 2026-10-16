@@ -362,6 +362,14 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
                 from analysis.render_kit import enrich_render
                 enrich_render(candidate, trigger_df,
                               htf_df=bundle.get("4h") or bundle.get("1h"))
+                # ── R99q23 TLBREAK (its own file): the single-trendline lane
+                # stamps its line's state (FRESH_BREAK / RETEST_BE / TOUCH /
+                # REJECTED / COMPRESSION) + the trigger-TF candle evidence.
+                try:
+                    from analysis.pattern_law import engine_stamp as _es23
+                    _es23(candidate.metadata, trigger_df, "TLBREAK")
+                except Exception as _e23x:
+                    print(f"TLBREAK engine stamp warning: {_e23x}")
             except Exception:
                 pass
             candidate.metadata.update({"strategy_variant":"VIVA_TLBREAK","viva_state":"S0_WATCH","viva_pattern":"TWO_PIVOT_WATCH","viva_watch_line":line_price,"viva_touch_count":2,"viva_watch_points":[dict(watch.first),dict(watch.last)],"public_code":generate_viva_public_code("TLBREAK", style),
@@ -1510,6 +1518,14 @@ def detect_pinbar_zone(bundle: MarketBundle, style: str) -> Optional[SignalCandi
             if _pdf is not None:
                 enrich_render(best, _pdf,
                               htf_df=bundle.get("4h") or bundle.get("1h"))
+                # ── R99q23 PINVAL (its own file): the zone lane's pattern is
+                # OPTIONAL — when the law sees one it is named and referenced,
+                # never invented.
+                try:
+                    from analysis.pattern_law import engine_stamp as _es23
+                    _es23(best.metadata, _pdf, "PINVAL")
+                except Exception as _e23x:
+                    print(f"PINVAL engine stamp warning: {_e23x}")
         except Exception:
             pass
         # r40 SETUP-CONSOLIDATION (Viva 09-26, «هر چیز خوب PINWALL-QUALITY در
@@ -1831,6 +1847,14 @@ def _albrox_zone_lane(bundle, style):
         try:  # r41 parity: zone-lane charts paint zones/HTF context like every setup
             from analysis.render_kit import enrich_render
             enrich_render(cand, tdf, htf_df=sdf)
+            # ── R99q23 ALBROX (its own file): the union lane (TLBREAK +
+            # TECHCLASSIC + zones) carries the law of whichever geometry its
+            # chart actually draws.
+            try:
+                from analysis.pattern_law import engine_stamp as _es23
+                _es23(cand.metadata, tdf, str(cand.setup_code or "ALBROX"))
+            except Exception as _e23x:
+                print(f"ALBROX engine stamp warning: {_e23x}")
         except Exception:
             pass
         return cand

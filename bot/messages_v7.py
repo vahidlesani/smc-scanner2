@@ -1639,6 +1639,49 @@ def _alert_lateness_minutes(candidate: SignalCandidate) -> int:
     return max(0, int(round(delta)))
 
 
+def _law_note_lines(candidate: SignalCandidate) -> List[str]:
+    """R99q23 — the alert states the LAW it stands on (his 10-17).
+
+    Every setup engine stamps its own candidate (`pattern_law.engine_stamp`) in
+    its own file; here those stamps become one compact block:
+      🧩 الگو: گوه نزولی · حالت: ریتست ضلع بالا (پولبک به بریک‌ایون)
+      📐 وضعیت خط + 🕯 شاهد کندلی   (single-trendline lanes, his condition 7)
+      📖 مرجع: Edwards & Magee Ch.7 … (the ENGINE REFERENCE he asked for)
+    A candidate with no stamp adds nothing — the caption never invents a name.
+    """
+    try:
+        md = candidate.metadata or {}
+        slug = str(md.get("law_slug") or "").upper()
+        st_fa = str(md.get("law_state_fa") or "")
+        rows: List[str] = []
+        if slug:
+            from analysis.pattern_law import label_fa as _lfa, pattern_ref_fa as _rfa
+            name = _lfa(slug) or slug
+            line = f"🧩 الگو: <b>{_e(name)}</b>"
+            if st_fa:
+                line += f" · حالت: {_e(st_fa)}"
+            rows.append(line)
+            ref = str(md.get("pattern_ref") or "")
+            if ref:
+                rows.append(f"📖 مرجع: {_e(ref)}")
+        line_state_fa = str(md.get("line_state_fa") or "")
+        if line_state_fa:
+            _role = {"SUPPORT": "حمایت", "RESISTANCE": "مقاومت"}.get(
+                str(md.get("line_role") or "").upper(), "")
+            rows.append(f"📐 وضعیت خط: {_e(line_state_fa)}"
+                        + (f" · نقش: {_role}" if _role else ""))
+        _cd = str(md.get("candle_evidence") or "")
+        if _cd:
+            from analysis.pattern_law import CANDLE_FA as _CFA
+            rows.append(f"🕯 شاهد کندلی تایم تریگر: {_e(_CFA.get(_cd, _cd))}")
+        if md.get("tc_awaits_edge"):
+            rows.append("⏳ داخل پترن است — منتظر نزدیک‌شدن به ضلع")
+        return rows
+    except Exception as exc:
+        print(f"law note warning: {exc}")
+        return []
+
+
 def _timing_lines(candidate: SignalCandidate) -> List[str]:
     """The clock block of every entry alert (his 09-21 request, verbatim:
     «تاخیر در زمان شناسایی و زمان انتشار و ارسال به تلگرام رو در هشدار مفصل نداشتیم»)."""
@@ -6404,6 +6447,7 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
          if setup_line else f"🎯 ستاپ: <b>VIVA-{_e(candidate.setup_code)}</b>"),
         f"⭐ امتیاز فعلی: {int(candidate.score if score is None else score)}/10",
         f"🆔 <code>{_e(code)}</code>",
+        *_law_note_lines(candidate),
         VIVA_SEP,
         "🔎 <b>ناحیه‌ای که زیر نظر داریم</b>",
         f"از {_price(candidate.entry_zone_bottom)} تا {_price(candidate.entry_zone_top)}",

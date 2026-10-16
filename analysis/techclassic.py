@@ -464,6 +464,36 @@ def tc_refine_geometry(candidate, bundle=None):
                 _sync21(md, _kept)
             except Exception as _e21t:
                 print(f"tc label sync warning: {_e21t}")
+        # ── R99q23 ENGINE SURGERY (TECHCLASSIC, his 10-17): the engine's own
+        # candidate carries the law — the slug the classifier actually drew,
+        # the selection state it stands in, and that pattern's ENGINE
+        # REFERENCE. TC also declares when it is waiting for the edge: a shape
+        # deep inside its band is not yet a TC entry (his «پترن رو نمی‌شناسه»).
+        try:
+            from analysis.pattern_law import engine_stamp as _es23
+            _md23 = getattr(candidate, "metadata", None) or {}
+            _tf23 = str(getattr(candidate, "trigger_timeframe", "") or "").lower()
+            _df23 = None
+            try:
+                _df23 = bundle.get(_tf23) if bundle is not None else None
+            except Exception:
+                _df23 = None
+            _info23 = _es23(_md23, _df23, "TECHCLASSIC")
+            try:
+                _dist23 = None
+                for _p23 in (_md23.get("render_patterns") or []):
+                    if str(_p23.get("law_slug") or _p23.get("type") or "").upper() \
+                            == str(_info23.get("law_slug") or ""):
+                        _dist23 = _p23.get("dist_atr")
+                        break
+                if str(_info23.get("law_state")) in ("INSIDE",) and _dist23 is not None \
+                        and float(_dist23) > 3.0:
+                    _md23["tc_awaits_edge"] = True
+                    _md23["tc_awaits_edge_fa"] = "داخل پترن است؛ منتظر نزدیک‌شدن به ضلع"
+            except Exception:
+                pass
+        except Exception as _e23tc:
+            print(f"tc engine stamp warning: {_e23tc}")
         md["tc_owned"] = True
         md["tc_refined"] = True
         md["tc_dropped"] = _dropped

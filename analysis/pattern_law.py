@@ -867,6 +867,119 @@ def trendline_state(df, line, atr: float, lookback: int = 40,
         return info
 
 
+STATE_FA = {
+    "INSIDE": "داخل پترن",
+    "AT_EDGE": "نزدیک ضلع (آمادهٔ شکست)",
+    "FRESH_BREAK": "شکستِ تازه",
+    "RETEST_UPPER": "ریتست ضلع بالا (پولبک به بریک‌ایون)",
+    "RETEST_LOWER": "ریتست ضلع پایین (پولبک به بریک‌ایون)",
+    "FAILED_BREAK": "شکستِ ناموفق — قیمت داخل پترن برگشت",
+    "STALE": "گذشته مارکت",
+    "TOUCH": "برخورد به خط",
+    "RETEST_BE": "ریتست بریک‌ایون خط",
+    "REJECTED": "برخورد و رد شدن از خط",
+    "COMPRESSION": "فشردگی زیر/روی خط",
+    "NEAR": "نزدیک خط",
+    "UNKNOWN": "نامشخص",
+}
+CANDLE_FA = {"PINBAR": "پین‌بار", "INV_PINBAR": "پین‌بار معکوس", "DOJI": "دوجی"}
+
+
+def pattern_ref_fa(slug: str) -> str:
+    """Persian one-liner for an alert caption: the pattern's engine reference."""
+    d = PATTERN_LAW.get(str(slug or "").upper()) or {}
+    return str(d.get("ref") or "")
+
+
+def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
+    """R99q23 PER-ENGINE SURGERY — every setup's own alert carries the law.
+
+    Each engine (TECHCLASSIC / TLBREAK / ALBROX / PINVAL) calls this in its OWN
+    file right after its geometry is built, so the published alert knows:
+      * which slug the law sees (`law_slug`) and in which selection state it
+        stands (`law_state` — the seven conditions of R99q22);
+      * the pattern's ENGINE REFERENCE (`pattern_ref`, `pattern_rule_fa`) so the
+        alert itself answers «برای هرکدام به انجین رفرنس بده»;
+      * for a single-trendline lane: the line's own state (`line_state`) and the
+        trigger-TF candle evidence (`candle_evidence` — pin bar / inverted pin
+        bar / doji, his condition 7).
+    Never vetoes: the publish gate is the one place that drops a candidate.
+    """
+    out: Dict = {"law_slug": "", "law_state": "", "pattern_ref": "",
+                 "candle_evidence": "", "line_state": ""}
+    try:
+        if not isinstance(md, dict):
+            return out
+        pats = [p for p in (md.get("pattern_law_all") or md.get("render_patterns") or [])
+                if isinstance(p, dict)]
+        if not pats:
+            md["law_state"] = md.get("law_state") or ""
+            return out
+        # the dominant drawn shape (or the freshest judged one)
+        dom = None
+        for p in pats:
+            if p.get("near_break") is not False and p.get("lines"):
+                dom = p
+                break
+        if dom is None:
+            dom = pats[0]
+        slug = str(dom.get("law_slug") or dom.get("type") or "").upper()
+        out["law_slug"] = slug
+        d = PATTERN_LAW.get(slug) or {}
+        # state: take the stamped one, otherwise judge now
+        st = str(dom.get("select_state") or dom.get("break_state") or "").upper()
+        if st in ("", "UNKNOWN") and df is not None:
+            try:
+                st = str(selection_for_shape(dom, df, _atr_of(df)).get("state") or "")
+            except Exception:
+                st = st or ""
+        out["law_state"] = st
+        md["law_slug"] = slug
+        md["law_state"] = st
+        md["law_state_fa"] = STATE_FA.get(st, st)
+        md["pattern_ref"] = d.get("ref") or ""
+        md["pattern_rule_fa"] = d.get("rule") or ""
+        md["pattern_bias"] = d.get("bias") or "NEUTRAL"
+        md["pattern_break_side"] = d.get("break") or "ANY"
+        md["pattern_type"] = slug or md.get("pattern_type")
+        md["tl_pattern"] = slug or md.get("tl_pattern")
+        lns = [l for l in (dom.get("lines") or []) if isinstance(l, dict)]
+        if len(lns) == 1 and df is not None:
+            try:
+                ti = trendline_state(df, lns[0], _atr_of(df))
+                md["line_state"] = str(ti.get("state") or "")
+                md["line_state_fa"] = STATE_FA.get(str(ti.get("state") or ""), "")
+                md["line_role"] = ti.get("role") or ""
+                out["line_state"] = md["line_state"]
+                if ti.get("candle"):
+                    md["candle_evidence"] = ti["candle"]
+                    out["candle_evidence"] = ti["candle"]
+            except Exception:
+                pass
+        md["engine_stamp"] = {k: v for k, v in out.items()}
+        md["setup_code"] = md.get("setup_code") or setup_code
+        return out
+    except Exception as exc:
+        print(f"engine stamp warning: {exc}")
+        return out
+
+
+def _atr_of(df) -> float:
+    """14-bar ATR of a frame (True Range mean) — local, no imports."""
+    try:
+        h = [float(v) for v in df["high"].tolist()][-14:]
+        l = [float(v) for v in df["low"].tolist()][-14:]
+        c = [float(v) for v in df["close"].tolist()]
+        trs = []
+        for i in range(len(h)):
+            j = len(c) - len(h) + i
+            pc = c[j - 1] if j > 0 else c[j]
+            trs.append(max(h[i] - l[i], abs(h[i] - pc), abs(l[i] - pc)))
+        return sum(trs) / max(len(trs), 1)
+    except Exception:
+        return 0.0
+
+
 def approach_atr_default() -> float:
     """The «نزدیک به ضلع» distance, overridable per deploy."""
     try:

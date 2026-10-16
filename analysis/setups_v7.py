@@ -1098,6 +1098,16 @@ def _base_candidate(
         enrich_render(_cand, trigger_df, htf_df=context_df)
     except Exception as exc:
         print(f"render kit warning {setup_code}: {exc}")
+    # ── R99q23 PER-ENGINE SURGERY (his 10-17: «شروع کن ستاپ‌ها رو از تکنوکلاسیک
+    # تا البروکس و تی‌ال‌بریک و پینوال»): every engine stamps its OWN candidate
+    # with the law — the selection state of the shape it stands on, the actual
+    # slug, and that pattern's ENGINE REFERENCE — so the published alert can
+    # state them. Nothing is vetoed here (the publish boundary does that).
+    try:
+        from analysis.pattern_law import engine_stamp as _es23
+        _es23(_cand.metadata, trigger_df, str(setup_code or ""))
+    except Exception as _e23v7:
+        print(f"engine stamp warning {setup_code}: {_e23v7}")
     # continuation doctrine: mid-box / wrong-edge candidates do not trade —
     # EXCEPT the break/watch streams, which ARE the doctrine's own trigger
     # (break + first close = entry; watch = the warning itself)
