@@ -193,3 +193,24 @@ def test_pace_reads_todays_counter_through_the_real_helper(monkeypatch):
     store["tier_day_setup:2026-10-17:PINVAL"] = 49
     store["tier_week_count:2026-W42:PINVAL"] = 200           # wallet empty
     assert ts.weekly_pace_ok("PINVAL", week="2026-W42", now=sat) is False
+
+
+def test_the_stamp_renames_every_label_the_sync_wrote():
+    """The label sync runs on the DOMINANT shape, the stamp on the LINEAGE.
+    Whatever the stamp picks must be the ONE name left in the metadata (live
+    evidence 10-17 03:41: law_slug TRIANGLE_ASCENDING, label «کانال افقی»)."""
+    from analysis.pattern_law import label_fa
+    flat = _shape("CHANNEL_FLAT", 0.0, 130.0)
+    wedge = _shape("WEDGE_FALLING", -0.40, 150.0)
+    flat["pid"], wedge["pid"] = pattern_pid(flat), pattern_pid(wedge)
+    md = {"render_patterns": [flat, wedge],
+          "pattern_type": "CHANNEL_FLAT", "tl_pattern": "CHANNEL_FLAT",
+          "viva_pattern": "CHANNEL_FLAT",
+          "pattern_label_fa": label_fa("CHANNEL_FLAT"),
+          "selected_pattern_pid": wedge["pid"]}
+    engine_stamp(md, None, "TECHCLASSIC")
+    assert md["pattern_type"] == "WEDGE_FALLING"
+    assert md["tl_pattern"] == "WEDGE_FALLING"
+    assert md["viva_pattern"] == "WEDGE_FALLING"
+    assert md["pattern_label_fa"] == label_fa("WEDGE_FALLING") == "گوه نزولی"
+    assert md["pattern_pid"] == wedge["pid"]

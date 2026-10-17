@@ -1014,6 +1014,17 @@ def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
         md["pattern_break_side"] = d.get("break") or "ANY"
         md["pattern_type"] = slug or md.get("pattern_type")
         md["tl_pattern"] = slug or md.get("tl_pattern")
+        # R99q24 ONE NAME, LAST WRITER: `enrich_render` synced every label from
+        # the DOMINANT drawn shape, then THIS stamp selects by the candidate's
+        # LINEAGE — on the 10-17 03:41 publishes that left the metadata saying
+        # TRIANGLE_ASCENDING while `pattern_label_fa` still read «کانال افقی»,
+        # exactly the mismatch his 10-16 audit killed. The last writer now
+        # renames every label key to the shape it actually stamped.
+        if slug:
+            for _lk in LABEL_KEYS:
+                if _lk in md:
+                    md[_lk] = slug
+            md["pattern_label_fa"] = label_fa(slug)
         lns = [l for l in (dom.get("lines") or []) if isinstance(l, dict)]
         if len(lns) == 1 and df is not None:
             try:
@@ -1029,6 +1040,7 @@ def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
                 pass
         out["pattern_pid"] = str(dom.get("pid") or "")
         out["selection"] = str(md.get("pattern_selection") or "")
+        md["pattern_pid"] = out["pattern_pid"] or md.get("pattern_pid")
         md["selected_pattern_pid"] = out["pattern_pid"] or md.get("selected_pattern_pid")
         md["engine_stamp"] = {k: v for k, v in out.items()}
         md["setup_code"] = md.get("setup_code") or setup_code
