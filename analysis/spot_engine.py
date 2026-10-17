@@ -316,7 +316,7 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 if _kind62 in RETIRED_PATTERNS or _kind62 in (
                         "DOUBLE_TOP", "DOUBLE_BOTTOM", "HEAD_SHOULDERS",
                         "INV_HEAD_SHOULDERS", "INVERSE_HEAD_SHOULDERS",
-                        "TRIANGLE", "NONE", "WEDGE_RISING", "FLAG_BEAR"):
+                        "TRIANGLE", "CHANNEL", "NONE", "WEDGE_RISING", "FLAG_BEAR"):
                     continue
                 if not bullish_pattern_ok(_pat62, close, upper):
                     continue
