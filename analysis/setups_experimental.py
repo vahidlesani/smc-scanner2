@@ -1645,23 +1645,24 @@ def _albrox_spike_context(df: np.ndarray | object) -> dict | None:
 
 
 def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
-    """ALBROX's own spike/reclaim/base/pinbar + zone detector.
+    """r60 ALBROX union law.
 
-    Pattern geometry may be drawn as shared chart context, but ALBROX must not
-    borrow TECHCLASSIC's candidate builder, entry rules, or rejection path.
-    Its own zone lane owns candidate creation; shared geometry is descriptive
-    only and cannot create or veto an ALBROX trade.
+    Lane A — pattern breaks/fades through the shared geometry engine, explicitly
+    stamped as ALBROX so its candidate identity and entry lifecycle remain owned
+    by this setup. Lane B/C — ALBROX's own zone break/reclaim and rejection
+    lanes. Geometry can be shared; setup-specific routing must remain explicit.
     """
     settings = get_settings()
     if not getattr(settings, "albrox_enabled", False):
         return None
     try:
-        return _albrox_zone_lane(bundle, style)
+        from analysis.pattern_engine import detect_technoclassic as _pattern_lane
+        cand = _pattern_lane(bundle, style, setup_code="ALBROX")
+        if cand is not None:
+            return cand
     except Exception as exc:
-        print(f"ALBROX own zone lane skipped {getattr(bundle, 'symbol', '?')}: {exc}")
-        return None
-
-
+        print(f"ALBROX pattern lane skipped {getattr(bundle, 'symbol', '?')}: {exc}")
+    return _albrox_zone_lane(bundle, style)
 def _albrox_zones(sdf, bundle, structure_tf: str, atr_s: float) -> list:
     """Fresh zone inventory (r60): un-mitigated FVGs, pivot SD/flip zones and
     the freshest order blocks on the structure frame. Inventory only — the
