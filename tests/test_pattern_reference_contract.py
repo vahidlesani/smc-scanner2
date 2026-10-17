@@ -34,7 +34,7 @@ def test_range_and_generic_channel_use_explicit_canonical_aliases():
 def test_retired_pivot_shapes_cannot_be_reactivated_by_the_law_registry():
     for slug in (
         "DOUBLE_TOP", "DOUBLE_BOTTOM", "HEAD_SHOULDERS",
-        "INV_HEAD_SHOULDERS", "CUP_HANDLE", "INV_CUP_HANDLE",
+        "INV_HEAD_SHOULDERS", "INVERSE_HEAD_SHOULDERS", "CUP_HANDLE", "INV_CUP_HANDLE",
     ):
         assert not pattern_is_live(slug)
         assert pattern_law_entry(slug) == {}
