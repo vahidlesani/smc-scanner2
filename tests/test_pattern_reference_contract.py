@@ -220,7 +220,7 @@ def test_tlbreak_main_lane_stamps_its_selected_geometry_after_render_enrichment(
     source = Path(__file__).resolve().parents[1] / "analysis" / "setups_experimental.py"
     text = source.read_text(encoding="utf-8")
     start = text.index('def detect_viva_tlbreak(')
-    end = text.index('\ndef _parent_countertrend_1009', start)
+    end = text.index('\ndef _unmitigated_fvg_edge', start)
     body = text[start:end]
     enrich = body.index('_er_tl(candidate, trigger_df')
     stamp = body.index('_stamp_tl(candidate.metadata, trigger_df, "TLBREAK")')
