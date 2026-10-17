@@ -1076,11 +1076,16 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
             except Exception:
                 pass
             from analysis.patterns16 import detect_pivot_patterns as _dpp16
+            from analysis.pattern_law import RETIRED_PATTERNS as _RETIRED_PIVOTS
             _have_sides = [(float(ln["slope"]) * (len(df) - 1) + float(ln["intercept"]),
                             str(ln.get("side") or ""))
                            for it in out for ln in (it.get("lines") or [])
                            if "slope" in ln and "intercept" in ln]
             for _pp in _dpp16(df.reset_index(drop=True), _atr_p):
+                # The pivot-only families were explicitly retired from the
+                # active chart-pattern set; do not resurrect them at render time.
+                if str(_pp.get("type") or "").strip().upper() in _RETIRED_PIVOTS:
+                    continue
                 _neck_v = float(_pp.get("neckline") or 0.0)
                 if abs(_neck_v - float(df["close"].iloc[-1])) > 6.0 * _atr_p:
                     continue                       # a fossil, not a live pattern
