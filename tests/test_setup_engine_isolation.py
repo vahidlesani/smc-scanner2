@@ -7,18 +7,13 @@ def _settings(monkeypatch, setups):
                         lambda: SimpleNamespace(albrox_enabled=True))
 
 
-def test_albrox_pattern_lane_is_explicitly_routed_as_albrox(monkeypatch):
+def test_albrox_pattern_lane_is_explicitly_routed_and_precedes_zone_lane(monkeypatch):
     import analysis.setups_experimental as setups
-    import analysis.pattern_engine as patterns
 
     marker = object()
     calls = []
-
-    def pattern_lane(bundle, style, setup_code="TECHCLASSIC"):
-        calls.append((bundle.symbol, style, setup_code))
-        return marker
-
-    monkeypatch.setattr(patterns, "detect_technoclassic", pattern_lane)
+    monkeypatch.setattr(setups, "_albrox_pattern_lane",
+                        lambda bundle, style: calls.append((bundle.symbol, style)) or marker)
     monkeypatch.setattr(setups, "_albrox_zone_lane",
                         lambda bundle, style: (_ for _ in ()).throw(
                             AssertionError("zone fallback must not run when pattern lane finds a candidate")))
@@ -26,7 +21,7 @@ def test_albrox_pattern_lane_is_explicitly_routed_as_albrox(monkeypatch):
 
     result = setups.detect_albrox(SimpleNamespace(symbol="TESTUSDT"), "SWING")
     assert result is marker
-    assert calls == [("TESTUSDT", "SWING", "ALBROX")]
+    assert calls == [("TESTUSDT", "SWING")]
 
 
 def test_albrox_falls_back_to_its_zone_lane_when_pattern_lane_has_no_candidate(monkeypatch):
@@ -42,23 +37,17 @@ def test_albrox_falls_back_to_its_zone_lane_when_pattern_lane_has_no_candidate(m
     result = setups.detect_albrox(SimpleNamespace(symbol="TESTUSDT"), "SWING")
     assert result is marker
 
-def test_albrox_pattern_lane_uses_albrox_toggle_not_technoclassic_toggle(monkeypatch):
-    from types import SimpleNamespace
-    import analysis.pattern_engine as patterns
-    import analysis.setups_v7 as setups_v7
-
-    seen = []
-    monkeypatch.setattr(patterns, "_s", lambda: SimpleNamespace(
-        albrox_enabled=True, technoclassic_enabled=False))
-    monkeypatch.setattr(setups_v7, "timeframe_profile",
-                        lambda style: ("4h", "1h", "15m"))
-    monkeypatch.setattr(setups_v7, "_ensure_frames",
-                        lambda bundle, frames: seen.append(tuple(frames)) or False)
-
-    result = patterns.detect_technoclassic(
-        SimpleNamespace(symbol="TESTUSDT"), "SWING", setup_code="ALBROX")
-    assert result is None
-    assert seen == [("4h", "15m")]
+def test_albrox_pattern_lane_uses_shared_geometry_not_techclassic_candidate_builder():
+    from pathlib import Path
+    source = Path(__file__).resolve().parents[1] / "analysis" / "setups_experimental.py"
+    text = source.read_text(encoding="utf-8")
+    start = text.index("def _albrox_pattern_lane(")
+    end = text.index("\ndef detect_albrox(", start)
+    body = text[start:end]
+    assert "scan_edges" in body
+    assert "SignalCandidate(" in body
+    assert "_build_candidate" not in body
+    assert "detect_technoclassic" not in body
 
 
 def test_technoclassic_toggle_still_controls_technoclassic_lane(monkeypatch):
