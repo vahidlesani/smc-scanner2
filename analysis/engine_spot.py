@@ -115,8 +115,8 @@ def best_pattern(df: pd.DataFrame, tf: str, lookback: Optional[int] = None):
     from analysis.pattern_law import RETIRED_PATTERNS
 
     allp = sorted(
-        two + [r for r in piv if str(getattr(r, "slug", "")).strip().upper()
-               not in RETIRED_PATTERNS],
+        [r for r in (two + piv)
+         if str(getattr(r, "slug", "")).strip().upper() not in RETIRED_PATTERNS],
         key=lambda r: -r.score,
     )
     if not allp:
