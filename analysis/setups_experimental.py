@@ -1668,9 +1668,7 @@ def _albrox_pattern_lane(bundle, style):
     pat, trig = bundle.get(structure_tf), bundle.get(trigger_tf)
     if pat is None or len(pat) < 60 or trig is None or len(trig) < 6:
         return None
-    from analysis.pattern_engine import (
-        STATE_BREAK, scan_edges, pivot_pattern_events, alert_lineage_key,
-    )
+    from analysis.pattern_engine import STATE_BREAK, scan_edges, alert_lineage_key
     live = 0.0
     try:
         live = float((getattr(bundle, "ticker", None) or {}).get("last_price") or 0.0)
@@ -1679,13 +1677,6 @@ def _albrox_pattern_lane(bundle, style):
     live = live if live > 0 else float(trig["close"].iloc[-1])
     events = [ev for ev in scan_edges(pat, trig, structure_tf, live_price=live)
               if ev.get("state") == STATE_BREAK]
-    # Active classical pivot families share detection doctrine, not the
-    # TECHCLASSIC candidate builder. Retired pivot-only names are filtered by
-    # pivot_pattern_events before they can enter this lane.
-    try:
-        events.extend(pivot_pattern_events(pat, trig, structure_tf, live_price=live))
-    except Exception as exc:
-        print(f"ALBROX pivot geometry skipped {getattr(bundle, 'symbol', '?')}: {exc}")
     if not events:
         return None
     events.sort(key=lambda ev: (
@@ -1717,15 +1708,6 @@ def _albrox_pattern_lane(bundle, style):
             continue
         buffer = max(structural_buffer(entry), 0.30 * atr_t)
         sl = edge - buffer if direction == "LONG" else edge + buffer
-        # Pivot-family geometry supplies its own doctrine stop (e.g. right
-        # shoulder / handle low). Use it only when it is on the protective side.
-        try:
-            hint = float(ev.get("stop_hint") or 0.0)
-            if hint > 0 and ((direction == "LONG" and hint < entry)
-                             or (direction == "SHORT" and hint > entry)):
-                sl = hint
-        except Exception:
-            pass
         sl, _ = clamp_stop_price(entry, direction, sl, str(trigger_tf))
         risk = (entry - sl) if direction == "LONG" else (sl - entry)
         if risk <= 0 or risk > 0.06 * entry:
@@ -1795,15 +1777,6 @@ def _albrox_pattern_lane(bundle, style):
             "approach_direction": ev.get("approach_direction"),
             "alert_lineage_key": lineage,
         })
-        if ev.get("pivot_pattern"):
-            _pp = ev["pivot_pattern"]
-            cand.metadata["pivot_pattern"] = _pp
-            cand.metadata["render_patterns_trade"] = [{
-                "type": _pp.get("type"), "trade_geometry": True, "lines": [],
-                "pivots_ts": list(_pp.get("pivots_ts") or []),
-                "neckline": float(_pp.get("neckline") or 0.0),
-                "role": _pp.get("role"), "tf": str(structure_tf),
-            }]
         try:
             from analysis.render_kit import enrich_render
             enrich_render(cand, trig, htf_df=pat)
