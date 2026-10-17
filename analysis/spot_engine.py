@@ -262,6 +262,9 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
     """
     from analysis.render_kit import detect_patterns
     from analysis.patterns import pattern_info, state_label
+    from analysis.pattern_law import (
+        RETIRED_PATTERNS, canonical_pattern_slug, pattern_law_entry,
+    )
     out: List[dict] = []
     if not frames:
         return out
@@ -306,16 +309,23 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 # R62-ARENA (audit S1): the bias is the LIBRARY's bias of the
                 # named shape when the item carries none (pivot patterns) — a
                 # double top / H&S / rising wedge is never a spot LONG.
-                _kind62 = str(pat.get("type") or "NONE").upper()
+                _kind62 = str(pat.get("type") or "NONE").strip().upper()
                 _pat62 = pat if pat.get("bias") else {**pat, "bias": pattern_info(_kind62).get("bias")}
-                if _kind62 in ("DOUBLE_TOP", "HEAD_SHOULDERS", "WEDGE_RISING", "FLAG_BEAR"):
+                # The retired pivot-only families are excluded symmetrically
+                # from Spot; bullish direction alone must not resurrect them.
+                if _kind62 in RETIRED_PATTERNS or _kind62 in (
+                        "DOUBLE_TOP", "DOUBLE_BOTTOM", "HEAD_SHOULDERS",
+                        "INV_HEAD_SHOULDERS", "INVERSE_HEAD_SHOULDERS",
+                        "TRIANGLE", "CHANNEL", "NONE", "WEDGE_RISING", "FLAG_BEAR"):
                     continue
                 if not bullish_pattern_ok(_pat62, close, upper):
                     continue
                 eps = 0.02 * atr
                 if upper is None or close <= upper + eps:
                     continue                      # no valid close above the area yet
-                kind = str(pat.get("type") or "NONE").upper()
+                kind = str(pat.get("type") or "NONE").strip().upper()
+                _law = pattern_law_entry(kind)
+                _law_slug = canonical_pattern_slug(kind)
                 _rect_fa = None
                 if kind == "RANGE" and str(pat.get("break_direction") or "") != "DOWN":
                     _rect_fa = "مستطیل صعودی (شکست سقف رنج)"
@@ -385,7 +395,12 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                     "horizon": ("SHORT" if tf in SPOT_SHORT_TFS else "MID" if tf in SPOT_MID_TFS else "LONG"),
                     "pattern_fa": (_rect_fa or pattern_info(kind)["fa"]),
                     "label": state_label(kind, str(pat.get("break_direction") or "")),
-                    "rule_fa": pattern_info(kind)["rule_fa"],
+                    "rule_fa": str(_law.get("rule") or pattern_info(kind)["rule_fa"]),
+                    "law_slug": _law_slug,
+                    "pattern_ref": str(_law.get("ref") or ""),
+                    "pattern_bias": str(_law.get("bias") or _pat62.get("bias") or "NEUTRAL"),
+                    "pattern_break_side": str(_law.get("break") or "ANY"),
+                    "selected_pattern_slug": _law_slug,
                     "entry": close, "sl": float(sl), "targets": targets,
                     "weights": list(SPOT_WEIGHTS),
                     "path_pct": round(path / close * 100.0, 3),
@@ -887,6 +902,11 @@ def build_spot_candidate(item: dict):
         "spot_chain_one_id": bool(_one_id15),
         "atr": float(item.get("atr") or 0.0),
         "pattern_type": str(item.get("pattern") or ""),
+        "selected_pattern_slug": str(item.get("selected_pattern_slug") or item.get("law_slug") or ""),
+        "law_slug": str(item.get("law_slug") or ""),
+        "pattern_ref": str(item.get("pattern_ref") or ""),
+        "pattern_bias": str(item.get("pattern_bias") or "NEUTRAL"),
+        "pattern_break_side": str(item.get("pattern_break_side") or "ANY"),
         "spot_horizon": str(item.get("horizon") or ""),
         "pattern_state_label": str(item.get("label") or ""),
         "pattern_rule_fa": str(item.get("rule_fa") or ""),

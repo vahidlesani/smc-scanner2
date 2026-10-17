@@ -72,7 +72,7 @@ STATE_FADE = "REJECTION_FADE"
 # The 10-06 «Universal Breakout Direction» override that made every shape
 # two-sided is RETIRED — it re-created the ADA/LIT counter-nature signals.
 _EDGE_RULES = {p: {"upper": "LONG", "lower": "SHORT"} for p in (
-    "TRIANGLE_SYMMETRICAL", "TRIANGLE", "CHANNEL_FLAT", "CHANNEL",
+    "TRIANGLE_SYMMETRICAL", "CHANNEL_FLAT",
     "TRENDLINE", "HORIZONTAL_SR", "BROADENING", "RECTANGLE", "RANGE",
 )}
 _EDGE_RULES.update({
@@ -1088,9 +1088,13 @@ def pivot_pattern_events(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         def _pt(i, price):
             return {"timestamp": str(pdf["timestamp"].iloc[int(i)]), "price": float(price)}
 
+        from analysis.pattern_law import pattern_is_live
         for item in detect_pivot_patterns(pdf, atr_p):
-            kind = str(item.get("type") or "")
-            if kind not in PIVOT_DOCTRINE:
+            kind = str(item.get("type") or "").strip().upper()
+            # R99q21/R99q23: the pivot-only family was explicitly retired
+            # from the active pattern set. Keep the legacy detector available
+            # for diagnostics, but never turn a retired shape into a live event.
+            if not pattern_is_live(kind) or kind not in PIVOT_DOCTRINE:
                 continue
             direction, role, want_from = PIVOT_DOCTRINE[kind]
             piv = list(item.get("pivots") or [])
@@ -1220,22 +1224,20 @@ def tf_minutes_safe(tf: str) -> float:
 _MINT_GUARD_TTL_S = 12 * 3600  # r60.2: one live alert per visual pattern across lanes
 
 
-def _mint_guard_key(bundle, ev) -> str:
-    """Pattern-level identity for the twin guard: symbol + pattern TF + kind +
-    edge + the edge's FIRST and LAST pivot timestamps. A new pivot (a genuine
-    structural change) yields a new key and may alert again; a mere refit
-    yields the SAME key and stays silent. No trigger TF in the key — that is
-    the whole point (FET trig-1h vs trig-15m twins)."""
+def _mint_guard_key(bundle, ev, setup_code: str = "TECHCLASSIC") -> str:
+    """Pattern-level twin guard scoped to a setup, not just shared geometry.
+
+    Same pivots across trigger timeframes are deduped WITHIN a setup. A shared
+    geometry event must not let TECHCLASSIC suppress ALBROX (or vice versa).
+    The TECHCLASSIC prefix stays byte-for-byte compatible with existing KV keys.
+    """
     pts = [str(p.get("timestamp") or p.get("ts") or "")[:16]
            for p in (ev.get("edge_points") or ())]
     if not pts:
         pts = [str(getattr(bundle, "symbol", ""))]
-    # r60.6: DIRECTION is NOT in the key — «جهت شکست رو تایید بکنن»: once a
-    # break of this pattern owns a live chain, the OPPOSITE-direction break of
-    # the same pattern may not mint a rival scenario (his ONDO complaint: the
-    # engine kept hunting SHORTS after the downtrend had already broken UP).
-    # A new pivot still changes the key and frees the pattern.
-    return "|".join(("TCMINT", str(getattr(bundle, "symbol", "")).upper(),
+    _code = str(setup_code or "TECHCLASSIC").strip().upper()
+    _prefix = "TCMINT" if _code == "TECHCLASSIC" else f"{_code}MINT"
+    return "|".join((_prefix, str(getattr(bundle, "symbol", "")).upper(),
                      str(ev.get("pattern_tf") or ev.get("pattern") or ""),
                      str(ev.get("pattern") or ""), str(ev.get("side") or ""),
                      pts[0], pts[-1]))
@@ -1280,13 +1282,18 @@ def _brooks_edge_ok(trig: pd.DataFrame, ev: Dict) -> bool:
 
 
 def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
-    """TECHCLASSIC live detector: only this setup issues pattern signals
-    (breakouts AND confirmed edge-fades). Other setups untouched.
-    r60: setup_code is injectable — ALBROX's pattern lane is THIS engine
-    under the ALBROX name (his union law: ALBROX = TLBREAK + TECHCLASSIC +
-    zones; the zone lanes live in setups_experimental)."""
+    """Shared validated-pattern lane for TECHCLASSIC and ALBROX's union setup.
+
+    Geometry/event detection is shared, but the enable switch and candidate
+    identity follow the explicitly requested setup_code. ALBROX still owns
+    its separate zone/reclaim fallback in setups_experimental.
+    """
     settings = _s()
-    if not getattr(settings, "technoclassic_enabled", False):
+    _code = str(setup_code or "TECHCLASSIC").strip().upper()
+    _enabled = (getattr(settings, "albrox_enabled", False)
+                if _code == "ALBROX"
+                else getattr(settings, "technoclassic_enabled", False))
+    if not _enabled:
         return None
     from analysis.indicators import structure_bias
     from analysis.models import EvidenceItem, generate_viva_public_code
@@ -1406,7 +1413,7 @@ def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
         # trig-15m two hours later) must not post twice. The guard key lives
         # at PATTERN level (no trigger TF), so any lane meeting the same
         # pivots within the freshness window stays silent.
-        _guard = _mint_guard_key(bundle, ev)
+        _guard = _mint_guard_key(bundle, ev, setup_code)
         try:
             from database.bot_kv import get_json as _gj
             _seen = _gj(_guard, {}) or {}
@@ -1482,6 +1489,7 @@ def measured_target(entry: float, direction: str, trigger_tf: str,
 
 def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
                      trigger_tf: str, cfg, setup_code: str = "TECHCLASSIC"):
+    _code = str(setup_code or "TECHCLASSIC").strip().upper()
     from analysis.indicators import structure_bias
     from analysis.models import EvidenceItem, generate_viva_public_code
     from analysis.patterns import pattern_info
@@ -1656,7 +1664,8 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     try:
         import time as _t
         from database.bot_kv import get_json
-        link = get_json(f"tc_link|{str(bundle.symbol).upper()}|{structure_tf}", {}) or {}
+        link = (get_json(f"tc_link|{str(bundle.symbol).upper()}|{structure_tf}", {}) or {}
+                if _code == "TECHCLASSIC" else {})
         if link.get("mid") and float(link.get("ts") or 0) > _t.time() - 40 * 3600:
             candidate.metadata["approaching_message_id"] = int(link["mid"])
     except Exception:
@@ -1875,7 +1884,7 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     # alert was re-created / superseded before any confirm-TF close. The
     # lineage is the broken EDGE itself - identified by its defining pivots
     # timestamps, which do not move as the fit window slides.
-    _lk = alert_lineage_key("TECHCLASSIC", bundle.symbol, trigger_tf, ev.get("pattern_tf") or structure_tf,
+    _lk = alert_lineage_key(setup_code, bundle.symbol, trigger_tf, ev.get("pattern_tf") or structure_tf,
                             ev.get("side"), direction,
                             ev.get("upper_points") if ev.get("side") == "upper" else ev.get("lower_points"),
                             is_break)
@@ -1971,6 +1980,19 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     except Exception:
         pass
     _attach_r63_geometry(candidate, ev, structure_tf)
+    # R99q23 integration fix: _base_candidate stamps generic render context
+    # before this setup-specific pattern event is available. Re-stamp here
+    # with the exact edge/pivot slug that minted this TECHCLASSIC candidate;
+    # otherwise an unrelated near-break shape on the chart could lend its law.
+    try:
+        _selected_slug = str(ev.get("pattern") or "").strip().upper()
+        if _selected_slug:
+            candidate.metadata["selected_pattern_slug"] = _selected_slug
+            candidate.metadata["pattern_type"] = _selected_slug
+            from analysis.pattern_law import engine_stamp as _es_selected
+            _es_selected(candidate.metadata, trig, str(setup_code or "TECHCLASSIC"))
+    except Exception as _es_selected_exc:
+        print(f"TECHCLASSIC selected-pattern stamp warning: {_es_selected_exc}")
     return candidate
 
 

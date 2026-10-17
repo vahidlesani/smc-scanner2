@@ -167,6 +167,7 @@ RETIRED_PATTERNS: Dict[str, str] = {
     "DOUBLE_BOTTOM": "Viva 10-16: pivots-only trio removed from the pattern set",
     "HEAD_SHOULDERS": "Viva 10-16: pivots-only trio removed from the pattern set",
     "INV_HEAD_SHOULDERS": "Viva 10-16: pivots-only trio removed from the pattern set",
+    "INVERSE_HEAD_SHOULDERS": "Viva 10-16: alias of the retired inverse head-and-shoulders pattern",
     "CUP_HANDLE": "Viva 10-16: pivots-only shapes removed from the pattern set",
     "INV_CUP_HANDLE": "Viva 10-16: pivots-only shapes removed from the pattern set",
 }
@@ -176,9 +177,13 @@ _FAMILY_ORDER = ("flag", "box", "converging", "parallel", "diverging")
 
 
 def pattern_is_live(slug: str) -> bool:
-    """True when a slug may be emitted as a PATTERN (retired trio/family = no)."""
-    k = str(slug or "").upper()
-    if k in RETIRED_PATTERNS:
+    """True when a canonical or explicitly aliased slug may be emitted as a pattern."""
+    raw = str(slug or "").strip().upper()
+    # Generic TRIANGLE is a diagnostic fallback, not a named/validated shape.
+    if raw in RETIRED_PATTERNS or raw in {"TRIANGLE", "NONE"}:
+        return False
+    k = canonical_pattern_slug(raw)
+    if k in RETIRED_PATTERNS or k in {"TRIANGLE", "NONE"}:
         return False
     return k in PATTERN_LAW and PATTERN_LAW[k].get("family") not in ("single",)
 
@@ -711,7 +716,16 @@ def select_state(df, upper, lower, atr: float,
                 break
         # ── the decision
         if inside:
-            inside = True
+            # Condition 5 outranks the generic INSIDE label: a close that
+            # re-entered the band within the configured window is a failed
+            # break, not merely an ordinary inside-pattern state.
+            if info.get("failed_break"):
+                info["state"] = "FAILED_BREAK"
+                info["why"] = (
+                    f"price returned inside the pattern within {reenter_bars} "
+                    "bars after an edge break"
+                )
+                return info
             info["state"] = "AT_EDGE" if min(du, dl) <= approach_atr else "INSIDE"
             info["why"] = (f"price inside the band, {info['dist_atr']} ATR off the "
                            f"nearest edge ({side})")
@@ -803,7 +817,7 @@ def trendline_state(df, line, atr: float, lookback: int = 40,
         # interaction history on the line
         i0 = max(1, n - max(6, int(lookback)))
         touched = rejected = 0
-        break_age = None
+        crosses = []
         for x in range(i0, n):
             vx = _price_at(line, x)
             if vx is None:
@@ -814,10 +828,27 @@ def trendline_state(df, line, atr: float, lookback: int = 40,
                 vp = _price_at(line, x - 1)
                 if vp is not None:
                     if closes[x - 1] < vp and closes[x] > vx + CLOSE_BUFFER_ATR * atr:
-                        break_age = n - 1 - x
-                    if closes[x - 1] > vp and closes[x] < vx - CLOSE_BUFFER_ATR * atr:
-                        break_age = n - 1 - x
+                        crosses.append((x, "UP"))
+                    elif closes[x - 1] > vp and closes[x] < vx - CLOSE_BUFFER_ATR * atr:
+                        crosses.append((x, "DOWN"))
+        break_age = n - 1 - crosses[-1][0] if crosses else None
         info["touches"] = touched
+        # A close back through the line within the first three bars is a
+        # FAILED_BREAK lifecycle event, not a fresh break in the opposite
+        # direction. Keep the original break direction visible for diagnosis.
+        if len(crosses) >= 2:
+            prev_cross, last_cross = crosses[-2], crosses[-1]
+            if (prev_cross[1] != last_cross[1]
+                    and last_cross[0] - prev_cross[0] <= 3
+                    and n - 1 - prev_cross[0] <= 3):
+                info["state"] = "FAILED_BREAK"
+                info["break_direction"] = prev_cross[1]
+                info["failed_break_age"] = n - 1 - prev_cross[0]
+                info["why"] = (
+                    f"{prev_cross[1]} break returned through the line within "
+                    f"{last_cross[0] - prev_cross[0]} bars"
+                )
+                return info
         for x in range(max(1, n - 6), n):
             vx = _price_at(line, x)
             if vx is None:
@@ -827,6 +858,7 @@ def trendline_state(df, line, atr: float, lookback: int = 40,
                 rejected += 1
         if break_age is not None and break_age <= fresh_bars:
             info["state"] = "FRESH_BREAK"
+            info["break_direction"] = crosses[-1][1]
             info["why"] = f"line closed through {break_age} bars ago"
             return info
         if break_age is not None and abs(d) <= retest_atr:
@@ -885,10 +917,31 @@ STATE_FA = {
 CANDLE_FA = {"PINBAR": "پین‌بار", "INV_PINBAR": "پین‌بار معکوس", "DOJI": "دوجی"}
 
 
+# Detector labels are not perfectly canonical yet. Keep aliases explicit so
+# a detector can retain its geometry label while still citing the correct law.
+PATTERN_ALIASES: Dict[str, str] = {
+    "RANGE": "RECTANGLE",
+}
+
+
+def canonical_pattern_slug(slug: str) -> str:
+    key = str(slug or "").strip().upper()
+    if key in RETIRED_PATTERNS:
+        return key
+    return PATTERN_ALIASES.get(key, key)
+
+
+def pattern_law_entry(slug: str) -> Dict:
+    """Return the law for one exact selected slug, resolving only explicit aliases."""
+    key = str(slug or "").strip().upper()
+    if not key or key in RETIRED_PATTERNS:
+        return {}
+    return PATTERN_LAW.get(canonical_pattern_slug(key)) or {}
+
+
 def pattern_ref_fa(slug: str) -> str:
     """Persian one-liner for an alert caption: the pattern's engine reference."""
-    d = PATTERN_LAW.get(str(slug or "").upper()) or {}
-    return str(d.get("ref") or "")
+    return str(pattern_law_entry(slug).get("ref") or "")
 
 
 def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
@@ -915,17 +968,39 @@ def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
         if not pats:
             md["law_state"] = md.get("law_state") or ""
             return out
-        # the dominant drawn shape (or the freshest judged one)
+        # Prefer the exact shape selected by the detector that owns this
+        # candidate. A different near-break shape earlier in render_patterns
+        # must never lend its reference to this setup/spot signal.
+        wanted = str(md.get("selected_pattern_slug") or md.get("pattern_type")
+                     or md.get("tl_pattern") or "").strip().upper()
+        if wanted in {"TRIANGLE", "CHANNEL", "NONE"}:
+            return out
         dom = None
-        for p in pats:
-            if p.get("near_break") is not False and p.get("lines"):
-                dom = p
-                break
-        if dom is None:
-            dom = pats[0]
-        slug = str(dom.get("law_slug") or dom.get("type") or "").upper()
-        out["law_slug"] = slug
-        d = PATTERN_LAW.get(slug) or {}
+        if wanted:
+            wanted_canonical = canonical_pattern_slug(wanted)
+            dom = next((p for p in pats
+                        if str(p.get("law_slug") or p.get("type") or "").strip().upper()
+                        in (wanted, wanted_canonical)), None)
+            # Explicit candidate label with no matching drawn geometry is a
+            # provenance mismatch. Do not silently borrow another pattern's
+            # reference; leave the stamp empty for diagnosis instead.
+            if dom is None:
+                return out
+        else:
+            # Legacy candidates may omit a selected slug. Only infer a shape
+            # when the renderer supplied exactly one plausible near-break
+            # geometry; never choose "the first" from an ambiguous list.
+            plausible = [p for p in pats
+                         if p.get("near_break") is not False and p.get("lines")]
+            if len(plausible) == 1:
+                dom = plausible[0]
+            elif len(pats) == 1:
+                dom = pats[0]
+            else:
+                return out
+        slug = str(dom.get("law_slug") or dom.get("type") or wanted or "").upper()
+        out["law_slug"] = canonical_pattern_slug(slug)
+        d = pattern_law_entry(slug)
         # state: take the stamped one, otherwise judge now
         st = str(dom.get("select_state") or dom.get("break_state") or "").upper()
         if st in ("", "UNKNOWN") and df is not None:
@@ -934,7 +1009,7 @@ def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
             except Exception:
                 st = st or ""
         out["law_state"] = st
-        md["law_slug"] = slug
+        md["law_slug"] = canonical_pattern_slug(slug)
         md["law_state"] = st
         md["law_state_fa"] = STATE_FA.get(st, st)
         md["pattern_ref"] = d.get("ref") or ""
@@ -1060,7 +1135,7 @@ def dominant_slug(pats) -> str:
         slug = str(p.get("law_slug") or p.get("type") or "").upper()
         if not slug:
             continue
-        if slug in RETIRED_PATTERNS:
+        if slug in RETIRED_PATTERNS or slug in {"TRIANGLE", "CHANNEL", "NONE"}:
             continue
         rank = _LABEL_RANK.index(slug) if slug in _LABEL_RANK else len(_LABEL_RANK)
         if p.get("near_break") is False:
@@ -1109,7 +1184,7 @@ def setup_gate_on() -> bool:
         not in ("0", "false", "off", "no")
 
 
-_CONTEXT_ONLY = ("RANGE", "TRENDLINE", "NONE", "")
+_CONTEXT_ONLY = ("RANGE", "TRENDLINE", "TRIANGLE", "CHANNEL", "NONE", "")
 
 
 def real_shapes(pats) -> list:

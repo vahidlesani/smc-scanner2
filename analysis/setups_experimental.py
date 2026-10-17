@@ -534,6 +534,17 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             _er_tl(candidate, trigger_df, htf_df=bundle.get("4h") or bundle.get("1h"))
         except Exception:
             pass
+        # R99q24 detection provenance: bind the line-break candidate to the
+        # exact geometry classified by this TLBREAK lane, then stamp after
+        # render enrichment so a nearby unrelated shape cannot lend its law.
+        try:
+            _slug_tl = str(pattern or "").strip().upper()
+            if _slug_tl:
+                candidate.metadata["selected_pattern_slug"] = _slug_tl
+                from analysis.pattern_law import engine_stamp as _stamp_tl
+                _stamp_tl(candidate.metadata, trigger_df, "TLBREAK")
+        except Exception as _stamp_tl_exc:
+            print(f"TLBREAK selected-pattern stamp warning: {_stamp_tl_exc}")
         return candidate
     return _tlbreak_rejection_scalp(bundle, style, refine_df, refine_tf,
                                     upper, lower, trigger_df, trigger_tf)
@@ -1644,33 +1655,151 @@ def _albrox_spike_context(df: np.ndarray | object) -> dict | None:
     return None
 
 
-def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
-    """r60 ALBROX (Viva 09-29 §6, dictated): the UNION setup.
+def _albrox_pattern_lane(bundle, style):
+    """ALBROX-owned candidate lane over shared validated geometry events.
 
-    Lane A — pattern breaks/fades: the exact TECHCLASSIC engine under the
-    ALBROX name (with-trend only, zones never veto, first-close doctrine).
-    Lane B — zone break/reclaim: FVG / flip / supply-demand / order block —
-    the trigger candle taps the zone and prints the FIRST close beyond its
-    edge (or TOHOM pre-close; the ladder only arms while price stays beyond
-    the level — CLOSE_THROUGH_INVALIDATION and the break contract guard it).
-    Lane C — zone rejection scalp: tap the NEAR edge, close back out with
-    rejection anatomy and NO close-through → counter-trend scalp confirmed
-    ONLY by the TOHOM illusion engine (rejection_scalp + tohom_required).
-    Per his law, zones may only ADD score here — they never gate.
+    Reuses only the edge scanner. It deliberately does NOT call TECHCLASSIC's
+    candidate/entry builder, stop ladder, alert lineage, or message-chain state.
     """
+    settings = get_settings()
+    structure_tf, _refine_tf, trigger_tf = timeframe_profile(style)
+    if not _ensure_frames(bundle, (structure_tf, trigger_tf)):
+        return None
+    pat, trig = bundle.get(structure_tf), bundle.get(trigger_tf)
+    if pat is None or len(pat) < 60 or trig is None or len(trig) < 6:
+        return None
+    from analysis.pattern_engine import STATE_BREAK, scan_edges, alert_lineage_key
+    live = 0.0
+    try:
+        live = float((getattr(bundle, "ticker", None) or {}).get("last_price") or 0.0)
+    except Exception:
+        pass
+    live = live if live > 0 else float(trig["close"].iloc[-1])
+    events = [ev for ev in scan_edges(pat, trig, structure_tf, live_price=live)
+              if ev.get("state") == STATE_BREAK]
+    if not events:
+        return None
+    events.sort(key=lambda ev: (
+        int(ev.get("bars_since_break") or 0),
+        -float(ev.get("structure_score") or 0.0)))
+    from analysis.trade_management import (
+        structural_buffer, clamp_path_to_band, clamp_stop_price,
+        sane_zone_geometry_ok,
+    )
+    from analysis.models import generate_viva_signal_id
+    atr_t = float((trig["high"] - trig["low"]).tail(14).mean() or 0.0)
+    atr_s = float((pat["high"] - pat["low"]).tail(14).mean() or 0.0)
+    if atr_t <= 0:
+        atr_t = atr_s
+    if atr_t <= 0:
+        return None
+    for ev in events:
+        direction = str(ev.get("direction") or "").upper()
+        if direction not in ("LONG", "SHORT"):
+            continue
+        edge = float(ev.get("line_price") or 0.0)
+        entry = float(trig["close"].iloc[-1])
+        if edge <= 0 or entry <= 0:
+            continue
+        # Keep the setup's own break lane fresh; a historical chase is not a
+        # new ALBROX signal. Geometry remains shared and independently stamped.
+        distance_atr = abs(entry - edge) / atr_t
+        if distance_atr > 1.5:
+            continue
+        buffer = max(structural_buffer(entry), 0.30 * atr_t)
+        sl = edge - buffer if direction == "LONG" else edge + buffer
+        sl, _ = clamp_stop_price(entry, direction, sl, str(trigger_tf))
+        risk = (entry - sl) if direction == "LONG" else (sl - entry)
+        if risk <= 0 or risk > 0.06 * entry:
+            continue
+        measured = ev.get("measured") or {}
+        measured_to = float(measured.get("to") or 0.0)
+        correct_side = measured_to > entry if direction == "LONG" else 0 < measured_to < entry
+        desired = abs(measured_to - entry) if correct_side else max(2.5 * risk, 1.5 * atr_t)
+        path, _path_source = clamp_path_to_band(entry, str(trigger_tf), desired)
+        if path <= 0:
+            continue
+        tp2 = entry + path if direction == "LONG" else entry - path
+        tp1 = entry + path / 3.0 if direction == "LONG" else entry - path / 3.0
+        # Corridor is the actual broken-edge-to-entry path; the invalidation
+        # must remain outside it. Reject only impossible geometry.
+        zlo = min(edge, entry)
+        zhi = max(edge, entry)
+        if direction == "LONG":
+            zlo = min(zlo, edge - 0.15 * atr_t)
+        else:
+            zhi = max(zhi, edge + 0.15 * atr_t)
+        if not sane_zone_geometry_ok(zlo, zhi, entry, sl, direction, atr_t,
+                                     str(style), line_price=edge,
+                                     trigger_tf=str(trigger_tf)):
+            continue
+        pattern = str(ev.get("pattern") or "VALIDATED_EDGE").upper()
+        cand = SignalCandidate(
+            signal_id=generate_viva_signal_id(str(bundle.symbol), str(style), "ALBROX"),
+            symbol=str(bundle.symbol), style=str(style).upper(),
+            setup_code="ALBROX", setup_name=SETUP_NAMES["ALBROX"],
+            strategy_fa=f"آلبروکس | شکست معتبر {pattern} در {structure_tf} — اولین کلوز",
+            direction=direction, score=min(10, max(6, int(round(float(ev.get("structure_score") or 6))))),
+            status="EDUCATIONAL", entry_zone_bottom=float(zlo), entry_zone_top=float(zhi),
+            planned_entry=float(entry), sl=float(sl), tp1=float(tp1), tp2=float(tp2),
+            rr_tp1=abs(tp1 - entry) / max(risk, 1e-12),
+            rr_tp2=abs(tp2 - entry) / max(risk, 1e-12),
+            bias="BULLISH" if direction == "LONG" else "BEARISH",
+            trigger_timeframe=str(trigger_tf),
+            evidence=[EvidenceItem(
+                "albrox_pattern", f"شکست {pattern} در {structure_tf}",
+                f"کلوز معتبر از ضلع {ev.get('side') or 'ساختار'} عبور کرده؛ "
+                f"فاصله از لبه {distance_atr:.2f} ATR است. زون ورود از هندسهٔ همان شکست ساخته شد.",
+                True, 2, level=edge, timeframe=str(structure_tf))],
+            warnings=[
+                "این تحلیل تا بسته‌شدن کندل تأییدی معتبر، دستور ورود نیست.",
+                f"عبور معتبر قیمت از {_n2(sl)} سناریو را باطل می‌کند.",
+            ],
+            mandatory_gates={"albrox_pattern_break": True},
+        )
+        points = ev.get("edge_points") or ev.get("upper_points") or ev.get("lower_points") or []
+        lineage = alert_lineage_key("ALBROX", str(bundle.symbol), str(trigger_tf),
+                                    str(structure_tf), ev.get("side"), direction,
+                                    points, is_break=True)
+        cand.metadata.update({
+            "strategy_variant": "ALBROX_PATTERN_BREAK",
+            "public_code": generate_viva_public_code("ALBROX", style),
+            "viva_pattern": pattern, "tl_pattern": pattern,
+            "pattern_type": pattern, "selected_pattern_slug": pattern,
+            "pattern_id": ev.get("pattern_id"), "lifecycle": ev.get("lifecycle"),
+            "pattern_tf": str(structure_tf), "tl_context_tf": str(structure_tf),
+            "viva_break_line": edge, "viva_breakout_line": edge,
+            "break_direction": "UP" if direction == "LONG" else "DOWN",
+            "trade_direction": direction, "viva_touch_count": int(ev.get("touches") or 0),
+            "viva_fit_error_atr": float(ev.get("fit_error_atr") or 0.0),
+            "pattern_geo": ev.get("pattern_geo") or {},
+            "break_line_geo": ev.get("line_geo") or {},
+            "approach_direction": ev.get("approach_direction"),
+            "alert_lineage_key": lineage,
+        })
+        try:
+            from analysis.render_kit import enrich_render
+            enrich_render(cand, trig, htf_df=pat)
+            from analysis.pattern_law import engine_stamp
+            engine_stamp(cand.metadata, trig, "ALBROX")
+        except Exception as exc:
+            print(f"ALBROX pattern render/stamp skipped {getattr(bundle, 'symbol', '?')}: {exc}")
+        return cand
+    return None
+
+
+def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
+    """ALBROX union: its own pattern-break lane, then its own zone/rejection lanes."""
     settings = get_settings()
     if not getattr(settings, "albrox_enabled", False):
         return None
     try:
-        from analysis.pattern_engine import detect_technoclassic as _tc_engine
-        cand = _tc_engine(bundle, style, setup_code="ALBROX")
+        cand = _albrox_pattern_lane(bundle, style)
         if cand is not None:
             return cand
     except Exception as exc:
         print(f"ALBROX pattern lane skipped {getattr(bundle, 'symbol', '?')}: {exc}")
     return _albrox_zone_lane(bundle, style)
-
-
 def _albrox_zones(sdf, bundle, structure_tf: str, atr_s: float) -> list:
     """Fresh zone inventory (r60): un-mitigated FVGs, pivot SD/flip zones and
     the freshest order blocks on the structure frame. Inventory only — the

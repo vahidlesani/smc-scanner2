@@ -107,7 +107,18 @@ def best_pattern(df: pd.DataFrame, tf: str, lookback: Optional[int] = None):
     """
     two = vg.fit_patterns(df, lookback=lookback)
     piv = vg.detect_pivot_patterns(df, lookback=lookback)
-    allp = sorted(two + piv, key=lambda r: -r.score)
+    # Viva 10-16: pivot-only families were retired from the live pattern set.
+    # The geometry library still contains legacy detectors for compatibility,
+    # so enforce the retirement at the consumer boundary before ranking. This
+    # prevents a high-scoring DOUBLE_TOP / H&S / CUP_HANDLE from outranking a
+    # valid live structure and leaking into the Spot chart or alert metadata.
+    from analysis.pattern_law import RETIRED_PATTERNS
+
+    allp = sorted(
+        two + [r for r in piv if str(getattr(r, "slug", "")).strip().upper()
+               not in RETIRED_PATTERNS],
+        key=lambda r: -r.score,
+    )
     if not allp:
         return None
     top = allp[0]
