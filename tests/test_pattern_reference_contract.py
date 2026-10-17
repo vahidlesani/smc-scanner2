@@ -149,3 +149,33 @@ def test_generic_channel_has_no_live_edge_rule_or_reference():
     assert "CHANNEL" not in _EDGE_RULES
     assert stamp["pattern_ref"] == ""
     assert md.get("pattern_ref") is None
+
+
+def test_single_trendline_rapid_return_is_failed_break_not_opposite_fresh_break():
+    from analysis.pattern_law import trendline_state
+
+    closes = [99.0, 99.0, 99.0, 99.0, 99.0, 99.0, 101.0, 100.5, 99.0, 99.0]
+    frame = pd.DataFrame({
+        "open": [v - 0.1 for v in closes],
+        "high": [v + 0.4 for v in closes],
+        "low": [v - 0.4 for v in closes],
+        "close": closes,
+    })
+    info = trendline_state(frame, _Line(100, 0.0), atr=1.0)
+    assert info["state"] == "FAILED_BREAK"
+    assert info["break_direction"] == "UP"
+
+
+def test_single_trendline_valid_close_break_keeps_its_direction():
+    from analysis.pattern_law import trendline_state
+
+    closes = [99.0] * 9 + [101.0]
+    frame = pd.DataFrame({
+        "open": [v - 0.1 for v in closes],
+        "high": [v + 0.4 for v in closes],
+        "low": [v - 0.4 for v in closes],
+        "close": closes,
+    })
+    info = trendline_state(frame, _Line(100, 0.0), atr=1.0)
+    assert info["state"] == "FRESH_BREAK"
+    assert info["break_direction"] == "UP"
