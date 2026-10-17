@@ -29,6 +29,8 @@ def test_range_and_generic_channel_use_explicit_canonical_aliases():
     assert pattern_law_entry("RANGE") == PATTERN_LAW["RECTANGLE"]
     assert canonical_pattern_slug("CHANNEL") == "CHANNEL_FLAT"
     assert pattern_law_entry("CHANNEL") == PATTERN_LAW["CHANNEL_FLAT"]
+    assert pattern_is_live("RANGE") is True
+    assert pattern_is_live("CHANNEL") is True
 
 
 def test_retired_pivot_shapes_cannot_be_reactivated_by_the_law_registry():
