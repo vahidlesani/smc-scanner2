@@ -1733,7 +1733,6 @@ def _albrox_pattern_lane(bundle, style):
                                      str(style), line_price=edge,
                                      trigger_tf=str(trigger_tf)):
             continue
-        stamp = str(trig["timestamp"].iloc[-1])[:16]
         pattern = str(ev.get("pattern") or "VALIDATED_EDGE").upper()
         cand = SignalCandidate(
             signal_id=generate_viva_signal_id(str(bundle.symbol), str(style), "ALBROX"),
