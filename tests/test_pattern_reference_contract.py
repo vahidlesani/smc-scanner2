@@ -179,3 +179,19 @@ def test_single_trendline_valid_close_break_keeps_its_direction():
     info = trendline_state(frame, _Line(100, 0.0), atr=1.0)
     assert info["state"] == "FRESH_BREAK"
     assert info["break_direction"] == "UP"
+
+
+def test_pattern_lifecycle_names_a_rapid_reentry_as_failed_break():
+    from analysis.pattern_law import select_state
+
+    closes = [100.0] * 8 + [111.0, 100.0]
+    frame = pd.DataFrame({
+        "open": [v - 0.1 for v in closes],
+        "high": [v + 0.4 for v in closes],
+        "low": [v - 0.4 for v in closes],
+        "close": closes,
+    })
+    info = select_state(frame, _Line(110, 0.0), _Line(90, 0.0), atr=1.0)
+    assert info["failed_break"] is True
+    assert info["reenter"] is True
+    assert info["state"] == "FAILED_BREAK"
