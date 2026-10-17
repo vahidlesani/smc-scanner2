@@ -76,3 +76,24 @@ def test_technoclassic_toggle_still_controls_technoclassic_lane(monkeypatch):
     result = patterns.detect_technoclassic(
         SimpleNamespace(symbol="TESTUSDT"), "SWING", setup_code="TECHCLASSIC")
     assert result is None
+
+
+def test_shared_pattern_geometry_has_setup_scoped_mint_guards():
+    import analysis.pattern_engine as patterns
+
+    bundle = SimpleNamespace(symbol="ETHUSDT")
+    event = {
+        "pattern_tf": "4h",
+        "pattern": "WEDGE_FALLING",
+        "side": "UPPER",
+        "edge_points": [
+            {"timestamp": "2026-10-16T00:00:00Z", "price": 100.0},
+            {"timestamp": "2026-10-17T00:00:00Z", "price": 105.0},
+        ],
+    }
+    tc = patterns._mint_guard_key(bundle, event, "TECHCLASSIC")
+    albrox = patterns._mint_guard_key(bundle, event, "ALBROX")
+    assert tc.startswith("TCMINT|ETHUSDT|")
+    assert albrox.startswith("ALBROXMINT|ETHUSDT|")
+    assert tc != albrox
+    assert tc == patterns._mint_guard_key(bundle, event, "TECHCLASSIC")
