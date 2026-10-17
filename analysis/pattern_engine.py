@@ -1489,6 +1489,7 @@ def measured_target(entry: float, direction: str, trigger_tf: str,
 
 def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
                      trigger_tf: str, cfg, setup_code: str = "TECHCLASSIC"):
+    _code = str(setup_code or "TECHCLASSIC").strip().upper()
     from analysis.indicators import structure_bias
     from analysis.models import EvidenceItem, generate_viva_public_code
     from analysis.patterns import pattern_info
