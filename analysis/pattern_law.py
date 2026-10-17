@@ -716,7 +716,16 @@ def select_state(df, upper, lower, atr: float,
                 break
         # ── the decision
         if inside:
-            inside = True
+            # Condition 5 outranks the generic INSIDE label: a close that
+            # re-entered the band within the configured window is a failed
+            # break, not merely an ordinary inside-pattern state.
+            if info.get("failed_break"):
+                info["state"] = "FAILED_BREAK"
+                info["why"] = (
+                    f"price returned inside the pattern within {reenter_bars} "
+                    "bars after an edge break"
+                )
+                return info
             info["state"] = "AT_EDGE" if min(du, dl) <= approach_atr else "INSIDE"
             info["why"] = (f"price inside the band, {info['dist_atr']} ATR off the "
                            f"nearest edge ({side})")
