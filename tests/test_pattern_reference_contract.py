@@ -227,3 +227,37 @@ def test_tlbreak_main_lane_stamps_its_selected_geometry_after_render_enrichment(
     assert stamp > enrich
     assert 'candidate.metadata["selected_pattern_slug"] = _slug_tl' in body
 
+def test_pattern_mint_guard_is_setup_scoped_and_preserves_techclassic_key():
+    from types import SimpleNamespace
+    from analysis.pattern_engine import _mint_guard_key
+
+    bundle = SimpleNamespace(symbol="ETHUSDT")
+    event = {
+        "pattern_tf": "4h",
+        "pattern": "WEDGE_FALLING",
+        "side": "upper",
+        "edge_points": [
+            {"timestamp": "2026-10-17T00:00:00Z", "price": 100.0},
+            {"timestamp": "2026-10-17T04:00:00Z", "price": 105.0},
+        ],
+    }
+    tc = _mint_guard_key(bundle, event)
+    tc_explicit = _mint_guard_key(bundle, event, "TECHCLASSIC")
+    albrox = _mint_guard_key(bundle, event, "ALBROX")
+    assert tc == tc_explicit
+    assert tc.startswith("TCMINT|ETHUSDT|")
+    assert albrox.startswith("ALBROXMINT|ETHUSDT|")
+    assert tc != albrox
+
+
+def test_shared_pattern_lane_keeps_techclassic_message_chain_setup_scoped():
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "analysis" / "pattern_engine.py"
+    text = source.read_text(encoding="utf-8")
+    start = text.index("def _build_candidate(")
+    end = text.index("\ndef _attach_r63_geometry", start)
+    body = text[start:end]
+    assert 'alert_lineage_key(setup_code, bundle.symbol' in body
+    assert '_mint_guard_key(bundle, ev, setup_code)' in text
+    assert '_code == "TECHCLASSIC" else {})' in body
