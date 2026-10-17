@@ -1,4 +1,6 @@
 """Behavioral contracts for the canonical pattern-law registry."""
+import pandas as pd
+
 from analysis.pattern_law import (
     PATTERN_LAW,
     canonical_pattern_slug,
@@ -100,3 +102,21 @@ def test_pair_geometry_distinguishes_falling_wedge_from_parallel_channel():
     channel = pair_metrics(channel_upper, channel_lower, 100)
     assert channel["ok"] is True
     assert classify_pair(channel) == "CHANNEL_DESCENDING"
+
+
+def test_generic_triangle_fallback_is_diagnostic_not_a_trade_event(monkeypatch):
+    from analysis import pattern_engine
+
+    n = 50
+    frame = pd.DataFrame({
+        "timestamp": pd.date_range("2026-01-01", periods=n, freq="4h"),
+        "open": [100.0] * n,
+        "high": [101.0] * n,
+        "low": [99.0] * n,
+        "close": [100.0] * n,
+        "volume": [1000.0] * n,
+    })
+    monkeypatch.setattr(pattern_engine, "fit_edge_line",
+                        lambda df, side, cfg, idx: _Line(130 if side == "HIGH" else 100, -0.1))
+    monkeypatch.setattr(pattern_engine, "classify_shape", lambda *args, **kwargs: "TRIANGLE")
+    assert pattern_engine.scan_edges(frame, frame.tail(10), "4h") == []
