@@ -68,3 +68,33 @@ def test_engine_stamp_does_not_borrow_an_unrelated_shape_when_label_mismatches()
     stamp = engine_stamp(md, setup_code="TECHCLASSIC")
     assert stamp["pattern_ref"] == ""
     assert md.get("pattern_ref") is None
+
+
+class _Line:
+    def __init__(self, intercept, slope, first_index=10):
+        self.intercept = float(intercept)
+        self.slope = float(slope)
+        self.first_index = first_index
+        self.points = [{"index": 10}, {"index": 50}, {"index": 90}]
+
+    def price_at(self, x):
+        return self.intercept + self.slope * float(x)
+
+
+def test_pair_geometry_distinguishes_falling_wedge_from_parallel_channel():
+    from analysis.pattern_law import pair_metrics, classify_pair
+
+    # Both edges descend, but the upper edge descends materially faster and
+    # the gap contracts: this is a falling wedge, not a descending channel.
+    wedge_upper = _Line(130, -0.25)
+    wedge_lower = _Line(100, -0.10)
+    wedge = pair_metrics(wedge_upper, wedge_lower, 100)
+    assert wedge["ok"] is True
+    assert classify_pair(wedge) == "WEDGE_FALLING"
+
+    # Similar relative edge speeds and a stable band must remain a channel.
+    channel_upper = _Line(130, -0.20)
+    channel_lower = _Line(100, -0.17)
+    channel = pair_metrics(channel_upper, channel_lower, 100)
+    assert channel["ok"] is True
+    assert classify_pair(channel) == "CHANNEL_DESCENDING"
