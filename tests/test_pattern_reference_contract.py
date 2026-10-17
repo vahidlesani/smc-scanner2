@@ -30,10 +30,12 @@ def test_every_active_shape_has_a_reference_and_rule():
 def test_range_and_generic_channel_use_explicit_canonical_aliases():
     assert canonical_pattern_slug("RANGE") == "RECTANGLE"
     assert pattern_law_entry("RANGE") == PATTERN_LAW["RECTANGLE"]
-    assert canonical_pattern_slug("CHANNEL") == "CHANNEL_FLAT"
-    assert pattern_law_entry("CHANNEL") == PATTERN_LAW["CHANNEL_FLAT"]
+    # A generic CHANNEL label does not prove a horizontal channel; it must not
+    # borrow that pattern's reference or be treated as a live named shape.
+    assert canonical_pattern_slug("CHANNEL") == "CHANNEL"
+    assert pattern_law_entry("CHANNEL") == {}
     assert pattern_is_live("RANGE") is True
-    assert pattern_is_live("CHANNEL") is True
+    assert pattern_is_live("CHANNEL") is False
     assert pattern_is_live("TRIANGLE") is False
     assert dominant_slug([{"type": "TRIANGLE"}]) == ""
     assert dominant_slug([{"type": "TRIANGLE"}, {"type": "WEDGE_FALLING"}]) == "WEDGE_FALLING"
