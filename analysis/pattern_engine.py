@@ -1284,11 +1284,13 @@ def _brooks_edge_ok(trig: pd.DataFrame, ev: Dict) -> bool:
 
 
 def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
-    """TECHCLASSIC live detector: only this setup issues pattern signals
-    (breakouts AND confirmed edge-fades). Other setups untouched.
-    r60: setup_code is injectable — ALBROX's pattern lane is THIS engine
-    under the ALBROX name (his union law: ALBROX = TLBREAK + TECHCLASSIC +
-    zones; the zone lanes live in setups_experimental)."""
+    """TECHCLASSIC's live pattern detector (breakouts and edge-fades).
+
+    The setup_code parameter remains for compatibility with older callers,
+    but ALBROX no longer borrows this candidate/entry builder: its own zone
+    lane owns ALBROX candidates. Shared geometry helpers remain reusable;
+    setup-specific candidate logic does not.
+    """
     settings = _s()
     if not getattr(settings, "technoclassic_enabled", False):
         return None
