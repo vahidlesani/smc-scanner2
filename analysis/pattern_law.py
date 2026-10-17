@@ -885,10 +885,32 @@ STATE_FA = {
 CANDLE_FA = {"PINBAR": "پین‌بار", "INV_PINBAR": "پین‌بار معکوس", "DOJI": "دوجی"}
 
 
+# Detector labels are not perfectly canonical yet. Keep aliases explicit so
+# a detector can retain its geometry label while still citing the correct law.
+PATTERN_ALIASES: Dict[str, str] = {
+    "RANGE": "RECTANGLE",
+    "CHANNEL": "CHANNEL_FLAT",
+}
+
+
+def canonical_pattern_slug(slug: str) -> str:
+    key = str(slug or "").strip().upper()
+    if key in RETIRED_PATTERNS:
+        return key
+    return PATTERN_ALIASES.get(key, key)
+
+
+def pattern_law_entry(slug: str) -> Dict:
+    """Return the law for one exact selected slug, resolving only explicit aliases."""
+    key = str(slug or "").strip().upper()
+    if not key or key in RETIRED_PATTERNS:
+        return {}
+    return PATTERN_LAW.get(canonical_pattern_slug(key)) or {}
+
+
 def pattern_ref_fa(slug: str) -> str:
     """Persian one-liner for an alert caption: the pattern's engine reference."""
-    d = PATTERN_LAW.get(str(slug or "").upper()) or {}
-    return str(d.get("ref") or "")
+    return str(pattern_law_entry(slug).get("ref") or "")
 
 
 def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
@@ -915,17 +937,27 @@ def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
         if not pats:
             md["law_state"] = md.get("law_state") or ""
             return out
-        # the dominant drawn shape (or the freshest judged one)
+        # Prefer the exact shape selected by the detector that owns this
+        # candidate. A different near-break shape earlier in render_patterns
+        # must never lend its reference to this setup/spot signal.
+        wanted = str(md.get("selected_pattern_slug") or md.get("pattern_type")
+                     or md.get("tl_pattern") or "").strip().upper()
         dom = None
-        for p in pats:
-            if p.get("near_break") is not False and p.get("lines"):
-                dom = p
-                break
+        if wanted:
+            wanted_canonical = canonical_pattern_slug(wanted)
+            dom = next((p for p in pats
+                        if str(p.get("law_slug") or p.get("type") or "").strip().upper()
+                        in (wanted, wanted_canonical)), None)
+        if dom is None:
+            for p in pats:
+                if p.get("near_break") is not False and p.get("lines"):
+                    dom = p
+                    break
         if dom is None:
             dom = pats[0]
-        slug = str(dom.get("law_slug") or dom.get("type") or "").upper()
-        out["law_slug"] = slug
-        d = PATTERN_LAW.get(slug) or {}
+        slug = str(dom.get("law_slug") or dom.get("type") or wanted or "").upper()
+        out["law_slug"] = canonical_pattern_slug(slug)
+        d = pattern_law_entry(slug)
         # state: take the stamped one, otherwise judge now
         st = str(dom.get("select_state") or dom.get("break_state") or "").upper()
         if st in ("", "UNKNOWN") and df is not None:
