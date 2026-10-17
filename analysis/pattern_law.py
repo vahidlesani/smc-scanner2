@@ -949,13 +949,23 @@ def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
             dom = next((p for p in pats
                         if str(p.get("law_slug") or p.get("type") or "").strip().upper()
                         in (wanted, wanted_canonical)), None)
-        if dom is None:
-            for p in pats:
-                if p.get("near_break") is not False and p.get("lines"):
-                    dom = p
-                    break
-        if dom is None:
-            dom = pats[0]
+            # Explicit candidate label with no matching drawn geometry is a
+            # provenance mismatch. Do not silently borrow another pattern's
+            # reference; leave the stamp empty for diagnosis instead.
+            if dom is None:
+                return out
+        else:
+            # Legacy candidates may omit a selected slug. Only infer a shape
+            # when the renderer supplied exactly one plausible near-break
+            # geometry; never choose "the first" from an ambiguous list.
+            plausible = [p for p in pats
+                         if p.get("near_break") is not False and p.get("lines")]
+            if len(plausible) == 1:
+                dom = plausible[0]
+            elif len(pats) == 1:
+                dom = pats[0]
+            else:
+                return out
         slug = str(dom.get("law_slug") or dom.get("type") or wanted or "").upper()
         out["law_slug"] = canonical_pattern_slug(slug)
         d = pattern_law_entry(slug)
