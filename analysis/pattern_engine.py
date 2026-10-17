@@ -1224,22 +1224,20 @@ def tf_minutes_safe(tf: str) -> float:
 _MINT_GUARD_TTL_S = 12 * 3600  # r60.2: one live alert per visual pattern across lanes
 
 
-def _mint_guard_key(bundle, ev) -> str:
-    """Pattern-level identity for the twin guard: symbol + pattern TF + kind +
-    edge + the edge's FIRST and LAST pivot timestamps. A new pivot (a genuine
-    structural change) yields a new key and may alert again; a mere refit
-    yields the SAME key and stays silent. No trigger TF in the key — that is
-    the whole point (FET trig-1h vs trig-15m twins)."""
+def _mint_guard_key(bundle, ev, setup_code: str = "TECHCLASSIC") -> str:
+    """Pattern-level twin guard scoped to a setup, not just shared geometry.
+
+    Same pivots across trigger timeframes are deduped WITHIN a setup. A shared
+    geometry event must not let TECHCLASSIC suppress ALBROX (or vice versa).
+    The TECHCLASSIC prefix stays byte-for-byte compatible with existing KV keys.
+    """
     pts = [str(p.get("timestamp") or p.get("ts") or "")[:16]
            for p in (ev.get("edge_points") or ())]
     if not pts:
         pts = [str(getattr(bundle, "symbol", ""))]
-    # r60.6: DIRECTION is NOT in the key — «جهت شکست رو تایید بکنن»: once a
-    # break of this pattern owns a live chain, the OPPOSITE-direction break of
-    # the same pattern may not mint a rival scenario (his ONDO complaint: the
-    # engine kept hunting SHORTS after the downtrend had already broken UP).
-    # A new pivot still changes the key and frees the pattern.
-    return "|".join(("TCMINT", str(getattr(bundle, "symbol", "")).upper(),
+    _code = str(setup_code or "TECHCLASSIC").strip().upper()
+    _prefix = "TCMINT" if _code == "TECHCLASSIC" else f"{_code}MINT"
+    return "|".join((_prefix, str(getattr(bundle, "symbol", "")).upper(),
                      str(ev.get("pattern_tf") or ev.get("pattern") or ""),
                      str(ev.get("pattern") or ""), str(ev.get("side") or ""),
                      pts[0], pts[-1]))
@@ -1415,7 +1413,7 @@ def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
         # trig-15m two hours later) must not post twice. The guard key lives
         # at PATTERN level (no trigger TF), so any lane meeting the same
         # pivots within the freshness window stays silent.
-        _guard = _mint_guard_key(bundle, ev)
+        _guard = _mint_guard_key(bundle, ev, setup_code)
         try:
             from database.bot_kv import get_json as _gj
             _seen = _gj(_guard, {}) or {}
@@ -1665,7 +1663,8 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     try:
         import time as _t
         from database.bot_kv import get_json
-        link = get_json(f"tc_link|{str(bundle.symbol).upper()}|{structure_tf}", {}) or {}
+        link = (get_json(f"tc_link|{str(bundle.symbol).upper()}|{structure_tf}", {}) or {}
+                if _code == "TECHCLASSIC" else {})
         if link.get("mid") and float(link.get("ts") or 0) > _t.time() - 40 * 3600:
             candidate.metadata["approaching_message_id"] = int(link["mid"])
     except Exception:
@@ -1884,7 +1883,7 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     # alert was re-created / superseded before any confirm-TF close. The
     # lineage is the broken EDGE itself - identified by its defining pivots
     # timestamps, which do not move as the fit window slides.
-    _lk = alert_lineage_key("TECHCLASSIC", bundle.symbol, trigger_tf, ev.get("pattern_tf") or structure_tf,
+    _lk = alert_lineage_key(setup_code, bundle.symbol, trigger_tf, ev.get("pattern_tf") or structure_tf,
                             ev.get("side"), direction,
                             ev.get("upper_points") if ev.get("side") == "upper" else ev.get("lower_points"),
                             is_break)
