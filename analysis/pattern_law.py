@@ -1107,7 +1107,7 @@ def dominant_slug(pats) -> str:
         slug = str(p.get("law_slug") or p.get("type") or "").upper()
         if not slug:
             continue
-        if slug in RETIRED_PATTERNS:
+        if slug in RETIRED_PATTERNS or slug in {"TRIANGLE", "NONE"}:
             continue
         rank = _LABEL_RANK.index(slug) if slug in _LABEL_RANK else len(_LABEL_RANK)
         if p.get("near_break") is False:
@@ -1156,7 +1156,7 @@ def setup_gate_on() -> bool:
         not in ("0", "false", "off", "no")
 
 
-_CONTEXT_ONLY = ("RANGE", "TRENDLINE", "NONE", "")
+_CONTEXT_ONLY = ("RANGE", "TRENDLINE", "TRIANGLE", "NONE", "")
 
 
 def real_shapes(pats) -> list:
