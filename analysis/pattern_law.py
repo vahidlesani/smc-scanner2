@@ -808,7 +808,7 @@ def trendline_state(df, line, atr: float, lookback: int = 40,
         # interaction history on the line
         i0 = max(1, n - max(6, int(lookback)))
         touched = rejected = 0
-        break_age = None
+        crosses = []
         for x in range(i0, n):
             vx = _price_at(line, x)
             if vx is None:
@@ -819,10 +819,27 @@ def trendline_state(df, line, atr: float, lookback: int = 40,
                 vp = _price_at(line, x - 1)
                 if vp is not None:
                     if closes[x - 1] < vp and closes[x] > vx + CLOSE_BUFFER_ATR * atr:
-                        break_age = n - 1 - x
-                    if closes[x - 1] > vp and closes[x] < vx - CLOSE_BUFFER_ATR * atr:
-                        break_age = n - 1 - x
+                        crosses.append((x, "UP"))
+                    elif closes[x - 1] > vp and closes[x] < vx - CLOSE_BUFFER_ATR * atr:
+                        crosses.append((x, "DOWN"))
+        break_age = n - 1 - crosses[-1][0] if crosses else None
         info["touches"] = touched
+        # A close back through the line within the first three bars is a
+        # FAILED_BREAK lifecycle event, not a fresh break in the opposite
+        # direction. Keep the original break direction visible for diagnosis.
+        if len(crosses) >= 2:
+            prev_cross, last_cross = crosses[-2], crosses[-1]
+            if (prev_cross[1] != last_cross[1]
+                    and last_cross[0] - prev_cross[0] <= 3
+                    and n - 1 - prev_cross[0] <= 3):
+                info["state"] = "FAILED_BREAK"
+                info["break_direction"] = prev_cross[1]
+                info["failed_break_age"] = n - 1 - prev_cross[0]
+                info["why"] = (
+                    f"{prev_cross[1]} break returned through the line within "
+                    f"{last_cross[0] - prev_cross[0]} bars"
+                )
+                return info
         for x in range(max(1, n - 6), n):
             vx = _price_at(line, x)
             if vx is None:
@@ -832,6 +849,7 @@ def trendline_state(df, line, atr: float, lookback: int = 40,
                 rejected += 1
         if break_age is not None and break_age <= fresh_bars:
             info["state"] = "FRESH_BREAK"
+            info["break_direction"] = crosses[-1][1]
             info["why"] = f"line closed through {break_age} bars ago"
             return info
         if break_age is not None and abs(d) <= retest_atr:
