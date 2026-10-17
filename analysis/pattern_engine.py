@@ -1088,9 +1088,13 @@ def pivot_pattern_events(pattern_df: pd.DataFrame, trigger_df: pd.DataFrame,
         def _pt(i, price):
             return {"timestamp": str(pdf["timestamp"].iloc[int(i)]), "price": float(price)}
 
+        from analysis.pattern_law import pattern_is_live
         for item in detect_pivot_patterns(pdf, atr_p):
-            kind = str(item.get("type") or "")
-            if kind not in PIVOT_DOCTRINE:
+            kind = str(item.get("type") or "").strip().upper()
+            # R99q21/R99q23: the pivot-only family was explicitly retired
+            # from the active pattern set. Keep the legacy detector available
+            # for diagnostics, but never turn a retired shape into a live event.
+            if not pattern_is_live(kind) or kind not in PIVOT_DOCTRINE:
                 continue
             direction, role, want_from = PIVOT_DOCTRINE[kind]
             piv = list(item.get("pivots") or [])
