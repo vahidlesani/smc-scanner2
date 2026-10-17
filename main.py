@@ -928,7 +928,8 @@ def run_discovery_scan() -> Dict[str, int]:
             f"  funnel {sc:8s} seen={t['seen']} ready_new={t['ready_new']} "
             f"dead_gate={t['dead_gate']}[{blocked}] low_score={t['low_score']} "
             f"dup={t['dup']} absorbed={t.get('absorbed',0)} quiet={t.get('same_zone_quiet',0)} "
-            f"liccap={t.get('license_cap',0)} sep2={t.get('sep2pct',0)} preTp1={t['suppressed_pre_tp1']} "
+            f"liccap={t.get('license_cap',0)} pace={t.get('weekly_pace_deferred',0)} "
+            f"week={t.get('weekly_deferred',0)} sep2={t.get('sep2pct',0)} preTp1={t['suppressed_pre_tp1']} "
             f"budget={t.get('budget_deferred',0)} addfail={t.get('add_failed',0)} edufail={t.get('educate_failed',0)}"
         )
     try:
