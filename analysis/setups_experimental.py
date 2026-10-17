@@ -1686,6 +1686,7 @@ def _albrox_pattern_lane(bundle, style):
         structural_buffer, clamp_path_to_band, clamp_stop_price,
         sane_zone_geometry_ok,
     )
+    from analysis.models import generate_viva_signal_id
     atr_t = float((trig["high"] - trig["low"]).tail(14).mean() or 0.0)
     atr_s = float((pat["high"] - pat["low"]).tail(14).mean() or 0.0)
     if atr_t <= 0:
@@ -1735,7 +1736,7 @@ def _albrox_pattern_lane(bundle, style):
         stamp = str(trig["timestamp"].iloc[-1])[:16]
         pattern = str(ev.get("pattern") or "VALIDATED_EDGE").upper()
         cand = SignalCandidate(
-            signal_id=f"viva-albroxp-{bundle.symbol}-{trigger_tf}-{stamp}-{pattern}-{direction}",
+            signal_id=generate_viva_signal_id(str(bundle.symbol), str(style), "ALBROX"),
             symbol=str(bundle.symbol), style=str(style).upper(),
             setup_code="ALBROX", setup_name=SETUP_NAMES["ALBROX"],
             strategy_fa=f"آلبروکس | شکست معتبر {pattern} در {structure_tf} — اولین کلوز",
