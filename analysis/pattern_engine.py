@@ -72,7 +72,7 @@ STATE_FADE = "REJECTION_FADE"
 # The 10-06 «Universal Breakout Direction» override that made every shape
 # two-sided is RETIRED — it re-created the ADA/LIT counter-nature signals.
 _EDGE_RULES = {p: {"upper": "LONG", "lower": "SHORT"} for p in (
-    "TRIANGLE_SYMMETRICAL", "TRIANGLE", "CHANNEL_FLAT", "CHANNEL",
+    "TRIANGLE_SYMMETRICAL", "CHANNEL_FLAT", "CHANNEL",
     "TRENDLINE", "HORIZONTAL_SR", "BROADENING", "RECTANGLE", "RANGE",
 )}
 _EDGE_RULES.update({
