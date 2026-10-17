@@ -4,6 +4,7 @@ import pandas as pd
 from analysis.pattern_law import (
     PATTERN_LAW,
     canonical_pattern_slug,
+    dominant_slug,
     engine_stamp,
     pattern_is_live,
     pattern_law_entry,
@@ -33,6 +34,9 @@ def test_range_and_generic_channel_use_explicit_canonical_aliases():
     assert pattern_law_entry("CHANNEL") == PATTERN_LAW["CHANNEL_FLAT"]
     assert pattern_is_live("RANGE") is True
     assert pattern_is_live("CHANNEL") is True
+    assert pattern_is_live("TRIANGLE") is False
+    assert dominant_slug([{"type": "TRIANGLE"}]) == ""
+    assert dominant_slug([{"type": "TRIANGLE"}, {"type": "WEDGE_FALLING"}]) == "WEDGE_FALLING"
 
 
 def test_retired_pivot_shapes_cannot_be_reactivated_by_the_law_registry():
