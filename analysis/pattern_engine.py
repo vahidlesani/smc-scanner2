@@ -1977,6 +1977,19 @@ def _build_candidate(bundle, style: str, ev: Dict, pat, trig, structure_tf: str,
     except Exception:
         pass
     _attach_r63_geometry(candidate, ev, structure_tf)
+    # R99q23 integration fix: _base_candidate stamps generic render context
+    # before this setup-specific pattern event is available. Re-stamp here
+    # with the exact edge/pivot slug that minted this TECHCLASSIC candidate;
+    # otherwise an unrelated near-break shape on the chart could lend its law.
+    try:
+        _selected_slug = str(ev.get("pattern") or "").strip().upper()
+        if _selected_slug:
+            candidate.metadata["selected_pattern_slug"] = _selected_slug
+            candidate.metadata["pattern_type"] = _selected_slug
+            from analysis.pattern_law import engine_stamp as _es_selected
+            _es_selected(candidate.metadata, trig, str(setup_code or "TECHCLASSIC"))
+    except Exception as _es_selected_exc:
+        print(f"TECHCLASSIC selected-pattern stamp warning: {_es_selected_exc}")
     return candidate
 
 
