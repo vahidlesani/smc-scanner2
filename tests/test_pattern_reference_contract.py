@@ -124,3 +124,13 @@ def test_generic_triangle_fallback_is_diagnostic_not_a_trade_event(monkeypatch):
                         lambda df, side, cfg, idx: _Line(130 if side == "HIGH" else 100, -0.1))
     monkeypatch.setattr(pattern_engine, "classify_shape", lambda *args, **kwargs: "TRIANGLE")
     assert pattern_engine.scan_edges(frame, frame.tail(10), "4h") == []
+
+
+def test_engine_stamp_does_not_promote_generic_triangle_to_a_live_reference():
+    md = {
+        "pattern_type": "TRIANGLE",
+        "render_patterns": [{"type": "TRIANGLE", "near_break": True, "lines": [{"side": "HIGH"}, {"side": "LOW"}]}],
+    }
+    stamp = engine_stamp(md, setup_code="TECHCLASSIC")
+    assert stamp["pattern_ref"] == ""
+    assert md.get("pattern_ref") is None
