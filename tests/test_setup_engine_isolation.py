@@ -41,3 +41,38 @@ def test_albrox_falls_back_to_its_zone_lane_when_pattern_lane_has_no_candidate(m
 
     result = setups.detect_albrox(SimpleNamespace(symbol="TESTUSDT"), "SWING")
     assert result is marker
+
+def test_albrox_pattern_lane_uses_albrox_toggle_not_technoclassic_toggle(monkeypatch):
+    from types import SimpleNamespace
+    import analysis.pattern_engine as patterns
+    import analysis.setups_v7 as setups_v7
+
+    seen = []
+    monkeypatch.setattr(patterns, "_s", lambda: SimpleNamespace(
+        albrox_enabled=True, technoclassic_enabled=False))
+    monkeypatch.setattr(setups_v7, "timeframe_profile",
+                        lambda style: ("4h", "1h", "15m"))
+    monkeypatch.setattr(setups_v7, "_ensure_frames",
+                        lambda bundle, frames: seen.append(tuple(frames)) or False)
+
+    result = patterns.detect_technoclassic(
+        SimpleNamespace(symbol="TESTUSDT"), "SWING", setup_code="ALBROX")
+    assert result is None
+    assert seen == [("4h", "15m")]
+
+
+def test_technoclassic_toggle_still_controls_technoclassic_lane(monkeypatch):
+    from types import SimpleNamespace
+    import analysis.pattern_engine as patterns
+    import analysis.setups_v7 as setups_v7
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("disabled TECHCLASSIC should return before frame access")
+
+    monkeypatch.setattr(patterns, "_s", lambda: SimpleNamespace(
+        albrox_enabled=True, technoclassic_enabled=False))
+    monkeypatch.setattr(setups_v7, "_ensure_frames", unexpected)
+
+    result = patterns.detect_technoclassic(
+        SimpleNamespace(symbol="TESTUSDT"), "SWING", setup_code="TECHCLASSIC")
+    assert result is None
