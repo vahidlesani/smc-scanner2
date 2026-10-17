@@ -195,3 +195,19 @@ def test_pattern_lifecycle_names_a_rapid_reentry_as_failed_break():
     assert info["failed_break"] is True
     assert info["reenter"] is True
     assert info["state"] == "FAILED_BREAK"
+
+
+def test_technoclassic_restamps_the_exact_event_pattern_after_candidate_build():
+    # _base_candidate stamps generic render context first; the live TC event is
+    # only known later. Guard the integration point so a nearby unrelated
+    # rendered shape cannot lend its reference to the selected trade.
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "analysis" / "pattern_engine.py"
+    text = source.read_text(encoding="utf-8")
+    start = text.index("def _build_candidate(")
+    end = text.index("\\ndef _attach_r63_geometry", start)
+    body = text[start:end]
+    assert 'candidate.metadata["selected_pattern_slug"] = _selected_slug' in body
+    assert '_selected_slug = str(ev.get("pattern") or "").strip().upper()' in body
+    assert '_es_selected(candidate.metadata, trig, str(setup_code or "TECHCLASSIC"))' in body
