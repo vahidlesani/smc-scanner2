@@ -894,7 +894,6 @@ CANDLE_FA = {"PINBAR": "پین‌بار", "INV_PINBAR": "پین‌بار معک�
 # a detector can retain its geometry label while still citing the correct law.
 PATTERN_ALIASES: Dict[str, str] = {
     "RANGE": "RECTANGLE",
-    "CHANNEL": "CHANNEL_FLAT",
 }
 
 
@@ -947,7 +946,7 @@ def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
         # must never lend its reference to this setup/spot signal.
         wanted = str(md.get("selected_pattern_slug") or md.get("pattern_type")
                      or md.get("tl_pattern") or "").strip().upper()
-        if wanted in {"TRIANGLE", "NONE"}:
+        if wanted in {"TRIANGLE", "CHANNEL", "NONE"}:
             return out
         dom = None
         if wanted:
@@ -1109,7 +1108,7 @@ def dominant_slug(pats) -> str:
         slug = str(p.get("law_slug") or p.get("type") or "").upper()
         if not slug:
             continue
-        if slug in RETIRED_PATTERNS or slug in {"TRIANGLE", "NONE"}:
+        if slug in RETIRED_PATTERNS or slug in {"TRIANGLE", "CHANNEL", "NONE"}:
             continue
         rank = _LABEL_RANK.index(slug) if slug in _LABEL_RANK else len(_LABEL_RANK)
         if p.get("near_break") is False:
@@ -1158,7 +1157,7 @@ def setup_gate_on() -> bool:
         not in ("0", "false", "off", "no")
 
 
-_CONTEXT_ONLY = ("RANGE", "TRENDLINE", "TRIANGLE", "NONE", "")
+_CONTEXT_ONLY = ("RANGE", "TRENDLINE", "TRIANGLE", "CHANNEL", "NONE", "")
 
 
 def real_shapes(pats) -> list:
