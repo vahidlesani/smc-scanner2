@@ -112,11 +112,15 @@ def best_pattern(df: pd.DataFrame, tf: str, lookback: Optional[int] = None):
     # so enforce the retirement at the consumer boundary before ranking. This
     # prevents a high-scoring DOUBLE_TOP / H&S / CUP_HANDLE from outranking a
     # valid live structure and leaking into the Spot chart or alert metadata.
-    from analysis.pattern_law import RETIRED_PATTERNS
+    from analysis.pattern_law import pattern_is_live
 
+    # Enforce the canonical live-pattern registry on BOTH geometry paths.
+    # Filtering only retired pivot families left generic TRIANGLE/CHANNEL
+    # fallbacks eligible for live Spot metadata despite lacking validated
+    # shape rules. Keep those diagnostic-only candidates out before ranking.
     allp = sorted(
         [r for r in (two + piv)
-         if str(getattr(r, "slug", "")).strip().upper() not in RETIRED_PATTERNS],
+         if pattern_is_live(str(getattr(r, "slug", "")).strip().upper())],
         key=lambda r: -r.score,
     )
     if not allp:
