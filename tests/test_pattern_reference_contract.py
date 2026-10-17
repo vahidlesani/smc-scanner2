@@ -206,7 +206,7 @@ def test_technoclassic_restamps_the_exact_event_pattern_after_candidate_build():
     source = Path(__file__).resolve().parents[1] / "analysis" / "pattern_engine.py"
     text = source.read_text(encoding="utf-8")
     start = text.index("def _build_candidate(")
-    end = text.index("\\ndef _attach_r63_geometry", start)
+    end = text.index("\ndef _attach_r63_geometry", start)
     body = text[start:end]
     assert 'candidate.metadata["selected_pattern_slug"] = _selected_slug' in body
     assert '_selected_slug = str(ev.get("pattern") or "").strip().upper()' in body
