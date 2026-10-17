@@ -1645,30 +1645,21 @@ def _albrox_spike_context(df: np.ndarray | object) -> dict | None:
 
 
 def detect_albrox(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
-    """r60 ALBROX (Viva 09-29 §6, dictated): the UNION setup.
+    """ALBROX's own spike/reclaim/base/pinbar + zone detector.
 
-    Lane A — pattern breaks/fades: the exact TECHCLASSIC engine under the
-    ALBROX name (with-trend only, zones never veto, first-close doctrine).
-    Lane B — zone break/reclaim: FVG / flip / supply-demand / order block —
-    the trigger candle taps the zone and prints the FIRST close beyond its
-    edge (or TOHOM pre-close; the ladder only arms while price stays beyond
-    the level — CLOSE_THROUGH_INVALIDATION and the break contract guard it).
-    Lane C — zone rejection scalp: tap the NEAR edge, close back out with
-    rejection anatomy and NO close-through → counter-trend scalp confirmed
-    ONLY by the TOHOM illusion engine (rejection_scalp + tohom_required).
-    Per his law, zones may only ADD score here — they never gate.
+    Pattern geometry may be drawn as shared chart context, but ALBROX must not
+    borrow TECHCLASSIC's candidate builder, entry rules, or rejection path.
+    Its own zone lane owns candidate creation; shared geometry is descriptive
+    only and cannot create or veto an ALBROX trade.
     """
     settings = get_settings()
     if not getattr(settings, "albrox_enabled", False):
         return None
     try:
-        from analysis.pattern_engine import detect_technoclassic as _tc_engine
-        cand = _tc_engine(bundle, style, setup_code="ALBROX")
-        if cand is not None:
-            return cand
+        return _albrox_zone_lane(bundle, style)
     except Exception as exc:
-        print(f"ALBROX pattern lane skipped {getattr(bundle, 'symbol', '?')}: {exc}")
-    return _albrox_zone_lane(bundle, style)
+        print(f"ALBROX own zone lane skipped {getattr(bundle, 'symbol', '?')}: {exc}")
+        return None
 
 
 def _albrox_zones(sdf, bundle, structure_tf: str, atr_s: float) -> list:
