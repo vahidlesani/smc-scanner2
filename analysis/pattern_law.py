@@ -179,10 +179,11 @@ _FAMILY_ORDER = ("flag", "box", "converging", "parallel", "diverging")
 def pattern_is_live(slug: str) -> bool:
     """True when a canonical or explicitly aliased slug may be emitted as a pattern."""
     raw = str(slug or "").strip().upper()
-    if raw in RETIRED_PATTERNS:
+    # Generic TRIANGLE is a diagnostic fallback, not a named/validated shape.
+    if raw in RETIRED_PATTERNS or raw in {"TRIANGLE", "NONE"}:
         return False
     k = canonical_pattern_slug(raw)
-    if k in RETIRED_PATTERNS:
+    if k in RETIRED_PATTERNS or k in {"TRIANGLE", "NONE"}:
         return False
     return k in PATTERN_LAW and PATTERN_LAW[k].get("family") not in ("single",)
 
