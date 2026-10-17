@@ -721,6 +721,15 @@ def run_discovery_scan() -> Dict[str, int]:
                         stats["weekly_licence_skip"] = stats.get("weekly_licence_skip", 0) + 1
                         _t(candidate)["weekly_deferred"] = _t(candidate).get("weekly_deferred", 0) + 1
                         continue
+                    # ── R99q24 WEEKLY PACE (his 10-17 «خشک شد»): a 200-licence
+                    # wallet must LAST the week instead of being burnt in one
+                    # burst night. Today may spend the honest daily share of
+                    # what is LEFT (VIVA_WEEKLY_PACE=0 switches it off).
+                    if not _tier99j.weekly_pace_ok(
+                            str(getattr(candidate, "setup_code", "") or "")):
+                        stats["weekly_pace_skip"] = stats.get("weekly_pace_skip", 0) + 1
+                        _t(candidate)["weekly_pace_deferred"] = _t(candidate).get("weekly_pace_deferred", 0) + 1
+                        continue
                 except Exception:
                     pass
                 for prior in supersede_alert_lineage(candidate):
@@ -772,6 +781,8 @@ def run_discovery_scan() -> Dict[str, int]:
                 try:  # R99q7: spend ONE weekly licence for this setup
                     from analysis import tiered_scan as _tier99j3
                     _tier99j3.weekly_licence_incr(
+                        str(getattr(candidate, "setup_code", "") or ""))
+                    _tier99j3.daily_setup_incr(
                         str(getattr(candidate, "setup_code", "") or ""))
                 except Exception:
                     pass
@@ -1423,6 +1434,10 @@ def run_spot_scan() -> Dict[str, int]:
                     str(getattr(cand, "setup_code", "") or "SPOT")):
                 stats["weekly_licence_skip"] = stats.get("weekly_licence_skip", 0) + 1
                 continue
+            if not _tier99.weekly_pace_ok(
+                    str(getattr(cand, "setup_code", "") or "SPOT")):
+                stats["weekly_pace_skip"] = stats.get("weekly_pace_skip", 0) + 1
+                continue
         except Exception:
             pass
         # R99h SPOT own-engine consult (fail-open, kill-switch SPOT_OWN_ENGINE_ENABLED=0).
@@ -1488,6 +1503,8 @@ def run_spot_scan() -> Dict[str, int]:
                     try:  # R99q7: spend one weekly licence for this spot setup
                         from analysis import tiered_scan as _tier99w
                         _tier99w.weekly_licence_incr(
+                            str(getattr(cand, "setup_code", "") or "SPOT"))
+                        _tier99w.daily_setup_incr(
                             str(getattr(cand, "setup_code", "") or "SPOT"))
                     except Exception:
                         pass

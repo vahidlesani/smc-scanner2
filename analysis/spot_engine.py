@@ -1447,8 +1447,34 @@ def build_spot_alert_candidate(item: dict):
         "pattern_state_label": str(item.get("pattern_fa") or ""),
         "pattern_rule_fa": str(item.get("rule_fa") or ""),
         "render_patterns": list(item.get("pattern_commands") or []),
+        # R99q24 (the audit's REF-002): a SPOT alert used to print a pattern
+        # name and rule with NO engine reference and no selection state. The
+        # same law stamp every setup uses is applied here, on the exact shape
+        # this alert is about, so the reference and the state travel with the
+        # message.
         "viva_state": "ALERT",
     }
+    try:
+        from analysis.pattern_law import engine_stamp as _es24s
+        _es24s(meta, None, SPOT_SETUP_CODE)
+        _pats24 = meta.get("pattern_law_all") or meta.get("render_patterns") or []
+        if _pats24:
+            _first24 = _pats24[0]
+            if isinstance(_first24, dict):
+                meta["selected_pattern_pid"] = str(_first24.get("pid") or "")
+                meta["pattern_selection"] = "spot_alert_shape"
+                meta["law_state"] = str(_first24.get("select_state")
+                                        or _first24.get("break_state") or "")
+                from analysis.pattern_law import (STATE_FA as _SFA24,
+                                                  pattern_ref_fa as _rfa24,
+                                                  label_fa as _lfa24)
+                meta["law_state_fa"] = _SFA24.get(meta["law_state"], meta["law_state"])
+                _slug24 = str(_first24.get("law_slug") or _first24.get("type") or "").upper()
+                meta["law_slug"] = _slug24
+                meta["pattern_ref"] = _rfa24(_slug24)
+                meta["pattern_label_fa"] = _lfa24(_slug24)
+    except Exception as _e24s:
+        print(f"spot law stamp warning: {_e24s}")
     return SignalCandidate(
         signal_id=(f"viva-spotalert-{str(item.get('symbol') or '').upper()}-"
                    f"{tf}-{stage}-{str(item.get('bar_ts') or '')[:13].replace(' ', 'T')}"),

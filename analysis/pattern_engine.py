@@ -1358,8 +1358,23 @@ def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
     # ── R63 P4: the pivot family (double top/bottom, H&S ±, cup & handle)
     if getattr(settings, "technoclassic_pivot_patterns_enabled", True):
         try:
-            events += pivot_pattern_events(pat, trig, structure_tf,
-                                           live_price=(live if live > 0 else None))
+            # R99q24 (his 10-17 ruling + the audit's PAT-002/SET-003): the pivot
+            # family (double top/bottom, head & shoulders ±, cup & handle) is
+            # RETIRED from the active menu — «دبل تاپ و دبل باتم و سر و شانه رو
+            # از اون ۱۶ پترن کم بکن». This lane kept producing them behind the
+            # law's back (34 DOUBLE_TOP + 23 DOUBLE_BOTTOM rows in one day of
+            # production), so every event is filtered through the ONE registry
+            # before it can reach a candidate.
+            from analysis.pattern_law import RETIRED_PATTERNS as _RET24
+            _p63_events = pivot_pattern_events(pat, trig, structure_tf,
+                                               live_price=(live if live > 0 else None))
+            _keep24 = [e for e in _p63_events
+                       if str(e.get("pattern") or "").upper() not in _RET24]
+            _gone24 = len(_p63_events) - len(_keep24)
+            if _gone24:
+                print(f"R99q24 retired pivot patterns dropped "
+                      f"{getattr(bundle, 'symbol', '?')}: {_gone24}")
+            events += _keep24
         except Exception as _p63:
             print(f"R63 pivot lane skipped {getattr(bundle, 'symbol', '?')}: {_p63}")
     if not events:

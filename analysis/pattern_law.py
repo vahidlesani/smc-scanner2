@@ -138,6 +138,17 @@ PATTERN_LAW: Dict[str, Dict] = {
         "need": {"rel_u": (0.003, 1.0), "rel_l": (-1.0, -0.003), "expand": 1.15},
     },
     # ── non-pattern geometry (still drawn, never traded as a shape) ──
+    # R99q24 (the audit's PAT-001): SPOT prints «RANGE» 351 times but the
+    # registry had no entry for it — every one of those alerts carried an empty
+    # reference. RANGE is the DISPLAY name of the rectangle box: one canonical
+    # slug (RECTANGLE) decides the geometry, RANGE only names it on the chart.
+    "RANGE": {
+        "fa": "رنج (مستطیل)", "family": "box", "bias": "NEUTRAL", "break": "ANY",
+        "ref": "E&M Ch.7 'Rectangles'; Brooks PA §Trading Range",
+        "rule": "سقف و کف افقیِ چندبرخوردی؛ شکست = کلوز بیرون هر لبه.",
+        "canonical_slug": "RECTANGLE", "display_slug": "RANGE",
+        "need": {"rel_u": [-0.004, 0.004], "rel_l": [-0.004, 0.004]},
+    },
     "TRENDLINE": {
         "fa": "خط روند", "family": "single", "bias": "NEUTRAL", "break": "ANY",
         "ref": "E&M Ch.3 (trendline: ≥2 touches, same side)",
@@ -891,6 +902,72 @@ def pattern_ref_fa(slug: str) -> str:
     return str(d.get("ref") or "")
 
 
+def pattern_pid(shape: dict, tf: str = "") -> str:
+    """A STABLE id for one detected shape (the audit's REF-001 fix).
+
+    Built from what decides the geometry — the slug and its two anchor lines —
+    so the same structure keeps the same id across re-renders, and a different
+    structure can never inherit the name. `tf` namespaces it per timeframe.
+    """
+    try:
+        slug = str(shape.get("law_slug") or shape.get("type") or "").upper()
+        lns = [l for l in (shape.get("lines") or []) if isinstance(l, dict)]
+        parts = []
+        for l in lns[:2]:
+            _x0 = int(float(l.get("x0") or 0))
+            _slope = float(l.get("slope") or 0.0)
+            _icpt = float(l.get("intercept") or l.get("log_intercept") or 0.0)
+            parts.append(f"{_x0}:{_slope:.6g}:{_icpt:.6g}")
+        if not parts and shape.get("hi") is not None:
+            parts = [f"box:{float(shape.get('hi')):.6g}:{float(shape.get('lo')):.6g}"]
+        return f"{tf or 'x'}|{slug}|" + "|".join(parts)
+    except Exception:
+        return ""
+
+
+def select_shape(md: dict, df=None) -> dict:
+    """THE shape this candidate is about — lineage first, guess last.
+
+    Order (audit REF-001/PAT-003):
+      1. `selected_pattern_pid` / `pattern_lineage_key` written by the engine
+         that built the candidate — the exact structure it traded;
+      2. the cited slug (`pattern_type` / `tl_pattern`) if the law drew it;
+      3. the freshest drawn shape carrying lines (the old behaviour).
+    The choice is recorded in `md["pattern_selection"]` with the reason, so a
+    mismatch can be traced instead of guessed.
+    """
+    out: Dict = {}
+    try:
+        if not isinstance(md, dict):
+            return out
+        pats = [p for p in (md.get("pattern_law_all") or md.get("render_patterns") or [])
+                if isinstance(p, dict)]
+        if not pats:
+            return out
+        pid = str(md.get("selected_pattern_pid") or md.get("pattern_lineage_key") or "")
+        if pid:
+            for p in pats:
+                if str(p.get("pid") or "") == pid:
+                    md["pattern_selection"] = "lineage"
+                    return p
+        cited = str(md.get("pattern_type") or md.get("viva_pattern")
+                    or md.get("tl_pattern") or "").upper()
+        if cited:
+            for p in sorted(pats, key=lambda q: 0 if q.get("near_break") is not False else 1):
+                if str(p.get("law_slug") or p.get("type") or "").upper() == cited:
+                    md["pattern_selection"] = f"cited:{cited}"
+                    return p
+        for p in pats:
+            if p.get("near_break") is not False and p.get("lines"):
+                md["pattern_selection"] = "dominant"
+                return p
+        md["pattern_selection"] = "first"
+        return pats[0]
+    except Exception as exc:
+        print(f"pattern selection warning: {exc}")
+        return out
+
+
 def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
     """R99q23 PER-ENGINE SURGERY — every setup's own alert carries the law.
 
@@ -915,14 +992,8 @@ def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
         if not pats:
             md["law_state"] = md.get("law_state") or ""
             return out
-        # the dominant drawn shape (or the freshest judged one)
-        dom = None
-        for p in pats:
-            if p.get("near_break") is not False and p.get("lines"):
-                dom = p
-                break
-        if dom is None:
-            dom = pats[0]
+        # R99q24: the shape this CANDIDATE is about (lineage → cited → drawn)
+        dom = select_shape(md) or pats[0]
         slug = str(dom.get("law_slug") or dom.get("type") or "").upper()
         out["law_slug"] = slug
         d = PATTERN_LAW.get(slug) or {}
@@ -956,6 +1027,9 @@ def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
                     out["candle_evidence"] = ti["candle"]
             except Exception:
                 pass
+        out["pattern_pid"] = str(dom.get("pid") or "")
+        out["selection"] = str(md.get("pattern_selection") or "")
+        md["selected_pattern_pid"] = out["pattern_pid"] or md.get("selected_pattern_pid")
         md["engine_stamp"] = {k: v for k, v in out.items()}
         md["setup_code"] = md.get("setup_code") or setup_code
         return out
@@ -1126,16 +1200,21 @@ def real_shapes(pats) -> list:
 
 
 def setup_gate(md: dict, setup_code: str = "") -> tuple:
-    """R99q21 ENGINE-BY-ENGINE GATE (phase 1: the presence + freshness law).
+    """R99q21/R99q24 ENGINE-BY-ENGINE GATE — **PAST-MARKET is the ONE veto**.
 
-      TECHCLASSIC : a pattern is REQUIRED — a bare band/trendline is not a TC
-                    setup (his «حتی یک پترن درست نمی‌ده» + the XRP/JUP rows that
-                    announced a pattern and drew none).
-      TLBREAK     : the traded edge must be near its break (or freshly broken);
-                    a broken-long-ago edge is history, not a trade.
-      PINVAL / ALBROX / others: a pattern is optional (zone / candle-window
-                    engines) — but CITING a pattern that is not drawn, or that is
-                    past-market, vetoes the candidate.
+    Viva 10-17, after the audit of his own day of publishes: «از اون ساعت
+    هشدارهای همه ستاپ‌ها خشک شد». The gate had learnt to veto on NAMING
+    disagreements too (CITED-NOT-DRAWN / TC-NO-PATTERN) and that silenced about
+    half of the TECHCLASSIC lane — the engine names the shape it traded
+    (FLAG_BULL) while the renderer draws its geometry as RANGE/TRENDLINE.
+
+    The law is now exactly the sentence he gave: «پترنی که گذشته مارکت است
+    فایده‌ای ندارد».
+      * STALE / past-market  → VETO (the only one).
+      * every other case      → PASS, with the reason recorded in
+        `md["law_gate"]` so the audit can still see the naming disagreement
+        (it is reported as RENAMED / CITED-NOT-DRAWN / TC-NO-PATTERN instead
+        of silently killing a live setup).
 
     Returns (ok, reason). Env: VIVA_SETUP_LAW_GATE (default 1).
     """
@@ -1151,10 +1230,14 @@ def setup_gate(md: dict, setup_code: str = "") -> tuple:
     cited_real = bool(cited) and cited not in _CONTEXT_ONLY and cited not in RETIRED_PATTERNS
     if not pats:
         if cited_real:
-            # it announced a pattern the law cannot draw for it
-            return False, f"CITED-NOT-DRAWN:{cited}"
+            # it announced a pattern the law cannot draw for it — RECORDED, not
+            # vetoed (see the docstring: the naming disagreement was the
+            # drying; the message is renamed to the drawn family instead).
+            md["law_gate_note"] = f"CITED-NOT-DRAWN:{cited}"
+            return True, f"CITED-NOT-DRAWN:{cited}"
         if code == "TECHCLASSIC" and not drawn and not cited:
-            return False, "TC-NO-PATTERN"
+            md["law_gate_note"] = "TC-NO-PATTERN"
+            return True, "TC-NO-PATTERN"
         return True, "NO-SHAPE-OK"
     fresh = [p for p in pats if p.get("near_break") is not False]
     if not fresh:
@@ -1166,7 +1249,7 @@ def setup_gate(md: dict, setup_code: str = "") -> tuple:
         # premise is that named pattern (his «حتی یک پترن درست نمی‌ده») → block;
         # a zone/candle engine is only CITING it → allow, renamed by the law.
         if code == "TECHCLASSIC":
-            return False, f"CITED-NOT-DRAWN:{cited}"
+            md["law_gate_note"] = f"CITED-NOT-DRAWN:{cited}->{dominant_slug(pats)}"
         return True, f"RENAMED:{cited}->{dominant_slug(pats)}"
     return True, "OK"
 

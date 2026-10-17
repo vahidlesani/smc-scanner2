@@ -1141,6 +1141,14 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
             if _info22.get("role"):
                 _p22["line_role"] = _info22["role"]
             _p22["select_why"] = _info22.get("why")
+            # R99q24: a STABLE id for this exact structure, so the engine that
+            # mints a candidate can name the shape it traded instead of «the
+            # first shape on the chart» (the audit's REF-001).
+            try:
+                from analysis.pattern_law import pattern_pid as _ppid24
+                _p22["pid"] = _ppid24(_p22, str(getattr(df, "attrs", {}).get("tf", "") or ""))
+            except Exception:
+                _p22["pid"] = ""
             if _gate_on22 and not _info22.get("ok") and not include_past_market:
                 print(f"R99q22 past-market pattern dropped: {_p22.get('type')} "
                       f"[{_p22.get('break_state')} · {_p22.get('dist_atr')} ATR]")

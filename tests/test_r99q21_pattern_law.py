@@ -186,12 +186,25 @@ def test_the_database_audit_tool_exists_and_reports_drift():
 
 
 # ───────────── per-engine gate (enforced at the publish boundary) ─────────────
-def test_setup_gate_blocks_a_cited_pattern_that_is_not_drawn():
+def test_a_cited_pattern_that_is_not_drawn_is_RECORDED_not_vetoed():
+    """R99q24 (his 10-17 «هشدارهای همه ستاپ‌ها خشک شد»): the naming
+    disagreement between an engine and the renderer used to KILL about half of
+    the TECHCLASSIC lane. It is now recorded in `law_gate_note` and the
+    candidate publishes with the law's own name. PAST-MARKET is the only veto."""
     from analysis.pattern_law import setup_gate
     md = {"pattern_type": "WEDGE_FALLING", "render_patterns": [
         {"type": "TRENDLINE"}, {"type": "RANGE", "law_slug": "CHANNEL_FLAT"}]}
     ok, why = setup_gate(md, "TECHCLASSIC")
-    assert not ok and why.startswith("CITED-NOT-DRAWN")
+    assert ok is True, "a naming disagreement must never silence a live setup"
+    assert why.startswith(("CITED-NOT-DRAWN", "RENAMED"))
+    assert "RENAMED" in why or md.get("law_gate_note", "").startswith("CITED-NOT-DRAWN")
+
+
+def test_techclassic_without_any_pattern_still_publishes():
+    from analysis.pattern_law import setup_gate
+    md = {"render_patterns": []}
+    ok, why = setup_gate(md, "TECHCLASSIC")
+    assert ok is True and why == "TC-NO-PATTERN"
 
 
 def test_setup_gate_blocks_a_past_market_story():

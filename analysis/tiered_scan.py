@@ -21,6 +21,7 @@ completion (starting TECHCLASSIC).
 """
 from __future__ import annotations
 
+import math
 import os
 from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
@@ -129,6 +130,71 @@ def weekly_licence_ok(setup_code=None, week=None) -> bool:
     """True while this setup still holds a licence this week."""
     try:
         return weekly_count(week, setup_code) < weekly_licence_cap(setup_code)
+    except Exception:
+        return True
+
+
+def days_left_in_week(now=None) -> int:
+    """Days remaining in the ISO week, TODAY included (Mon..Sun → 7..1)."""
+    try:
+        _d = now or datetime.now(timezone.utc)
+        return max(1, 7 - int(_d.isoweekday()) + 1)
+    except Exception:
+        return 1
+
+
+def _day_setup_key(day: str, setup_code: str) -> str:
+    return f"tier_day_setup:{day}:{str(setup_code or '').strip().upper()}"
+
+
+def daily_setup_count(setup_code=None, day=None) -> int:
+    """How many licences THIS setup spent today (pace evidence)."""
+    try:
+        _d = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return max(0, int(_kv().get_json(_day_setup_key(_d, setup_code), 0) or 0))
+    except Exception:
+        return 0
+
+
+def daily_setup_incr(setup_code=None, day=None) -> int:
+    try:
+        _d = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _k = _day_setup_key(_d, setup_code)
+        _n = max(0, int(_kv().get_json(_k, 0) or 0)) + 1
+        _kv().set_json(_k, _n)
+        return _n
+    except Exception:
+        return -1
+
+
+def weekly_pace_ok(setup_code=None, week=None, now=None) -> bool:
+    """R99q24 — A WEEKLY WALLET MUST LAST THE WEEK.
+
+    Viva 10-17 measured the drying directly: PINVAL's and ALBROX's 200-licence
+    wallets were EMPTY by 16:05/17:48 on day 4 of the week, because a burst
+    night (23 alerts/hour) can spend a whole week in a few hours. This is the
+    *pacing* rule, not a new cap: today may spend at most the honest daily
+    share of what is LEFT —
+
+        pace = ceil(left / days_left_in_week)      (today included)
+        allow while today_used < pace  (one spare so a single good setup in a
+                                        quiet week is never starved)
+
+    Fail-open everywhere: any error, or `VIVA_WEEKLY_PACE=0`, allows the
+    publish exactly as before.
+    """
+    if str(os.getenv("VIVA_WEEKLY_PACE", "1") or "1").strip().lower() in (
+            "0", "false", "off", "no"):
+        return True
+    try:
+        _cap = weekly_licence_cap(setup_code)
+        _left = _cap - weekly_count(week, setup_code)
+        if _left <= 0:
+            return False                    # the wallet itself is empty
+        _days = days_left_in_week(now)
+        _pace = max(1, int(math.ceil(_left / float(_days))))
+        return daily_setup_count(setup_code, now=(now.strftime("%Y-%m-%d")
+                                                  if now is not None else None)) < _pace
     except Exception:
         return True
 

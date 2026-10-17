@@ -532,6 +532,16 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
         try:
             from analysis.render_kit import enrich_render as _er_tl
             _er_tl(candidate, trigger_df, htf_df=bundle.get("4h") or bundle.get("1h"))
+            # ── R99q24 (the audit's REF-003): the MAIN validated-break path of
+            # TLBREAK must carry the same law stamp as the WATCH branch — the
+            # published CONFIRMED/ENTRY candidate is the one users trade, and
+            # it was leaving law_state/law_slug empty (visible in production:
+            # BCH 15m TLBREAK 21:48 → law_state=None).
+            try:
+                from analysis.pattern_law import engine_stamp as _es24
+                _es24(candidate.metadata, trigger_df, "TLBREAK")
+            except Exception as _e24t:
+                print(f"TLBREAK main-path stamp warning: {_e24t}")
         except Exception:
             pass
         return candidate
