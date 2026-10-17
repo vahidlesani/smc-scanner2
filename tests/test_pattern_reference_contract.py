@@ -136,3 +136,16 @@ def test_engine_stamp_does_not_promote_generic_triangle_to_a_live_reference():
     stamp = engine_stamp(md, setup_code="TECHCLASSIC")
     assert stamp["pattern_ref"] == ""
     assert md.get("pattern_ref") is None
+
+
+def test_generic_channel_has_no_live_edge_rule_or_reference():
+    from analysis.pattern_engine import _EDGE_RULES
+
+    md = {
+        "pattern_type": "CHANNEL",
+        "render_patterns": [{"type": "CHANNEL", "near_break": True, "lines": [{"side": "HIGH"}, {"side": "LOW"}]}],
+    }
+    stamp = engine_stamp(md, setup_code="TECHCLASSIC")
+    assert "CHANNEL" not in _EDGE_RULES
+    assert stamp["pattern_ref"] == ""
+    assert md.get("pattern_ref") is None
