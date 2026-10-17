@@ -1,22 +1,43 @@
-"""Behavioral checks that setup-specific candidate engines stay isolated."""
+"""Behavioral checks for explicit setup routing without deleting ALBROX union lanes."""
 from types import SimpleNamespace
 
-import pytest
+
+def _settings(monkeypatch, setups):
+    monkeypatch.setattr(setups, "get_settings",
+                        lambda: SimpleNamespace(albrox_enabled=True))
 
 
-def test_albrox_uses_its_own_zone_lane_not_the_techclassic_candidate_builder(monkeypatch):
+def test_albrox_pattern_lane_is_explicitly_routed_as_albrox(monkeypatch):
     import analysis.setups_experimental as setups
     import analysis.pattern_engine as patterns
 
     marker = object()
-    monkeypatch.setattr(setups, "get_settings",
-                        lambda: SimpleNamespace(albrox_enabled=True))
+    calls = []
+
+    def pattern_lane(bundle, style, setup_code="TECHCLASSIC"):
+        calls.append((bundle.symbol, style, setup_code))
+        return marker
+
+    monkeypatch.setattr(patterns, "detect_technoclassic", pattern_lane)
     monkeypatch.setattr(setups, "_albrox_zone_lane",
-                        lambda bundle, style: marker)
+                        lambda bundle, style: (_ for _ in ()).throw(
+                            AssertionError("zone fallback must not run when pattern lane finds a candidate")))
+    _settings(monkeypatch, setups)
 
-    def forbidden_tc_call(*args, **kwargs):
-        pytest.fail("ALBROX must not borrow TECHCLASSIC's candidate/entry engine")
+    result = setups.detect_albrox(SimpleNamespace(symbol="TESTUSDT"), "SWING")
+    assert result is marker
+    assert calls == [("TESTUSDT", "SWING", "ALBROX")]
 
-    monkeypatch.setattr(patterns, "detect_technoclassic", forbidden_tc_call)
+
+def test_albrox_falls_back_to_its_zone_lane_when_pattern_lane_has_no_candidate(monkeypatch):
+    import analysis.setups_experimental as setups
+    import analysis.pattern_engine as patterns
+
+    marker = object()
+    monkeypatch.setattr(patterns, "detect_technoclassic",
+                        lambda bundle, style, setup_code="TECHCLASSIC": None)
+    monkeypatch.setattr(setups, "_albrox_zone_lane", lambda bundle, style: marker)
+    _settings(monkeypatch, setups)
+
     result = setups.detect_albrox(SimpleNamespace(symbol="TESTUSDT"), "SWING")
     assert result is marker
