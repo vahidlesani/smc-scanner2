@@ -947,6 +947,8 @@ def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
         # must never lend its reference to this setup/spot signal.
         wanted = str(md.get("selected_pattern_slug") or md.get("pattern_type")
                      or md.get("tl_pattern") or "").strip().upper()
+        if wanted in {"TRIANGLE", "NONE"}:
+            return out
         dom = None
         if wanted:
             wanted_canonical = canonical_pattern_slug(wanted)
