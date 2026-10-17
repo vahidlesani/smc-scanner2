@@ -193,8 +193,8 @@ def weekly_pace_ok(setup_code=None, week=None, now=None) -> bool:
             return False                    # the wallet itself is empty
         _days = days_left_in_week(now)
         _pace = max(1, int(math.ceil(_left / float(_days))))
-        return daily_setup_count(setup_code, now=(now.strftime("%Y-%m-%d")
-                                                  if now is not None else None)) < _pace
+        _day = now.strftime("%Y-%m-%d") if now is not None else None
+        return daily_setup_count(setup_code, day=_day) < _pace
     except Exception:
         return True
 

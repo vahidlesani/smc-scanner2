@@ -162,3 +162,34 @@ def test_the_pace_rule_is_wired_into_both_lanes():
     src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
     assert src.count("weekly_pace_ok(") >= 2          # futures + spot
     assert src.count("daily_setup_incr(") >= 2
+
+
+def test_pace_reads_todays_counter_through_the_real_helper(monkeypatch):
+    """Regression: weekly_pace_ok must call daily_setup_count with ITS OWN
+    signature (day=), otherwise the TypeError is swallowed by fail-open and
+    the pacing guard would silently never engage in production."""
+    from analysis import tiered_scan as ts
+    from datetime import datetime, timezone
+
+    sat = datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc)
+    store = {"tier_week_count:2026-W42:PINVAL": 100,
+             "tier_day_setup:2026-10-17:PINVAL": 49}
+
+    class _KV:
+        def get_json(self, key, default=None):
+            return store.get(key, default)
+
+        def set_json(self, key, value):
+            store[key] = value
+
+    monkeypatch.setattr(ts, "_kv", lambda: _KV())
+    monkeypatch.setattr(ts, "weekly_licence_cap", lambda *a, **k: 200)
+    monkeypatch.delenv("VIVA_WEEKLY_PACE", raising=False)
+
+    assert ts.daily_setup_count("PINVAL", day="2026-10-17") == 49
+    assert ts.weekly_pace_ok("PINVAL", week="2026-W42", now=sat) is True
+    store["tier_day_setup:2026-10-17:PINVAL"] = 50          # pace = 50/day
+    assert ts.weekly_pace_ok("PINVAL", week="2026-W42", now=sat) is False
+    store["tier_day_setup:2026-10-17:PINVAL"] = 49
+    store["tier_week_count:2026-W42:PINVAL"] = 200           # wallet empty
+    assert ts.weekly_pace_ok("PINVAL", week="2026-W42", now=sat) is False
