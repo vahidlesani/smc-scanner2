@@ -177,8 +177,11 @@ _FAMILY_ORDER = ("flag", "box", "converging", "parallel", "diverging")
 
 
 def pattern_is_live(slug: str) -> bool:
-    """True when a slug may be emitted as a PATTERN (retired trio/family = no)."""
-    k = str(slug or "").upper()
+    """True when a canonical or explicitly aliased slug may be emitted as a pattern."""
+    raw = str(slug or "").strip().upper()
+    if raw in RETIRED_PATTERNS:
+        return False
+    k = canonical_pattern_slug(raw)
     if k in RETIRED_PATTERNS:
         return False
     return k in PATTERN_LAW and PATTERN_LAW[k].get("family") not in ("single",)
