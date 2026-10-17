@@ -34,3 +34,24 @@ def test_spot_best_pattern_filters_retired_results_from_geometry_detector(monkey
     monkeypatch.setattr(engine_spot.vg, "detect_pivot_patterns", lambda *a, **k: [live])
 
     assert engine_spot.best_pattern(pd.DataFrame(), "4h") is live
+
+def test_spot_best_pattern_does_not_rank_generic_ambiguous_geometry(monkeypatch):
+    from analysis import engine_spot
+
+    ambiguous = SimpleNamespace(slug="TRIANGLE", score=99.0)
+    live = SimpleNamespace(slug="WEDGE_FALLING", score=8.0)
+    monkeypatch.setattr(engine_spot.vg, "fit_patterns", lambda *a, **k: [ambiguous, live])
+    monkeypatch.setattr(engine_spot.vg, "detect_pivot_patterns", lambda *a, **k: [])
+
+    assert engine_spot.best_pattern(pd.DataFrame(), "4h") is live
+
+
+def test_spot_best_pattern_returns_none_when_only_generic_channel_exists(monkeypatch):
+    from analysis import engine_spot
+
+    ambiguous = SimpleNamespace(slug="CHANNEL", score=99.0)
+    monkeypatch.setattr(engine_spot.vg, "fit_patterns", lambda *a, **k: [ambiguous])
+    monkeypatch.setattr(engine_spot.vg, "detect_pivot_patterns", lambda *a, **k: [])
+
+    assert engine_spot.best_pattern(pd.DataFrame(), "4h") is None
+
