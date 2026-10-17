@@ -1284,15 +1284,18 @@ def _brooks_edge_ok(trig: pd.DataFrame, ev: Dict) -> bool:
 
 
 def detect_technoclassic(bundle, style: str, setup_code: str = "TECHCLASSIC"):
-    """TECHCLASSIC's live pattern detector (breakouts and edge-fades).
+    """Shared validated-pattern lane for TECHCLASSIC and ALBROX's union setup.
 
-    The setup_code parameter remains for compatibility with older callers,
-    but ALBROX no longer borrows this candidate/entry builder: its own zone
-    lane owns ALBROX candidates. Shared geometry helpers remain reusable;
-    setup-specific candidate logic does not.
+    Geometry/event detection is shared, but the enable switch and candidate
+    identity follow the explicitly requested setup_code. ALBROX still owns
+    its separate zone/reclaim fallback in setups_experimental.
     """
     settings = _s()
-    if not getattr(settings, "technoclassic_enabled", False):
+    _code = str(setup_code or "TECHCLASSIC").strip().upper()
+    _enabled = (getattr(settings, "albrox_enabled", False)
+                if _code == "ALBROX"
+                else getattr(settings, "technoclassic_enabled", False))
+    if not _enabled:
         return None
     from analysis.indicators import structure_bias
     from analysis.models import EvidenceItem, generate_viva_public_code
