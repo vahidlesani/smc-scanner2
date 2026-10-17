@@ -261,3 +261,18 @@ def test_shared_pattern_lane_keeps_techclassic_message_chain_setup_scoped():
     assert 'alert_lineage_key(setup_code, bundle.symbol' in body
     assert '_mint_guard_key(bundle, ev, setup_code)' in text
     assert '_code == "TECHCLASSIC" else {})' in body
+
+
+def test_candidate_builder_defines_setup_code_before_scoping_pattern_linkage():
+    # Setup-specific pattern lanes share geometry but must not share linkage
+    # state. Catch a runtime NameError in the branch that reads the TC link.
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "analysis" / "pattern_engine.py"
+    text = source.read_text(encoding="utf-8")
+    start = text.index("def _build_candidate(")
+    end = text.index("\ndef _attach_r63_geometry", start)
+    body = text[start:end]
+    normalized = body.index('_code = str(setup_code or "TECHCLASSIC").strip().upper()')
+    scoped_link = body.index('if _code == "TECHCLASSIC" else {}')
+    assert normalized < scoped_link
