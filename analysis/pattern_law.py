@@ -167,6 +167,7 @@ RETIRED_PATTERNS: Dict[str, str] = {
     "DOUBLE_BOTTOM": "Viva 10-16: pivots-only trio removed from the pattern set",
     "HEAD_SHOULDERS": "Viva 10-16: pivots-only trio removed from the pattern set",
     "INV_HEAD_SHOULDERS": "Viva 10-16: pivots-only trio removed from the pattern set",
+    "INVERSE_HEAD_SHOULDERS": "Viva 10-16: alias of the retired inverse head-and-shoulders pattern",
     "CUP_HANDLE": "Viva 10-16: pivots-only shapes removed from the pattern set",
     "INV_CUP_HANDLE": "Viva 10-16: pivots-only shapes removed from the pattern set",
 }
@@ -966,7 +967,7 @@ def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
             except Exception:
                 st = st or ""
         out["law_state"] = st
-        md["law_slug"] = slug
+        md["law_slug"] = canonical_pattern_slug(slug)
         md["law_state"] = st
         md["law_state_fa"] = STATE_FA.get(st, st)
         md["pattern_ref"] = d.get("ref") or ""
