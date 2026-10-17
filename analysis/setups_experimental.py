@@ -534,6 +534,17 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
             _er_tl(candidate, trigger_df, htf_df=bundle.get("4h") or bundle.get("1h"))
         except Exception:
             pass
+        # R99q24 detection provenance: bind the line-break candidate to the
+        # exact geometry classified by this TLBREAK lane, then stamp after
+        # render enrichment so a nearby unrelated shape cannot lend its law.
+        try:
+            _slug_tl = str(pattern or "").strip().upper()
+            if _slug_tl:
+                candidate.metadata["selected_pattern_slug"] = _slug_tl
+                from analysis.pattern_law import engine_stamp as _stamp_tl
+                _stamp_tl(candidate.metadata, trigger_df, "TLBREAK")
+        except Exception as _stamp_tl_exc:
+            print(f"TLBREAK selected-pattern stamp warning: {_stamp_tl_exc}")
         return candidate
     return _tlbreak_rejection_scalp(bundle, style, refine_df, refine_tf,
                                     upper, lower, trigger_df, trigger_tf)
