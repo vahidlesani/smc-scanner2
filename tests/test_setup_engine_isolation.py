@@ -135,3 +135,15 @@ def test_albrox_pattern_lane_mints_candidate_without_techclassic_builder(monkeyp
     assert cand.direction == "LONG"
     assert cand.metadata["strategy_variant"] == "ALBROX_PATTERN_BREAK"
     assert cand.metadata["selected_pattern_slug"] == "WEDGE_FALLING"
+
+
+def test_albrox_pattern_lane_preserves_the_existing_signal_id_generator():
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "analysis" / "setups_experimental.py"
+    text = source.read_text(encoding="utf-8")
+    start = text.index("def _albrox_pattern_lane(")
+    end = text.index("\ndef detect_albrox(", start)
+    body = text[start:end]
+    assert 'signal_id=generate_viva_signal_id(str(bundle.symbol), str(style), "ALBROX")' in body
+    assert 'signal_id=f"viva-albroxp-' not in body
