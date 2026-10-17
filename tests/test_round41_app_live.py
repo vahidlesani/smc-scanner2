@@ -136,21 +136,21 @@ def test_touch_notifications_wired():
 
 # ── 4. MTF/refine parity across setups ─────────────────────────────────────
 
-def test_albrox_union_routes_pattern_lane_and_keeps_zone_render_context():
-    # ALBROX's documented union law: pattern-break lane first, then its own
-    # zone break/reclaim/rejection fallback. The setup code must be explicit.
+def test_albrox_uses_own_pattern_candidate_lane_and_keeps_zone_render_context():
+    # Geometry is shared, but the ALBROX candidate/entry builder is independent.
     src = open(os.path.join(REPO, "analysis", "setups_experimental.py"),
                encoding="utf-8").read()
-    part = src.split("def detect_albrox")[1].split("def _albrox_zones")[0]
-    assert "_pattern_lane(bundle, style, setup_code=\"ALBROX\")" in part
-    assert "return _albrox_zone_lane(bundle, style)" in part
-    assert "enrich_render" in src                 # own zone lane paints zones/HTF
-    assert "htf_df=sdf" in src
-    pe = open(os.path.join(REPO, "analysis", "pattern_engine.py"), encoding="utf-8").read()
-    assert "if _code == \"ALBROX\"" in pe        # independent enable switch
+    part = src.split("def detect_albrox")[1].split("ALBROX_DETECTORS")[0]
+    assert "_albrox_pattern_lane(bundle, style)" in part
+    assert "detect_technoclassic" not in part
+    lane = src.split("def _albrox_pattern_lane")[1].split("def detect_albrox")[0]
+    assert "scan_edges" in lane
+    assert "SignalCandidate(" in lane
+    assert "_build_candidate" not in lane
+    assert "enrich_render(cand, trig, htf_df=pat)" in lane
+    assert 'engine_stamp(cand.metadata, trig, "ALBROX")' in lane
     v7 = open(os.path.join(REPO, "analysis", "setups_v7.py"), encoding="utf-8").read()
     assert "enrich_render(_cand, trigger_df, htf_df=context_df)" in v7
-
 
 def test_every_other_setup_passes_htf_context():
     tl = open(os.path.join(REPO, "analysis", "setups_experimental.py"),
