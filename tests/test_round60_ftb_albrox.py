@@ -242,51 +242,33 @@ def test_tlbreak_rejection_scalp_mints():
     assert cand.tp1 < cand.planned_entry < cand.sl
 
 
-# ── 5) ALBROX union routing ─────────────────────────────────────────────────
-def test_albrox_pattern_lane_is_routed_with_albrox_identity(monkeypatch):
+# ── 5) ALBROX-owned pattern lane + zone fallback ───────────────────────────
+def test_albrox_pattern_lane_is_own_builder_not_techclassic(monkeypatch):
     from test_pattern_engine import _wedge_frames, _Bundle
     import analysis.setups_experimental as exp
     import analysis.pattern_engine as pe
     pattern, trigger = _wedge_frames()
     bundle = _Bundle({"4h": pattern, "1h": pattern, "15m": trigger})
     marker = object()
-    seen = {}
-
-    def pattern_lane(b, style, setup_code="TECHCLASSIC"):
-        seen["pattern"] = (b, style, setup_code)
-        return marker
-
-    def unexpected_zone_lane(*args, **kwargs):
-        pytest.fail("zone fallback should not run when the pattern lane returns a candidate")
-
-    monkeypatch.setattr(pe, "detect_technoclassic", pattern_lane)
-    monkeypatch.setattr(exp, "_albrox_zone_lane", unexpected_zone_lane)
-    out = exp.detect_albrox(bundle, "DAYTRADE")
-    assert out is marker
-    assert seen["pattern"] == (bundle, "DAYTRADE", "ALBROX")
-
-
-def test_albrox_falls_back_to_its_own_zone_lane_when_pattern_lane_is_empty(monkeypatch):
-    from test_pattern_engine import _wedge_frames, _Bundle
-    import analysis.setups_experimental as exp
-    import analysis.pattern_engine as pe
-    pattern, trigger = _wedge_frames()
-    bundle = _Bundle({"4h": pattern, "1h": pattern, "15m": trigger})
-    marker = object()
-    seen = {}
-
     monkeypatch.setattr(pe, "detect_technoclassic",
-                        lambda b, style, setup_code="TECHCLASSIC": None)
+                        lambda *a, **k: pytest.fail("ALBROX must not borrow TECHCLASSIC candidate builder"))
+    monkeypatch.setattr(exp, "_albrox_pattern_lane", lambda b, style: marker)
+    monkeypatch.setattr(exp, "_albrox_zone_lane",
+                        lambda *a, **k: pytest.fail("zone lane should not run when ALBROX pattern candidate exists"))
+    monkeypatch.setattr(exp, "get_settings", lambda: type("S", (), {"albrox_enabled": True})())
+    assert exp.detect_albrox(bundle, "DAYTRADE") is marker
 
-    def own_zone_lane(b, style):
-        seen["bundle"] = b
-        seen["style"] = style
-        return marker
 
-    monkeypatch.setattr(exp, "_albrox_zone_lane", own_zone_lane)
-    out = exp.detect_albrox(bundle, "DAYTRADE")
-    assert out is marker
-    assert seen == {"bundle": bundle, "style": "DAYTRADE"}
+def test_albrox_pattern_lane_empty_result_falls_back_to_own_zone_lane(monkeypatch):
+    from test_pattern_engine import _wedge_frames, _Bundle
+    import analysis.setups_experimental as exp
+    pattern, trigger = _wedge_frames()
+    bundle = _Bundle({"4h": pattern, "1h": pattern, "15m": trigger})
+    marker = object()
+    monkeypatch.setattr(exp, "_albrox_pattern_lane", lambda b, style: None)
+    monkeypatch.setattr(exp, "_albrox_zone_lane", lambda b, style: marker)
+    monkeypatch.setattr(exp, "get_settings", lambda: type("S", (), {"albrox_enabled": True})())
+    assert exp.detect_albrox(bundle, "DAYTRADE") is marker
 
 
 def test_albrox_zone_break_lane_mints(monkeypatch):
