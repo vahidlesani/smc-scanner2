@@ -54,3 +54,17 @@ def test_engine_stamp_uses_the_candidate_selected_shape_not_first_near_break():
     assert stamp["law_slug"] == "WEDGE_RISING"
     assert md["pattern_ref"] == PATTERN_LAW["WEDGE_RISING"]["ref"]
     assert md["pattern_rule_fa"] == PATTERN_LAW["WEDGE_RISING"]["rule"]
+
+
+def test_engine_stamp_does_not_borrow_an_unrelated_shape_when_label_mismatches():
+    md = {
+        "setup_code": "TECHCLASSIC",
+        "pattern_type": "TRIANGLE_ASCENDING",
+        "render_patterns": [
+            {"type": "WEDGE_FALLING", "near_break": True, "lines": [{"side": "HIGH"}]},
+            {"type": "WEDGE_RISING", "near_break": True, "lines": [{"side": "HIGH"}]},
+        ],
+    }
+    stamp = engine_stamp(md, setup_code="TECHCLASSIC")
+    assert stamp["pattern_ref"] == ""
+    assert md.get("pattern_ref") is None
