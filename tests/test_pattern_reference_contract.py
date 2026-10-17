@@ -211,3 +211,19 @@ def test_technoclassic_restamps_the_exact_event_pattern_after_candidate_build():
     assert 'candidate.metadata["selected_pattern_slug"] = _selected_slug' in body
     assert '_selected_slug = str(ev.get("pattern") or "").strip().upper()' in body
     assert '_es_selected(candidate.metadata, trig, str(setup_code or "TECHCLASSIC"))' in body
+
+def test_tlbreak_main_lane_stamps_its_selected_geometry_after_render_enrichment():
+    # The main confirmed-break lane must carry the same provenance as WATCH;
+    # this is metadata-only and must not alter message templates or IDs.
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "analysis" / "setups_experimental.py"
+    text = source.read_text(encoding="utf-8")
+    start = text.index('def detect_trendline_breakout')
+    end = text.index('\ndef _parent_countertrend_1009', start)
+    body = text[start:end]
+    enrich = body.index('_er_tl(candidate, trigger_df')
+    stamp = body.index('_stamp_tl(candidate.metadata, trigger_df, "TLBREAK")')
+    assert stamp > enrich
+    assert 'candidate.metadata["selected_pattern_slug"] = _slug_tl' in body
+
