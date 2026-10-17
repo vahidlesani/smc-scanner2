@@ -7,8 +7,8 @@ Laws under test (docs/TC_TLBREAK_REFERENCE.md §6):
   join the vocabulary; one counter sub-step allowed at the retest);
 - rejection scalps (TLBREAK/ALBROX) confirm ONLY via TOHOM — a bare close
   never does, and candle patterns never veto real breaks;
-- ALBROX owns its zone break/reclaim + rejection-scalar candidate lane;
-  it must not borrow TECHCLASSIC's candidate/entry builder.
+- ALBROX is a union: explicitly routed pattern-break lane plus its own zone
+  break/reclaim and TOHOM-only rejection-scalar lane.
 """
 
 import importlib
@@ -242,8 +242,8 @@ def test_tlbreak_rejection_scalp_mints():
     assert cand.tp1 < cand.planned_entry < cand.sl
 
 
-# ── 5) ALBROX engine isolation ──────────────────────────────────────────────
-def test_albrox_candidate_comes_from_its_own_zone_lane(monkeypatch):
+# ── 5) ALBROX union routing ─────────────────────────────────────────────────
+def test_albrox_pattern_lane_is_routed_with_albrox_identity(monkeypatch):
     from test_pattern_engine import _wedge_frames, _Bundle
     import analysis.setups_experimental as exp
     import analysis.pattern_engine as pe
@@ -252,15 +252,37 @@ def test_albrox_candidate_comes_from_its_own_zone_lane(monkeypatch):
     marker = object()
     seen = {}
 
-    def forbidden_tc(*args, **kwargs):
-        pytest.fail("ALBROX must not borrow TECHCLASSIC's candidate/entry builder")
+    def pattern_lane(b, style, setup_code="TECHCLASSIC"):
+        seen["pattern"] = (b, style, setup_code)
+        return marker
+
+    def unexpected_zone_lane(*args, **kwargs):
+        pytest.fail("zone fallback should not run when the pattern lane returns a candidate")
+
+    monkeypatch.setattr(pe, "detect_technoclassic", pattern_lane)
+    monkeypatch.setattr(exp, "_albrox_zone_lane", unexpected_zone_lane)
+    out = exp.detect_albrox(bundle, "DAYTRADE")
+    assert out is marker
+    assert seen["pattern"] == (bundle, "DAYTRADE", "ALBROX")
+
+
+def test_albrox_falls_back_to_its_own_zone_lane_when_pattern_lane_is_empty(monkeypatch):
+    from test_pattern_engine import _wedge_frames, _Bundle
+    import analysis.setups_experimental as exp
+    import analysis.pattern_engine as pe
+    pattern, trigger = _wedge_frames()
+    bundle = _Bundle({"4h": pattern, "1h": pattern, "15m": trigger})
+    marker = object()
+    seen = {}
+
+    monkeypatch.setattr(pe, "detect_technoclassic",
+                        lambda b, style, setup_code="TECHCLASSIC": None)
 
     def own_zone_lane(b, style):
         seen["bundle"] = b
         seen["style"] = style
         return marker
 
-    monkeypatch.setattr(pe, "detect_technoclassic", forbidden_tc)
     monkeypatch.setattr(exp, "_albrox_zone_lane", own_zone_lane)
     out = exp.detect_albrox(bundle, "DAYTRADE")
     assert out is marker
