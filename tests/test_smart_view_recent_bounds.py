@@ -106,7 +106,9 @@ def test_classify_geometry_rejects_converging_pattern_with_exhausted_apex():
     x0, x1 = 100, 200
     upper = vg.Line(-0.002, np.log(120.0) + 0.002 * x0,
                     "upper", (x0, x1), x0)
-    lower = vg.Line(-0.00101, upper.at(x0) - 0.1,
+    lower_slope = -0.00101
+    lower = vg.Line(lower_slope,
+                    upper.at(x0) - 0.1 - lower_slope * x0,
                     "lower", (x0, x1), x0)
     slug, meta = vg.classify_geometry(upper, lower, x0, x1)
 
