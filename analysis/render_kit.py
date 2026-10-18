@@ -634,7 +634,18 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
             try:
                 _a = float((df["high"] - df["low"]).tail(14).mean() or 0.0)
                 if _a > 0:
-                    _y = float(getattr(ln, "slope")) * n + float(getattr(ln, "intercept"))
+                    # The fitter returns each candidate in its OWN local
+                    # window (60/90/120/180 bars), not global chart coordinates.
+                    # Comparing slope*n+intercept used the full-frame n against
+                    # a local intercept, so line ranking drifted with window size;
+                    # it also treated log-fitted curves as linear. Score proximity
+                    # at the candidate's own right endpoint in the actual fit space.
+                    _x_live = int(getattr(ln, "last_index", n))
+                    try:
+                        _y = float(ln.price_at(_x_live))
+                    except Exception:
+                        _y = (float(getattr(ln, "slope")) * _x_live
+                              + float(getattr(ln, "intercept")))
                     _d = abs(_y - float(df["close"].iloc[-1])) / _a
                     prox = 1.0 / (1.0 + max(0.0, _d - 1.0))
             except Exception:
