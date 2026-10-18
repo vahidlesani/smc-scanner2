@@ -65,3 +65,38 @@ def test_choose_view_does_not_use_unbounded_leg_history_for_left_padding():
     assert view["x_to"] - (len(frame) - 1) <= max(
         8, int(round(vg.TF_VIEW_BARS["4h"] * vg.RIGHT_PROJ))
     )
+
+def test_choose_view_vertical_range_contains_selected_pattern_lines():
+    frame = _frame(500)
+    x0, x1 = 420, 499
+    # Lines are deliberately just outside the candle extrema at the visible
+    # endpoints; the final price axis must still contain the selected geometry.
+    upper = vg.Line(0.0001, np.log(130.0), "upper", (x0, x1), x0)
+    lower = vg.Line(0.0001, np.log(90.0), "lower", (x0, x1), x0)
+    res = vg.PatternResult(
+        "CHANNEL_ASCENDING", upper, lower, x0, x1,
+        10.0, vg.Leg(), {"du": 0.1, "dl": 0.1},
+    )
+    view = vg.choose_view(frame, res, tf="15m")
+
+    assert view["y_min"] <= lower.price_at(x0)
+    assert view["y_min"] <= lower.price_at(x1)
+    assert view["y_max"] >= upper.price_at(x0)
+    assert view["y_max"] >= upper.price_at(x1)
+
+
+def test_choose_view_ignores_extrapolated_line_values_outside_visible_window():
+    frame = _frame(500)
+    # The old anchor is far outside the viewport; an extreme extrapolation at
+    # that anchor must not stretch the price axis or squeeze the live candles.
+    upper = vg.Line(0.02, np.log(125.0) - 0.02 * 10, "upper", (10, 40), 10)
+    lower = vg.Line(0.01, np.log(90.0) - 0.01 * 10, "lower", (10, 40), 10)
+    res = vg.PatternResult(
+        "CHANNEL_ASCENDING", upper, lower, 10, 40,
+        10.0, vg.Leg(direction=vg.UP, bars=10000), {"du": 0.1, "dl": 0.1},
+    )
+    view = vg.choose_view(frame, res, tf="1d")
+
+    assert view["y_min"] > 0
+    assert view["y_max"] / view["y_min"] < 2.0
+
