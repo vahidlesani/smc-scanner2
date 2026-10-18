@@ -753,20 +753,34 @@ def choose_view(df: pd.DataFrame, res: PatternResult,
     ≤۸۵٪ ارتفاع (مگر قطری)، و تعداد کندل هم‌راستا با جدول r57."""
     L = log_ohlc(df)
     n = len(df)
-    x0 = min(max(0, res.x0), n - 1)
-    plen = max(1, (res.x1 if res.x1 < n else n - 1) - x0 + 1)
-    leg_bars = int(res.leg.bars * 1.1) if res.leg.direction != NONE else 0
-    left_need = max(leg_bars, int(LEFT_PAD_MIN * plen))
-    total = int(round((plen + left_need) / (1 - RIGHT_PROJ)))
+    # A stale pattern must never force the viewport to pan months/years left.
+    # Pattern fitting is performed on a bounded lookback; enforce the same
+    # visible-age contract here as a final guard against legacy/global anchors.
+    x0 = min(max(0, int(res.x0)), n - 1)
+    x1 = min(max(x0, int(res.x1)), n - 1)
     tbar = TF_VIEW_BARS.get(tf or "", 0)
-    lo_t, hi_t = (int(0.8 * tbar), int(1.25 * tbar)) if tbar else (120, 400)
-    total = int(min(max(total, lo_t, 120), max(hi_t, 400)))
-    right = int(round(total * RIGHT_PROJ))
+    # Visible data window is intentionally bounded by the timeframe's chart
+    # budget. Keep at least 80% of that budget, and never widen it just to show
+    # an old pattern start. If the selected pattern is older than the visible
+    # budget, its left anchors are clipped by the viewport rather than moving
+    # the live candles off-screen.
+    target_bars = int(tbar or 200)
+    max_data_bars = max(60, target_bars)
+    x_from = max(0, n - max_data_bars)
+    # A pattern can be framed only if its start is inside the bounded data
+    # window. Otherwise the renderer still shows current market data, not stale
+    # history. Keep the right projection independent of historical pattern age.
+    frame_x0 = max(x0, x_from)
+    plen = max(1, x1 - frame_x0 + 1)
+    leg_bars = int(min(max(0, res.leg.bars * 1.1), max_data_bars * 0.20)) \
+        if res.leg.direction != NONE else 0
+    left_need = min(max(leg_bars, int(LEFT_PAD_MIN * plen)), max_data_bars // 4)
+    right = max(8, int(round(target_bars * RIGHT_PROJ)))
     x_to = n - 1 + right
-    x_from = max(0, x_to - total + 1)
-    if x_from > x0 - left_need:
-        x_from = max(0, x0 - left_need)
-        total = x_to - x_from + 1
+    # x_from is based on live candles, not on res.x0; no stale candidate may
+    # expand the historical window beyond max_data_bars.
+    total = x_to - x_from + 1
+    lo_t, hi_t = (int(0.8 * target_bars), int(1.25 * target_bars))
     seg = slice(x_from, n)
     data_lo = float(L["low"][seg].min())
     data_hi = float(L["high"][seg].max())
