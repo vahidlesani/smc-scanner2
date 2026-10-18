@@ -228,6 +228,15 @@ def classify_geometry(upper: Line, lower: Line, x0: int, x1: int,
     du, dl, gap = m["du"], m["dl"], m["slope_gap"]
     slug, fam, conf = "NONE", "", 1.0
 
+    # Do not label a converging shape as a live pattern when its apex is
+    # effectively at the current bar. Such geometry is already exhausted and
+    # commonly produces the "triangle/wedge whose lines stop before live" bug.
+    # The threshold is deliberately small: this is a validity guard, not a
+    # broad pattern-age filter.
+    if (r <= CONVERGE_EDGE and m.get("apex_bars") is not None
+            and m["apex_bars"] <= 3.0):
+        return "NONE", dict(meta, reason="رأس الگوی همگرا حداکثر ۳ کندل با لایو فاصله دارد")
+
     if r <= CONVERGE_EDGE:
         fam = "converging"
         conf = 1.0 if r <= CONVERGE_CORE else 0.6
