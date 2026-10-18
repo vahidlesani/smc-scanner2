@@ -784,7 +784,24 @@ def choose_view(df: pd.DataFrame, res: PatternResult,
     seg = slice(x_from, n)
     data_lo = float(L["low"][seg].min())
     data_hi = float(L["high"][seg].max())
+    # Include only the selected pattern's line values inside the actual viewport.
+    # This prevents valid near-price trendlines from being clipped vertically,
+    # while avoiding unbounded extrapolation to stale x0/x1 anchors.
+    line_x0 = max(x_from, min(x0, n - 1))
+    line_x1 = min(n - 1, max(line_x0, x1))
+    line_values = []
+    if line_x1 >= line_x0:
+        for line in (res.upper, res.lower):
+            for xi in (line_x0, line_x1):
+                try:
+                    value = float(line.price_at(xi))
+                except (AttributeError, TypeError, ValueError, OverflowError):
+                    continue
+                if math.isfinite(value) and value > 0:
+                    line_values.append(math.log(value))
     lo, hi = data_lo, data_hi
+    if line_values:
+        lo, hi = min(lo, min(line_values)), max(hi, max(line_values))
     if target_price:
         tl = math.log(max(target_price, 1e-9))
         lo, hi = min(lo, tl), max(hi, tl)
