@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import os
+import hashlib
+import json
 import pandas as pd
 
 SPOT_SHORT_TFS = ("4h", "8h")
@@ -253,6 +255,58 @@ def _mtf_bias_fa(frames: Dict[str, pd.DataFrame]) -> List[str]:
     return out
 
 
+def spot_pattern_fingerprint(pattern: dict) -> str:
+    """Stable identity for one drawn Spot shape (not merely its family name).
+
+    Pivot timestamps/prices survive sliding scan windows, so a genuinely new
+    structure of the same type can start a fresh chain without reusing the old
+    pattern's identity.
+    """
+    try:
+        p = pattern if isinstance(pattern, dict) else {}
+        lines = []
+        for line in p.get("lines") or []:
+            if not isinstance(line, dict):
+                continue
+            pts = []
+            for q in line.get("points") or []:
+                if not isinstance(q, dict):
+                    continue
+                ts = str(q.get("ts") or q.get("timestamp") or "")
+                price = q.get("price")
+                if ts or price is not None:
+                    pts.append((ts, round(float(price), 10) if price is not None else None))
+            pts.sort(key=lambda z: z[0])
+            if pts:
+                anchor = [pts[0], pts[-1]]
+            else:
+                anchor = [
+                    round(float(line.get("x0") or 0), 3),
+                    round(float(line.get("x1") or 0), 3),
+                    round(float(line.get("slope") or 0), 12),
+                    round(float(line.get("intercept") or 0), 10),
+                ]
+            lines.append((str(line.get("side") or "").upper(), anchor))
+        payload = json.dumps({"type": str(p.get("type") or "").upper(),
+                              "shape": str(p.get("shape") or "single").lower(),
+                              "lines": sorted(lines, key=lambda x: x[0])},
+                             sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+    except Exception:
+        return ""
+
+
+def spot_pattern_is_retired(symbol: str, tf: str, fingerprint: str) -> bool:
+    """True after a Spot position on this exact geometry has terminally closed."""
+    try:
+        from database.bot_kv import get_json as _g
+        key = f"{str(symbol or '').upper()}|{str(tf or '').upper()}"
+        state = (_g("spot_retired_patterns", {}) or {}).get(key) or {}
+        return bool(fingerprint and fingerprint in (state.get("fingerprints") or []))
+    except Exception:
+        return False
+
+
 def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                      buffer_pct: float = 0.10) -> List[dict]:
     """Confirmed spot setups for one symbol across 4h/8h/12h/1d/3d/1w.
@@ -394,6 +448,7 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                     "break_close": close,
                     "bars_since_break": _bsb,
                     "pattern_commands": [pat],
+                    "spot_pattern_id": spot_pattern_fingerprint(pat),
                     "atr": float(atr),
                     "mtf_fa": _mtf_bias_fa(frames),
                     "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -887,6 +942,8 @@ def build_spot_candidate(item: dict):
         "spot_chain_one_id": bool(_one_id15),
         "atr": float(item.get("atr") or 0.0),
         "pattern_type": str(item.get("pattern") or ""),
+        "spot_pattern_id": str(item.get("spot_pattern_id") or spot_pattern_fingerprint(
+            (item.get("pattern_commands") or [{}])[0])),
         "spot_horizon": str(item.get("horizon") or ""),
         "pattern_state_label": str(item.get("label") or ""),
         "pattern_rule_fa": str(item.get("rule_fa") or ""),
@@ -1134,8 +1191,12 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                     vol_ratio = (float(d["volume"].iloc[-1]) / _v20) if _v20 > 0 else 0.0
                 except Exception:
                     vol_ratio = 0.0
-                sig = _spot_sig(symbol, tf, kind, hit.get("side"),
-                                  _lns[0].get("x0", 0), _lns[-1].get("x0", 0))
+                _spot_pid = spot_pattern_fingerprint(pat)
+                if spot_pattern_is_retired(symbol, tf, _spot_pid):
+                    continue
+                sig = (_spot_sig(symbol, tf, kind, hit.get("side"),
+                                 _lns[0].get("x0", 0), _lns[-1].get("x0", 0))
+                       + (f"|{_spot_pid}" if _spot_pid else ""))
                 out.append({
                     "stage": hit["stage"], "side": hit["side"],
                     "symbol": symbol.upper(), "tf": tf, "pattern": kind,
@@ -1147,6 +1208,7 @@ def scan_spot_alerts(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]
                     "atr": float(atr), "vol_ratio": round(vol_ratio, 2),
                     "box_top": float(box_top) if box_top else 0.0,
                     "pattern_commands": [pat], "sig": sig,
+                    "spot_pattern_id": _spot_pid,
                     "bar_ts": str(d["timestamp"].iloc[-1]),
                     "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 })
@@ -1444,6 +1506,8 @@ def build_spot_alert_candidate(item: dict):
         "spot_alert_stage": stage,
         "spot_alert_side": str(item.get("side") or ""),
         "atr": atr, "pattern_type": kind,
+        "spot_pattern_id": str(item.get("spot_pattern_id") or spot_pattern_fingerprint(
+            (item.get("pattern_commands") or [{}])[0])),
         "pattern_state_label": str(item.get("pattern_fa") or ""),
         "pattern_rule_fa": str(item.get("rule_fa") or ""),
         "render_patterns": list(item.get("pattern_commands") or []),
@@ -1530,8 +1594,12 @@ def spot_position_open(candidate, targets, confirm_mid: int = 0) -> dict:
         code = str(md.get("public_code") or getattr(candidate, "signal_id", "") or "")
         if not code:
             return {}
-        _entry = float(getattr(candidate, "entry", 0) or md.get("entry") or 0.0)
-        _stop = float(getattr(candidate, "stop_loss", 0) or md.get("stop_loss") or 0.0)
+        _entry = float(getattr(candidate, "planned_entry", 0)
+                        or getattr(candidate, "entry", 0)
+                        or md.get("entry") or md.get("spot_break_close") or 0.0)
+        _stop = float(getattr(candidate, "sl", 0)
+                      or getattr(candidate, "stop_loss", 0)
+                      or md.get("stop_loss") or md.get("spot_stop") or 0.0)
         _tg = [float(x) for x in (targets or []) if float(x) > 0]
         if _entry <= 0 or not _tg:
             return {}
@@ -1545,10 +1613,40 @@ def spot_position_open(candidate, targets, confirm_mid: int = 0) -> dict:
             "hits": [], "opened": _t.time(), "confirm": int(confirm_mid or 0),
             "alert": int(md.get("spot_alert_mid") or 0),
             "pattern": str(md.get("pattern_type") or ""),
+            "spot_pattern_id": str(md.get("spot_pattern_id") or ""),
             "render_patterns": list(md.get("render_patterns") or []),
         }
         set_json(SPOT_POSITIONS_KEY, store)
         return store[code]
+    except Exception:
+        return {}
+
+
+def spot_position_close(code: str, reason: str = "CLOSED") -> dict:
+    """Close the chart-4 position and retire only its exact traded geometry."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        import time as _t
+        store = dict(_g(SPOT_POSITIONS_KEY, {}) or {})
+        pos = dict(store.get(str(code or "")) or {})
+        if not pos:
+            return {}
+        pos["closed"] = str(reason or "CLOSED").upper()
+        pos["closed_at"] = _t.time()
+        store[str(code)] = pos
+        _s(SPOT_POSITIONS_KEY, store)
+        fingerprint = str(pos.get("spot_pattern_id") or "")
+        if fingerprint:
+            key = f"{str(pos.get('symbol') or '').upper()}|{str(pos.get('tf') or '').upper()}"
+            retired = dict(_g("spot_retired_patterns", {}) or {})
+            state = dict(retired.get(key) or {})
+            ids = list(state.get("fingerprints") or [])
+            if fingerprint not in ids:
+                ids.append(fingerprint)
+            state.update({"fingerprints": ids[-256:], "ts": _t.time()})
+            retired[key] = state
+            _s("spot_retired_patterns", retired)
+        return pos
     except Exception:
         return {}
 

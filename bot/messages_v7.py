@@ -191,6 +191,38 @@ CHART_THEME = {
     key: os.getenv(f"CHART_{key.upper()}_COLOR", default)
     for key, default in _BASE.items()
 }
+
+
+def _make_market_colors(mpf, setup_code: str = ""):
+    """Mplfinance palette; TECHCLASSIC alone uses the approved monochrome."""
+    if str(setup_code or "").upper() == "TECHCLASSIC":
+        _edge = "#202124" if _STYLE_NAME != "dark" else "#FFFFFF"
+        return mpf.make_marketcolors(
+            up="#FFFFFF", down="#111111",
+            edge={"up": _edge, "down": _edge},
+            wick={"up": _edge, "down": _edge},
+            volume={"up": "#AEB4BC", "down": "#50565E"},
+        )
+    if _CANDLE_STYLE == "cryptocove":
+        return mpf.make_marketcolors(
+            up="#089981", down="#F23645",
+            edge={"up": "#089981", "down": "#F23645"},
+            wick={"up": "#089981", "down": "#F23645"},
+            volume={"up": "#9BD9C6", "down": "#F3B3B8"},
+        )
+    if _STYLE_NAME == "dark":
+        return mpf.make_marketcolors(
+            up=CHART_THEME["bull"], down=CHART_THEME["bear"],
+            edge="inherit", wick="inherit", volume="in",
+        )
+    return mpf.make_marketcolors(
+        up=CHART_THEME["bull"], down=CHART_THEME["bear"],
+        edge={"up": "#6C625C", "down": "#3D4046"},
+        wick={"up": "#6C625C", "down": "#3D4046"},
+        volume={"up": CHART_THEME["volume_up"], "down": CHART_THEME["volume_down"]},
+    )
+
+
 CHART_BRAND_NAME = os.getenv("CHART_BRAND_NAME", "VIVA SIGNALS PRO").upper()
 CHART_BRAND_HANDLE = os.getenv("CHART_BRAND_HANDLE", "")
 CHART_LOGO_PATH = os.getenv(
@@ -3053,26 +3085,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _lock63(candidate, frame=frame)
         except Exception as _l63:
             print(f"R63 snapshot-lock warning: {_l63}")
-        if _CANDLE_STYLE == "cryptocove":
-            # r59 PREVIEW only — Viva judges before it becomes the default.
-            market_colors = mpf.make_marketcolors(
-                up="#089981", down="#F23645",
-                edge={"up": "#089981", "down": "#F23645"},
-                wick={"up": "#089981", "down": "#F23645"},
-                volume={"up": "#9BD9C6", "down": "#F3B3B8"},
-            )
-        elif _STYLE_NAME == "dark":
-            market_colors = mpf.make_marketcolors(
-                up=CHART_THEME["bull"], down=CHART_THEME["bear"],
-                edge="inherit", wick="inherit", volume="in",
-            )
-        else:  # light: Viva monochrome candles (hollow bull / solid bear)
-            market_colors = mpf.make_marketcolors(
-                up=CHART_THEME["bull"], down=CHART_THEME["bear"],
-                edge={"up": "#6C625C", "down": "#3D4046"},
-                wick={"up": "#6C625C", "down": "#3D4046"},
-                volume={"up": CHART_THEME["volume_up"], "down": CHART_THEME["volume_down"]},
-            )
+        market_colors = _make_market_colors(
+            mpf, str(getattr(candidate, "setup_code", "") or ""))
         style = mpf.make_mpf_style(
             marketcolors=market_colors,
             base_mpf_style="nightclouds",
@@ -4382,11 +4396,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # r59 far-majors sit between (a thin BLUE background major)
                 # R67.1: faint far / thin child / bold parent — same hue
                 _head99q15 = bool(_ln.get("_headless99q15"))
-                _lw8 = 1.3 if (_pat.get("far_major") or _pat.get("far_faint99p")
-                               or _head99q15) else (
-                    1.2 if _pat.get("child") else 2.0)
-                _al8 = 0.55 if (_pat.get("far_major") or _pat.get("far_faint99p")
-                                or _head99q15) else (
+                _target_pattern_chart = str(getattr(candidate, "setup_code", "") or "").upper() \
+                    in {"TLBREAK", "TECHCLASSIC"}
+                # far_faint99p is kept in this weight/alpha path as a faint guide.
+                _faint_major8 = bool(_pat.get("far_major") or _pat.get("far_faint99p")
+                                     or _head99q15)
+                _lw8 = 1.3 if _faint_major8 else (
+                    1.2 if _pat.get("child") else (2.45 if _target_pattern_chart else 2.0))
+                _al8 = 0.55 if _faint_major8 else (
                     0.60 if _pat.get("child") else 0.95)
                 # R16 phase 3: draw the CALIBRATED geometry. A log-fitted line
                 # is a curve on a log axis, so it is painted as a polyline
@@ -4415,13 +4432,18 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 if _bx8 is None and count < _xe - 0.6:
                     _xsB, _ysB = _line_xy(_ln, count, _xe)
                     ax.plot(_xsB, _ysB,
-                            color=_col8, linewidth=_lw8 * 0.7, alpha=_al8 * 0.75,
+                            color=_col8,
+                            linewidth=(max(0.75, _lw8 * 0.42) if _target_pattern_chart
+                                       else _lw8 * 0.7),
+                            alpha=(0.38 if _target_pattern_chart else _al8 * 0.75),
                             zorder=6, linestyle=(0, (6, 4)),
                             solid_capstyle="butt")
                 elif _bx8 is not None and _bx8 < _xe - 0.6 and not (_is_mini_flag or _is_too_steep or _is_too_short):
                     _xsC, _ysC = _line_xy(_ln, _xend8, _xe)
                     ax.plot(_xsC, _ysC,
-                            color=_col8, linewidth=1.3, alpha=0.85,
+                            color=_col8,
+                            linewidth=(0.80 if _target_pattern_chart else 1.3),
+                            alpha=(0.40 if _target_pattern_chart else 0.85),
                             zorder=6, linestyle=(0, (5, 3)),
                             solid_capstyle="butt")
                 _px8, _xs8 = [], []
@@ -4601,27 +4623,38 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 if xb > xa:
                     slope = (pb - pa) / (xb - xa)
                     x_end = count + future - 0.5
-                    # r59: solid→LIVE, dashed→canvas (the same law every
-                    # trend/pattern obeys; was solid into the margin).
+                    # Solid structural edges stay visually dominant; the
+                    # projected/dashed tails remain deliberately light and
+                    # thin (especially on TLBREAK) so they read as extensions.
+                    _tl_target = str(getattr(candidate, "setup_code", "") or "").upper() \
+                        in {"TLBREAK", "TECHCLASSIC"}
                     _xlv9 = min(float(count), x_end)
                     ax.plot([xa, _xlv9], [pa, pa + slope * (_xlv9 - xa)],
-                            color=CHART_THEME["trend"], linewidth=1.65, alpha=0.92, zorder=8,
+                            color=CHART_THEME["trend"],
+                            linewidth=2.45 if _tl_target else 1.65,
+                            alpha=0.98 if _tl_target else 0.92, zorder=8,
                             solid_capstyle="round", antialiased=True)
                     if count < x_end - 0.6:
                         ax.plot([_xlv9, x_end],
                                 [pa + slope * (_xlv9 - xa), pa + slope * (x_end - xa)],
-                                color=CHART_THEME["trend"], linewidth=1.15, alpha=0.7,
+                                color=CHART_THEME["trend"],
+                                linewidth=0.82 if _tl_target else 1.15,
+                                alpha=0.38 if _tl_target else 0.7,
                                 zorder=7, linestyle=(0, (6, 4)), solid_capstyle="butt",
                                 antialiased=True)
                     p_anc = float(md["tl_anchor_price"])
                     _xla9 = min(float(count), max(xanc, x_end))
                     ax.plot([xanc, _xla9], [p_anc, p_anc + slope * (_xla9 - xanc)],
-                            color=CHART_THEME["trend"], linewidth=1.35, alpha=0.75, zorder=8,
+                            color=CHART_THEME["trend"],
+                            linewidth=2.0 if _tl_target else 1.35,
+                            alpha=0.86 if _tl_target else 0.75, zorder=8,
                             solid_capstyle="round", antialiased=True)
                     if _xla9 < x_end - 0.6:
                         ax.plot([_xla9, x_end],
                                 [p_anc + slope * (_xla9 - xanc), p_anc + slope * (x_end - xanc)],
-                                color=CHART_THEME["trend"], linewidth=1.0, alpha=0.55,
+                                color=CHART_THEME["trend"],
+                                linewidth=0.72 if _tl_target else 1.0,
+                                alpha=0.32 if _tl_target else 0.55,
                                 zorder=7, linestyle=(0, (6, 4)), solid_capstyle="butt",
                                 antialiased=True)
                     stage = md.get("tl_stage", "")

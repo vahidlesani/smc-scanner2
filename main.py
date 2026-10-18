@@ -1043,6 +1043,37 @@ def _spot_tf_position_commit(symbol: str, tf: str) -> None:
         pass
 
 
+def _spot_tf_position_clear(symbol: str, tf: str) -> None:
+    """Release the one-position-per-TF marker after that Spot trade is terminal."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        key = f"{str(symbol or '').upper()}|{str(tf or '').upper()}"
+        data = dict(_g("spot_tf_position", {}) or {})
+        data.pop(key, None)
+        _s("spot_tf_position", data)
+    except Exception:
+        pass
+
+
+def _spot_candidate_stamp_key(candidate) -> str:
+    md = getattr(candidate, "metadata", None) or {}
+    return (f"spot|{str(getattr(candidate, 'symbol', '') or '').upper()}|"
+            f"{str(getattr(candidate, 'trigger_timeframe', '') or '').upper()}|"
+            f"{str(md.get('pattern_type') or '').upper()}|"
+            f"{str(md.get('spot_pattern_id') or 'legacy')}")
+
+
+def _spot_candidate_pattern_retired(candidate) -> bool:
+    try:
+        from analysis.spot_engine import spot_pattern_is_retired
+        md = getattr(candidate, "metadata", None) or {}
+        return spot_pattern_is_retired(
+            getattr(candidate, "symbol", ""), getattr(candidate, "trigger_timeframe", ""),
+            str(md.get("spot_pattern_id") or ""))
+    except Exception:
+        return False
+
+
 def _spot_hit_pass(bundles: dict) -> int:
     """R99q15 SPOT HIT LANE (charts five…seven of a unique id, his 10-16 law:
     «بعد ۳ تا هیت شدن .. هر شناسه از لحظه شناسایی تا پایان مسیر ۷ چارت نهایتاً
@@ -1092,10 +1123,18 @@ def _spot_hit_pass(bundles: dict) -> int:
                         _chart15 = generate_chart(_frame, _cand15, confirmed=True)
                 _mid15 = _ssh15(_pos, _hit15, chart=_chart15, slot=str(_slot15 or ""))
                 if _mid15:
-                    _spc(_code, str(_hit15.get("kind") or ""), int(_mid15))
+                    _pos_after = _spc(_code, str(_hit15.get("kind") or ""), int(_mid15))
                     posted += 1
                     print(f"🪙 spot hit {_hit15.get('kind')} {_pos.get('symbol')} "
                           f"{_pos.get('tf')} slot={_slot15 or 'text-only'} mid={_mid15}")
+                    if str((_pos_after or {}).get("closed") or "").upper() == "ALL_TARGETS":
+                        _release_terminal_spot_event({
+                            "event": "CLOSED", "source": "SPOTBREAK",
+                            "public_code": str(_pos.get("code") or _code),
+                            "symbol": str(_pos.get("symbol") or ""),
+                            "trigger_timeframe": str(_pos.get("tf") or ""),
+                            "close_reason": "ALL_TARGETS",
+                        })
             except Exception as _he15:
                 print(f"spot hit skip {_code}: {_he15}")
         return posted
@@ -1404,8 +1443,10 @@ def run_spot_scan() -> Dict[str, int]:
     pending.sort(key=lambda c: float(((c.metadata or {}).get("target_ladder") or {})
                                      .get("path_pct") or 0.0), reverse=True)
     for cand in pending:   # 10-11: ONE position per (symbol, trigger-TF)
-        key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"
-               f"{(cand.metadata or {}).get('pattern_type')}")
+        if _spot_candidate_pattern_retired(cand):
+            stats["retired_geometry_skip"] = stats.get("retired_geometry_skip", 0) + 1
+            continue
+        key = _spot_candidate_stamp_key(cand)
         window = 72.0 if str(cand.trigger_timeframe) == "3d" else 36.0
         if _spot_stamp(key, window, commit=False):
             stats["stamp_skip"] = stats.get("stamp_skip", 0) + 1
@@ -2647,8 +2688,18 @@ def monitor_candidates() -> Dict[str, int]:
                     _lrc99 = str(_md99.get('last_reject_code') or '')
                     if 'VETO' in _lrc99:
                         _fg99.append(_lrc99)
-                    _ent99 = (_md99.get('entry') or getattr(candidate, 'entry', None)
-                              or _md99.get('activation_price'))
+                    # TECHCLASSIC/TLBREAK judge chase against the FIRST break
+                    # close, not the plan's post-confirm rebase (which otherwise
+                    # made a delayed signal appear fresh). Other setups retain
+                    # their existing entry lookup.
+                    if _code99 in {'TECHCLASSIC', 'TLBREAK'}:
+                        _ent99 = (_md99.get('fast_break_close')
+                                  or getattr(candidate, 'planned_entry', None)
+                                  or _md99.get('entry')
+                                  or _md99.get('activation_price'))
+                    else:
+                        _ent99 = (_md99.get('entry') or getattr(candidate, 'entry', None)
+                                  or _md99.get('activation_price'))
                     _kw99 = dict(broke=_broke99,
                                  closed_after_break=bool(confirmed and have_frames),
                                  tohom_fired=_via_tohom99, foreign_gates=_fg99,
@@ -2656,6 +2707,8 @@ def monitor_candidates() -> Dict[str, int]:
                                                or 'LONG'),
                                  live=current_price, entry=_ent99,
                                  tp1=(_md99.get('tp1') or getattr(candidate, 'tp1', None)))
+                    if _code99 in {'TECHCLASSIC', 'TLBREAK'}:
+                        _kw99['break_age_bars'] = _md99.get('fast_break_age_bars')
                     if _code99 == 'PINWALL':
                         _kw99['carried_by'] = (_md99.get('pinwall_carried_by')
                                                or _md99.get('carried_by'))
@@ -2973,6 +3026,10 @@ def _publish_trade_events(events) -> int:
     """Serialize lifecycle publication so ticker and candle monitors cannot race."""
     for event in events:
         kind = str(event.get("event") or "")
+        try:
+            _release_terminal_spot_event(event)
+        except Exception:
+            pass
         if kind.startswith("TP"):
             pro_tp_mid = send_ladder_event(event)
             if pro_tp_mid:
@@ -3022,6 +3079,51 @@ def _publish_trade_events(events) -> int:
             if close_mid and res_mid:
                 attach_results_link(int(close_mid), int(res_mid))
     return len(events)
+
+
+def _release_terminal_spot_event(event: dict) -> None:
+    """Retire a Spot chart's exact geometry and free its TF after final TP/stop."""
+    try:
+        if str((event or {}).get("event") or "").upper() not in {
+                "CLOSED", "STOP", "TRAIL_STOP"}:
+            return
+        source = str((event or {}).get("source") or "").upper()
+        if source not in {"SPOT", "SPOTBREAK"}:
+            return
+        code = str((event or {}).get("public_code") or "")
+        symbol = str((event or {}).get("symbol") or "").upper()
+        tf = str((event or {}).get("trigger_timeframe") or "").upper()
+        pos = {}
+        if code:
+            from analysis.spot_engine import spot_position_close
+            pos = spot_position_close(
+                code, str(event.get("close_reason") or event.get("reason")
+                          or event.get("event") or "CLOSED")) or {}
+        _spot_tf_position_clear(symbol, tf)
+        # A resolved journey may not lend its id/chart counter to the next
+        # pattern. Reset only when this terminal event owns the current chain.
+        try:
+            from database.bot_kv import get_json as _g, set_json as _s
+            chain_key = f"spot_chain|{symbol}|{tf}"
+            chain = dict(_g(chain_key, {}) or {})
+            if code and str(chain.get("code") or "") == code:
+                _s(chain_key, {})
+            pattern = str(pos.get("pattern") or "").upper()
+            if pattern:
+                _s(f"spot_alert_mid|{symbol}|{tf.lower()}|{pattern}", {})
+            watch_key = f"{symbol}|{tf.lower()}"
+            watch = dict(_g("spot_urgent_watch", {}) or {})
+            if watch.pop(watch_key, None) is not None:
+                _s("spot_urgent_watch", watch)
+            lw_prefix = f"{symbol}|{tf.lower()}|"
+            lw_state = dict(_g("line_watch", {}) or {})
+            lw_state = {k: v for k, v in lw_state.items()
+                        if not str(k).startswith(lw_prefix)}
+            _s("line_watch", lw_state)
+        except Exception:
+            pass
+    except Exception as exc:
+        print(f"spot terminal release skipped: {exc}")
 
 
 def monitor_confirmed_results() -> int:
@@ -3173,8 +3275,9 @@ def _spot_urgent_recheck() -> int:
                         _lss65(_uc58)
                     except Exception:
                         pass
-                    key = (f"spot|{_uc58.symbol}|{_uc58.trigger_timeframe}|"
-                           f"{(_uc58.metadata or {}).get('pattern_type')}")
+                    if _spot_candidate_pattern_retired(_uc58):
+                        continue
+                    key = _spot_candidate_stamp_key(_uc58)
                     window = 72.0 if str(_uc58.trigger_timeframe) == "3d" else 36.0
                     if _spot_stamp(key, window, commit=False):
                         continue
@@ -3231,8 +3334,9 @@ def _spot_urgent_recheck() -> int:
                 except Exception as _e57:
                     print(f"spot update events warning {symbol}: {_e57}")
                 for cand in spot_signals_for(symbol, bundle):
-                    key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"
-                           f"{(cand.metadata or {}).get('pattern_type')}")
+                    if _spot_candidate_pattern_retired(cand):
+                        continue
+                    key = _spot_candidate_stamp_key(cand)
                     window = 72.0 if str(cand.trigger_timeframe) == "3d" else 36.0
                     if _spot_stamp(key, window, commit=False):
                         continue

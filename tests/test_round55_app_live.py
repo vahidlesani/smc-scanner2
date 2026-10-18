@@ -236,12 +236,11 @@ def test_spot_pass_runs_offloop_single_flight():
 
 
 def test_multi_tf_breaks_publish_per_tf_one_position():
-    """10-11 EVOLVED (his «هر تایم تریگر اجازه صدور یک پوزیشن» — the r56
-    no-budget law is superseded for now): the stamp key is still
-    (symbol, tf, pattern) so the same symbol publishes per-TF breaks — but
-    each (symbol, trigger-TF) now holds ONE position per 24h (the TF gate
-    below the stamp check; 2nd/3rd signals closed)."""
+    """10-11: one position per trigger TF; new geometry of the same family
+    gets its own stamp, while a terminally closed shape remains retired."""
     src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
-    assert 'key = (f"spot|{cand.symbol}|{cand.trigger_timeframe}|"' in src
+    assert "def _spot_candidate_stamp_key(candidate)" in src
+    assert "md.get('spot_pattern_id')" in src
+    assert "_spot_candidate_pattern_retired(cand)" in src
     assert "for cand in pending:   # 10-11: ONE position per (symbol, trigger-TF)" in src
     assert "_spot_tf_position_open(cand.symbol, cand.trigger_timeframe)" in src

@@ -29,6 +29,13 @@ def test_fresh_break_confirms():
     assert _r["decision"] == "CONFIRM", _r
 
 
+def test_first_close_older_than_two_trigger_bars_is_not_reconfirmed():
+    _r = _check(broke=True, closed_after_break=True, direction="LONG",
+                live=100.1, entry=100.0, tp1=105.0, break_age_bars=3)
+    assert _r["decision"] == "STALE", _r
+    assert any("STALE" in reason for reason in _r["reasons"])
+
+
 def test_fresh_long_confirms():
     _r = _check(broke=True, closed_after_break=True, direction="LONG",
                 live=100.1, entry=100.0, tp1=104.0)

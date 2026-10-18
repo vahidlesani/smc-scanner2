@@ -166,12 +166,37 @@ def test_tc_trailing_healthy_and_short_mirror():
     assert _t["state"] == "TRAIL_HIT"
 
 
-def test_tc_entry_late_annotated(monkeypatch):
+def test_tc_entry_small_fresh_drift_still_confirms(monkeypatch):
     _fake_kv(monkeypatch, {})
     _r = tc_entry_check(broke=True, closed_after_break=True,
-                        live=102.0, entry=100.0, day="2099-02-05")
+                        live=100.5, entry=100.0, tp1=105.0,
+                        break_age_bars=0, day="2099-02-05")
     assert _r["decision"] == "CONFIRM"
-    assert any("LATE" in a for a in _r["alarms"])
+
+
+def test_tc_entry_material_chase_is_refused(monkeypatch):
+    _fake_kv(monkeypatch, {})
+    _r = tc_entry_check(broke=True, closed_after_break=True,
+                        live=102.0, entry=100.0, tp1=105.0,
+                        break_age_bars=1, day="2099-02-06")
+    assert _r["decision"] == "LATE"
+    assert any("chase forbidden" in a for a in _r["alarms"])
+
+
+def test_tc_entry_refuses_already_consumed_tp1(monkeypatch):
+    _fake_kv(monkeypatch, {})
+    _r = tc_entry_check(broke=True, closed_after_break=True,
+                        live=105.1, entry=100.0, tp1=105.0,
+                        day="2099-02-07")
+    assert _r["decision"] == "STALE"
+
+
+def test_tc_entry_refuses_old_first_break_close(monkeypatch):
+    _fake_kv(monkeypatch, {})
+    _r = tc_entry_check(broke=True, closed_after_break=True,
+                        live=100.1, entry=100.0, tp1=105.0,
+                        break_age_bars=3, day="2099-02-08")
+    assert _r["decision"] == "STALE"
 
 
 def test_tc_entry_budget_gate_retired(monkeypatch):
