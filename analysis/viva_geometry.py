@@ -787,18 +787,25 @@ def choose_view(df: pd.DataFrame, res: PatternResult,
     # Include only the selected pattern's line values inside the actual viewport.
     # This prevents valid near-price trendlines from being clipped vertically,
     # while avoiding unbounded extrapolation to stale x0/x1 anchors.
-    line_x0 = max(x_from, min(x0, n - 1))
-    line_x1 = min(n - 1, max(line_x0, x1))
     line_values = []
-    if line_x1 >= line_x0:
-        for line in (res.upper, res.lower):
-            for xi in (line_x0, line_x1):
-                try:
-                    value = float(line.price_at(xi))
-                except (AttributeError, TypeError, ValueError, OverflowError):
-                    continue
-                if math.isfinite(value) and value > 0:
-                    line_values.append(math.log(value))
+    # A pattern wholly to the left of the visible data is stale for framing:
+    # do not extrapolate its equations into today's price scale.
+    overlaps_view = x1 >= x_from and x0 <= n - 1
+    if overlaps_view:
+        line_x0 = max(x_from, x0)
+        line_x1 = min(n - 1, x1)
+        if line_x1 >= line_x0:
+            for line in (res.upper, res.lower):
+                for xi in (line_x0, line_x1):
+                    try:
+                        value = float(line.price_at(xi))
+                    except (AttributeError, TypeError, ValueError, OverflowError):
+                        continue
+                    if math.isfinite(value) and value > 0:
+                        # A wildly detached projection is not a useful price-axis
+                        # anchor; bound it relative to the visible candle envelope.
+                        if data_lo / 1.8 <= value <= data_hi * 1.8:
+                            line_values.append(math.log(value))
     lo, hi = data_lo, data_hi
     if line_values:
         lo, hi = min(lo, min(line_values)), max(hi, max(line_values))
