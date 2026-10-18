@@ -100,3 +100,16 @@ def test_choose_view_ignores_extrapolated_line_values_outside_visible_window():
     assert view["y_min"] > 0
     assert view["y_max"] / view["y_min"] < 2.0
 
+def test_classify_geometry_rejects_converging_pattern_with_exhausted_apex():
+    # Both edges slope down and converge, but their intersection is only one
+    # bar after x1. This must not be promoted as a live falling wedge.
+    x0, x1 = 100, 200
+    upper = vg.Line(-0.002, np.log(120.0) + 0.002 * x0,
+                    "upper", (x0, x1), x0)
+    lower = vg.Line(-0.00101, upper.at(x0) - 0.1,
+                    "lower", (x0, x1), x0)
+    slug, meta = vg.classify_geometry(upper, lower, x0, x1)
+
+    assert slug == "NONE"
+    assert "رأس الگوی همگرا" in meta["reason"]
+
