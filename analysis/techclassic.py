@@ -90,13 +90,12 @@ def _foreign_gate_hit(gate_name: str) -> bool:
 def tc_entry_check(*, broke: bool, closed_after_break: bool,
                    tohom_fired: bool = False, foreign_gates=(),
                    direction: str = "LONG", live=None, entry=None, tp1=None,
-                   day=None):
-    """SEPARATE TC entry-law checker (§6.9). Pure + tested.
+                   break_age_bars=None, day=None):
+    """TECHCLASSIC's own entry law (§6.9), including a hard late-entry veto.
 
-    Returns {"decision": "CONFIRM"|"WAIT"|"DEFERRED_BUDGET",
-             "alarms": [...], "reasons": [...]}.
-    A foreign gate NEVER vetoes: it raises an alarm and the entry proceeds.
-    A late confirm (live beyond entry) is ANNOTATED, entry proceeds.
+    A true first close (or a live TOHOM trigger) can confirm immediately, but
+    a stale break, a TP1 already reached, or a materially chased entry cannot
+    be published as a new trade. Foreign setup vetoes remain alarm-only.
     """
     alarms, reasons = [], []
     for _g in (foreign_gates or ()):
@@ -109,20 +108,54 @@ def tc_entry_check(*, broke: bool, closed_after_break: bool,
     if not (closed_after_break or tohom_fired):
         reasons.append("break without close/TOHOM — waiting for the trigger")
         return {"decision": "WAIT", "alarms": alarms, "reasons": reasons}
-    # R99q (Viva 10-15, verbatim «گفتم گیت خشک‌کننده سیگنال‌های ستاپ‌ها رو
-    # بردارررر»): the daily TOTAL budget is RETIRED — a shared cap that
-    # dried EVERY setup at once (today 21/25 by 04:40 Tehran → silence).
-    # Capacity lives in the licence seats (3 concurrent per symbol/setup/
-    # trigger-TF) and the setup's own concurrent slots. Never deferred.
+
+    # For the bar-close lane, the first-break stamp is authoritative. A later
+    # rebase of the displayed plan must not reset its age to zero.
+    if closed_after_break and break_age_bars is not None:
+        try:
+            if int(break_age_bars) > 2:
+                reason = f"STALE: first break close is {int(break_age_bars)} bars old"
+                alarms.append(tc_alarm(reason + " — confirm refused"))
+                reasons.append(reason)
+                return {"decision": "STALE", "alarms": alarms, "reasons": reasons}
+        except (TypeError, ValueError):
+            pass
+
+    # Reject only a meaningful chase (or a target already consumed), not a
+    # harmless tick beyond the entry. When TP1 is known, measure the run as a
+    # fraction of the actual entry→TP1 path; without it, cap drift at 1.5%.
     try:
         _long = str(direction or "LONG").upper() != "SHORT"
-        if live is not None and entry is not None:
-            _late = (float(live) > float(entry)) if _long else (float(live) < float(entry))
-            if _late:
-                alarms.append(tc_alarm("LATE confirm annotated (live beyond entry)"))
-                reasons.append("late annotated")
-    except Exception:
+        _live = float(live) if live is not None else 0.0
+        _entry = float(entry) if entry is not None else 0.0
+        _tp1 = float(tp1) if tp1 is not None else 0.0
+        if _live > 0 and _entry > 0:
+            _tp1_ok = _tp1 > _entry if _long else (0 < _tp1 < _entry)
+            if _tp1_ok:
+                _past_tp1 = _live >= _tp1 if _long else _live <= _tp1
+                if _past_tp1:
+                    reason = f"STALE: live {_live:g} already reached TP1 {_tp1:g}"
+                    alarms.append(tc_alarm(reason + " — trade played out, confirm refused"))
+                    reasons.append(reason)
+                    return {"decision": "STALE", "alarms": alarms, "reasons": reasons}
+                _leg = (_tp1 - _entry) if _long else (_entry - _tp1)
+                _run = (_live - _entry) if _long else (_entry - _live)
+                if _leg > 0 and _run >= 0.30 * _leg:
+                    reason = f"LATE: live chased {(_run / _leg) * 100:.0f}% of entry→TP1"
+                    alarms.append(tc_alarm(reason + " — chase forbidden, confirm refused"))
+                    reasons.append(reason)
+                    return {"decision": "LATE", "alarms": alarms, "reasons": reasons}
+            else:
+                _run_pct = ((_live - _entry) if _long else (_entry - _live)) / _entry
+                if _run_pct > 0.015:
+                    reason = f"LATE: live is {_run_pct * 100:.1f}% beyond entry (no valid TP1)"
+                    alarms.append(tc_alarm(reason + " — chase forbidden, confirm refused"))
+                    reasons.append(reason)
+                    return {"decision": "LATE", "alarms": alarms, "reasons": reasons}
+    except (TypeError, ValueError, ZeroDivisionError):
         pass
+
+    # The shared daily budget is retired; this is accounting only, not a gate.
     try:
         from analysis import tiered_scan as _ts2
         _ts2.daily_count_incr("futures", day)

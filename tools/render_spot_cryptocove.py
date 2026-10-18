@@ -175,6 +175,11 @@ def _fmt_axis(v, _p=None) -> str:
     return f"{v:.4f}"
 
 
+def spot_candle_colors(is_up: bool) -> tuple:
+    """(body, edge/wick): white bullish candle, black bearish candle."""
+    return ("#FFFFFF" if bool(is_up) else "#111111", "#111111")
+
+
 def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
            stage: str = "", title: str = "") -> "str | bytes":
     """رندر واحد اسپات. اگر path خالی باشد بایت PNG برمی‌گرداند."""
@@ -240,7 +245,7 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     except Exception:
         pass
 
-    fig, ax = plt.subplots(figsize=(16, 9), dpi=130)
+    fig, ax = plt.subplots(figsize=(16, 9), dpi=180)
     fig.patch.set_facecolor("#FFFFFF")
     # حاشیهٔ کم (یادداشت خودش: «حاشیهٔ پشت محور و پایین صفحه رو کم کن»)
     fig.subplots_adjust(left=0.016, right=0.952, top=0.915, bottom=0.066)
@@ -269,7 +274,7 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     if os.path.isfile(logo_path):
         try:
             _w_ax = ax.inset_axes([0.40, 0.30, 0.20, 0.38], zorder=1)
-            _w_ax.imshow(mpimg.imread(logo_path), alpha=0.20)
+            _w_ax.imshow(mpimg.imread(logo_path), alpha=0.10)
             _w_ax.set_axis_off()
             _w_ax.patch.set_alpha(0)
         except Exception:
@@ -290,18 +295,18 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
                 # روی قیمت؛ آن باگ کل پنل را پر می‌کرد)
                 _hbar = _base * (math.exp(_vh) - 1.0)
                 ax.add_patch(Rectangle((i - 0.33, _base), 0.66, _hbar,
-                                       facecolor=GREEN if c[i] >= o[i] else RED,
+                                       facecolor="#AEB4BC" if c[i] >= o[i] else "#50565E",
                                        edgecolor="none", alpha=0.30, zorder=2))
     except Exception:
         pass
 
-    # ── 4) کندل‌ها
+    # ── 4) monochrome candles: hollow white up-bars and solid black down-bars.
     for i in range(x_from, n):
-        col = GREEN if c[i] >= o[i] else RED
-        ax.vlines(i, l[i], h[i], color=col, lw=1.0, zorder=3)
+        body, edge = spot_candle_colors(c[i] >= o[i])
+        ax.vlines(i, l[i], h[i], color=edge, lw=1.0, zorder=3)
         ax.add_patch(Rectangle((i - 0.33, min(o[i], c[i])), 0.66,
-                               max(abs(c[i] - o[i]), 1e-12), facecolor=col,
-                               edgecolor=col, linewidth=0.6, zorder=4))
+                               max(abs(c[i] - o[i]), 1e-12), facecolor=body,
+                               edgecolor=edge, linewidth=0.75, zorder=4))
 
     # ── 5) خطوط الگو از هندسهٔ انجین + دایره‌های توخالی روی پیوت‌ها
     entry_edge = str(brk.get("edge") or "")
@@ -317,12 +322,12 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
         _span_end = min(n - 1, max(_last_t, int(getattr(ln, "first_index", x_from))))
         xs = np.array([max(int(getattr(ln, "first_index", x_from)), x_from), _span_end])
         ax.plot(xs, [ln.price_at(x) for x in xs], color=INK,
-                lw=2.0 if is_entry else 1.4,
+                lw=2.55 if is_entry else 2.0,
                 alpha=1.0 if is_entry else 0.92, zorder=6, solid_capstyle="round")
-        if x_to > _span_end:   # ادامهٔ تصویر تا ته قاب (رفرنس‌ها)
+        if x_to > _span_end:   # faint, thin projection only — not a traded edge
             xs_p = np.array([_span_end, x_to - 1])
             ax.plot(xs_p, [ln.price_at(x) for x in xs_p], color=INK,
-                    lw=1.2 if is_entry else 1.0, ls=(0, (5, 4)), alpha=0.75,
+                    lw=0.82 if is_entry else 0.72, ls=(0, (5, 4)), alpha=0.38,
                     zorder=6)
         _tix = [int(t) for t in (getattr(ln, "touches", ()) or ())
                 if x_from <= int(t) <= n - 1]

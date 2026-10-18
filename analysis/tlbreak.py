@@ -167,7 +167,7 @@ def tlbreak_zones_from_pivots(pivots, direction="LONG"):
 def tlbreak_entry_check(*, broke: bool, closed_after_break: bool,
                         tohom_fired: bool = False, side: str = None,
                         direction: str = "LONG", live=None, entry=None, tp1=None,
-                        foreign_gates=(), day=None):
+                        break_age_bars=None, foreign_gates=(), day=None):
     alarms, reasons = [], []
     for _g in (foreign_gates or ()):
         if _foreign_gate_hit(_g):
@@ -179,6 +179,17 @@ def tlbreak_entry_check(*, broke: bool, closed_after_break: bool,
     if not (closed_after_break or tohom_fired):
         reasons.append("break without close/TOHOM")
         return {"decision": "WAIT", "alarms": alarms, "reasons": reasons}
+    # The fresh close is the entry event; a historical close cannot be
+    # re-labeled as a current TLBREAK confirmation after the tape has advanced.
+    if closed_after_break and break_age_bars is not None:
+        try:
+            if int(break_age_bars) > 2:
+                _stale = f"STALE: first break close is {int(break_age_bars)} bars old"
+                alarms.append(tlbreak_alarm(_stale + " -- confirm REFUSED"))
+                reasons.append(_stale)
+                return {"decision": "STALE", "alarms": alarms, "reasons": reasons}
+        except (TypeError, ValueError):
+            pass
     # R99q (Viva 10-15, verbatim «گفتم گیت خشک‌کننده سیگنال‌های ستاپ‌ها رو
     # بردارررر»): the daily TOTAL budget is RETIRED — a shared cap that
     # dried EVERY setup at once (today 21/25 by 04:40 Tehran → silence).

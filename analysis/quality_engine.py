@@ -865,7 +865,7 @@ def evaluate_confirmation(
             _lower_tf = bool(_fm > 0 and _trig_m > 0 and _fm < _trig_m * 0.99)
             _ftb_seen = not _stale_after
             _prev_row = None
-            for _ix, _r in _scan.iterrows():
+            for _scan_pos, (_ix, _r) in enumerate(_scan.iterrows()):
                 _bar_ts = _r["timestamp"] if "timestamp" in _scan.columns else _ix
                 _bar_close_ts = None
                 try:
@@ -922,6 +922,12 @@ def evaluate_confirmation(
                 candidate.metadata["fast_break_bar"] = str(_bar_ts)[:19]
                 candidate.metadata["fast_break_close"] = float(_r["close"])
                 candidate.metadata["fast_break_tf_min"] = float(_fm or 0.0)
+                # Keep the age of the FIRST valid close separately from the
+                # newest tape row. Re-basing the trade ladder must not make an
+                # hours-old break look like a fresh confirmation to the setup
+                # owner's late/chase guard.
+                candidate.metadata["fast_break_age_bars"] = max(
+                    0, len(_scan) - 1 - int(_scan_pos))
                 candidate.metadata["tl_fast_break"] = fast_lane
                 candidate.metadata["confirm_level_used"] = float(_edge_t)
                 if _cndl:

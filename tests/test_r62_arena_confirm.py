@@ -363,6 +363,9 @@ def test_dot_case_1h_chain_confirms_on_first_valid_15m_close(monkeypatch):
     md = c2.metadata
     # the fake-out star at 12:15 is skipped; the 12:30 strong close confirms
     assert str(md.get("fast_break_bar"))[:16] == "2026-09-30 12:30"
+    # The confirming close is one bar behind the newest frame row here; the
+    # setup-owner late guard must see that age even after entry rebasing.
+    assert md.get("fast_break_age_bars") == 1
     assert md.get("last_fakeout_candle")
 
 
