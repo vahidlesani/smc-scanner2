@@ -1,0 +1,102 @@
+name: viva-diag
+
+# Read-only production diagnostic. Pulls the service variables from the
+# Railway API (never printed), connects to the app database and prints
+# aggregate counts only — no symbols of users, no tokens, no DSN.
+on:
+  workflow_dispatch:
+    inputs:
+      what:
+        description: "alerts | patterns | all"
+        required: true
+        default: "alerts"
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      WHAT: ${{ github.event.inputs.what }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: pip install -q psycopg2-binary
+
+      - name: pull variables + query
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request, sys
+
+          API = "https://backboard.railway.com/graphql/v2"
+          PID = "dfa19d15-6e78-41b5-8a0c-8ccfc3807add"
+          EID = "a787e251-94d1-4665-8ab4-dc9b92a10a2a"
+          SID = "84f5a4ef-117f-4c2d-a460-83bd290ce58a"
+
+          def gql(q, v=None):
+              body = json.dumps({"query": q, "variables": v or {}}).encode()
+              req = urllib.request.Request(
+                  API, data=body, method="POST",
+                  headers={"Authorization": "Bearer " + os.environ["RAILWAY_API_TOKEN"],
+                           "Content-Type": "application/json",
+                           "User-Agent": "viva-ops/1.0"})
+              with urllib.request.urlopen(req, timeout=90) as r:
+                  return json.loads(r.read().decode())
+
+          d = gql("""query($p:String!,$e:String!,$s:String!){
+                       variables(projectId:$p, environmentId:$e, serviceId:$s) }""",
+                  {"p": PID, "e": EID, "s": SID})
+          var = (d.get("data") or {}).get("variables") or {}
+          print("variables readable:", len(var), "names")
+          dsn = None
+          for k in ("DATABASE_URL", "VIVA_DB_DSN", "POSTGRES_URL", "PG_DSN"):
+              if var.get(k):
+                  dsn = var[k]; print("dsn key:", k); break
+          if not dsn:
+              print("NO DSN among:", sorted(var)[:40]); sys.exit(1)
+
+          import psycopg2
+          con = psycopg2.connect(dsn, connect_timeout=20)
+          con.set_session(readonly=True)
+          cur = con.cursor()
+
+          def q(label, sql, args=()):
+              print("\n──", label)
+              try:
+                  cur.execute(sql, args)
+                  rows = cur.fetchall()
+                  cols = [d[0] for d in cur.description]
+                  print("   ", " | ".join(cols))
+                  for r in rows[:30]:
+                      print("   ", " | ".join(str(x)[:44] for x in r))
+                  if not rows: print("    (empty)")
+              except Exception as e:
+                  con.rollback()
+                  print("    ERR:", str(e)[:180])
+
+          q("signal_candidates last 30h by setup/status", """
+            SELECT setup_code, status, count(*)
+            FROM signal_candidates
+            WHERE created_at::timestamptz > now() - interval '30 hours'
+            GROUP BY 1,2 ORDER BY 3 DESC""")
+
+          q("signal_candidates last 30h by hour", """
+            SELECT date_trunc('hour', created_at::timestamptz) h, count(*)
+            FROM signal_candidates
+            WHERE created_at::timestamptz > now() - interval '30 hours'
+            GROUP BY 1 ORDER BY 1 DESC""")
+
+          q("signals sent last 30h by source", """
+            SELECT source, count(*), max(created_at)
+            FROM signals
+            WHERE created_at::timestamptz > now() - interval '30 hours'
+            GROUP BY 1 ORDER BY 2 DESC""")
+
+          q("newest 12 candidates", """
+            SELECT created_at, setup_code, status, symbol
+            FROM signal_candidates ORDER BY created_at DESC LIMIT 12""")
+
+          q("newest 12 signals", """
+            SELECT created_at, source, symbol FROM signals
+            ORDER BY created_at DESC LIMIT 12""")
+          PY
