@@ -74,6 +74,24 @@ jobs:
                   {"p": PID, "e": EID})
           print(json.dumps(d)[:700])
 
+          # ── R99q30 THE REAL FIX ───────────────────────────────────────
+          # `source.repo` and `source.image` are BOTH null: this service has
+          # no build source at all, so serviceInstanceDeploy only RESTARTS the
+          # last image. That is why every deploy reported SUCCESS while the
+          # container kept running code with no R99q29 marker and no hourly
+          # keys — nothing has been shipped for days.
+          if os.environ.get("CONFIRM") == "CONNECT":
+              src = {"repo": "vahidlesani/smc-scanner2", "branch": "main"}
+              print("── connecting source:", src)
+              out = gql("""mutation($s:String!,$e:String!,$i:ServiceInstanceUpdateInput!){
+                             serviceInstanceUpdate(serviceId:$s, environmentId:$e, input:$i) }""",
+                        {"s": SID, "e": EID, "i": {"source": src}})
+              print("── connect result:", json.dumps(out)[:800])
+              chk = gql('query($id:String!){service(id:$id){serviceInstances{edges{node{source{repo image} }}}}}',
+                        {"id": SID})
+              print("── source now:", json.dumps(chk)[:600])
+              raise SystemExit(0)
+
           if os.environ.get("CONFIRM") != "DEPLOY":
               print("inspect-only run; pass confirm=DEPLOY to deploy")
               raise SystemExit(0)
