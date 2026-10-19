@@ -99,4 +99,49 @@ jobs:
           q("newest 12 signals", """
             SELECT created_at, source, symbol FROM signals
             ORDER BY created_at DESC LIMIT 12""")
+
+          q("all setups, 7 days: count + last seen", """
+            SELECT setup_code, count(*), max(created_at)
+            FROM signal_candidates
+            WHERE created_at::timestamptz > now() - interval '7 days'
+            GROUP BY 1 ORDER BY 3 DESC""")
+
+          q("ALBROX / PINWALL ever", """
+            SELECT setup_code, count(*), max(created_at)
+            FROM signal_candidates
+            WHERE setup_code IN ('ALBROX','PINWALLQ','PINWALL')
+            GROUP BY 1""")
+
+          q("every send per source per day (7d)", """
+            SELECT date_trunc('day', created_at::timestamptz) d, source, count(*)
+            FROM signals
+            WHERE created_at::timestamptz > now() - interval '7 days'
+            GROUP BY 1,2 ORDER BY 1 DESC, 3 DESC""")
+
+          q("candidates per day (7d)", """
+            SELECT date_trunc('day', created_at::timestamptz) d, count(*)
+            FROM signal_candidates
+            WHERE created_at::timestamptz > now() - interval '7 days'
+            GROUP BY 1 ORDER BY 1 DESC""")
+
+          # ---- runtime logs of the live deployment ----
+          print("\n── deployment logs (last 120 lines, filtered)")
+          try:
+              dep = gql("""query($p:String!,$e:String!){
+                             deployments(first:1, input:{projectId:$p, environmentId:$e}){
+                               edges{ node{ id status createdAt } } } }""",
+                        {"p": PID, "e": EID})
+              node = dep["data"]["deployments"]["edges"][0]["node"]
+              print("   deployment:", node["status"], node["createdAt"], node["id"])
+              lg = gql("""query($id:String!){ deploymentLogs(deploymentId:$id, limit:400){
+                             timestamp message severity } }""", {"id": node["id"]})
+              rows = (lg.get("data") or {}).get("deploymentLogs") or []
+              if lg.get("errors"):
+                  print("   LOG ERR:", json.dumps(lg["errors"])[:200])
+              print("   lines:", len(rows))
+              for r in rows[-120:]:
+                  m = (r.get("message") or "").replace("\n", " ")[:220]
+                  print("   ", r.get("timestamp","")[11:19], m)
+          except Exception as e:
+              print("   ERR:", str(e)[:200])
           PY
