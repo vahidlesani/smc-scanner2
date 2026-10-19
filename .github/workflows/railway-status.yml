@@ -1,0 +1,10 @@
+name: railway-status
+on: { workflow_dispatch: }
+jobs:
+  s:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env: { RAILWAY_API_TOKEN: "${{ secrets.RAILWAY_API_TOKEN }}" }
+    steps:
+      - name: status
+        run: python3 ops/railway/status.py 2>/dev/null || python3 -c "print('no script')"
