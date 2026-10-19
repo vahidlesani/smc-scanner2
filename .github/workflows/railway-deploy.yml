@@ -89,10 +89,19 @@ jobs:
               try:
                   r = gql('{ __schema { mutationType { fields { name args { name type { name kind ofType { name } } } } } } }')
                   for f in r["data"]["__schema"]["mutationType"]["fields"]:
-                      if any(t in f["name"].lower() for t in ("service", "source", "connect", "repo")):
-                          print("MUT", f["name"], [a["name"] for a in f["args"]])
+                      if f["name"] in ("serviceConnect", "serviceInstanceUpdate"):
+                          print("MUT", f["name"], [(a["name"], a["type"].get("name") or (a["type"].get("ofType") or {}).get("name")) for a in f["args"]])
               except Exception as _e:
                   print("schema failed:", str(_e)[:300])
+              for _tn in ("ServiceConnectInput", "ServiceSourceInput", "ServiceInstanceUpdateInput"):
+                  try:
+                      q = '{ __type(name: "%s") { kind inputFields { name type { name kind ofType { name } } } } }' % _tn
+                      rt = gql(q)
+                      _t = (rt.get("data") or {}).get("__type")
+                      if _t:
+                          print("TYPE", _tn, [(f["name"], f["type"].get("name") or (f["type"].get("ofType") or {}).get("name")) for f in (_t.get("inputFields") or [])])
+                  except Exception as _e2:
+                      print("type", _tn, "failed:", str(_e2)[:160])
               raise SystemExit(0)
 
           if os.environ.get("CONFIRM") == "CONNECT":
