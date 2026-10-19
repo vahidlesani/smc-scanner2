@@ -63,7 +63,11 @@ jobs:
           def q(label, sql, args=()):
               print("\n──", label)
               try:
-                  cur.execute(sql, args)
+                  if args:
+                      cur.execute(sql, args)
+                  else:
+                      # no params: pass nothing, or psycopg2 eats the '%' in LIKE
+                      cur.execute(sql)
                   rows = cur.fetchall()
                   cols = [d[0] for d in cur.description]
                   print("   ", " | ".join(cols))
@@ -136,7 +140,9 @@ jobs:
             SELECT key, value, updated_at FROM bot_kv
             WHERE key LIKE 'tier_day_count:%' ORDER BY key DESC LIMIT 20""")
 
-          print("\n── setup-related env (names + values, secrets masked)")
+          print("\n── ALL env names (values hidden where the name looks secret)")
+          for k in sorted(var):
+              print("   ", k)
           SKIP = ("TOKEN","KEY","PASSWORD","SECRET","DSN","URL","CHAT","HASH","SALT")
           for k in sorted(var):
               if not (k.startswith("VIVA_") or "SETUP" in k or "LICEN" in k or "PACE" in k):
