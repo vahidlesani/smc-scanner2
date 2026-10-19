@@ -145,6 +145,7 @@ def test_a_weekly_wallet_must_last_the_week(monkeypatch):
     monkeypatch.setattr(ts, "weekly_licence_cap", lambda *a, **k: cap["c"])
     monkeypatch.setattr(ts, "daily_setup_count", lambda *a, **k: today["d"])
     monkeypatch.delenv("VIVA_WEEKLY_PACE", raising=False)
+    monkeypatch.setenv("VIVA_WEEKLY_PACE_SPREAD", "0")   # flat contract
 
     # 100 left over 2 days → pace 50/day
     assert ts.weekly_pace_ok("PINVAL", now=sat) is True
@@ -185,6 +186,7 @@ def test_pace_reads_todays_counter_through_the_real_helper(monkeypatch):
     monkeypatch.setattr(ts, "_kv", lambda: _KV())
     monkeypatch.setattr(ts, "weekly_licence_cap", lambda *a, **k: 200)
     monkeypatch.delenv("VIVA_WEEKLY_PACE", raising=False)
+    monkeypatch.setenv("VIVA_WEEKLY_PACE_SPREAD", "0")   # flat contract
 
     assert ts.daily_setup_count("PINVAL", day="2026-10-17") == 49
     assert ts.weekly_pace_ok("PINVAL", week="2026-W42", now=sat) is True

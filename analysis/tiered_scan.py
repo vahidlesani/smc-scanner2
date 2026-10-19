@@ -191,10 +191,27 @@ def weekly_pace_ok(setup_code=None, week=None, now=None) -> bool:
         _left = _cap - weekly_count(week, setup_code)
         if _left <= 0:
             return False                    # the wallet itself is empty
-        _days = days_left_in_week(now)
+        _now = now or datetime.now(timezone.utc)
+        _days = days_left_in_week(_now)
         _pace = max(1, int(math.ceil(_left / float(_days))))
-        _day = now.strftime("%Y-%m-%d") if now is not None else None
-        return daily_setup_count(setup_code, day=_day) < _pace
+        # R99q27 (Viva 10-19, verbatim: «از ساعت ۱۰ صبح هیچ هشداری نیامده …
+        # ۲۷ پیام اومده و ستاپ‌ها هیچ هشداری ندادن»): the daily share used to be
+        # spendable in ONE burst. Measured on 10-19: ALBROX spent its 25 by
+        # 01:32, PINVAL by 01:02, TECHCLASSIC by 06:34, TLBREAK by 07:02 UTC —
+        # and then every setup sat silent for the rest of the day because
+        # `today_used < pace` was false. The weekly cap is NOT touched; only
+        # the SHAPE of the spend changes: the same daily quota is released
+        # across the 24 hours, so after h hours at most ceil(pace*(h+1)/24)
+        # may have been spent. At the end of the day the full quota is
+        # available exactly as before.
+        # VIVA_WEEKLY_PACE_SPREAD=0 restores the old flat behaviour.
+        _spread = str(os.getenv("VIVA_WEEKLY_PACE_SPREAD", "1") or "1").strip().lower()
+        if _spread in ("0", "false", "off", "no"):
+            _by_now = _pace
+        else:
+            _by_now = max(1, int(math.ceil(_pace * (_now.hour + 1) / 24.0)))
+        _day = _now.strftime("%Y-%m-%d")
+        return daily_setup_count(setup_code, day=_day) < _by_now
     except Exception:
         return True
 
