@@ -50,6 +50,23 @@ jobs:
 
           print("── project:", json.dumps(
               gql('query($id:String!){project(id:$id){name}}', {"id": PID}))[:200])
+          # R99q30: WHERE does this service build FROM? Every deploy has been
+          # reporting SUCCESS while the container kept running code older than
+          # the pushed commits (no R99q29 marker, no hourly keys). If the
+          # source is a pinned image or a dead repo link, serviceInstanceDeploy
+          # only restarts it.
+          for _label, _q in (
+              ("service", 'query($id:String!){service(id:$id){id name serviceInstances{edges{node{id source{repo image} }}}}}'),
+              ("instance", 'query($e:String!,$s:String!){serviceInstance(environmentId:$e, serviceId:$s){id source{repo image branch} } }'),
+          ):
+              try:
+                  if _label == "service":
+                      r = gql(_q, {"id": SID})
+                  else:
+                      r = gql(_q, {"e": EID, "s": SID})
+                  print("── " + _label + ":", json.dumps(r)[:1200])
+              except Exception as _qe:
+                  print("── " + _label + " query failed:", str(_qe)[:200])
           print("── latest deployments:")
           d = gql("""query($p:String!,$e:String!){
                      deployments(first:3, input:{projectId:$p, environmentId:$e}){
