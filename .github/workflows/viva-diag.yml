@@ -197,7 +197,7 @@ jobs:
                         {"p": PID, "e": EID})
               node = dep["data"]["deployments"]["edges"][0]["node"]
               print("   deployment:", node["status"], node["createdAt"], node["id"])
-              lg = gql("""query($id:String!){ deploymentLogs(deploymentId:$id, limit:400){
+              lg = gql("""query($id:String!){ deploymentLogs(deploymentId:$id, limit:5000){
                              timestamp message severity } }""", {"id": node["id"]})
               rows = (lg.get("data") or {}).get("deploymentLogs") or []
               if lg.get("errors"):
@@ -218,6 +218,13 @@ jobs:
                       _seen[_k] = _seen.get(_k, 0) + 1
                       continue
                   print("   ", m[:200])
+              print("\n── ALBROX / PINWALL / SETUP-detector lines")
+              for r in rows:
+                  m = (r.get("message") or "").replace("\n", " ")
+                  if any(k in m for k in ("ALBROX", "albrox", "PINWALL", "Setup detector error",
+                                          "R99q24 retired", "own-engine consult")):
+                      print("   ", m[:200])
+
               print("\n── CONFIRM_REJECT tally (setup :: code)")
               for k, v in sorted(_seen.items(), key=lambda t: -t[1]):
                   print(f"    {v:5d}  {k}")
