@@ -107,10 +107,10 @@ jobs:
           if os.environ.get("CONFIRM") == "CONNECT":
               src = {"repo": "vahidlesani/smc-scanner2", "branch": "main"}
               print("── connecting source:", src)
-              out = gql("""mutation($s:String!,$e:String!,$i:ServiceInstanceUpdateInput!){
-                             serviceInstanceUpdate(serviceId:$s, environmentId:$e, input:$i) }""",
-                        {"s": SID, "e": EID, "i": {"source": src}})
-              print("── connect result:", json.dumps(out)[:800])
+              out = gql("""mutation($id:String!,$i:ServiceConnectInput!){
+                             serviceConnect(id:$id, input:$i) }""",
+                        {"id": SID, "i": src})
+              print("── connect result:", json.dumps(out)[:900])
               chk = gql('query($id:String!){service(id:$id){serviceInstances{edges{node{source{repo image} }}}}}',
                         {"id": SID})
               print("── source now:", json.dumps(chk)[:600])
