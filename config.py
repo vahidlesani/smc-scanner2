@@ -143,7 +143,7 @@ class Settings:
     # this fraction of price away from the confirmed price. One number, all setups.
     license_min_sep_pct: float = 0.02
     confirm_body_min_atr: float = 0.35
-    confirm_require_zone_mid: bool = True
+    confirm_require_zone_mid: bool = True  # PIN-family only since 10-19 (law §6.9)
     # Alternative (multi-candle / higher-TF) trigger engine. The pin bar is a
     # sign of rejection, never a requirement: a 2..N candle base that aggregates
     # into a pin/doji-break/engulf/reclaim at the zone confirms the same way.

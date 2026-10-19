@@ -386,18 +386,44 @@ def classify_pair(m: Dict, meta: Optional[Dict] = None) -> str:
                  "touches_u": m.get("touches_u"), "touches_l": m.get("touches_l"),
                  "entry_side": m.get("entry_side"), "apex": apx})
 
-    # ① FLAG / PENNANT — needs a pole; the pattern must be a SHORT pause
+    # ① FLAG / PENNANT — a flag is a SHORT, TIGHT pause after a genuine
+    # DISPLACEMENT pole, and the pause must lean AGAINST the pole.
+    #
+    # Viva 10-19 («پرچم کانال می‌کشه می‌گه فلگ»): the old gate accepted any
+    # window up to 27 bars whose drifts were merely < +2%, with NO direction
+    # test and NO displacement test — so an ordinary ascending channel that
+    # happened to follow a 3% rise was published as a bull flag. Brooks: a
+    # consolidation that keeps rising WITH the trend is a channel, not a flag;
+    # the flag's pause must slope back against the impulse (or be dead flat).
+    # Three hard conditions now, all recorded in `why`:
+    #   a) the pause is brief  — span <= min(24, max(10, 10% of the window))
+    #   b) the pause is tight  — height <= 35% of the pole
+    #   c) the pause leans    — bull flag needs rl<0 or a dead-flat box;
+    #                           bear flag needs ru>0 or a dead-flat box
     pole = float(m.get("pole_rel") or 0.0)
+    pole_atr = float(m.get("pole_atr") or 0.0)
     pole_min = max(0.03, 1.2 * height_rel)
-    if abs(pole) >= pole_min and span <= max(20, int(0.45 * 60)):
-        short_enough = height_rel <= max(0.02, 0.45 * abs(pole))
-        if short_enough:
-            if pole > 0 and (flat_u or flat_l or (ru <= 0.02 and rl <= 0.02)):
-                _why(meta, f"flag: pole {pole:+.2%} up, pause <=0.02 & short")
+    # a pause longer than 24 bars is a consolidation/channel on every TF
+    flag_span_max = 24
+    if abs(pole) >= pole_min and span <= flag_span_max:
+        short_enough = height_rel <= max(0.02, 0.35 * abs(pole))
+        # the pole must be an actual leg, not a slow grind: its net move has
+        # to exceed the average bar range it travelled over.
+        displaced = pole_atr >= 1.0
+        dead_flat = flat_u and flat_l
+        if short_enough and displaced:
+            if pole > 0 and (rl < 0 or dead_flat):
+                _why(meta, f"flag: pole {pole:+.2%} up (disp {pole_atr:.1f}), "
+                           f"pause tight ({height_rel:.2%}) & leaning back")
                 return "PENNANT_BULL" if conv <= 0.95 else "FLAG_BULL"
-            if pole < 0 and (flat_u or flat_l or (ru >= -0.02 and rl >= -0.02)):
-                _why(meta, f"flag: pole {pole:+.2%} down, pause >=-0.02 & short")
+            if pole < 0 and (ru > 0 or dead_flat):
+                _why(meta, f"flag: pole {pole:+.2%} down (disp {pole_atr:.1f}), "
+                           f"pause tight ({height_rel:.2%}) & leaning back")
                 return "PENNANT_BEAR" if conv <= 0.95 else "FLAG_BEAR"
+            _why(meta, f"pole {pole:+.2%} but the pause runs WITH the trend "
+                       f"(ru {ru:+.2%}, rl {rl:+.2%}) -> channel, not a flag")
+        elif not displaced:
+            _why(meta, f"pole {pole:+.2%} is a grind (disp {pole_atr:.1f}) -> not a flag")
 
     # ② BOX / RECTANGLE — both edges horizontal, SAME drift direction (a flat
     # top with a drifting bottom is not a box), and both tested twice
@@ -420,6 +446,12 @@ def classify_pair(m: Dict, meta: Optional[Dict] = None) -> str:
         # still needs a real speed difference (Δ≥8%) — a thin band with equal
         # speeds yields any conv ratio from pivot noise alone, which is how a
         # parallel CHANNEL kept flipping to WEDGE («کانال، وج شد» killer).
+        # Viva 10-19: a same-sign pair needs a REAL speed gap before it may be
+        # called converging. Band contraction alone is not proof — 150 bars of
+        # pivot noise on a truly parallel channel moves `conv` below 0.90
+        # without any structural convergence (the R65 flip killer, re-proven
+        # by tests/test_round26_geometry_v3.py:seed 3). The speed gap stays the
+        # decisive evidence for same-sign pairs; opposite drifts always approach.
         converging = bool((not same_sign)
                           or (conv <= 0.92 and delta >= 0.15)
                           or (conv <= 0.60 and delta >= 0.08))
