@@ -1092,7 +1092,11 @@ def _spot_hit_pass(bundles: dict) -> int:
                                           spot_position_commit as _spc,
                                           spot_hit_candidate as _shc,
                                           _spot_journey_slot as _js15)
-        from bot.messages_v7 import send_spot_hit as _ssh15
+        # E1 (audit 2026-10-19): `generate_chart` was never imported in this
+        # scope — every spot TP-hit that won a journey slot died on a NameError
+        # swallowed by the `except Exception` below, so the hit message was
+        # silently dropped. Bound here, once, for the whole pass.
+        from bot.messages_v7 import send_spot_hit as _ssh15, generate_chart as _gc15
         from database.bot_kv import get_json as _g15
         import time as _t15
         _open = _spo()
@@ -1120,7 +1124,7 @@ def _spot_hit_pass(bundles: dict) -> int:
                 if _slot15:
                     _cand15 = _shc(_pos)
                     if _cand15 is not None:
-                        _chart15 = generate_chart(_frame, _cand15, confirmed=True)
+                        _chart15 = _gc15(_frame, _cand15, confirmed=True)
                 _mid15 = _ssh15(_pos, _hit15, chart=_chart15, slot=str(_slot15 or ""))
                 if _mid15:
                     _pos_after = _spc(_code, str(_hit15.get("kind") or ""), int(_mid15))

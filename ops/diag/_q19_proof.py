@@ -30,8 +30,7 @@ def _plot(self, *a, **kw):
 
 _Ax.Axes.plot = _plot
 
-DSN = ("postgresql://postgres.nmndchflpeigorkmqcwi:Viva2026%21.%21@"
-       "aws-0-eu-central-1.pooler.supabase.com:5432/postgres")
+DSN = os.environ["VIVA_DB_DSN"]
 CODES = sys.argv[1:] or ["K172967", "K749619", "K107736", "K717222",
                          "T700976", "T661070", "T497775"]
 

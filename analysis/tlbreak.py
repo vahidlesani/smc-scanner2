@@ -185,9 +185,18 @@ def tlbreak_entry_check(*, broke: bool, closed_after_break: bool,
         try:
             if int(break_age_bars) > 2:
                 _stale = f"STALE: first break close is {int(break_age_bars)} bars old"
-                alarms.append(tlbreak_alarm(_stale + " -- confirm REFUSED"))
+                try:
+                    import os as _os2
+                    _veto = str(_os2.getenv("VIVA_LATE_ENTRY_VETO", "0")).strip().lower() in (
+                        "1", "true", "yes", "on")
+                except Exception:
+                    _veto = False
+                if _veto:
+                    alarms.append(tlbreak_alarm(_stale + " -- confirm REFUSED"))
+                    reasons.append(_stale)
+                    return {"decision": "STALE", "alarms": alarms, "reasons": reasons}
+                alarms.append(tlbreak_alarm(_stale + " -- annotated, entry proceeds"))
                 reasons.append(_stale)
-                return {"decision": "STALE", "alarms": alarms, "reasons": reasons}
         except (TypeError, ValueError):
             pass
     # R99q (Viva 10-15, verbatim «گفتم گیت خشک‌کننده سیگنال‌های ستاپ‌ها رو

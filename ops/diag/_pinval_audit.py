@@ -2,8 +2,7 @@
 import sys, os, json, dataclasses
 sys.path.insert(0, "/home/user/.fresh"); os.chdir("/home/user/.fresh")
 import psycopg2
-DSN = ("postgresql://postgres.nmndchflpeigorkmqcwi:Viva2026%21.%21@"
-       "aws-0-eu-central-1.pooler.supabase.com:5432/postgres")
+DSN = os.environ["VIVA_DB_DSN"]
 LIMIT = int(sys.argv[1]) if len(sys.argv) > 1 else 14
 con = psycopg2.connect(DSN); cur = con.cursor()
 cur.execute("""select symbol, trigger_tf, payload::jsonb from signal_candidates

@@ -25,8 +25,7 @@ def _p(self, *a, **kw):
 
 _Ax.Axes.plot = _p
 
-DSN = ("postgresql://postgres.nmndchflpeigorkmqcwi:Viva2026%21.%21@"
-       "aws-0-eu-central-1.pooler.supabase.com:5432/postgres")
+DSN = os.environ["VIVA_DB_DSN"]
 cn = psycopg2.connect(DSN, connect_timeout=20); cu = cn.cursor()
 cu.execute("""select payload::jsonb, symbol, trigger_tf from signal_candidates
               where payload::jsonb->'metadata'->>'public_code'=%s limit 1""",

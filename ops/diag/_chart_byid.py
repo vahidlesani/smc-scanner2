@@ -6,8 +6,7 @@ import sys, os, dataclasses
 sys.path.insert(0, "/home/user/.fresh"); os.chdir("/home/user/.fresh")
 import psycopg2
 
-DSN = ("postgresql://postgres.nmndchflpeigorkmqcwi:Viva2026%21.%21@"
-       "aws-0-eu-central-1.pooler.supabase.com:5432/postgres")
+DSN = os.environ["VIVA_DB_DSN"]
 SID = sys.argv[1]
 CONF = (len(sys.argv) > 2 and str(sys.argv[2]) not in ("0", "false", "False"))
 TAG = sys.argv[3] if len(sys.argv) > 3 else "q15"

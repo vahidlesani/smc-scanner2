@@ -21,9 +21,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-DSN = os.getenv("VIVA_DB_DSN") or (
-    "postgresql://postgres.nmndchflpeigorkmqcwi:Viva2026%21.%21@"
-    "aws-0-eu-central-1.pooler.supabase.com:5432/postgres")
+DSN = os.getenv("VIVA_DB_DSN") or os.environ["VIVA_DB_DSN"]
 
 
 def main(days: int = 3, dry: bool = False) -> None:

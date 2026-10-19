@@ -45,8 +45,7 @@ _Ax.Axes.plot = _plot
 _Ax.Axes.axhline = _hline
 _plt.subplots = _sub
 
-DSN = ("postgresql://postgres.nmndchflpeigorkmqcwi:Viva2026%21.%21@"
-       "aws-0-eu-central-1.pooler.supabase.com:5432/postgres")
+DSN = os.environ["VIVA_DB_DSN"]
 CODES = sys.argv[1:] or ["K172967", "K749619", "K107736", "K717222",
                          "T700976", "T661070", "T497775"]
 cn = psycopg2.connect(DSN, connect_timeout=25); cu = cn.cursor()

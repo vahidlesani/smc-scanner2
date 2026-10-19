@@ -1618,7 +1618,13 @@ def evaluate_confirmation(
     body_top, body_bottom = max(open_price, close), min(open_price, close)
     upper_wick = float(row["high"]) - body_top
     lower_wick = body_bottom - float(row["low"])
-    require_mid = SETTINGS.confirm_require_zone_mid
+    # Viva law §6.9 («هر گیت دیگری باید حذف بشه»، «وتو ممنوع»): the zone-mid
+    # test is a PIN-FAMILY privilege, never a cross-setup veto. TECHCLASSIC /
+    # TLBREAK / ALBROX / SPOT confirm on the break + first close and must not
+    # be held hostage by where the supply/demand box happens to sit.
+    _pin_mid_owner = str(getattr(candidate, "setup_code", "") or "").upper() in {
+        "PINVAL", "PINWALLQ", "PINWALL"}
+    require_mid = bool(SETTINGS.confirm_require_zone_mid) and _pin_mid_owner
     if candidate.direction == "LONG":
         directional = close > open_price and (close > zone_mid if require_mid else True)
         structure_trigger = close > previous_high
@@ -1685,15 +1691,21 @@ def evaluate_confirmation(
     if not trigger_valid and candidate.metadata.get("tl_fast_break"):
         trigger_valid = True
         candidate.metadata["trigger_note"] = "اولین کلوزِ معتبر پشت خط/لبه (بدون پولبک)"
-    if (not trigger_valid
-            and str(getattr(candidate, "setup_code", "") or "").upper() == "TLBREAK"
-            and _is_internal
-            and bool((candidate.metadata or {}).get("internal_trigger"))):
+    _is_internal_tl = (
+        str(getattr(candidate, "setup_code", "") or "").upper() == "TLBREAK"
+        and _is_internal
+        and bool((candidate.metadata or {}).get("internal_trigger")))
+    if not trigger_valid and _is_internal_tl:
         # 10-09 (Viva: inner ceiling↔floor is TLBREAK's): the internal plan's
         # own edge candle (pin/engulf/close validated when the plan was
         # built) IS the confirmation event — a range trade has no break
         # close by definition. Other setups keep their exact trigger paths.
         trigger_valid = True
+    if _is_internal_tl:
+        # Viva 10-19: the note describes the PLAN TYPE, so it must ride the
+        # candidate in every lane. It used to be written only on the lane
+        # where the internal branch rescued a failing trigger, which made the
+        # label vanish the moment another path validated first.
         candidate.metadata["trigger_note"] = "کندل تأیید داخلی از لبهٔ رنج/کانال (قانون ۱۰-۰۹)"
     if not trigger_valid and alt is not None:
         trigger_valid = True

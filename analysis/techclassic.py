@@ -87,6 +87,20 @@ def _foreign_gate_hit(gate_name: str) -> bool:
     return ("veto" in _g) or ("zone" in _g and "pinwall" in _g) or ("zone" in _g and "albrox" in _g)
 
 
+def _late_veto_enabled() -> bool:
+    """Viva law §6.9 + §8 («هر گیت دیگری باید حذف بشه»، «وتو ممنوع»):
+    the stale/late checks are ANNOTATION-ONLY by default — the alarm is
+    printed and the entry PROCEEDS. The hard refusal of commit 04d7e00 is
+    opt-in only (VIVA_LATE_ENTRY_VETO=1) and never the default again.
+    """
+    try:
+        import os as _os
+        return str(_os.getenv("VIVA_LATE_ENTRY_VETO", "0")).strip().lower() in (
+            "1", "true", "yes", "on")
+    except Exception:
+        return False
+
+
 def tc_entry_check(*, broke: bool, closed_after_break: bool,
                    tohom_fired: bool = False, foreign_gates=(),
                    direction: str = "LONG", live=None, entry=None, tp1=None,
@@ -115,9 +129,12 @@ def tc_entry_check(*, broke: bool, closed_after_break: bool,
         try:
             if int(break_age_bars) > 2:
                 reason = f"STALE: first break close is {int(break_age_bars)} bars old"
-                alarms.append(tc_alarm(reason + " — confirm refused"))
+                if _late_veto_enabled():
+                    alarms.append(tc_alarm(reason + " — confirm refused"))
+                    reasons.append(reason)
+                    return {"decision": "STALE", "alarms": alarms, "reasons": reasons}
+                alarms.append(tc_alarm(reason + " — annotated, entry proceeds"))
                 reasons.append(reason)
-                return {"decision": "STALE", "alarms": alarms, "reasons": reasons}
         except (TypeError, ValueError):
             pass
 
@@ -135,23 +152,32 @@ def tc_entry_check(*, broke: bool, closed_after_break: bool,
                 _past_tp1 = _live >= _tp1 if _long else _live <= _tp1
                 if _past_tp1:
                     reason = f"STALE: live {_live:g} already reached TP1 {_tp1:g}"
-                    alarms.append(tc_alarm(reason + " — trade played out, confirm refused"))
+                    if _late_veto_enabled():
+                        alarms.append(tc_alarm(reason + " — trade played out, confirm refused"))
+                        reasons.append(reason)
+                        return {"decision": "STALE", "alarms": alarms, "reasons": reasons}
+                    alarms.append(tc_alarm(reason + " — annotated, entry proceeds"))
                     reasons.append(reason)
-                    return {"decision": "STALE", "alarms": alarms, "reasons": reasons}
                 _leg = (_tp1 - _entry) if _long else (_entry - _tp1)
                 _run = (_live - _entry) if _long else (_entry - _live)
                 if _leg > 0 and _run >= 0.30 * _leg:
                     reason = f"LATE: live chased {(_run / _leg) * 100:.0f}% of entry→TP1"
-                    alarms.append(tc_alarm(reason + " — chase forbidden, confirm refused"))
+                    if _late_veto_enabled():
+                        alarms.append(tc_alarm(reason + " — chase forbidden, confirm refused"))
+                        reasons.append(reason)
+                        return {"decision": "LATE", "alarms": alarms, "reasons": reasons}
+                    alarms.append(tc_alarm(reason + " — annotated, entry proceeds"))
                     reasons.append(reason)
-                    return {"decision": "LATE", "alarms": alarms, "reasons": reasons}
             else:
                 _run_pct = ((_live - _entry) if _long else (_entry - _live)) / _entry
                 if _run_pct > 0.015:
                     reason = f"LATE: live is {_run_pct * 100:.1f}% beyond entry (no valid TP1)"
-                    alarms.append(tc_alarm(reason + " — chase forbidden, confirm refused"))
+                    if _late_veto_enabled():
+                        alarms.append(tc_alarm(reason + " — chase forbidden, confirm refused"))
+                        reasons.append(reason)
+                        return {"decision": "LATE", "alarms": alarms, "reasons": reasons}
+                    alarms.append(tc_alarm(reason + " — annotated, entry proceeds"))
                     reasons.append(reason)
-                    return {"decision": "LATE", "alarms": alarms, "reasons": reasons}
     except (TypeError, ValueError, ZeroDivisionError):
         pass
 

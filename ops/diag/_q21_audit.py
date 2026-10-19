@@ -16,13 +16,13 @@ PAST   = every drawn shape is far/stale (a past-market pattern — gated now).
 usage:  python3 ops/diag/_q21_audit.py [--days 4] [--limit 40] [--json out.json]
 """
 from __future__ import annotations
+import os
 
 import argparse
 import json
 import sys
 
-DSN = ("postgresql://postgres.nmndchflpeigorkmqcwi:Viva2026%21.%21@"
-       "aws-0-eu-central-1.pooler.supabase.com:5432/postgres")
+DSN = os.environ["VIVA_DB_DSN"]
 
 _LEGACY = {"", "NONE", "RANGE", "TRENDLINE", "TRIANGLE", "CHANNEL"}
 

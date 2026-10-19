@@ -48,8 +48,7 @@ if mode_setup:
     import bot.messages_v7 as B7
     from analysis.models import SignalCandidate
     from analysis.render_kit import enrich_render
-    DSN = ("postgresql://postgres.nmndchflpeigorkmqcwi:Viva2026%21.%21@"
-           "aws-0-eu-central-1.pooler.supabase.com:5432/postgres")
+    DSN = os.environ["VIVA_DB_DSN"]
     cn = psycopg2.connect(DSN, connect_timeout=25); cu = cn.cursor()
     SETUPS = ["T700976", "T661070", "K172967", "K107736", "K717222", "T497775"]
     for code in SETUPS:
