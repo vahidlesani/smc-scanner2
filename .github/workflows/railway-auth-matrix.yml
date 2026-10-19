@@ -1,0 +1,35 @@
+name: railway-auth-matrix
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AT: ${{ secrets.RAILWAY_API_TOKEN }}
+      PID: dfa19d15-6e78-41b5-8a0c-8ccfc3807add
+    steps:
+      - name: probe
+        run: |
+          gql () {
+            curl -s -X POST https://backboard.railway.com/graphql/v2 \
+              -H "Authorization: Bearer $AT" -H "Content-Type: application/json" \
+              -d "$1"; echo
+          }
+          echo "── 1) projects (worked before)"
+          gql '{"query":"query { projects { edges { node { id name } } } }"}' | head -c 300
+          echo
+          echo "── 2) project by id"
+          gql "{\"query\":\"query { project(id: \\\"$PID\\\") { name } }\"}" | head -c 400
+          echo
+          echo "── 3) me"
+          gql '{"query":"query { me { name email } }"}' | head -c 300
+          echo
+          echo "── 4) team"
+          gql '{"query":"query { team { name } }"}' | head -c 300
+          echo
+          echo "── 5) environments via project"
+          gql "{\"query\":\"query { project(id: \\\"$PID\\\") { environments { edges { node { id name } } } } }\"}" | head -c 500
+          echo
+          echo "── 6) services via project"
+          gql "{\"query\":\"query { project(id: \\\"$PID\\\") { services { edges { node { id name } } } } }\"}" | head -c 500
