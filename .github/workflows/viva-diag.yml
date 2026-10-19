@@ -124,6 +124,27 @@ jobs:
             WHERE created_at::timestamptz > now() - interval '7 days'
             GROUP BY 1 ORDER BY 1 DESC""")
 
+          q("KV wallet: tier_week_count", """
+            SELECT key, value, updated_at FROM bot_kv
+            WHERE key LIKE 'tier_week_count:%' ORDER BY key""")
+
+          q("KV wallet: tier_day_setup (today)", """
+            SELECT key, value, updated_at FROM bot_kv
+            WHERE key LIKE 'tier_day_setup:%' ORDER BY key""")
+
+          q("KV wallet: tier_day_count", """
+            SELECT key, value, updated_at FROM bot_kv
+            WHERE key LIKE 'tier_day_count:%' ORDER BY key DESC LIMIT 20""")
+
+          print("\n── setup-related env (names + values, secrets masked)")
+          SKIP = ("TOKEN","KEY","PASSWORD","SECRET","DSN","URL","CHAT","HASH","SALT")
+          for k in sorted(var):
+              if not (k.startswith("VIVA_") or "SETUP" in k or "LICEN" in k or "PACE" in k):
+                  continue
+              if any(x in k.upper() for x in SKIP):
+                  continue
+              print("   ", k, "=", str(var[k])[:60])
+
           # ---- runtime logs of the live deployment ----
           print("\n── deployment logs (last 120 lines, filtered)")
           try:
