@@ -223,7 +223,7 @@ def weekly_pace_ok(setup_code=None, week=None, now=None) -> bool:
 from analysis.trading_sessions import (  # noqa: E402,F401
     active_sessions, current_session, in_scan_window, next_session,
     session_count, session_licence_cap, session_licence_incr,
-    session_licence_ok, session_snapshot,
+    session_licence_ok, session_snapshot, sessions_enabled,
 )
 
 

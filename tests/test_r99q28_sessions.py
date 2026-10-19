@@ -107,3 +107,27 @@ def test_main_wires_both_lanes_and_spot_is_unlimited():
     assert "session_licence_incr(" in src
     assert "in_scan_window()" in src
     assert "VIVA_SPOT_UNLIMITED" in src
+
+
+def test_sessions_replace_the_flat_pace_instead_of_stacking():
+    """10-19 evidence: every setup had already spent its flat 25 by 07:00, so
+    `weekly_pace_ok` was False for the rest of the day — and because both gates
+    were consulted, the sessions could never release a single licence. The read
+    `funnel ALBROX seen=17 ready_new=0 pace=14` is the proof: 14 of 17 died at
+    the pace gate, not at confirmation."""
+    src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
+    i = src.index("session_licence_ok(")
+    j = src.index("weekly_pace_ok(", i)
+    between = src[i:j]
+    assert "sessions_enabled()" in between, (
+        "weekly_pace_ok must be consulted ONLY when the session book is off")
+    assert "if not _tier99j.sessions_enabled():" in src
+
+
+def test_sessions_enabled_is_public():
+    assert ts.sessions_enabled() is True
+    os.environ["VIVA_SESSION_LICENCES"] = "0"
+    try:
+        assert ts.sessions_enabled() is False
+    finally:
+        del os.environ["VIVA_SESSION_LICENCES"]

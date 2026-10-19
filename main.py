@@ -750,11 +750,17 @@ def run_discovery_scan() -> Dict[str, int]:
                         stats["session_licence_skip"] = stats.get("session_licence_skip", 0) + 1
                         _t(candidate)["session_deferred"] = _t(candidate).get("session_deferred", 0) + 1
                         continue
-                    if not _tier99j.weekly_pace_ok(
-                            str(getattr(candidate, "setup_code", "") or "")):
-                        stats["weekly_pace_skip"] = stats.get("weekly_pace_skip", 0) + 1
-                        _t(candidate)["weekly_pace_deferred"] = _t(candidate).get("weekly_pace_deferred", 0) + 1
-                        continue
+                    # R99q28: the session book REPLACES the flat daily pace.
+                    # Stacking both meant the tighter one always won — and on
+                    # 10-19 the flat pace was already at 25/25 for every setup,
+                    # so the funnel read ready_new=0 and pace=<everything> even
+                    # with the sessions switched on.
+                    if not _tier99j.sessions_enabled():
+                        if not _tier99j.weekly_pace_ok(
+                                str(getattr(candidate, "setup_code", "") or "")):
+                            stats["weekly_pace_skip"] = stats.get("weekly_pace_skip", 0) + 1
+                            _t(candidate)["weekly_pace_deferred"] = _t(candidate).get("weekly_pace_deferred", 0) + 1
+                            continue
                 except Exception:
                     pass
                 for prior in supersede_alert_lineage(candidate):

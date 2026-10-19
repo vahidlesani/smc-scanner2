@@ -47,6 +47,16 @@ def _enabled() -> bool:
         "0", "false", "off", "no")
 
 
+def sessions_enabled() -> bool:
+    """Public: True when the session licence book owns the quota.
+
+    main.py uses this to decide whether the OLD flat daily pace is still
+    consulted. They must never both gate the same publish: whichever is
+    tighter would silently win, which is exactly the 10-19 drought.
+    """
+    return _enabled()
+
+
 def _scan_gate_enabled() -> bool:
     return str(os.getenv("VIVA_SESSION_SCAN_GATE", "1") or "1").strip().lower() not in (
         "0", "false", "off", "no")
