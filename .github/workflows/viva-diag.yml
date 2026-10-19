@@ -170,6 +170,13 @@ jobs:
             SELECT key, value, updated_at FROM bot_kv
             WHERE key LIKE 'tier_day_count:%' ORDER BY key DESC LIMIT 20""")
 
+          print("\n── SETUP FLAGS (values)")
+          for k in sorted(var):
+              if any(t in k.upper() for t in ("ALBROX", "TECHCLASSIC", "PINWALL",
+                                              "PINVAL", "TLBREAK", "_ENABLED",
+                                              "SYMBOLS", "CORE_V7")):
+                  print(f"    {k} = {str(var[k])[:90]}")
+
           print("\n── ALL env names (values hidden where the name looks secret)")
           for k in sorted(var):
               print("   ", k)
