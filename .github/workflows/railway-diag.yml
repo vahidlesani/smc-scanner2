@@ -1,0 +1,54 @@
+name: railway-diag
+
+# One-shot diagnostic: is the Railway credential in this repo able to see the
+# project and trigger a deploy? Prints NOTHING secret — only auth results,
+# project names and variable NAMES.
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+    steps:
+      - name: which secrets exist
+        run: |
+          [ -n "$RAILWAY_TOKEN" ] && echo "RAILWAY_TOKEN: present" || echo "RAILWAY_TOKEN: MISSING"
+          [ -n "$RAILWAY_API_TOKEN" ] && echo "RAILWAY_API_TOKEN: present" || echo "RAILWAY_API_TOKEN: MISSING"
+
+      - name: graphql probe (project token header)
+        if: env.RAILWAY_TOKEN != ''
+        run: |
+          curl -s -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Project-Access-Token: $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"query { projectToken { projectId environmentId } }"}'
+          echo
+
+      - name: graphql probe (account bearer)
+        if: env.RAILWAY_API_TOKEN != ''
+        run: |
+          curl -s -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"query { me { name email } }"}'
+          echo
+
+      - name: install railway cli
+        run: npm i -g @railway/cli >/dev/null && railway --version
+
+      - name: whoami
+        run: |
+          railway whoami 2>&1 | head -5 || true
+
+      - name: list projects (account token)
+        if: env.RAILWAY_API_TOKEN != ''
+        run: |
+          curl -s -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"query { projects { edges { node { id name } } } }"}' | head -c 1200
+          echo
