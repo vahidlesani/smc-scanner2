@@ -128,6 +128,20 @@ jobs:
             WHERE created_at::timestamptz > now() - interval '7 days'
             GROUP BY 1 ORDER BY 1 DESC""")
 
+          q("ALL TABLES", """
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema='public' ORDER BY 1""")
+
+          q("ALBROX candidates ever (any status)", """
+            SELECT status, count(*), min(created_at), max(created_at)
+            FROM signal_candidates WHERE setup_code='ALBROX' GROUP BY 1""")
+
+          q("candidate_alert_posts per setup today", """
+            SELECT setup_code, count(*), max(created_at)
+            FROM candidate_alert_posts
+            WHERE created_at::timestamptz > now() - interval '30 hours'
+            GROUP BY 1""")
+
           q("KV wallet: tier_week_count", """
             SELECT key, value, updated_at FROM bot_kv
             WHERE key LIKE 'tier_week_count:%' ORDER BY key""")
