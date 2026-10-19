@@ -29,11 +29,22 @@ def test_fresh_break_confirms():
     assert _r["decision"] == "CONFIRM", _r
 
 
-def test_first_close_older_than_two_trigger_bars_is_not_reconfirmed():
+def test_first_close_older_than_two_trigger_bars_annotates_by_default(monkeypatch):
+    """Viva law §6.9/§8 («هر گیت دیگری باید حذف بشه»، «وتو ممنوع»): a stale
+    first-close is ANNOTATED and the entry PROCEEDS. Hard refusal is opt-in
+    only — VIVA_LATE_ENTRY_VETO=1 restores the R99m veto."""
+    monkeypatch.delenv("VIVA_LATE_ENTRY_VETO", raising=False)
+    _r = _check(broke=True, closed_after_break=True, direction="LONG",
+                live=100.1, entry=100.0, tp1=105.0, break_age_bars=3)
+    assert _r["decision"] == "CONFIRM", _r
+    assert any("STALE" in reason for reason in _r["reasons"])
+
+
+def test_first_close_older_than_two_trigger_bars_veto_opt_in(monkeypatch):
+    monkeypatch.setenv("VIVA_LATE_ENTRY_VETO", "1")
     _r = _check(broke=True, closed_after_break=True, direction="LONG",
                 live=100.1, entry=100.0, tp1=105.0, break_age_bars=3)
     assert _r["decision"] == "STALE", _r
-    assert any("STALE" in reason for reason in _r["reasons"])
 
 
 def test_fresh_long_confirms():

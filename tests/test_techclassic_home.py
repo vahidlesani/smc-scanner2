@@ -174,29 +174,45 @@ def test_tc_entry_small_fresh_drift_still_confirms(monkeypatch):
     assert _r["decision"] == "CONFIRM"
 
 
-def test_tc_entry_material_chase_is_refused(monkeypatch):
+def test_tc_entry_material_chase_is_annotated_not_vetoed(monkeypatch):
+    """Viva law §6.9/§8 («وتو ممنوع»): the chase is ANNOTATED and the entry
+    PROCEEDS. The hard refusal of 04d7e00 is opt-in only (VIVA_LATE_ENTRY_VETO=1)."""
     _fake_kv(monkeypatch, {})
+    monkeypatch.delenv("VIVA_LATE_ENTRY_VETO", raising=False)
     _r = tc_entry_check(broke=True, closed_after_break=True,
                         live=102.0, entry=100.0, tp1=105.0,
                         break_age_bars=1, day="2099-02-06")
-    assert _r["decision"] == "LATE"
-    assert any("chase forbidden" in a for a in _r["alarms"])
+    assert _r["decision"] == "CONFIRM"
+    assert any("annotated" in a for a in _r["alarms"])
 
 
-def test_tc_entry_refuses_already_consumed_tp1(monkeypatch):
+def test_tc_entry_chase_veto_opt_in(monkeypatch):
     _fake_kv(monkeypatch, {})
+    monkeypatch.setenv("VIVA_LATE_ENTRY_VETO", "1")
+    _r = tc_entry_check(broke=True, closed_after_break=True,
+                        live=102.0, entry=100.0, tp1=105.0,
+                        break_age_bars=1, day="2099-02-09")
+    assert _r["decision"] == "LATE"
+
+
+def test_tc_entry_consumed_tp1_is_annotated_by_default(monkeypatch):
+    _fake_kv(monkeypatch, {})
+    monkeypatch.delenv("VIVA_LATE_ENTRY_VETO", raising=False)
     _r = tc_entry_check(broke=True, closed_after_break=True,
                         live=105.1, entry=100.0, tp1=105.0,
                         day="2099-02-07")
-    assert _r["decision"] == "STALE"
+    assert _r["decision"] == "CONFIRM"
+    assert any("annotated" in a for a in _r["alarms"])
 
 
-def test_tc_entry_refuses_old_first_break_close(monkeypatch):
+def test_tc_entry_old_first_break_close_is_annotated_by_default(monkeypatch):
     _fake_kv(monkeypatch, {})
+    monkeypatch.delenv("VIVA_LATE_ENTRY_VETO", raising=False)
     _r = tc_entry_check(broke=True, closed_after_break=True,
                         live=100.1, entry=100.0, tp1=105.0,
                         break_age_bars=3, day="2099-02-08")
-    assert _r["decision"] == "STALE"
+    assert _r["decision"] == "CONFIRM"
+    assert any("STALE" in x for x in _r["reasons"])
 
 
 def test_tc_entry_budget_gate_retired(monkeypatch):
