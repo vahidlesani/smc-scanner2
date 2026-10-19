@@ -1,0 +1,1448 @@
+{
+ "generated": "2026-10-19",
+ "repo_head": "04d7e00",
+ "count": 144,
+ "note": "منبع حقیقت: config.py + grep مستقیم کد. مقادیر واقعی Railway با توکن قابل خواندن نبود (توکن مرده).",
+ "vars": [
+  {
+   "name": "ALBROX_BASE_MAX_ATR",
+   "config_field": "albrox_base_max_atr",
+   "type": "num/str",
+   "default": "3.0",
+   "group": "ALBROX",
+   "purpose_fa": "حداکثر ارتفاع بیس (×ATR).",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "ALBROX_MAX_CONCURRENT_CHAINS",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "ALBROX",
+   "purpose_fa": "سقف زنجیرهٔ همزمان.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "ALBROX_MIN_RECLAIM_FRAC",
+   "config_field": "albrox_min_reclaim_frac",
+   "type": "num/str",
+   "default": "0.40",
+   "group": "ALBROX",
+   "purpose_fa": "حداقل بازپس‌گیری بدنه.",
+   "effect_fa": "بالا = سخت‌گیرتر.",
+   "in_code": true
+  },
+  {
+   "name": "ALBROX_MIN_SPIKE_ATR",
+   "config_field": "albrox_min_spike_atr",
+   "type": "num/str",
+   "default": "2.5",
+   "group": "ALBROX",
+   "purpose_fa": "حداقل اسپایک (×ATR).",
+   "effect_fa": "بالا = فقط اسپایک‌های شدید.",
+   "in_code": true
+  },
+  {
+   "name": "TLBREAK_MAX_CONCURRENT_CHAINS",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "TLBREAK",
+   "purpose_fa": "سقف زنجیرهٔ همزمان.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "TLBREAK_MIN_ADX",
+   "config_field": "tlbreak_min_adx",
+   "type": "num/str",
+   "default": "0.0",
+   "group": "TLBREAK",
+   "purpose_fa": "گیت ADX (0 = خاموش).",
+   "effect_fa": "بالا = فقط روندهای قوی.",
+   "in_code": true
+  },
+  {
+   "name": "TLBREAK_TP1_HEIGHT_FRAC",
+   "config_field": "tlbreak_tp1_height_frac",
+   "type": "num/str",
+   "default": "0.45",
+   "group": "TLBREAK",
+   "purpose_fa": "TP1 برحسب نسبت ارتفاع کانال.",
+   "effect_fa": "بالا = هدف دورتر.",
+   "in_code": true
+  },
+  {
+   "name": "TLBREAK_TP2_HEIGHT_FRAC",
+   "config_field": "tlbreak_tp2_height_frac",
+   "type": "num/str",
+   "default": "0.70",
+   "group": "TLBREAK",
+   "purpose_fa": "TP2 برحسب نسبت ارتفاع کانال.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "EXPERIMENTAL_P1234_ENABLED",
+   "config_field": "experimental_p1234_enabled",
+   "type": "bool",
+   "default": "False",
+   "group": "آزمایشی",
+   "purpose_fa": "ماژول آزمایشی P1234.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "P1234_MIN_ADX",
+   "config_field": "p1234_min_adx",
+   "type": "num/str",
+   "default": "0.0",
+   "group": "آزمایشی",
+   "purpose_fa": "گیت ADX آزمایشی.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "EDUCATION_MAX_PER_SCAN",
+   "config_field": "education_max_per_scan",
+   "type": "num/str",
+   "default": "16",
+   "group": "آمار",
+   "purpose_fa": "حداکثر پیام آموزشی در هر اسکن.",
+   "effect_fa": "بالا = پیام بیشتر در هر دور.",
+   "in_code": true
+  },
+  {
+   "name": "ENTRY_FILL_MAX_BARS_DAYTRADE",
+   "config_field": "entry_fill_max_bars_daytrade",
+   "type": "num/str",
+   "default": "16",
+   "group": "آمار",
+   "purpose_fa": "همان برای دی‌ترید.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "ENTRY_FILL_MAX_BARS_SCALP",
+   "config_field": "entry_fill_max_bars_scalp",
+   "type": "num/str",
+   "default": "24",
+   "group": "آمار",
+   "purpose_fa": "همان برای اسکلپ.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "ENTRY_FILL_MAX_BARS_SWING",
+   "config_field": "entry_fill_max_bars_swing",
+   "type": "num/str",
+   "default": "24",
+   "group": "آمار",
+   "purpose_fa": "چند کندل فرصت پر شدن ورود (سوینگ) دارد.",
+   "effect_fa": "بالا = ورود دیرتر هم قبول.",
+   "in_code": true
+  },
+  {
+   "name": "MAX_SIGNALS_PER_SYMBOL_TRIGGER",
+   "config_field": "max_signals_per_symbol_trigger",
+   "type": "num/str",
+   "default": "3",
+   "group": "آمار",
+   "purpose_fa": "حداکثر سیگنال همزمان برای یک نماد/TF.",
+   "effect_fa": "بالا = سیگنال بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "STATS_DEDUP_HOURS",
+   "config_field": "stats_dedup_hours",
+   "type": "num/str",
+   "default": "24.0",
+   "group": "آمار",
+   "purpose_fa": "بازهٔ حذف تکراری در آمار.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "MIN_STOP_ATR_DAYTRADE",
+   "config_field": "min_stop_atr_daytrade",
+   "type": "num/str",
+   "default": "1.0",
+   "group": "استاپ",
+   "purpose_fa": "حداقل فاصلهٔ استاپ (×ATR).",
+   "effect_fa": "بالا = دورتر.",
+   "in_code": true
+  },
+  {
+   "name": "MIN_STOP_ATR_SCALP",
+   "config_field": "min_stop_atr_scalp",
+   "type": "num/str",
+   "default": "0.8",
+   "group": "استاپ",
+   "purpose_fa": "همان برای اسکلپ.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "MIN_STOP_ATR_SWING",
+   "config_field": "min_stop_atr_swing",
+   "type": "num/str",
+   "default": "1.4",
+   "group": "استاپ",
+   "purpose_fa": "همان برای سوینگ.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "MIN_STOP_PCT_DAYTRADE",
+   "config_field": "min_stop_pct_daytrade",
+   "type": "num/str",
+   "default": "0.012",
+   "group": "استاپ",
+   "purpose_fa": "حداقل فاصلهٔ استاپ (٪ قیمت).",
+   "effect_fa": "بالا = استاپ دورتر.",
+   "in_code": true
+  },
+  {
+   "name": "MIN_STOP_PCT_SCALP",
+   "config_field": "min_stop_pct_scalp",
+   "type": "num/str",
+   "default": "0.006",
+   "group": "استاپ",
+   "purpose_fa": "همان برای اسکلپ.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "MIN_STOP_PCT_SWING",
+   "config_field": "min_stop_pct_swing",
+   "type": "num/str",
+   "default": "0.020",
+   "group": "استاپ",
+   "purpose_fa": "همان برای سوینگ.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "RISK_LADDER_ENABLED",
+   "config_field": "risk_ladder_enabled",
+   "type": "bool",
+   "default": "True",
+   "group": "استاپ",
+   "purpose_fa": "نردبان ریسک (۵ پلهٔ TP + تریلینگ) روشن.",
+   "effect_fa": "0 = فقط TP1/TP2 ساده.",
+   "in_code": true
+  },
+  {
+   "name": "SCENARIO_OUT_OF_REACH_ATR",
+   "config_field": "scenario_out_of_reach_atr",
+   "type": "num/str",
+   "default": "2.0",
+   "group": "استاپ",
+   "purpose_fa": "اگر قیمت این‌قدر از سناریو دور شود، پوزیشن بسته می‌شود.",
+   "effect_fa": "بالا = دیرتر بستن.",
+   "in_code": true
+  },
+  {
+   "name": "SL_BUFFER_ATR_SCALP",
+   "config_field": "sl_buffer_atr_scalp",
+   "type": "num/str",
+   "default": "0.25",
+   "group": "استاپ",
+   "purpose_fa": "بافر استاپ اسکلپ (×ATR).",
+   "effect_fa": "بالا = دورتر.",
+   "in_code": true
+  },
+  {
+   "name": "SL_BUFFER_ATR_SWING",
+   "config_field": "sl_buffer_atr_swing",
+   "type": "num/str",
+   "default": "0.35",
+   "group": "استاپ",
+   "purpose_fa": "بافر استاپ پشت سوینگ (×ATR) در سوینگ.",
+   "effect_fa": "بالا = استاپ دورتر (ریسک بیشتر، استاپ‌خوردن کمتر).",
+   "in_code": true
+  },
+  {
+   "name": "CHART_ENABLED",
+   "config_field": "chart_enabled",
+   "type": "bool",
+   "default": "True",
+   "group": "استایل",
+   "purpose_fa": "تولید چارت روشن باشد.",
+   "effect_fa": "0 = پیام‌ها بدون عکس.",
+   "in_code": true
+  },
+  {
+   "name": "CHART_LOG_ALL",
+   "config_field": "chart_log_all",
+   "type": "bool",
+   "default": "True",
+   "group": "استایل",
+   "purpose_fa": "محور قیمت لگاریتمی برای همه.",
+   "effect_fa": "0 = محور خطی.",
+   "in_code": true
+  },
+  {
+   "name": "CHART_LOG_HTF",
+   "config_field": "chart_log_htf",
+   "type": "bool",
+   "default": "False",
+   "group": "استایل",
+   "purpose_fa": "محور لگاریتمی فقط برای تایم‌های بالا.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "SPOT_MAX_CONCURRENT_CHAINS",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "اسپات",
+   "purpose_fa": "سقف زنجیرهٔ همزمان اسپات.",
+   "effect_fa": "بالا = پوزیشن باز بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "CANDIDATE_MONITOR_SECONDS",
+   "config_field": "candidate_monitor_seconds",
+   "type": "num/str",
+   "default": "10",
+   "group": "اسکن",
+   "purpose_fa": "هر چند ثانیه کاندیداها مانیتور شوند.",
+   "effect_fa": "پایین = سریع‌تر.",
+   "in_code": true
+  },
+  {
+   "name": "FULL_SCAN_MINUTES",
+   "config_field": "full_scan_minutes",
+   "type": "num/str",
+   "default": "15",
+   "group": "اسکن",
+   "purpose_fa": "فاصلهٔ اسکن کامل کشف (دقیقه).",
+   "effect_fa": "بالا = کندتر/کم‌مصرف‌تر. پایین = سریع‌تر/پرهزینه‌تر.",
+   "in_code": true
+  },
+  {
+   "name": "MONITOR_MINUTES",
+   "config_field": "monitor_minutes",
+   "type": "num/str",
+   "default": "3",
+   "group": "اسکن",
+   "purpose_fa": "فاصلهٔ مانیتور معاملات تأییدشده (دقیقه).",
+   "effect_fa": "بالا = دیرتر TP/SL تشخیص داده می‌شود.",
+   "in_code": true
+  },
+  {
+   "name": "MONITOR_OFFSET_MINUTES",
+   "config_field": "monitor_offset_minute",
+   "type": "num/str",
+   "default": "1",
+   "group": "اسکن",
+   "purpose_fa": "دقیقهٔ شروع مانیتور بعد از بستهٔ کندل.",
+   "effect_fa": "تغییر زمان‌بندی.",
+   "in_code": true
+  },
+  {
+   "name": "REALTIME_EXECUTION_SECONDS",
+   "config_field": "realtime_execution_seconds",
+   "type": "num/str",
+   "default": "5",
+   "group": "اسکن",
+   "purpose_fa": "هر چند ثانیه نخ اجرای لحظه‌ای بیدار شود.",
+   "effect_fa": "پایین = واکنش سریع‌تر، مصرف بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "RUN_SCAN_ON_START",
+   "config_field": "run_scan_on_start",
+   "type": "bool",
+   "default": "True",
+   "group": "اسکن",
+   "purpose_fa": "بعد از بوت، اسکن فوری بزند.",
+   "effect_fa": "0 = تا اولین زمان‌بندی صبر می‌کند.",
+   "in_code": true
+  },
+  {
+   "name": "SCAN_OFFSET_MINUTE",
+   "config_field": "scan_offset_minute",
+   "type": "num/str",
+   "default": "1",
+   "group": "اسکن",
+   "purpose_fa": "دقیقهٔ شروع اسکن بعد از بستهٔ کندل.",
+   "effect_fa": "تغییر زمان‌بندی.",
+   "in_code": true
+  },
+  {
+   "name": "STARTUP_MESSAGE_ENABLED",
+   "config_field": "startup_message_enabled",
+   "type": "bool",
+   "default": "False",
+   "group": "اسکن",
+   "purpose_fa": "پیام «ربات بالا آمد» به تلگرام.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "CHAT_ID_ALERTS",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "اپ",
+   "purpose_fa": "آیدی کانال هشدارها.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "CHAT_ID_EXECUTION",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "اپ",
+   "purpose_fa": "آیدی کانال اجرا.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "CHAT_ID_PRO",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "اپ",
+   "purpose_fa": "آیدی کانال PRO.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "CHAT_ID_RESULTS",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "اپ",
+   "purpose_fa": "آیدی کانال نتایج.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "CHAT_ID_SPOT",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "اپ",
+   "purpose_fa": "آیدی کانال/چت اسپات تلگرام.",
+   "effect_fa": "تغییر مسیر ارسال.",
+   "in_code": true
+  },
+  {
+   "name": "DATABASE_URL",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "اپ",
+   "purpose_fa": "رشتهٔ اتصال Postgres/Supabase.",
+   "effect_fa": "جایگزین VIVA_DB_DSN.",
+   "in_code": true
+  },
+  {
+   "name": "PORT",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "اپ",
+   "purpose_fa": "پورت سرویس (Railway خودش ست می‌کند).",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "TELEGRAM_BOT_TOKEN",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "اپ",
+   "purpose_fa": "توکن ربات تلگرام.",
+   "effect_fa": "باید فقط در Railway باشد.",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_APP_PASSWORD",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "اپ",
+   "purpose_fa": "رمز ورود اپ وب VIVA (/app).",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "CONFIRM_BODY_MIN_ATR",
+   "config_field": "confirm_body_min_atr",
+   "type": "num/str",
+   "default": "0.35",
+   "group": "تأیید",
+   "purpose_fa": "حداقل بدنهٔ کندل تأیید برحسب ATR.",
+   "effect_fa": "بالا = فقط کندل‌های قوی، تعداد کمتر.",
+   "in_code": true
+  },
+  {
+   "name": "CONFIRM_CEILING_GATE",
+   "config_field": "confirm_ceiling_gate",
+   "type": "bool",
+   "default": "True",
+   "group": "تأیید",
+   "purpose_fa": "سقف قیمتی برای تأیید (جلوگیری از تأیید در انتهای اسپایک).",
+   "effect_fa": "خاموش = تأیید آسان‌تر ولی ورود دیرتر.",
+   "in_code": true
+  },
+  {
+   "name": "CONFIRM_MAX_CHASE_ATR",
+   "config_field": "confirm_max_chase_atr",
+   "type": "num/str",
+   "default": "0.80",
+   "group": "تأیید",
+   "purpose_fa": "حداکثر فاصلهٔ قیمت از ورود برای تأیید (تعقیب).",
+   "effect_fa": "بالا = تأیید دیرتر مجاز است، تعداد بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "CONFIRM_REQUIRE_ZONE_MID",
+   "config_field": "confirm_require_zone_mid",
+   "type": "bool",
+   "default": "True",
+   "group": "تأیید",
+   "purpose_fa": "تأیید فقط داخل میانهٔ ناحیه مجاز باشد.",
+   "effect_fa": "خاموش = تأیید آسان‌تر (این گیت از نواحی وتو می‌کند — طبق قانون §۶.۹ باید خاموش باشد).",
+   "in_code": true
+  },
+  {
+   "name": "CONFIRM_RR1_FLOOR",
+   "config_field": "confirm_rr1_floor",
+   "type": "num/str",
+   "default": "1.30",
+   "group": "تأیید",
+   "purpose_fa": "حداقل نسبت پاداش/ریسک تا TP1 برای تأیید.",
+   "effect_fa": "بالا = کیفیت بیشتر، تعداد کمتر. پایین = تأیید بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "CONFIRM_RR2_FLOOR",
+   "config_field": "confirm_rr2_floor",
+   "type": "num/str",
+   "default": "2.0",
+   "group": "تأیید",
+   "purpose_fa": "حداقل R:R تا TP2.",
+   "effect_fa": "بالا = سیگنال کمتر.",
+   "in_code": true
+  },
+  {
+   "name": "EDUCATIONAL_MIN_SCORE",
+   "config_field": "educational_min_score",
+   "type": "num/str",
+   "default": "6",
+   "group": "تأیید",
+   "purpose_fa": "حداقل امتیاز برای پیام آموزشی/هشدار.",
+   "effect_fa": "پایین = هشدار بیشتر (کیفیت کمتر).",
+   "in_code": true
+  },
+  {
+   "name": "EXECUTION_MIN_SCORE",
+   "config_field": "execution_min_score",
+   "type": "num/str",
+   "default": "7",
+   "group": "تأیید",
+   "purpose_fa": "حداقل امتیاز برای تبدیل به معاملهٔ اجرایی.",
+   "effect_fa": "پایین = سیگنال بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "FAST_BREAK_MAX_CHASE_ATR",
+   "config_field": "fast_break_max_chase_atr",
+   "type": "num/str",
+   "default": "1.5",
+   "group": "تأیید",
+   "purpose_fa": "سقف تعقیب در مسیر سریع (fast-lane).",
+   "effect_fa": "بالا = تأییدهای دیرتر ولی بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "TOHOM_ENABLED",
+   "config_field": "tohom_enabled",
+   "type": "bool",
+   "default": "True",
+   "group": "تأیید",
+   "purpose_fa": "انجین «توهم»: تأیید زودتر از کلوز کندل.",
+   "effect_fa": "0 = فقط با کلوز تأیید می‌شود (کندتر، محافظه‌کارتر).",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_CONFIRM_LIVE_TOL_PCT",
+   "config_field": "confirm_live_tol_pct",
+   "type": "num/str",
+   "default": "0.2",
+   "group": "تأیید",
+   "purpose_fa": "تلورانس قیمت لایو در لحظهٔ تأیید (قانون ۰.۲٪).",
+   "effect_fa": "بالا = تأیید آسان‌تر.",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_FRAME_MAX_AGE_MULT",
+   "config_field": "frame_max_age_mult",
+   "type": "num/str",
+   "default": "2.0",
+   "group": "تأیید",
+   "purpose_fa": "ضریب عمر مجاز فریم نسبت به TF.",
+   "effect_fa": "بالا = فریم کهنه‌تر قبول می‌شود.",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_LIVECLOSE_MAX_PCT",
+   "config_field": "liveclose_max_pct",
+   "type": "num/str",
+   "default": "3.0",
+   "group": "تأیید",
+   "purpose_fa": "حداکثر درصد فاصلهٔ کلوز لایو از فریم.",
+   "effect_fa": "بالا = تأیید آسان‌تر.",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_STALE_CONFIRM_BARS",
+   "config_field": "stale_confirm_bars",
+   "type": "num/str",
+   "default": "2.0",
+   "group": "تأیید",
+   "purpose_fa": "چند کندل کهنه بودن فیلم تایم‌فریم را تحمل می‌کنیم.",
+   "effect_fa": "بالا = تأیید بیشتر ولی ریسک تأیید کهنه.",
+   "in_code": true
+  },
+  {
+   "name": "ALERT_VERDICT_CANDLES",
+   "config_field": "alert_verdict_candles",
+   "type": "num/str",
+   "default": "3",
+   "group": "تریگر",
+   "purpose_fa": "چند کندل بعد حکم (تأیید/رد) بده.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "ALT_CLUSTER_MAX_BASE",
+   "config_field": "alt_cluster_max_base",
+   "type": "num/str",
+   "default": "9",
+   "group": "تریگر",
+   "purpose_fa": "حداکثر بیس کلاستر.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "ALT_CLUSTER_MIN_BODY_ATR",
+   "config_field": "alt_cluster_min_body_atr",
+   "type": "num/str",
+   "default": "0.30",
+   "group": "تریگر",
+   "purpose_fa": "حداقل بدنهٔ کلاستر.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "ALT_FIBO_CONFLUENCE",
+   "config_field": "alt_fibo_confluence",
+   "type": "bool",
+   "default": "True",
+   "group": "تریگر",
+   "purpose_fa": "هم‌گرایی فیبو.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "ALT_MTF_ENABLED",
+   "config_field": "alt_mtf_enabled",
+   "type": "bool",
+   "default": "True",
+   "group": "تریگر",
+   "purpose_fa": "تریگر چند‌تایم‌فریمی.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "ALT_TRIGGERS_ENABLED",
+   "config_field": "alt_triggers_enabled",
+   "type": "bool",
+   "default": "True",
+   "group": "تریگر",
+   "purpose_fa": "تریگرهای جایگزین (multi-candle).",
+   "effect_fa": "0 = فقط تریگر اصلی.",
+   "in_code": true
+  },
+  {
+   "name": "RANGE_FRACTION_TARGETS",
+   "config_field": "range_fraction_targets",
+   "type": "bool",
+   "default": "False",
+   "group": "تریگر",
+   "purpose_fa": "هدف‌های کسری رنج.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "TECHCLASSIC_COOLDOWN_HOURS",
+   "config_field": "technoclassic_cooldown_hours",
+   "type": "num/str",
+   "default": "8.0",
+   "group": "تکنوکلاسیک",
+   "purpose_fa": "فاصلهٔ حداقلی تکرار هشدار یک نماد.",
+   "effect_fa": "بالا = سیگنال کمتر برای هر نماد.",
+   "in_code": true
+  },
+  {
+   "name": "TECHCLASSIC_FADE_SIGNALS",
+   "config_field": "technoclassic_fade_signals",
+   "type": "bool",
+   "default": "True",
+   "group": "تکنوکلاسیک",
+   "purpose_fa": "سیگنال‌های محو‌شدنی.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "TECHCLASSIC_HTF_CACHE_HOURS",
+   "config_field": "technoclassic_htf_cache_hours",
+   "type": "num/str",
+   "default": "4.0",
+   "group": "تکنوکلاسیک",
+   "purpose_fa": "عمر کش تایم بالا (ساعت).",
+   "effect_fa": "بالا = مصرف کمتر.",
+   "in_code": true
+  },
+  {
+   "name": "TECHCLASSIC_HTF_SCORING",
+   "config_field": "technoclassic_htf_scoring",
+   "type": "bool",
+   "default": "True",
+   "group": "تکنوکلاسیک",
+   "purpose_fa": "امتیازدهی تایم بالا.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "TECHCLASSIC_MAX_CONCURRENT_CHAINS",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "تکنوکلاسیک",
+   "purpose_fa": "سقف زنجیرهٔ همزمان.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "TECHCLASSIC_PREVIEW_ALERTS",
+   "config_field": "technoclassic_preview_alerts",
+   "type": "bool",
+   "default": "True",
+   "group": "تکنوکلاسیک",
+   "purpose_fa": "پیش‌نمایش فقط در PRO.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "TECHCLASSIC_REJECT_RATE",
+   "config_field": "technoclassic_reject_rate",
+   "type": "num/str",
+   "default": "0.6",
+   "group": "تکنوکلاسیک",
+   "purpose_fa": "نرخ رد الگوهای ضعیف.",
+   "effect_fa": "بالا = سخت‌گیرتر.",
+   "in_code": true
+  },
+  {
+   "name": "TECHCLASSIC_STALE_ATR",
+   "config_field": "technoclassic_stale_atr",
+   "type": "num/str",
+   "default": "1.5",
+   "group": "تکنوکلاسیک",
+   "purpose_fa": "آستانهٔ کهنه‌بودن بریک (×ATR).",
+   "effect_fa": "بالا = بریک‌های قدیمی‌تر قبول.",
+   "in_code": true
+  },
+  {
+   "name": "BYBIT_CACHE_SECONDS",
+   "config_field": "bybit_cache_seconds",
+   "type": "num/str",
+   "default": "45",
+   "group": "داده",
+   "purpose_fa": "عمر کش کندل‌ها (ثانیه).",
+   "effect_fa": "بالا = مصرف کمتر ولی تأخیر خبری بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "BYBIT_MIN_REQUEST_INTERVAL",
+   "config_field": "bybit_min_request_interval",
+   "type": "num/str",
+   "default": "0.08",
+   "group": "داده",
+   "purpose_fa": "حداقل فاصلهٔ بین دو درخواست (ثانیه) — throttle.",
+   "effect_fa": "بالا = محافظت از rate-limit، کندتر.",
+   "in_code": true
+  },
+  {
+   "name": "BYBIT_TIMEOUT_SECONDS",
+   "config_field": "bybit_timeout_seconds",
+   "type": "num/str",
+   "default": "12",
+   "group": "داده",
+   "purpose_fa": "تایم‌اوت درخواست Bybit.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_DIAG_ALL",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "دیباگ",
+   "purpose_fa": "همهٔ لاگ‌های تشخیصی.",
+   "effect_fa": "1 = لاگ سنگین و مصرف بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "ACCOUNT_SIZE",
+   "config_field": "account_size",
+   "type": "num/str",
+   "default": "1000.0",
+   "group": "ریسک",
+   "purpose_fa": "اندازهٔ حساب فرضی برای محاسبهٔ حجم/ریسک.",
+   "effect_fa": "تغییر فقط اعداد نمایشی و حجم.",
+   "in_code": true
+  },
+  {
+   "name": "DAILY_LOSS_LIMIT_PERCENT",
+   "config_field": "daily_loss_limit_percent",
+   "type": "num/str",
+   "default": "3.0",
+   "group": "ریسک",
+   "purpose_fa": "سقف ضرر روزانه (٪).",
+   "effect_fa": "بالا = اجازهٔ ضرر بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "FEE_RATE_PERCENT",
+   "config_field": "fee_rate_percent",
+   "type": "num/str",
+   "default": "0.06",
+   "group": "ریسک",
+   "purpose_fa": "کارمزد هر طرف (٪) در محاسبهٔ سود خالص.",
+   "effect_fa": "بالا = سود خالص کمتر در گزارش.",
+   "in_code": true
+  },
+  {
+   "name": "MAX_CORRELATED_TRADES",
+   "config_field": "max_correlated_trades",
+   "type": "num/str",
+   "default": "2",
+   "group": "ریسک",
+   "purpose_fa": "حداکثر معاملهٔ همبسته.",
+   "effect_fa": "بالا = ریسک تمرکز بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "MAX_MARGIN_PERCENT",
+   "config_field": "max_margin_percent",
+   "type": "num/str",
+   "default": "5.0",
+   "group": "ریسک",
+   "purpose_fa": "حداکثر مارجین (٪ حساب).",
+   "effect_fa": "بالا = پوزیشن بزرگ‌تر.",
+   "in_code": true
+  },
+  {
+   "name": "MAX_OPEN_TRADES",
+   "config_field": "max_open_trades",
+   "type": "num/str",
+   "default": "5",
+   "group": "ریسک",
+   "purpose_fa": "حداکثر معاملهٔ باز همزمان.",
+   "effect_fa": "بالا = پوزیشن بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "MAX_RISK_PERCENT",
+   "config_field": "max_risk_percent",
+   "type": "num/str",
+   "default": "1.25",
+   "group": "ریسک",
+   "purpose_fa": "سقف ریسک هر معامله (٪).",
+   "effect_fa": "بالا = حجم بزرگ‌تر.",
+   "in_code": true
+  },
+  {
+   "name": "PARTIAL_TP1_PERCENT",
+   "config_field": "partial_tp1_percent",
+   "type": "num/str",
+   "default": "60.0",
+   "group": "ریسک",
+   "purpose_fa": "درصد خروج در TP1.",
+   "effect_fa": "۶۰ = ۶۰٪ پوزیشن در TP1 بسته می‌شود.",
+   "in_code": true
+  },
+  {
+   "name": "PARTIAL_TP2_PERCENT",
+   "config_field": "partial_tp2_percent",
+   "type": "num/str",
+   "default": "40.0",
+   "group": "ریسک",
+   "purpose_fa": "درصد خروج در TP2.",
+   "effect_fa": "۴۰ = باقی در TP2.",
+   "in_code": true
+  },
+  {
+   "name": "PORTFOLIO_GUARD_ENABLED",
+   "config_field": "portfolio_guard_enabled",
+   "type": "bool",
+   "default": "False",
+   "group": "ریسک",
+   "purpose_fa": "گارد پورتفوی روشن باشد.",
+   "effect_fa": "1 = محدودیت‌های ریسک اعمال می‌شود.",
+   "in_code": true
+  },
+  {
+   "name": "RISK_PERCENT",
+   "config_field": "base_risk_percent",
+   "type": "num/str",
+   "default": "1.0",
+   "group": "ریسک",
+   "purpose_fa": "ریسک پایهٔ هر معامله (٪).",
+   "effect_fa": "بالا = حجم بزرگ‌تر.",
+   "in_code": true
+  },
+  {
+   "name": "SLIPPAGE_PERCENT",
+   "config_field": "slippage_percent",
+   "type": "num/str",
+   "default": "0.03",
+   "group": "ریسک",
+   "purpose_fa": "اسلیپیج فرضی (٪).",
+   "effect_fa": "بالا = سود خالص کمتر.",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_MAX_CONCURRENT_POSITIONS",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "ریسک",
+   "purpose_fa": "سقف کل پوزیشن همزمان.",
+   "effect_fa": "بالا = پوزیشن بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "CHAINS_PER_SYMBOL_SETUP_24H",
+   "config_field": "chains_per_symbol_setup_24h",
+   "type": "num/str",
+   "default": "3",
+   "group": "زنجیره",
+   "purpose_fa": "حداکثر زنجیرهٔ فعال هر نماد/ستاپ در ۲۴ ساعت.",
+   "effect_fa": "بالا = سیگنال بیشتر برای هر نماد.",
+   "in_code": true
+  },
+  {
+   "name": "CHAIN_SLOT_GATE_ENABLED",
+   "config_field": "chain_slot_gate_enabled",
+   "type": "bool",
+   "default": "True",
+   "group": "زنجیره",
+   "purpose_fa": "گیت اسلات زنجیره برای هر نماد/ستاپ/TF.",
+   "effect_fa": "خاموش = چند زنجیرهٔ همزمان بیشتر (اسپم).",
+   "in_code": true
+  },
+  {
+   "name": "MAX_CHAIN_HEARTBEATS",
+   "config_field": "max_chain_heartbeats",
+   "type": "num/str",
+   "default": "3",
+   "group": "زنجیره",
+   "purpose_fa": "حداکثر آپدیت هر زنجیره در هر کندل.",
+   "effect_fa": "بالا = آپدیت بیشتر + مصرف Railway بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "SKIP_DEAD_GATE_CANDIDATES",
+   "config_field": "skip_dead_gate_candidates",
+   "type": "bool",
+   "default": "True",
+   "group": "زنجیره",
+   "purpose_fa": "کاندیدایی که گیت اجباری‌اش رد شده، اصلاً ردیابی نشود.",
+   "effect_fa": "خاموش = هشدار بیشتر ولی اسپم Approaching.",
+   "in_code": true
+  },
+  {
+   "name": "UPDATE_MIN_GAP_SECONDS",
+   "config_field": "update_min_gap_seconds",
+   "type": "num/str",
+   "default": "300",
+   "group": "زنجیره",
+   "purpose_fa": "حداقل فاصلهٔ زمانی بین دو آپدیت یک زنجیره (ثانیه).",
+   "effect_fa": "پایین = آپدیت بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "LICENSE_MIN_SEP_PCT",
+   "config_field": "license_min_sep_pct",
+   "type": "num/str",
+   "default": "0.02",
+   "group": "زنجیره",
+   "purpose_fa": "حداقل فاصلهٔ درصدی ورود سیگنال جدید از آخرین ورود تأییدشدهٔ همان نماد — جلوگیری از سیگنال تکراری روی یک قیمت.",
+   "effect_fa": "بالا = سیگنال کمتر روی یک نماد.",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_MANAGEMENT_PROFILE",
+   "config_field": "viva_management_profile",
+   "type": "bool",
+   "default": "True",
+   "group": "ریسک",
+   "purpose_fa": "پروفایل مدیریت ویوا (نردبان ۵ هدفه + تریلینگ هوشمند) روشن باشد.",
+   "effect_fa": "0 = مدیریت ساده و بدون تریلینگ.",
+   "in_code": true
+  },
+  {
+   "name": "ALBROX_ENABLED",
+   "config_field": "albrox_enabled",
+   "type": "bool",
+   "default": "True",
+   "group": "ستاپ‌ها",
+   "purpose_fa": "ستاپ ALBROX روشن باشد.",
+   "effect_fa": "0 = خاموش.",
+   "in_code": true
+  },
+  {
+   "name": "CORE_V7_SETUPS_ENABLED",
+   "config_field": "core_v7_setups_enabled",
+   "type": "bool",
+   "default": "False",
+   "group": "ستاپ‌ها",
+   "purpose_fa": "۱۳ استراتژی قدیمی v5/v6 روشن باشند.",
+   "effect_fa": "1 = سیگنال‌های قدیمی/بی‌ربط برمی‌گردند. توصیه: 0",
+   "in_code": true
+  },
+  {
+   "name": "EXPERIMENTAL_TLBREAK_ENABLED",
+   "config_field": "experimental_tlbreak_enabled",
+   "type": "bool",
+   "default": "True",
+   "group": "ستاپ‌ها",
+   "purpose_fa": "فلگ قدیمی TLBREAK (هر دو باید روشن باشند).",
+   "effect_fa": "0 = خاموش.",
+   "in_code": true
+  },
+  {
+   "name": "PINVAL_ENABLED",
+   "config_field": "pinv_enabled",
+   "type": "bool",
+   "default": "True",
+   "group": "ستاپ‌ها",
+   "purpose_fa": "ستاپ پین‌وال (PINVAL) روشن باشد.",
+   "effect_fa": "0 = حذف کامل خانوادهٔ پین از گردش.",
+   "in_code": true
+  },
+  {
+   "name": "TECHCLASSIC_ENABLED",
+   "config_field": "technoclassic_enabled",
+   "type": "bool",
+   "default": "True",
+   "group": "ستاپ‌ها",
+   "purpose_fa": "ستاپ تکنوکلاسیک روشن باشد.",
+   "effect_fa": "0 = خاموش.",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_TLBREAK_ENABLED",
+   "config_field": "viva_tlbreak_enabled",
+   "type": "bool",
+   "default": "True",
+   "group": "ستاپ‌ها",
+   "purpose_fa": "ستاپ TLBREAK روشن باشد.",
+   "effect_fa": "0 = خاموش.",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_MAX_DAILY_SIGNALS",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "سهمیه",
+   "purpose_fa": "سقف قدیمی سیگنال روزانه (بازنشسته).",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_WEEKLY_LICENCE_ALBROX",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "سهمیه",
+   "purpose_fa": "سهمیهٔ هفتگی ALBROX.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_WEEKLY_LICENCE_PINVAL",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "سهمیه",
+   "purpose_fa": "سهمیهٔ هفتگی پین‌وال.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_WEEKLY_LICENCE_SPOT",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "سهمیه",
+   "purpose_fa": "سهمیهٔ هفتگی مخصوص اسپات.",
+   "effect_fa": "بالا = سیگنال بیشتر اسپات.",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_WEEKLY_LICENCE_TECHCLASSIC",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "سهمیه",
+   "purpose_fa": "سهمیهٔ هفتگی تکنوکلاسیک.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_WEEKLY_LICENCE_TLBREAK",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "سهمیه",
+   "purpose_fa": "سهمیهٔ هفتگی TLBREAK.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_WEEKLY_PACE",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "سهمیه",
+   "purpose_fa": "آهنگ روزانهٔ سهمیه.",
+   "effect_fa": "0 = خاموش.",
+   "in_code": true
+  },
+  {
+   "name": "CANDIDATE_EXPIRY_HOURS_DAYTRADE",
+   "config_field": "candidate_expiry_hours_daytrade",
+   "type": "num/str",
+   "default": "120",
+   "group": "عمر",
+   "purpose_fa": "عمر کاندیدای دی‌ترید (۱ساعته).",
+   "effect_fa": "بالا = بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "CANDIDATE_EXPIRY_HOURS_GRAND",
+   "config_field": "candidate_expiry_hours_grand",
+   "type": "num/str",
+   "default": "336",
+   "group": "عمر",
+   "purpose_fa": "چند ساعت کاندیدای گرند (۱روزه) زنده بماند.",
+   "effect_fa": "بالا = بیشتر منتظر می‌ماند، شانس تأیید بیشتر، سیگنال باز بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "CANDIDATE_EXPIRY_HOURS_SCALP",
+   "config_field": "candidate_expiry_hours_scalp",
+   "type": "num/str",
+   "default": "12",
+   "group": "عمر",
+   "purpose_fa": "عمر کاندیدای اسکلپ (۱۵م).",
+   "effect_fa": "SCALP پیش‌فرض خاموش است.",
+   "in_code": true
+  },
+  {
+   "name": "CANDIDATE_EXPIRY_HOURS_SWING",
+   "config_field": "candidate_expiry_hours_swing",
+   "type": "num/str",
+   "default": "168",
+   "group": "عمر",
+   "purpose_fa": "عمر کاندیدای سوینگ (۴ساعته).",
+   "effect_fa": "بالا = بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_NEAR_BREAK_GATE",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "قانون",
+   "purpose_fa": "گیت نزدیک-شکست.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "VIVA_SETUP_LAW_GATE",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "قانون",
+   "purpose_fa": "گیت قانون پترن در مرز انتشار.",
+   "effect_fa": "0 = بدون گیت.",
+   "in_code": true
+  },
+  {
+   "name": "SCALP_MAX_SPREAD_PERCENT",
+   "config_field": "scalp_max_spread_percent",
+   "type": "num/str",
+   "default": "0.12",
+   "group": "واچ‌لیست",
+   "purpose_fa": "حداکثر اسپرد اسکلپ.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "SCALP_MIN_TURNOVER_USD",
+   "config_field": "scalp_min_turnover_usd",
+   "type": "num/str",
+   "default": "20_000_000.0",
+   "group": "واچ‌لیست",
+   "purpose_fa": "حداقل گردش برای نماد اسکلپ.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "WATCHLIST_MAX_FOREX_SYMBOLS",
+   "config_field": "watchlist_max_forex_symbols",
+   "type": "num/str",
+   "default": "0",
+   "group": "واچ‌لیست",
+   "purpose_fa": "حداکثر نماد فارکس.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "WATCHLIST_MAX_SPREAD_PERCENT",
+   "config_field": "watchlist_max_spread_percent",
+   "type": "num/str",
+   "default": "0.25",
+   "group": "واچ‌لیست",
+   "purpose_fa": "حداکثر اسپرد مجاز (٪).",
+   "effect_fa": "بالا = نماد بیشتر (کیفیت کمتر).",
+   "in_code": true
+  },
+  {
+   "name": "WATCHLIST_MAX_SYMBOLS",
+   "config_field": "watchlist_max_symbols",
+   "type": "num/str",
+   "default": "100",
+   "group": "واچ‌لیست",
+   "purpose_fa": "حداکثر نماد در واچ‌لیست.",
+   "effect_fa": "بالا = کاندیدای بیشتر + هزینهٔ بیشتر (مهم‌ترین اهرم تعداد سیگنال).",
+   "in_code": true
+  },
+  {
+   "name": "WATCHLIST_MAX_TRADFI_SYMBOLS",
+   "config_field": "watchlist_max_tradfi_symbols",
+   "type": "num/str",
+   "default": "15",
+   "group": "واچ‌لیست",
+   "purpose_fa": "حداکثر نماد TradFi.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "WATCHLIST_MIN_LISTING_DAYS",
+   "config_field": "watchlist_min_listing_days",
+   "type": "num/str",
+   "default": "14",
+   "group": "واچ‌لیست",
+   "purpose_fa": "حداقل عمر لیستینگ (روز).",
+   "effect_fa": "بالا = حذف تازه‌واردها.",
+   "in_code": true
+  },
+  {
+   "name": "WATCHLIST_MIN_TURNOVER_USD",
+   "config_field": "watchlist_min_turnover_usd",
+   "type": "num/str",
+   "default": "5_000_000.0",
+   "group": "واچ‌لیست",
+   "purpose_fa": "حداقل گردش مالی نماد (دلار).",
+   "effect_fa": "بالا = فقط نمادهای نقدشونده.",
+   "in_code": true
+  },
+  {
+   "name": "WATCHLIST_PREFILTER_SYMBOLS",
+   "config_field": "watchlist_prefilter_symbols",
+   "type": "num/str",
+   "default": "200",
+   "group": "واچ‌لیست",
+   "purpose_fa": "چند نماد قبل از فیلتر اولیه بررسی شوند.",
+   "effect_fa": "بالا = استخر بزرگ‌تر.",
+   "in_code": true
+  },
+  {
+   "name": "WATCHLIST_REFRESH_MINUTES",
+   "config_field": "watchlist_refresh_minutes",
+   "type": "num/str",
+   "default": "60",
+   "group": "واچ‌لیست",
+   "purpose_fa": "هر چند دقیقه واچ‌لیست بازسازی شود.",
+   "effect_fa": "بالا = مصرف کمتر.",
+   "in_code": true
+  },
+  {
+   "name": "WATCHLIST_TOP_RELATIVE_VOLUME",
+   "config_field": "watchlist_top_relative_volume",
+   "type": "num/str",
+   "default": "20",
+   "group": "واچ‌لیست",
+   "purpose_fa": "تعداد نماد برتر از نظر حجم نسبی.",
+   "effect_fa": "بالا = نماد بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "WATCHLIST_TOP_TURNOVER",
+   "config_field": "watchlist_top_turnover",
+   "type": "num/str",
+   "default": "100",
+   "group": "واچ‌لیست",
+   "purpose_fa": "تعداد نماد برتر از نظر گردش مالی.",
+   "effect_fa": "بالا = نماد بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "PINVAL_MAX_BODY_FRAC",
+   "config_field": "pinv_max_body_frac",
+   "type": "num/str",
+   "default": "0.35",
+   "group": "پین‌وال",
+   "purpose_fa": "حداکثر نسبت بدنه به رنج کندل.",
+   "effect_fa": "کمتر = فقط کندل‌های سایه‌بلند.",
+   "in_code": true
+  },
+  {
+   "name": "PINVAL_MAX_CONCURRENT_CHAINS",
+   "config_field": "",
+   "type": "num/str",
+   "default": "(env-only)",
+   "group": "پین‌وال",
+   "purpose_fa": "سقف زنجیرهٔ همزمان.",
+   "effect_fa": "بالا = سیگنال باز بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "PINVAL_MIN_RANGE_ATR",
+   "config_field": "pinv_min_range_atr",
+   "type": "num/str",
+   "default": "0.6",
+   "group": "پین‌وال",
+   "purpose_fa": "حداقل رنج کندل (×ATR).",
+   "effect_fa": "بالا = فیلتر کندل‌های کوچک.",
+   "in_code": true
+  },
+  {
+   "name": "PINVAL_MIN_WICK_BODY",
+   "config_field": "pinv_min_wick_body",
+   "type": "num/str",
+   "default": "2.0",
+   "group": "پین‌وال",
+   "purpose_fa": "نسبت حداقلی سایه به بدنه.",
+   "effect_fa": "بالا = پین‌بار قوی‌تر، تعداد کمتر.",
+   "in_code": true
+  },
+  {
+   "name": "PINVAL_POLARITY_BLOCK_ATR",
+   "config_field": "pinv_polarity_block_atr",
+   "type": "num/str",
+   "default": "1.8",
+   "group": "پین‌وال",
+   "purpose_fa": "دیوار مخالف در این فاصله باعث بلاک می‌شود.",
+   "effect_fa": "بالا = بلاک بیشتر.",
+   "in_code": true
+  },
+  {
+   "name": "PINVAL_POLARITY_BREAKOUT_BODY_ATR",
+   "config_field": "pinv_polarity_breakout_body_atr",
+   "type": "num/str",
+   "default": "0.5",
+   "group": "پین‌وال",
+   "purpose_fa": "بدنهٔ شکست معتبر (×ATR).",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "PINVAL_POLARITY_BYPASS_LEGACY_FILTERS",
+   "config_field": "pinv_polarity_bypass_legacy_filters",
+   "type": "bool",
+   "default": "True",
+   "group": "پین‌وال",
+   "purpose_fa": "عبور از فیلترهای قدیمی وقتی گیت پلاریتی فعال است.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "PINVAL_POLARITY_GATE_ENABLED",
+   "config_field": "pinv_polarity_gate_enabled",
+   "type": "bool",
+   "default": "True",
+   "group": "پین‌وال",
+   "purpose_fa": "گیت پلاریتی ناحیه.",
+   "effect_fa": "0 = تأیید آسان‌تر.",
+   "in_code": true
+  },
+  {
+   "name": "PINVAL_POLARITY_NEAR_ATR",
+   "config_field": "pinv_polarity_near_atr",
+   "type": "num/str",
+   "default": "1.2",
+   "group": "پین‌وال",
+   "purpose_fa": "فاصلهٔ «در ناحیه» (×ATR).",
+   "effect_fa": "بالا = ناحیه بزرگ‌تر.",
+   "in_code": true
+  },
+  {
+   "name": "PINVAL_RR1_FLOOR",
+   "config_field": "pinv_rr1_floor",
+   "type": "num/str",
+   "default": "1.30",
+   "group": "پین‌وال",
+   "purpose_fa": "حداقل R:R تا TP1.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "PINVAL_RR2_FLOOR",
+   "config_field": "pinv_rr2_floor",
+   "type": "num/str",
+   "default": "2.00",
+   "group": "پین‌وال",
+   "purpose_fa": "حداقل R:R تا TP2.",
+   "effect_fa": "-",
+   "in_code": true
+  },
+  {
+   "name": "PINWALL_QUALITY_ENABLED",
+   "config_field": "pinwall_quality_enabled",
+   "type": "bool",
+   "default": "True",
+   "group": "پین‌وال",
+   "purpose_fa": "فیلتر کیفیت PINWALL.",
+   "effect_fa": "0 = سیگنال بیشتر، کیفیت کمتر.",
+   "in_code": true
+  },
+  {
+   "name": "PINWALL_QUALITY_MIN_SCORE",
+   "config_field": "pinwall_quality_min_score",
+   "type": "num/str",
+   "default": "78.0",
+   "group": "پین‌وال",
+   "purpose_fa": "حداقل امتیاز کیفیت PINWALL (۰-۱۰۰).",
+   "effect_fa": "بالا = سخت‌گیرتر، تعداد کمتر.",
+   "in_code": true
+  }
+ ]
+}
