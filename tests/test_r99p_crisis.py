@@ -283,7 +283,15 @@ def test_r99q_signature_and_watermark_wired():
     # the author's name with the logo BESIDE it.
     assert '"VAHID LESANI ANALYSIS", transform=ax.transAxes' in _mv
     assert '"VAHID LESANI ANALYSIS", transform=ax.transAxes' in _rs
-    assert "VIVA SIGNALS PRO" not in _mv.replace('CHART_BRAND_NAME = os.getenv("CHART_BRAND_NAME", "VIVA SIGNALS PRO").upper()', "")
+    # R99q28 REVERSAL (his 10-19, verbatim: «سمت راست بالا انتهای چارت لوگو
+    # کوچک با کیفیت و مقابلش متن زیر VAHID LESANI - VIVA SIGNALS PRO … این
+    # تغییر جای نام و برند در ستاپ هم انجام بشه»). R99q23 had removed the brand
+    # word; the newer law puts it back on ONE line, top-right, in both designs.
+    # The R99q23 *intent* still holds: no scattered repeats — the centre mark
+    # stays the author's name alone and no second brand word lives in the body.
+    assert "VAHID LESANI — VIVA SIGNALS PRO" in _mv
+    _body = _mv.replace('CHART_BRAND_NAME = os.getenv("CHART_BRAND_NAME", "VIVA SIGNALS PRO").upper()', "")
+    assert _body.count("VIVA SIGNALS PRO") == 1, "the brand word must appear exactly once (top-right credit)"
     assert "_add_author_credit(fig)" in _mv
     assert "viva_credit_banner" not in _mv and "viva_credit_banner" not in _rs
     assert "VIVA SIGNALS PRO\" , transform=ax.transAxes" not in _rs

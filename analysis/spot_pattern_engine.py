@@ -283,7 +283,9 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     live_price = float(closes[-1])
 
     # 3. Canvas setup with maximum width (Tight left/right margins)
-    fig, ax = plt.subplots(figsize=(16, 9), dpi=180)
+    # R99q28 (his 10-19: «کیفیت کل چارتهای اسپات به شدت پایینه و باید بالا بره»)
+    # 180 dpi → 220, and every image drawn below uses lanczos resampling.
+    fig, ax = plt.subplots(figsize=(16, 9), dpi=220)
     plt.subplots_adjust(left=0.022, right=0.955, top=0.925, bottom=0.16)
 
     # Authentic Lemon-to-Sky Vertical Gradient
@@ -293,22 +295,29 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     ax.imshow(gradient, aspect='auto', extent=[0, 1, 0, 1], origin='upper', zorder=0, transform=ax.transAxes)
 
     ax.set_yscale('log')
-    ax.grid(True, which='both', color='#D5D0C5', linestyle='-', linewidth=0.5, alpha=0.35)
+    # R99q28 (his law: «گریدلاین‌های پشت کندل‌ها در اسپات حذف بشه»): no grid at
+    # all behind the candles. Price labels on the right axis carry the scale.
+    ax.grid(False)
 
     # 4. Draw Official Viva Signals Watermark in Center
     logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assets', 'vivasignals-logo.png')
     if os.path.isfile(logo_path):
         try:
-            mark_ax = ax.inset_axes([0.38, 0.28, 0.24, 0.44], transform=ax.transAxes, zorder=1)
-            mark_ax.imshow(mpimg.imread(logo_path), alpha=0.080)
+            mark_ax = ax.inset_axes([0.255, 0.20, 0.49, 0.62], transform=ax.transAxes, zorder=1)
+            # R99q28 (his 10-19: «کیفیت لوگوهام در چارتهای اسپات بشدت پایینه»):
+            # lanczos instead of the default nearest-neighbour downsample.
+            mark_ax.imshow(mpimg.imread(logo_path), alpha=0.070,
+                           interpolation='lanczos', resample=True)
             mark_ax.set_axis_off()
             mark_ax.patch.set_alpha(0)
         except Exception:
             pass
 
     # 5. Candlesticks (Emerald & Coral with substantial width)
-    c_up = '#26A69A'
-    c_dn = '#EF5350'
+    # R99q28 (his law: «کندلهای چارتها در اسپات قرمز و سبز خوشرنگ»): a real
+    # green/red pair, not the teal TradingView default.
+    c_up = '#16A34A'
+    c_dn = '#DC2626'
     width = 0.66
     for i in range(n):
         o, c, h, l = opens[i], closes[i], highs[i], lows[i]
@@ -343,15 +352,20 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
                 x_start = max(0, min(x_pts))
             if slope_l is None or x_start is None:
                 continue
-            # Solid segment across pattern span
-            xs_solid = np.linspace(x_start, n - 1, 100)
+            # R99q28 (his 10-19: «ترندلاین‌های پترن باید کمی نازک‌تر بشه و تا
+            # ادامه به اندازه ۵ کندل بعد از کندل لایو خط کامل باشه اگر نیاز بود
+            # بعدش خط چین بشه»): thinner stroke, and the line stays SOLID for
+            # five bars past the live candle — only then does it break up.
+            _hold = 5
+            xs_solid = np.linspace(x_start, n - 1 + _hold, 120)
             ys_solid = 10.0 ** (slope_l * xs_solid + ic_l)
-            ax.plot(xs_solid, ys_solid, color='#1F2328', linewidth=2.0, zorder=5)
+            ax.plot(xs_solid, ys_solid, color='#1F2328', linewidth=1.5, zorder=5)
 
-            # Projection dashed segment into future
-            xs_proj = np.linspace(n - 1, n + future - 4, 40)
-            ys_proj = 10.0 ** (slope_l * xs_proj + ic_l)
-            ax.plot(xs_proj, ys_proj, color='#1F2328', linewidth=1.4, linestyle=(0, (5, 3)), alpha=0.75, zorder=5)
+            if (n - 1 + _hold) < (n + future - 4):
+                xs_proj = np.linspace(n - 1 + _hold, n + future - 4, 40)
+                ys_proj = 10.0 ** (slope_l * xs_proj + ic_l)
+                ax.plot(xs_proj, ys_proj, color='#1F2328', linewidth=1.15,
+                        linestyle=(0, (5, 3)), alpha=0.70, zorder=5)
 
             # Scatter pivot touch points
             for px, py in zip(x_pts, y_pts):
@@ -366,7 +380,7 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
         slope_u = (np.log10(highs[-2]) - np.log10(highs[pk_idx])) / max(1, (n - 2 - pk_idx))
         ic_u = np.log10(highs[pk_idx]) - slope_u * pk_idx
         xs_u = np.linspace(pk_idx, n + future - 4, 100)
-        ax.plot(xs_u, 10.0 ** (slope_u * xs_u + ic_u), color='#1F2328', linewidth=1.8, zorder=5)
+        ax.plot(xs_u, 10.0 ** (slope_u * xs_u + ic_u), color='#1F2328', linewidth=1.4, zorder=5)
 
     # 7. Measured Move Box or Breakdown Marker
     # Only draw bullish target box if it is actually a bullish setup or confirmation!
@@ -420,14 +434,57 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
         # at the top edge.
         _clip73b = bool(target_price > y_max_data * 1.35)
         _cap73b = y_max_data * 1.07 * 1.28
-        _ly73b = _cap73b * 0.995 if _clip73b else target_price * 1.018
+        # his 10-19 law: the label sits ABOVE the box, tight to its top edge.
+        _ly73b = _cap73b * 0.995 if _clip73b else target_price * 1.006
         ax.text(arrow_x, _ly73b, label_text,
                 color='#1F2328', fontsize=9.2, fontweight='bold', ha='center',
                 va='top' if _clip73b else 'bottom', zorder=8)
         y_max = _cap73b if _clip73b else max(y_max_data, target_price) * 1.07
         y_min = y_min_data * 0.96
+    elif is_breakdown and (confirmed or 'BREAK_DOWN' in stage or 'TOUCH' in stage
+                           or 'NEAR_BREAK' in stage):
+        # R99q28 (his 10-19: «باکس رو طبق چارت ارسالی باید طراحی بکنی و
+        # برعکسش قرمز برای شورتها»): the mirror image of the long box — the
+        # floor line, the breakdown candle as the left edge, and the measured
+        # move hanging BELOW, in red. Same label convention above/below.
+        _floor73 = live_price * 0.95
+        if drawn_lines:
+            _dn_cand = [ln for ln in drawn_lines if ln.get('side') == 'LOW']
+            if _dn_cand:
+                _floor73 = float(10.0 ** (_dn_cand[0]['slope'] * (n - 1)
+                                          + _dn_cand[0]['intercept']))
+        try:
+            _bot73s = float(md.get("spot_box_bottom") or 0.0)
+        except Exception:
+            _bot73s = 0.0
+        _pattern_h = max(1e-9, y_max_data - y_min_data)
+        _target_dn = _bot73s if _bot73s > 0 else (_floor73 - _pattern_h)
+        if _target_dn >= _floor73:
+            _target_dn = _floor73 - _pattern_h
+        _delta_dn = _floor73 - _target_dn
+        _pct_dn = (_delta_dn / max(1e-6, _floor73)) * 100.0
+
+        _bx0 = n - 1
+        _bx1 = n + future - 4
+        _bw = _bx1 - _bx0
+        ax.hlines(_floor73, _bx0, _bx1, colors='#1F2328', linewidth=1.4, zorder=6)
+        _rect_dn = patches.Rectangle((_bx0, _target_dn), _bw, _floor73 - _target_dn,
+                                     facecolor='#F2B8B5', edgecolor='#C62828',
+                                     linewidth=1.2, alpha=0.60, zorder=5)
+        ax.add_patch(_rect_dn)
+        _ax_dn = _bx0 + _bw * 0.5
+        ax.annotate('', xy=(_ax_dn, _target_dn), xytext=(_ax_dn, _floor73),
+                    arrowprops=dict(arrowstyle='->', color='#C62828', lw=1.5,
+                                    mutation_scale=12), zorder=7)
+        _ticks_dn = int(round(_delta_dn * 1000)) if _delta_dn < 10 else int(round(_delta_dn))
+        ax.text(_ax_dn, _target_dn * 0.982,
+                f'{_delta_dn:.4g} (-{_pct_dn:.2f}%) {_ticks_dn:,}',
+                color='#C62828', fontsize=9.2, fontweight='bold', ha='center',
+                va='top', zorder=8)
+        y_max = y_max_data * 1.05
+        y_min = min(y_min_data, _target_dn) * 0.96
     else:
-        # For breakdowns or warning: no fake long target box!
+        # For a warning state: no invented target box.
         y_max = y_max_data * 1.05
         y_min = y_min_data * 0.95
 
@@ -474,24 +531,45 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     except Exception:
         pass
 
-    # 10. Clean Header Information matching Telegram Alert
+    # 10. Header — R99q28 brand block per his 10-19 law:
+    #     «سمت راست بالا انتهای چارت لوگو کوچک با کیفیت .. و مقابلش متن زیر
+    #      VAHID LESANI - VIVA SIGNALS PRO .. از پایین سمت راست لوگو کوچک
+    #      برداشته بشه».
+    #     So: symbol/title top-LEFT (untouched), mark + full brand top-RIGHT,
+    #     and the old bottom-right badge is GONE.
     sub_title = f'{stage.replace("_", " ")} • {pat_title} • Log Scale'
-    fig.text(0.038, 0.955, f'{symbol}  •  {tf.upper()}  •  SPOTBREAK', fontsize=15, fontweight='bold', color='#1F2328')
-    fig.text(0.955, 0.955, 'Vahid Lesani', fontsize=12, fontweight='bold', color='#1F2328', ha='right', va='center')
-    fig.text(0.038, 0.932, f'VIVA SIGNALS PRO  •  {sub_title}', fontsize=10.5, color='#4A4640')
+    fig.text(0.022, 0.955, f'{symbol}  •  {tf.upper()}  •  SPOTBREAK',
+             fontsize=15, fontweight='bold', color='#1F2328')
+    fig.text(0.022, 0.930, sub_title, fontsize=10.5, color='#4A4640')
 
-    # 11. Bottom-Right Official Brand & Golden Badge
-    brand_name = 'VIVA SIGNALS PRO'
+    BRAND = 'VAHID LESANI — VIVA SIGNALS PRO'
+    _brand_y = 0.949
     if os.path.isfile(logo_path):
         try:
-            b_ax = fig.add_axes([0.895, 0.022, 0.032, 0.038], zorder=10)
-            b_ax.imshow(mpimg.imread(logo_path), alpha=0.90)
-            b_ax.axis('off')
-            fig.text(0.890, 0.038, brand_name, fontsize=12, fontweight='bold', color='#1F2328', ha='right', va='center')
+            _lg_ax = fig.add_axes([0.958, 0.916, 0.030, 0.040], zorder=10)
+            _lg_ax.imshow(mpimg.imread(logo_path), alpha=1.0,
+                          interpolation='lanczos', resample=True)
+            _lg_ax.axis('off')
+            _lg_ax.patch.set_alpha(0)
+            fig.text(0.940, _brand_y, BRAND, fontsize=11.0, fontweight='bold',
+                     color='#1F2328', ha='right', va='center')
         except Exception:
-            fig.text(0.93, 0.038, brand_name, fontsize=12, fontweight='bold', color='#1F2328', ha='right', va='center')
+            fig.text(0.955, _brand_y, BRAND, fontsize=11.0, fontweight='bold',
+                     color='#1F2328', ha='right', va='center')
     else:
-        fig.text(0.93, 0.038, brand_name, fontsize=12, fontweight='bold', color='#1F2328', ha='right', va='center')
+        fig.text(0.955, _brand_y, BRAND, fontsize=11.0, fontweight='bold',
+                 color='#1F2328', ha='right', va='center')
+
+    # 11. Unique ID bottom-LEFT, deliberately BELOW the volume pane's tick
+    # labels so it can never sit on the time-axis numbers (his law).
+    try:
+        _md_id = getattr(candidate, 'metadata', None) or {}
+        _uid = str(_md_id.get('public_code') or getattr(candidate, 'signal_id', '') or '')
+        if _uid:
+            fig.text(0.022, 0.030, f'ID  {_uid}', fontsize=9.0, fontweight='bold',
+                     color='#4A4640', ha='left', va='center', zorder=12)
+    except Exception:
+        pass
 
     # 12. Axis Formatting (No Colliding Numbers)
     ax.spines['top'].set_visible(False)
@@ -500,7 +578,8 @@ def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = 
     ax.spines['bottom'].set_color('#8A857D')
     ax.tick_params(colors='#4A4640', labelsize=9.5)
     ax.yaxis.tick_right()
-    ax.grid(True, color='#8A857D', alpha=0.22, linestyle='--', linewidth=0.7, zorder=0)
+    # R99q28 his law: NO gridlines behind the candles, here or anywhere else.
+    ax.grid(False)
 
     step = max(15, n // 6)
     pos_list = list(range(5, n, step))

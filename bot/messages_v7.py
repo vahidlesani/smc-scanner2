@@ -1323,8 +1323,12 @@ def _add_author_credit(fig) -> bool:
     … نمی‌خواد»): two elements only, name and mark, top-right, same as spot.
     """
     try:
-        fig.text(0.888, 0.936, "VAHID LESANI", fontsize=11.5, fontweight="bold",
-                 color=CHART_THEME["text"], ha="right", va="center", zorder=24)
+        # R99q28 (his 10-19: «و مقابلش متن زیر VAHID LESANI - VIVA SIGNALS
+        # PRO ... این تغییر جای نام و برند در ستاپ هم انجام بشه»): the top-right
+        # credit is the full brand line, not just the name.
+        fig.text(0.888, 0.936, "VAHID LESANI — VIVA SIGNALS PRO", fontsize=10.5,
+                 fontweight="bold", color=CHART_THEME["text"], ha="right",
+                 va="center", zorder=24)
         if os.path.isfile(CHART_LOGO_PATH):
             _lim = mpimg.imread(CHART_LOGO_PATH)
             _lh = 0.058
@@ -1381,15 +1385,10 @@ def _add_branding(fig, ax, candidate: SignalCandidate) -> None:
         va="center",
         zorder=22,
     )
-    brand_x = 0.952
-    if os.path.isfile(CHART_LOGO_PATH):
-        try:
-            logo_ax = fig.add_axes([0.918, 0.004, 0.038, 0.044], zorder=23)
-            logo_ax.imshow(mpimg.imread(CHART_LOGO_PATH), alpha=0.52)
-            logo_ax.axis("off")
-            brand_x = 0.912
-        except Exception as exc:
-            print(f"Chart logo warning: {exc}")
+    # R99q28 (his 10-19: «از پایین سمت راست لوگو کوچک برداشته بشه»): the
+    # footer mark is gone in spot AND in setups — the brand lives top-right
+    # (see _add_author_credit) and the footer keeps only the ID line, left.
+    _ = _public_code(candidate)  # footer text above already carries it
     # R99q23 («ویوا سیگنالز پرو رو از هر دو دیزاین حذف کن»): the footer brand
     # WORD is gone — the small logo mark (above) is the whole footer credit.
     # Signature watermark lives behind price, deliberately subtle like a

@@ -216,6 +216,17 @@ def weekly_pace_ok(setup_code=None, week=None, now=None) -> bool:
         return True
 
 
+# ── R99q28 sessions ──────────────────────────────────────────────────────
+# main.py gates the futures lane through this module (`_tier99j`); the session
+# helpers live in their own file so they can be tested without touching the
+# scan loop. Re-exported here so the call site stays one import.
+from analysis.trading_sessions import (  # noqa: E402,F401
+    active_sessions, current_session, in_scan_window, next_session,
+    session_count, session_licence_cap, session_licence_incr,
+    session_licence_ok, session_snapshot,
+)
+
+
 def weekly_licence_incr(setup_code=None, week=None, n: int = 1) -> int:
     """Spend n licences after a successful publish. Returns the new count."""
     try:

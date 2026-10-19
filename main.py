@@ -399,6 +399,22 @@ def run_discovery_scan() -> Dict[str, int]:
             "budget_deferred": 0, "add_failed": 0, "educate_failed": 0, "chain_slot": 0,
             "open_zone_dup": 0,
         })
+    # ── R99q28 SESSION GATE (his 10-19 «بقیه اوقات بین سشن ها کلا اسکن قطع
+    # بشه .. از ۱۵ دقیقه قبل از هر سشن اسکن پیدا کردن موقعیت رو اعمال بکنه»):
+    # discovery only looks for NEW positions inside a session window. The
+    # monitor loop is a different function and keeps confirming, hitting and
+    # stopping exactly as before — nothing open is ever abandoned.
+    try:
+        from analysis import tiered_scan as _tsess
+        if not _tsess.in_scan_window():
+            _nxt = _tsess.next_session()
+            print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC] "
+                  f"Discovery paused between sessions — next: {_nxt[0]} "
+                  f"in {_nxt[1]} min (VIVA_SESSION_SCAN_GATE=0 to disable)")
+            stats["session_scan_paused"] = stats.get("session_scan_paused", 0) + 1
+            return stats
+    except Exception:
+        pass
     print(
         f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC] "
         f"Discovery scan started for {len(symbols)} dynamic symbols"
@@ -725,6 +741,15 @@ def run_discovery_scan() -> Dict[str, int]:
                     # wallet must LAST the week instead of being burnt in one
                     # burst night. Today may spend the honest daily share of
                     # what is LEFT (VIVA_WEEKLY_PACE=0 switches it off).
+                    # ── R99q28 TRADING SESSIONS (his 10-19 «سشن های معاملاتی
+                    # را مشخص بکنی ... نیویورک ۱۵ ... لندن ۱۵ ... توکیو ۱۰»):
+                    # the flat daily pace is replaced by a per-session
+                    # licence book. VIVA_SESSION_LICENCES=0 falls back to it.
+                    if not _tier99j.session_licence_ok(
+                            str(getattr(candidate, "setup_code", "") or "")):
+                        stats["session_licence_skip"] = stats.get("session_licence_skip", 0) + 1
+                        _t(candidate)["session_deferred"] = _t(candidate).get("session_deferred", 0) + 1
+                        continue
                     if not _tier99j.weekly_pace_ok(
                             str(getattr(candidate, "setup_code", "") or "")):
                         stats["weekly_pace_skip"] = stats.get("weekly_pace_skip", 0) + 1
@@ -783,6 +808,9 @@ def run_discovery_scan() -> Dict[str, int]:
                     _tier99j3.weekly_licence_incr(
                         str(getattr(candidate, "setup_code", "") or ""))
                     _tier99j3.daily_setup_incr(
+                        str(getattr(candidate, "setup_code", "") or ""))
+                    # R99q28: and ONE session licence (fail-open)
+                    _tier99j3.session_licence_incr(
                         str(getattr(candidate, "setup_code", "") or ""))
                 except Exception:
                     pass
@@ -1474,16 +1502,22 @@ def run_spot_scan() -> Dict[str, int]:
                     _open99):
                 stats["tier_cap_skip"] = stats.get("tier_cap_skip", 0) + 1
                 continue
-            # R99q7: the SAME weekly wallet on the spot lane (spot keeps 1d
-            # as a legal trigger per his law).
-            if not _tier99.weekly_licence_ok(
-                    str(getattr(cand, "setup_code", "") or "SPOT")):
-                stats["weekly_licence_skip"] = stats.get("weekly_licence_skip", 0) + 1
-                continue
-            if not _tier99.weekly_pace_ok(
-                    str(getattr(cand, "setup_code", "") or "SPOT")):
-                stats["weekly_pace_skip"] = stats.get("weekly_pace_skip", 0) + 1
-                continue
+            # R99q28 (his 10-19, verbatim: «سهمیه اسپات کلا باید باز باشه .. 
+            # در اسپات روزانه و ۳ روزه و هفتگی اصلا خیلی پایینه تعدادش با اینکه
+            # بهترین کیفیت ها رو داره»): the spot lane no longer spends a weekly
+            # wallet or a daily pace. Spot is the highest-quality lane and its
+            # own concurrent-slot guard (just above) is the only brake.
+            # VIVA_SPOT_UNLIMITED=0 restores the old wallet.
+            if str(os.getenv("VIVA_SPOT_UNLIMITED", "1") or "1").strip().lower() in (
+                    "0", "false", "off", "no"):
+                if not _tier99.weekly_licence_ok(
+                        str(getattr(cand, "setup_code", "") or "SPOT")):
+                    stats["weekly_licence_skip"] = stats.get("weekly_licence_skip", 0) + 1
+                    continue
+                if not _tier99.weekly_pace_ok(
+                        str(getattr(cand, "setup_code", "") or "SPOT")):
+                    stats["weekly_pace_skip"] = stats.get("weekly_pace_skip", 0) + 1
+                    continue
         except Exception:
             pass
         # R99h SPOT own-engine consult (fail-open, kill-switch SPOT_OWN_ENGINE_ENABLED=0).
@@ -1546,10 +1580,13 @@ def run_spot_scan() -> Dict[str, int]:
                     reply_to=int(_alert_kv.get("mid") or 0))
                 if _pub_mid:
                     stats["published"] += 1
-                    try:  # R99q7: spend one weekly licence for this spot setup
+                    try:  # R99q28: spot is unlimited by his 10-19 law, so it
+                        # does not burn the shared weekly wallet either.
                         from analysis import tiered_scan as _tier99w
-                        _tier99w.weekly_licence_incr(
-                            str(getattr(cand, "setup_code", "") or "SPOT"))
+                        if str(os.getenv("VIVA_SPOT_UNLIMITED", "1") or "1").strip().lower() in (
+                                "0", "false", "off", "no"):
+                            _tier99w.weekly_licence_incr(
+                                str(getattr(cand, "setup_code", "") or "SPOT"))
                         _tier99w.daily_setup_incr(
                             str(getattr(cand, "setup_code", "") or "SPOT"))
                     except Exception:
