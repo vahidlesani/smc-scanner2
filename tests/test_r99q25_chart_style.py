@@ -18,7 +18,10 @@ def test_techclassic_market_colors_are_black_white_and_scoped(monkeypatch):
     assert other["up"] == "#089981" and other["down"] == "#F23645"
 
 
-def test_spot_candle_colors_are_monochrome():
+def test_spot_candle_colors_are_teal_and_red():
+    """R99q30 (his 10-20: «اصلا رنگ لیبل‌ها هم تغییر کرده»): the reference set
+    shows a TEAL up-bar and a RED down-bar. The monochrome white/black pair was
+    the drift, not the design."""
     from tools.render_spot_cryptocove import spot_candle_colors
-    assert spot_candle_colors(True) == ("#FFFFFF", "#111111")
-    assert spot_candle_colors(False) == ("#111111", "#111111")
+    assert spot_candle_colors(True) == ("#26A69A", "#26A69A")
+    assert spot_candle_colors(False) == ("#EF5350", "#EF5350")

@@ -109,19 +109,22 @@ def test_main_wires_both_lanes_and_spot_is_unlimited():
     assert "VIVA_SPOT_UNLIMITED" in src
 
 
-def test_sessions_replace_the_flat_pace_instead_of_stacking():
+def test_the_futures_quota_is_the_hourly_cap_not_a_stacked_pace():
     """10-19 evidence: every setup had already spent its flat 25 by 07:00, so
-    `weekly_pace_ok` was False for the rest of the day — and because both gates
-    were consulted, the sessions could never release a single licence. The read
-    `funnel ALBROX seen=17 ready_new=0 pace=14` is the proof: 14 of 17 died at
-    the pace gate, not at confirmation."""
+    `weekly_pace_ok` was False for the rest of the day. R99q28 guarded the pace
+    behind the session book — and 10-20 proved that was not enough either: the
+    funnel still read `pace=92 ready_new=0` on every scan. R99q30 therefore
+    REPLACES both sub-gates with the cadence he asked for («باید ساعتی کنیم»):
+    at most VIVA_HOURLY_CAP alerts per setup per clock hour, with the weekly
+    wallet kept as the outer bound."""
     src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
     i = src.index("session_licence_ok(")
-    j = src.index("weekly_pace_ok(", i)
+    j = src.index("hourly_pace_ok(", i)
     between = src[i:j]
-    assert "sessions_enabled()" in between, (
-        "weekly_pace_ok must be consulted ONLY when the session book is off")
-    assert "if not _tier99j.sessions_enabled():" in src
+    assert "session_licence_ok(" in between
+    assert "if not _tier99j.sessions_enabled():" not in src, (
+        "the stacked sessions+pace pair is retired")
+    assert "_tier99j.hourly_pace_ok(" in src
 
 
 def test_sessions_enabled_is_public():

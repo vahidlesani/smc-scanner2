@@ -134,6 +134,58 @@ def weekly_licence_ok(setup_code=None, week=None) -> bool:
         return True
 
 
+# ── R99q30 HOURLY CADENCE (his 10-20, verbatim: «الان اگر مصرف ریلوی میشه
+# بستن هشدار ها چه فایده ای داره؟؟ ... می‌خوای ساعتی ۱۰ هشدار برای هرستاپ و
+# اسپات تعیین بکنیم؟؟ ... فعلا که خشکه باید ساعتی کنیم اینجوری فایده نداره»).
+#
+# The weekly pace subdivided a 200-licence wallet into a DAILY share and then
+# spread it across the clock — measured on 10-20: PINVAL pace=92, ALBROX
+# pace=14, TECHCLASSIC pace=5, TLBREAK pace=1 and ready_new=0 in EVERY scan.
+# A cap that is never reached is not a cap, it is an outage. The cadence he
+# asked for is the replacement: at most N alerts per setup per clock hour,
+# spot included. The weekly wallet (200) stays the outer bound.
+#
+# VIVA_HOURLY_CAP=0 disables the hourly shape entirely (back to the wallet).
+def hourly_cap() -> int:
+    try:
+        return max(0, int(os.getenv("VIVA_HOURLY_CAP", "10") or 10))
+    except Exception:
+        return 10
+
+
+def _hour_setup_key(hour_tag: str, setup_code: str) -> str:
+    return f"tier_hour_setup:{hour_tag}:{str(setup_code or '').strip().upper()}"
+
+
+def hourly_pace_ok(setup_code=None, now=None) -> bool:
+    """True while this setup may still publish in the CURRENT clock hour."""
+    _cap = hourly_cap()
+    if _cap <= 0:
+        return True
+    try:
+        _n = now or datetime.now(timezone.utc)
+        _tag = _n.strftime("%Y-%m-%dT%H")
+        return max(0, int(_kv().get_json(_hour_setup_key(_tag, setup_code), 0) or 0)) < _cap
+    except Exception:
+        return True
+
+
+def hourly_pace_incr(setup_code=None, now=None) -> int:
+    """Spend one slot in this hour. Returns the new count, or -1 on error."""
+    _cap = hourly_cap()
+    if _cap <= 0:
+        return -1
+    try:
+        _n = now or datetime.now(timezone.utc)
+        _tag = _n.strftime("%Y-%m-%dT%H")
+        _k = _hour_setup_key(_tag, setup_code)
+        _cur = max(0, int(_kv().get_json(_k, 0) or 0)) + 1
+        _kv().set_json(_k, _cur)
+        return _cur
+    except Exception:
+        return -1
+
+
 def days_left_in_week(now=None) -> int:
     """Days remaining in the ISO week, TODAY included (Mon..Sun → 7..1)."""
     try:

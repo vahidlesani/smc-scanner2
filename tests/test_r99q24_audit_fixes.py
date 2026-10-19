@@ -160,8 +160,12 @@ def test_a_weekly_wallet_must_last_the_week(monkeypatch):
 
 
 def test_the_pace_rule_is_wired_into_both_lanes():
+    """R99q30: the futures lane now spends an HOURLY slot instead of the flat
+    pace (his «باید ساعتی کنیم»); the spot lane keeps its wallet-gated path, and
+    the daily counter is still written by both lanes."""
     src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
-    assert src.count("weekly_pace_ok(") >= 2          # futures + spot
+    assert src.count("weekly_pace_ok(") >= 1          # spot (wallet-gated)
+    assert src.count("hourly_pace_ok(") >= 1          # futures cadence
     assert src.count("daily_setup_incr(") >= 2
 
 

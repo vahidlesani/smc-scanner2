@@ -755,12 +755,20 @@ def run_discovery_scan() -> Dict[str, int]:
                     # 10-19 the flat pace was already at 25/25 for every setup,
                     # so the funnel read ready_new=0 and pace=<everything> even
                     # with the sessions switched on.
-                    if not _tier99j.sessions_enabled():
-                        if not _tier99j.weekly_pace_ok(
-                                str(getattr(candidate, "setup_code", "") or "")):
-                            stats["weekly_pace_skip"] = stats.get("weekly_pace_skip", 0) + 1
-                            _t(candidate)["weekly_pace_deferred"] = _t(candidate).get("weekly_pace_deferred", 0) + 1
-                            continue
+                    # ── R99q30 (his 10-20). The TWO quota gates that were
+                    # meant to protect the wallet became the drought: the
+                    # session book and the flat weekly pace stacked, so the
+                    # tighter one always won, and the funnel read
+                    # pace=<every candidate>, ready_new=0, on every scan.
+                    # The cadence he asked for replaces BOTH sub-gates:
+                    # at most VIVA_HOURLY_CAP (10) alerts per setup per clock
+                    # hour. The weekly wallet above stays the outer bound, so
+                    # nothing about the 200-licence ceiling changes.
+                    if not _tier99j.hourly_pace_ok(
+                            str(getattr(candidate, "setup_code", "") or "")):
+                        stats["weekly_pace_skip"] = stats.get("weekly_pace_skip", 0) + 1
+                        _t(candidate)["weekly_pace_deferred"] = _t(candidate).get("weekly_pace_deferred", 0) + 1
+                        continue
                 except Exception:
                     pass
                 for prior in supersede_alert_lineage(candidate):
@@ -814,6 +822,9 @@ def run_discovery_scan() -> Dict[str, int]:
                     _tier99j3.weekly_licence_incr(
                         str(getattr(candidate, "setup_code", "") or ""))
                     _tier99j3.daily_setup_incr(
+                        str(getattr(candidate, "setup_code", "") or ""))
+                    # R99q30: and ONE slot in the current clock hour
+                    _tier99j3.hourly_pace_incr(
                         str(getattr(candidate, "setup_code", "") or ""))
                     # R99q28: and ONE session licence (fail-open)
                     _tier99j3.session_licence_incr(

@@ -175,14 +175,111 @@ def _fmt_axis(v, _p=None) -> str:
     return f"{v:.4f}"
 
 
+# R99q30 (his 10-20 reference set): every spot file in the reference folder
+# shows a TEAL up-bar and a RED down-bar. The live renderer had drifted to
+# hollow-white / solid-black — that is his «اصلا رنگ لیبل‌ها هم تغییر کرده».
+SPOT_UP = "#26A69A"
+SPOT_DN = "#EF5350"
+
+
 def spot_candle_colors(is_up: bool) -> tuple:
-    """(body, edge/wick): white bullish candle, black bearish candle."""
-    return ("#FFFFFF" if bool(is_up) else "#111111", "#111111")
+    """(body, edge/wick): teal bullish candle, red bearish candle."""
+    return (SPOT_UP if bool(is_up) else SPOT_DN,
+            SPOT_UP if bool(is_up) else SPOT_DN)
+
+
+# ── R99q30 brand mark loader ────────────────────────────────────────────────
+_LOGO_CACHE: dict = {}
+
+
+def _logo_img():
+    """The brand mark at its highest available resolution.
+
+    The shipped asset is only 280×296 px — drawing it on a 240-dpi canvas
+    upscales a tiny bitmap and every edge goes soft. `assets/vivasignals-logo@4x.png`
+    is the same artwork pre-scaled (lanczos, cropped to the mark) so matplotlib
+    always has real pixels. Falls back to the 1× file.
+    """
+    try:
+        key = str(logo_path_global())
+        got = _LOGO_CACHE.get(key)
+        if got is not None:
+            return got
+        hi = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "assets", "vivasignals-logo@4x.png")
+        use = hi if os.path.isfile(hi) else key
+        img = mpimg.imread(use)
+        _LOGO_CACHE[key] = img
+        return img
+    except Exception:
+        return mpimg.imread(logo_path_global())
+
+
+def logo_path_global() -> str:
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "assets", "vivasignals-logo.png")
+
+
+def _log_ticks(lo: float, hi: float, target: int = 11):
+    """ROUND labels for a log price axis.
+
+    Two regimes, because one ladder cannot serve both:
+      • a short span (≤ 25×, XMR 380–680) — a uniform LINEAR round step reads
+        perfectly even and every label is a number a human writes;
+      • a wide span (INJ 0.40–12.9, 32×) — only decade rungs survive on a log
+        axis, so step through round mantissas 1 · 1.5 · 2 · 2.5 · 3 · 4 · 5 ·
+        6 · 8 per decade.
+    Never returns "nice" floats like 12.59 or 2.51.
+    """
+    import math as _m
+    try:
+        lo, hi = float(lo), float(hi)
+        if not (hi > lo > 0):
+            return [], 4
+        out = []
+        if hi / lo <= 25.0:
+            raw = (hi - lo) / max(4.0, float(target) - 1.0)
+            mag = 10.0 ** _m.floor(_m.log10(raw))
+            step = mag
+            for mm in (1.0, 2.0, 2.5, 5.0, 10.0, 20.0):
+                if 7 <= (hi - lo) / (mm * mag) + 1 <= 13:
+                    step = mm * mag
+                    break
+            v = _m.ceil(lo / step) * step
+            while v <= hi * 1.0005 and len(out) < 40:
+                out.append(round(v, 12))
+                v += step
+        else:
+            mant = (1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0)
+            for e in range(int(_m.floor(_m.log10(lo))), int(_m.ceil(_m.log10(hi))) + 1):
+                for mm in mant:
+                    v = mm * (10.0 ** e)
+                    if lo * 0.995 <= v <= hi * 1.005:
+                        out.append(round(v, 12))
+            out = sorted(set(out))
+            if len(out) > target:
+                want = int(target)
+                stepi = (len(out) - 1) / float(want - 1)
+                out = [out[int(round(k * stepi))] for k in range(want)]
+        if len(out) < 5:
+            return [], 4
+        dec = 0
+        while dec < 8 and any(abs(v - round(v, dec)) > 1e-9 for v in out):
+            dec += 1
+        return out, dec
+    except Exception:
+        return [], 4
 
 
 def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
-           stage: str = "", title: str = "") -> "str | bytes":
-    """رندر واحد اسپات. اگر path خالی باشد بایت PNG برمی‌گرداند."""
+           stage: str = "", title: str = "", trade: dict = None) -> "str | bytes":
+    """رندر واحد اسپات. اگر path خالی باشد بایت PNG برمی‌گرداند.
+
+    `trade` (R99q30, his 10-20: «اطلاعات ورود به پوزیشن هم بیاد روبروی
+    هیستوگرام های حجم هم در ستاپ ها هم در اسپات»): an optional dict with
+    entry / stop / targets / direction. It is DRAWN ONLY — it never changes the
+    detected geometry, the stage or the message.
+    """
     n = len(df)
     tf = str(a.get("tf") or "4h").lower()
     sym = str(symbol or "").upper() or "SPOT"
@@ -245,10 +342,15 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     except Exception:
         pass
 
-    fig, ax = plt.subplots(figsize=(16, 9), dpi=180)
+    # ── R99q30 (his 10-20: «لوگو من … کیفیتش بالا بره»): spot printed at 180 dpi
+    # while the setups canvas printed at 240 — same chart, 1.8× fewer pixels,
+    # so every mark (logo included) came out soft. One resolution now.
+    fig, ax = plt.subplots(figsize=(16, 9), dpi=240)
     fig.patch.set_facecolor("#FFFFFF")
     # حاشیهٔ کم (یادداشت خودش: «حاشیهٔ پشت محور و پایین صفحه رو کم کن»)
-    fig.subplots_adjust(left=0.016, right=0.952, top=0.915, bottom=0.066)
+    # R99q30: the top band grew (0.915 -> 0.898) — the credit used to sit level
+    # with the topmost price tick («بردی روی محور قیمت»).
+    fig.subplots_adjust(left=0.016, right=0.952, top=0.898, bottom=0.066)
 
     top_rgb = np.array([253, 244, 159]) / 255.0
     bot_rgb = np.array([145, 203, 248]) / 255.0
@@ -274,7 +376,7 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     if os.path.isfile(logo_path):
         try:
             _w_ax = ax.inset_axes([0.40, 0.30, 0.20, 0.38], zorder=1)
-            _w_ax.imshow(mpimg.imread(logo_path), alpha=0.10)
+            _w_ax.imshow(_logo_img(), alpha=0.10, interpolation="lanczos", resample=True)
             _w_ax.set_axis_off()
             _w_ax.patch.set_alpha(0)
         except Exception:
@@ -285,8 +387,12 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
         v = df["volume"].astype(float).to_numpy()
         vmax = float(np.max(v[n_show])) if len(v) else 0.0
         if vmax > 0:
+            # R99q30 (his reference set + «چرا هیستوگرام‌های اسپات رو از روی
+            # چارت جدا کردی؟»): the histogram lives INSIDE the price panel,
+            # stands on its floor, is tinted with its own candle colour and is
+            # tall enough to read. The old grey 6.2% dashes read as tick marks.
             _base = y_lo * math.exp(0.004 * d_span)
-            _hgt = 0.062 * d_span
+            _hgt = 0.088 * d_span
             for i in range(x_from, n):
                 _vh = (_hgt * (float(v[i]) / vmax)) if vmax else 0.0
                 if _vh <= 0:
@@ -295,8 +401,8 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
                 # روی قیمت؛ آن باگ کل پنل را پر می‌کرد)
                 _hbar = _base * (math.exp(_vh) - 1.0)
                 ax.add_patch(Rectangle((i - 0.33, _base), 0.66, _hbar,
-                                       facecolor="#AEB4BC" if c[i] >= o[i] else "#50565E",
-                                       edgecolor="none", alpha=0.30, zorder=2))
+                                       facecolor=SPOT_UP if c[i] >= o[i] else SPOT_DN,
+                                       edgecolor="none", alpha=0.34, zorder=2))
     except Exception:
         pass
 
@@ -318,9 +424,18 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
         is_entry = (side.upper() == entry_edge)
         # رفرنس‌ها: هر دو ضلع از پیوت اول تا آخرین تاچِ خودشان «توپر» هستند
         # (ضلع ورود پررنگ‌تر) و فقط ادامهٔ تصویر به آینده نقطه‌چین می‌شود.
+        _first_i = max(int(getattr(ln, "first_index", x_from)), x_from)
         _last_t = max(list(getattr(ln, "touches", ()) or [n - 1]) or [n - 1])
-        _span_end = min(n - 1, max(_last_t, int(getattr(ln, "first_index", x_from))))
-        xs = np.array([max(int(getattr(ln, "first_index", x_from)), x_from), _span_end])
+        # R99q30 (his 10-20: «پترن کج و داغون بی هویت»): the solid part must
+        # reach the LAST VALIDATED TOUCH. The old code took max(last_touch,
+        # first_index) — on a line whose pivots sit outside the visible window
+        # that collapses to ONE BAR and matplotlib then joins the projection's
+        # first point to it, drawing a visibly tilted segment that no pivot sits
+        # on. A solid edge now always spans first pivot → last touch.
+        _span_end = min(n - 1, max(_last_t, _first_i + 1))
+        if _span_end <= _first_i:
+            _span_end = min(n - 1, _first_i + 1)
+        xs = np.array([_first_i, _span_end])
         ax.plot(xs, [ln.price_at(x) for x in xs], color=INK,
                 lw=2.55 if is_entry else 2.0,
                 alpha=1.0 if is_entry else 0.92, zorder=6, solid_capstyle="round")
@@ -443,19 +558,31 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     # قبل هم نمی‌خواد، فقط به کنار اسم من بالای سمت راست چارت لوگو رو اضافه
     # کن»): no banner, no badge, no extra label — the NAME and the LOGO, side
     # by side, in the top-right corner of both designs.
-    fig.text(0.888, 0.968, "VAHID LESANI", fontsize=11.5, fontweight="bold",
-             color=INK, ha="right", va="center")
+    # ── R99q30 (his 10-20, verbatim: «لوگو من در بالای چارت همونی که قبلا بود
+    # در اسپات و ستاپ‌ها اندازه و کیفیتش بالا بره ... و متن اسم خودم و برندم
+    # فقط جلوش بیاد ... اونم خیلی کوچیک و بی کیفیت»): the mark is BIGGER, drawn
+    # from the 4× asset with a lanczos resample, and the NAME + BRAND line sits
+    # BESIDE it — the credit block ends inside the header band, never on the
+    # price axis (top moved to 0.898 above).
+    _brand30 = "VAHID LESANI — VIVA SIGNALS PRO"
+    _lh30 = 0.072
     if os.path.isfile(logo_path):
         try:
-            _lim = mpimg.imread(logo_path)
-            _lh = 0.055
-            _lw = _lh * (float(_lim.shape[1]) / float(_lim.shape[0])) \
+            _lim = _logo_img()
+            _lw30 = _lh30 * (float(_lim.shape[1]) / float(_lim.shape[0])) \
                 * (float(fig.get_figheight()) / float(fig.get_figwidth()))
-            _lax = fig.add_axes([0.898, 0.968 - _lh / 2.0, _lw, _lh], zorder=12)
-            _lax.imshow(_lim, alpha=0.95)
+            _lx30 = 0.990 - _lw30
+            _lax = fig.add_axes([_lx30, 0.978 - _lh30 / 2.0, _lw30, _lh30], zorder=12)
+            _lax.imshow(_lim, alpha=1.0, interpolation="lanczos", resample=True)
             _lax.axis("off")
+            _lax.patch.set_alpha(0)
+            fig.text(_lx30 - 0.008, 0.978, _brand30, fontsize=12.5,
+                     fontweight="bold", color=INK, ha="right", va="center")
         except Exception as _e23:
             print(f"spot credit logo warning: {_e23}")
+    else:
+        fig.text(0.990, 0.978, _brand30, fontsize=12.5, fontweight="bold",
+                 color=INK, ha="right", va="center")
 
     # ── 10) فوتر
     fig.text(0.020, 0.024, f"{sym}  •  VIVA  •  SPOT  •  BINANCE SPOT",
@@ -464,10 +591,56 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     if os.path.isfile(logo_path):
         try:
             b_ax = fig.add_axes([0.956, 0.010, 0.026, 0.046], zorder=10)
-            b_ax.imshow(mpimg.imread(logo_path), alpha=0.95)
+            b_ax.imshow(_logo_img(), alpha=0.95, interpolation="lanczos", resample=True)
             b_ax.axis("off")
         except Exception:
             pass
+
+    # ── 10b) R99q30 TRADE STRIP — entry / stop / targets beside the volume
+    # histogram (his 10-20: «اطلاعات ورود به پوزیشن هم بیاد روبروی هیستوگرام
+    # های حجم هم در ستاپ ها هم در اسپات»). Drawn on the figure, under the
+    # price panel and level with the volume band, so it never covers a candle
+    # and never shifts the geometry. Display only.
+    if trade:
+        try:
+            _d30 = str(trade.get("direction") or "LONG").upper()
+            _is_long30 = _d30 in ("LONG", "UP", "BULL", "BULLISH")
+            _cells = []
+            _e30 = float(trade.get("entry") or 0)
+            _s30 = float(trade.get("stop") or 0)
+            if _e30 > 0:
+                _cells.append(("ENTRY", _e30, "#1F6FEB"))
+            if _s30 > 0:
+                _cells.append(("STOP", _s30, "#C62828"))
+            for _i30, _k30 in enumerate(("tp1", "tp2", "tp3")):
+                _v30 = float(trade.get(_k30) or 0)
+                if _v30 > 0:
+                    _cells.append((f"TP{_i30 + 1}", _v30, "#2E7D32"))
+            if _cells:
+                _x30 = 0.020
+                # sits level with the volume band's floor, clear of the time
+                # axis labels underneath (0.047 printed them on top of it)
+                _y30 = 0.084
+                for _lab30, _val30, _col30 in _cells:
+                    _txt30 = f"{_lab30}  {_price_fmt(_val30)}"
+                    _t30 = fig.text(_x30, _y30, _txt30, fontsize=9.5,
+                                    fontweight="bold", color="#FFFFFF",
+                                    ha="left", va="center", zorder=14,
+                                    bbox=dict(boxstyle="round,pad=0.32",
+                                              facecolor=_col30, edgecolor="none"))
+                    # advance by the rendered width so pills never overlap
+                    try:
+                        fig.canvas.draw()
+                        _bb = _t30.get_window_extent(renderer=fig.canvas.get_renderer())
+                        _x30 += (_bb.width / fig.bbox.width) + 0.006
+                    except Exception:
+                        _x30 += 0.085
+                _tag30 = "LONG" if _is_long30 else "SHORT"
+                fig.text(_x30 + 0.004, _y30, _tag30, fontsize=9.5,
+                         fontweight="bold", color=MUTED, ha="left", va="center",
+                         zorder=14)
+        except Exception as _t30e:
+            print(f"spot trade strip warning: {_t30e}")
 
     # ── 11) محورها
     ax.yaxis.tick_right()
@@ -476,7 +649,12 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     # متناسب با گام (BTC صفر اعشار، ENA/DOGE سه اعشار).
     try:
         from matplotlib.ticker import FixedLocator as _FL99
-        _tk99, _dp99 = vg.nice_price_ticks(*ax.get_ylim())
+        # R99q30: LOG-space ticks. Spot is always log; a linear tick ladder
+        # bunched the cheap levels and thinned the expensive ones — his
+        # «محور قیمت‌ها همه قیمت‌ها له شده به بالا».
+        _tk99, _dp99 = _log_ticks(*ax.get_ylim())
+        if len(_tk99) < 6:
+            _tk99, _dp99 = vg.nice_price_ticks(*ax.get_ylim())
         if len(_tk99) >= 6:
             ax.yaxis.set_major_locator(_FL99(_tk99))
             ax.yaxis.set_minor_locator(_FL99([]))

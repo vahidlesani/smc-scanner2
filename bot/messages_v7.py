@@ -2936,9 +2936,29 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             if _a2:
                 _stage2 = str((candidate.metadata or {}).get("spot_alert_stage")
                               or candidate.status or "")
+                # R99q30 (his 10-20): the entry/stop/target strip beside the
+                # volume histogram. Display only — the detector already ruled.
+                _trade30 = {}
+                try:
+                    _md30t = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+                    _tlad30 = (_md30t.get("target_ladder") or {}).get("targets") or []
+                    _trade30 = {
+                        "direction": str(getattr(candidate, "direction", "") or "LONG"),
+                        "entry": float(getattr(candidate, "planned_entry", 0) or
+                                       getattr(candidate, "entry_zone_top", 0) or 0),
+                        "stop": float(getattr(candidate, "sl", 0) or 0),
+                    }
+                    for _i30t, _v30t in enumerate(list(_tlad30)[:3]):
+                        _trade30[f"tp{_i30t + 1}"] = float(_v30t)
+                    if not _tlad30:
+                        _trade30["tp1"] = float(getattr(candidate, "tp1", 0) or 0)
+                        _trade30["tp2"] = float(getattr(candidate, "tp2", 0) or 0)
+                except Exception:
+                    _trade30 = {}
                 _spot_png = _rs2(df, _a2, None,
                                  symbol=str(getattr(candidate, "symbol", "")),
-                                 stage=_stage2, title=(_title18 or ""))
+                                 stage=_stage2, title=(_title18 or ""),
+                                 trade=_trade30 or None)
                 if _spot_png and len(_spot_png) > 1000:
                     _chart_cache_set(_ck, _spot_png)
                     return _spot_png
