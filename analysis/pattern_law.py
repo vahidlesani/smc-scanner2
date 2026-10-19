@@ -251,9 +251,21 @@ def pair_metrics(upper, lower, n: int, df=None, pole_bars: int = 24) -> Dict:
     if u0 < l0:
         upper, lower = lower, upper
         u0, l0 = l0, u0
+    def _first_index(_ln) -> int:
+        """First bar of an edge — the fitter's Line exposes `first_index`, the
+        render dict exposes `x0`. getattr() on a dict always returned the
+        default, so every dict pair was measured from bar 0: a window the
+        pattern never covered (the band ratio then described history, not the
+        shape). R99q29."""
+        try:
+            v = getattr(_ln, "first_index", None)
+            if v is None and isinstance(_ln, dict):
+                v = _ln.get("x0")
+            return int(v or 0)
+        except Exception:
+            return 0
     try:
-        start = max(int(getattr(upper, "first_index", 0) or 0),
-                    int(getattr(lower, "first_index", 0) or 0))
+        start = max(_first_index(upper), _first_index(lower))
     except Exception:
         start = 0
     start = max(0, min(int(start), int(n) - 2))
@@ -265,9 +277,21 @@ def pair_metrics(upper, lower, n: int, df=None, pole_bars: int = 24) -> Dict:
         return m
     height = max(w_then, w_now)
     mid = (_price_at(upper, start) + _price_at(lower, start)) / 2.0
+    # ── R99q29 SCALE-INVARIANT CONVERGENCE (his 10-19 pattern audit).
+    # `conv_ratio` compares ABSOLUTE band widths. On a falling chart every
+    # band shrinks in absolute terms even when both edges are perfectly
+    # parallel — a 160-bar parallel channel measured 0.51 and was read as a
+    # converging structure, which is how «کانال، وج شد». The eye compares the
+    # band to the PRICE, so the law must too: conv_rel = (w/mid) now ÷ then.
+    _mid_then = (_price_at(upper, start) + _price_at(lower, start)) / 2.0
+    _mid_now = (float(u0) + float(l0)) / 2.0
+    _rel_then = (w_then / _mid_then) if _mid_then else 0.0
+    _rel_now = (w_now / _mid_now) if _mid_now else 0.0
     m.update({
         "ok": True, "start": start, "span": span, "n": int(n),
         "width_then": w_then, "width_mid": w_mid, "width_now": w_now,
+        "band_rel_then": _rel_then, "band_rel_now": _rel_now,
+        "conv_rel": (_rel_now / _rel_then) if _rel_then else 1.0,
         "height": height,
         "height_rel": (height / mid) if mid else 0.0,
         "rel_u": _rel_drift(upper, start, n),
@@ -437,8 +461,10 @@ def classify_pair(m: Dict, meta: Optional[Dict] = None) -> str:
     # (what the eye reads on the live end, r61 HYPE law) decide the family;
     # the window drifts are the fallback; the ENTRY SIDE vetoes «rising wedge»
     # on a structure price fell into from above.
+    conv_rel = float(m.get("conv_rel") or conv)
     converging = False
-    if conv <= 0.92 and (m.get("width_mid", 0) or 0) < 0.97 * (m.get("width_then") or 1e9):
+    if (conv <= 0.92 or conv_rel <= 0.92) and \
+            (m.get("width_mid", 0) or 0) < 0.97 * (m.get("width_then") or 1e9):
         same_sign = (ru > 0) == (rl > 0)
         delta = abs(abs(ru) - abs(rl)) / max(abs(ru), abs(rl), 1e-12)
         # Opposite drifts always approach. Same-sign pairs must genuinely
@@ -530,7 +556,15 @@ def classify_pair(m: Dict, meta: Optional[Dict] = None) -> str:
                 # a band thinner than ~6% of price cannot carry a reliable
                 # width ratio (pivot noise moves it 2×) — there the DRIFT
                 # similarity is the parallelism evidence
-                if abs(float(m.get("height_rel") or 0.0)) >= 0.06:
+                # R99q29: band steadiness must be judged RELATIVE to price.
+                # The old absolute ratio called a perfectly parallel channel
+                # on a falling chart «converging» (measured 0.51 on synthetic
+                # parallel edges) and the parallel branch then refused it.
+                _rel0 = float(m.get("band_rel_then") or 0.0)
+                _rel1 = float(m.get("band_rel_now") or 0.0)
+                if _rel0 > 0 and _rel1 > 0:
+                    band_ok = 0.62 <= (_rel1 / _rel0) <= 1.60
+                elif abs(float(m.get("height_rel") or 0.0)) >= 0.06:
                     band_ok = 0.55 <= (w1 / w0) <= 1.45
             except Exception:
                 pass

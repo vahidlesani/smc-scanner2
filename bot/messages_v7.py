@@ -5409,7 +5409,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # at the apex, no tail in the future). A converging pair ahead of
                     # LIVE keeps its projection through the branch above.
                     ax.scatter(xs, ys, s=42, color=CHART_THEME["panel"], edgecolors=_col9, linewidths=1.7, zorder=9)
-                    notes.append((f"{label} · {len(xs)} PIVOTS" + (" · FAR" if _far9 else ""), _col9))
+                    _gr29 = str((candidate.metadata or {}).get("pattern_grade") or "")
+                    _tp29 = (candidate.metadata or {}).get("pattern_taps") or {}
+                    _tp29s = ""
+                    if _tp29:
+                        _tp29s = " · %s/%s" % (_tp29.get("upper", "?"), _tp29.get("lower", "?"))
+                    notes.append((f"{label} · {len(xs)} PIVOTS" + (" · FAR" if _far9 else "")
+                                  + (f" · GRADE {_gr29}" if _gr29 else "") + _tp29s, _col9))
                 # ── r61.3-R62 SHELL GUARANTEE: a stored set may still paint
                 # fewer than TWO edges (a one-sided range break, a side lost
                 # to a degenerate fit — DOT 15M / ETHFI 1H / STX 1H). The
@@ -5452,6 +5458,32 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             proj = None
                     except Exception:
                         pass
+                # ── R99q29 HONEST BOX END (his 10-19 reference
+                # BADREF_geo_8H-skybox: a +65.8% box into a months-old
+                # ceiling). `_PROJ_CAP` above is a flat % guess per TF; this
+                # clamp uses REAL structure from the very frame being drawn,
+                # so the box ends at the same-TF level or not at all. Render
+                # side only — the TL-break engines stay byte-identical.
+                if proj:
+                    try:
+                        from analysis.geometry_v2 import (clamp_box_end,
+                                                          structural_ceiling,
+                                                          structural_floor)
+                        _pdx29 = str(proj.get("direction") or "LONG").upper()
+                        _lc29 = float(frame["close"].iloc[-1])
+                        _ref29 = (structural_ceiling(frame, _lc29) if _pdx29 == "LONG"
+                                  else structural_floor(frame, _lc29))
+                        if _ref29:
+                            _raw29 = float(proj.get("to"))
+                            _new29, _src29 = clamp_box_end(_raw29, _ref29, _pdx29)
+                            if _src29 == "CEILING" and _new29 > 0:
+                                proj = dict(proj, to=_new29, box_end="CEILING",
+                                            box_end_ref=_ref29)
+                                if isinstance(candidate.metadata, dict):
+                                    candidate.metadata["tc_projection_clamped"] = {
+                                        "raw": _raw29, "to": _new29, "ref": _ref29}
+                    except (KeyError, TypeError, ValueError, IndexError):
+                        proj = dict(proj or {})   # never crash a chart over a clamp
                 if proj:
                     try:
                         p_from = float(proj.get("from")); p_to = float(proj.get("to"))

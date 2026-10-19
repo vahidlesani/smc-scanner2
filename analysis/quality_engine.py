@@ -93,6 +93,47 @@ def scan_bundle(bundle: MarketBundle) -> List[SignalCandidate]:
             enrich_candidate_context(bundle, candidate)
         except Exception:
             pass
+    # ── R99q29 NAMING LAYER (his 10-19, option B: «کامل»).
+    # Measured gap: SPOT and TECHCLASSIC/ALBROX name their structure through
+    # pattern_law; TLBREAK and the zone engines had ZERO references to it, so
+    # a TLBREAK alert could say «شکست خط روند» and never «کانال نزولی شکست».
+    # This runs ONCE in the shared funnel, after every detector has returned,
+    # and only ever writes metadata — no direction, entry, stop, target,
+    # score, status or gate is touched, and the TL-break engines stay
+    # byte-identical (his standing law).
+    try:
+        from analysis.pattern_naming import name_candidate as _name29
+        _named29 = 0
+        for candidate in candidates:
+            try:
+                if (candidate.metadata or {}).get("render_patterns"):
+                    continue
+                _tf29 = str(getattr(candidate, "trigger_timeframe", "") or "")
+                _df29 = None
+                for _t29 in (_tf29, "4h", "2h", "1h", "30m", "15m"):
+                    if not _t29:
+                        continue
+                    try:
+                        _f29 = bundle.get(_t29)
+                    except Exception:
+                        _f29 = None
+                    if _f29 is not None and len(_f29) >= 45:
+                        _df29 = _f29
+                        break
+                if _df29 is None:
+                    continue
+                _nm29 = _name29(candidate, _df29)
+                candidate.metadata["pattern_naming"] = _nm29
+                if _nm29.get("written"):
+                    _named29 += 1
+            except Exception as _nmx29:
+                candidate.metadata["pattern_naming"] = {"written": False,
+                                                        "reason": str(_nmx29)[:160]}
+        if _named29:
+            print(f"R99q29 naming layer: {_named29} candidate(s) named by the law")
+    except Exception as _nm29:
+        print(f"R99q29 naming layer skipped: {_nm29}")
+
     # R28 execution layer: attach CORE/CONTEXT/EXECUTION evidence only.
     # This does not alter Telegram templates, link-chain IDs, public codes, or
     # the five setup cores; it is a separate price/risk layer.
