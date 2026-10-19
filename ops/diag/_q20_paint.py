@@ -24,8 +24,7 @@ from analysis.candle_counts import fetch_limits
 from analysis.render_kit import enrich_render
 import bot.messages_v7 as B7
 
-DSN = ("postgresql://postgres.nmndchflpeigorkmqcwi:Viva2026%21.%21@"
-       "aws-0-eu-central-1.pooler.supabase.com:5432/postgres")
+DSN = os.environ["VIVA_DB_DSN"]
 code = sys.argv[1] if len(sys.argv) > 1 else "T700976"
 cn = psycopg2.connect(DSN, connect_timeout=25); cu = cn.cursor()
 cu.execute("""select signal_id, symbol, trigger_tf, setup_code, payload::jsonb,
