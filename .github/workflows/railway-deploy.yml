@@ -28,7 +28,7 @@ jobs:
       - name: inspect + deploy
         run: |
           python3 - <<'PY'
-          import json, os, urllib.request
+          import json, os, urllib.request, urllib.error
 
           API = "https://backboard.railway.com/graphql/v2"
           PID = "dfa19d15-6e78-41b5-8a0c-8ccfc3807add"
@@ -45,8 +45,13 @@ jobs:
                            # agent with a bare 403 — same reason
                            # ops/railway/rw_api.py sets one.
                            "User-Agent": "viva-ops/1.0"})
-              with urllib.request.urlopen(req, timeout=90) as r:
-                  return json.loads(r.read().decode())
+              try:
+                  with urllib.request.urlopen(req, timeout=90) as r:
+                      return json.loads(r.read().decode())
+              except urllib.error.HTTPError as _he:
+                  _body = _he.read().decode(errors="replace")
+                  print("   !! HTTP", _he.code, "body:", _body[:900])
+                  raise
 
           print("── project:", json.dumps(
               gql('query($id:String!){project(id:$id){name}}', {"id": PID}))[:200])
@@ -80,6 +85,16 @@ jobs:
           # last image. That is why every deploy reported SUCCESS while the
           # container kept running code with no R99q29 marker and no hourly
           # keys — nothing has been shipped for days.
+          if os.environ.get("CONFIRM") == "SCHEMA":
+              try:
+                  r = gql('{ __schema { mutationType { fields { name args { name type { name kind ofType { name } } } } } } }')
+                  for f in r["data"]["__schema"]["mutationType"]["fields"]:
+                      if any(t in f["name"].lower() for t in ("service", "source", "connect", "repo")):
+                          print("MUT", f["name"], [a["name"] for a in f["args"]])
+              except Exception as _e:
+                  print("schema failed:", str(_e)[:300])
+              raise SystemExit(0)
+
           if os.environ.get("CONFIRM") == "CONNECT":
               src = {"repo": "vahidlesani/smc-scanner2", "branch": "main"}
               print("── connecting source:", src)
