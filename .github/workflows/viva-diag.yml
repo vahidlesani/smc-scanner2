@@ -180,9 +180,24 @@ jobs:
               if lg.get("errors"):
                   print("   LOG ERR:", json.dumps(lg["errors"])[:200])
               print("   lines:", len(rows))
-              for r in rows[-120:]:
-                  m = (r.get("message") or "").replace("\n", " ")[:220]
-                  print("   ", r.get("timestamp","")[11:19], m)
+              import re as _re
+              _keys = ("CONFIRM_REJECT", "licence refused", "OUT_OF_REACH",
+                       "DISCOVERY", "Discovery", "funnel", "rejects=",
+                       "own engine", "own_defer", "DEAD_GATE", "deadgate")
+              _seen = {}
+              for r in rows:
+                  m = (r.get("message") or "").replace("\n", " ")
+                  if not any(k in m for k in _keys):
+                      continue
+                  _m2 = _re.match(r"CONFIRM_REJECT \| (\S+) \| (\S+) \| (\S+) \| (\S+)", m)
+                  if _m2:
+                      _k = f"{_m2.group(2)} :: {_m2.group(4)}"
+                      _seen[_k] = _seen.get(_k, 0) + 1
+                      continue
+                  print("   ", m[:200])
+              print("\n── CONFIRM_REJECT tally (setup :: code)")
+              for k, v in sorted(_seen.items(), key=lambda t: -t[1]):
+                  print(f"    {v:5d}  {k}")
           except Exception as e:
               print("   ERR:", str(e)[:200])
           PY
