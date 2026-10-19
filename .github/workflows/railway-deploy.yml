@@ -1,0 +1,87 @@
+name: railway-deploy
+
+# Manual deploy lane. Railway's GitHub auto-deploy is not firing for this
+# project (no deployment has been created by the integration since a2e29b7),
+# so this workflow calls the Railway API directly with the account token.
+#
+# Requires the RAILWAY_API_TOKEN secret (already present and verified: it can
+# list the project `delightful-success`). Deploys the CURRENT commit of the
+# branch it runs on. Prints no secret values.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type DEPLOY to run a real deploy"
+        required: true
+        default: "inspect"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PROJECT_ID: dfa19d15-6e78-41b5-8a0c-8ccfc3807add
+      ENVIRONMENT_ID: a787e251-94d1-4665-8ab4-dc9b92a10a2a
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: inspect project (services + environments)
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          API = "https://backboard.railway.com/graphql/v2"
+          def gql(q, v=None):
+              body = json.dumps({"query": q, "variables": v or {}}).encode()
+              req = urllib.request.Request(
+                  API, data=body, method="POST",
+                  headers={"Authorization": "Bearer " + os.environ["RAILWAY_API_TOKEN"],
+                           "Content-Type": "application/json"})
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  return json.loads(r.read().decode())
+          q = """
+          query($id: String!) {
+            project(id: $id) {
+              name
+              environments { edges { node { id name } } }
+              services { edges { node { id name } } }
+            }
+          }"""
+          out = gql(q, {"id": os.environ["PROJECT_ID"]})
+          print(json.dumps(out, indent=1)[:3000])
+          PY
+
+      - name: deploy the current commit
+        if: github.event.inputs.confirm == 'DEPLOY'
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          API = "https://backboard.railway.com/graphql/v2"
+          def gql(q, v=None):
+              body = json.dumps({"query": q, "variables": v or {}}).encode()
+              req = urllib.request.Request(
+                  API, data=body, method="POST",
+                  headers={"Authorization": "Bearer " + os.environ["RAILWAY_API_TOKEN"],
+                           "Content-Type": "application/json"})
+              with urllib.request.urlopen(req, timeout=90) as r:
+                  return json.loads(r.read().decode())
+
+          pid, eid = os.environ["PROJECT_ID"], os.environ["ENVIRONMENT_ID"]
+          proj = gql("query($id:String!){project(id:$id){services{edges{node{id name}}}}}",
+                     {"id": pid})
+          services = [e["node"] for e in proj["data"]["project"]["services"]["edges"]]
+          print("services:", [(s["name"], s["id"]) for s in services])
+          target = next((s for s in services if s["name"] == "smc-scanner2"), None)
+          if target is None:
+              raise SystemExit("service 'smc-scanner2' not found in project")
+          print("target service id:", target["id"])
+
+          m = """
+          mutation($environmentId: String!, $serviceId: String!) {
+            serviceInstanceDeploy(environmentId: $environmentId, serviceId: $serviceId)
+          }"""
+          out = gql(m, {"environmentId": eid, "serviceId": target["id"]})
+          print("deploy result:", json.dumps(out)[:600])
+          if out.get("errors"):
+              raise SystemExit("deploy mutation failed: " + json.dumps(out["errors"])[:400])
+          PY
