@@ -3571,6 +3571,23 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _rz_list = list(_zmem)
             except Exception:
                 pass
+        # ── R99q31c SAME-TF ZONE REFINEMENT (his 10-20: «اصلا نمی‌خوام یک زون
+        # تایم یا تایم‌های بالاتر بیاد توی تایم‌های کوچیک‌تر ... هر تایم پایین‌تر
+        # که میاد ریفاین بشه ... نه اینکه یه باکس خیلی عریض بپره وسط چارت»).
+        # A stored zone carries the DETECTION frame's bar INDEX; painting that
+        # on a 15m chart puts a 16×-too-wide band mid-canvas. Every zone is now
+        # re-anchored by TIME and its edges re-measured from THIS frame's tape.
+        # Fail-open: any problem leaves the list exactly as it was.
+        try:
+            from analysis.zone_refine import prepare_zones as _pz31, zone_report as _zr31
+            if _rz_list:
+                _rz_new31 = _pz31(_rz_list, frame.reset_index(drop=True))
+                if _rz_new31:
+                    _rz_list = _rz_new31
+                    if os.getenv("VIVA_ZONE_DEBUG"):
+                        print(f"[q31 zones] {_zr31(_rz_list)} tf={_chart_tf}")
+        except Exception as _z31e:
+            print(f"zone refine skipped: {_z31e}")
         # r59.2 TARGET LAW: a LONG trades UP → the ≤2 nearest zones ABOVE the
         # live price are its probable final targets (his «اونجا خودش میشه
         # تارگت احتمالی نهایی»); a SHORT mirrors below. Marked in the margin.
