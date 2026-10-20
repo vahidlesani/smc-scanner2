@@ -874,12 +874,8 @@ def run_discovery_scan() -> Dict[str, int]:
                 # the sweep, fail-open.
                 try:
                     from analysis import tiered_scan as _tier31h
-                    _sc31h = str(getattr(_dc, "setup_code", "") or "")
-                    _tier31h.weekly_licence_incr(_sc31h)
-                    _tier31h.daily_setup_incr(_sc31h)
-                    _tier31h.daily_count_incr("futures")
-                    _tier31h.hourly_pace_incr(_sc31h)
-                    _tier31h.session_licence_incr(_sc31h)
+                    _tier31h.spend_publish_licence(
+                        str(getattr(_dc, "setup_code", "") or ""), "futures")
                 except Exception as _ac31h:
                     print(f"retry accounting warning {getattr(_dc, 'signal_id', '?')}: {_ac31h}")
                 continue

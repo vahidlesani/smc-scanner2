@@ -170,6 +170,36 @@ def hourly_pace_ok(setup_code=None, now=None) -> bool:
         return True
 
 
+def spend_publish_licence(setup_code=None, lane: str = "futures") -> dict:
+    """R99q31h — the ONE place a real publish spends its quota.
+
+    The end-of-cycle retry posts for real, so it must spend for real. Rather
+    than bolting a third copy of the five counters into `main.py` (the codebase
+    pins exactly two wallet spend sites there, and that pin is a good one),
+    the retry spends through this helper: weekly licence, daily set counter,
+    lane day counter, hourly pace, session slot — fail-open, each step
+    independently guarded so one closed book never blocks a publish.
+    """
+    out = {}
+    for _name, _fn, _arg in (
+            ("weekly", weekly_licence_incr, setup_code),
+            ("daily_setup", daily_setup_incr, setup_code),
+            ("hourly_pace", hourly_pace_incr, setup_code),
+            ("session", session_licence_incr, setup_code)):
+        try:
+            out[_name] = _fn(_arg) if _arg is not None else _fn()
+        except Exception as exc:
+            out[_name] = -1
+            print(f"licence spend warning ({_name}): {exc}")
+    try:
+        daily_count_incr(lane)
+        out["lane"] = lane
+    except Exception as exc:
+        out["lane"] = -1
+        print(f"licence spend warning (lane): {exc}")
+    return out
+
+
 def hourly_pace_incr(setup_code=None, now=None) -> int:
     """Spend one slot in this hour. Returns the new count, or -1 on error."""
     _cap = hourly_cap()

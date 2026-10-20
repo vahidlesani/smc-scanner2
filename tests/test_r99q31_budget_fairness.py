@@ -57,6 +57,16 @@ def test_the_fairness_never_touches_the_weekly_wallet():
 def test_a_retry_post_spends_the_quota_it_used_to_skip():
     i = SRC.index('stats["edu_retry_posted"]')
     seg = SRC[i:i + 1400]
+    assert "spend_publish_licence(" in seg, "a retry post must spend its quota"
+    # and the helper really spends all five counters
+    tier = open("analysis/tiered_scan.py", encoding="utf-8").read()
+    h = tier[tier.index("def spend_publish_licence"):]
     for fn in ("weekly_licence_incr", "daily_setup_incr", "hourly_pace_incr",
-               "session_licence_incr"):
-        assert fn in seg, f"{fn} must be spent by a retry post too"
+               "session_licence_incr", "daily_count_incr"):
+        assert fn in h, f"{fn} missing from the shared spender"
+
+
+def test_main_keeps_exactly_two_wallet_spend_sites():
+    """The pre-existing pin (futures + spot) must survive the fairness fix."""
+    assert SRC.count("weekly_licence_incr(") == 2
+    assert SRC.count("weekly_licence_ok(") == 2
