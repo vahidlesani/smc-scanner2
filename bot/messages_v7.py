@@ -1261,6 +1261,37 @@ def _slot_alloc(taken: List[float], y: float, span: float, step: float = 0.034) 
     return y
 
 
+def _enforce_block_share(ax, px_lo: float, px_hi: float,
+                         target: float = 0.72) -> bool:
+    """R99q36d — «۷۰ تا ۷۵ درصد ارتفاع چارت» enforced on the FINAL axis.
+
+    His law, verbatim (10-16 and again 10-20): «کندل‌ها ارتفاع چارت رو گاهی پر
+    می‌کنن و سقف ۷۰ درصد ارتفاع رو رعایت نمی‌کنن». The window is built with the
+    law in mind, but every later overlay (a far target box, a level, a chip
+    stack) can take the visible block back over it. This runs LAST, on the
+    limits the picture is actually saved with, and only ever ADDS air.
+
+    Log axes are measured in log space (the setups canvas is always log).
+    Returns True when the window had to grow.
+    """
+    try:
+        import math as _m
+        _lo, _hi = [float(x) for x in ax.get_ylim()]
+        if not (_hi > _lo > 0):
+            return False
+        _blk = _m.log(max(float(px_hi), 1e-12)) - _m.log(max(float(px_lo), 1e-12))
+        _span = _m.log(_hi) - _m.log(_lo)
+        if _blk <= 0 or _span <= 0 or (_blk / _span) <= target:
+            return False
+        _need = _blk / float(target)
+        _mid = 0.5 * (_m.log(_hi) + _m.log(_lo))
+        ax.set_ylim(_m.exp(_mid - 0.5 * _need), _m.exp(_mid + 0.5 * _need))
+        return True
+    except Exception as _eb36:
+        print(f"block-share guard skipped: {_eb36}")
+        return False
+
+
 def _relayout_pills(rows: List[List[float]], lo: float, hi: float, step: float) -> None:
     """Final guarantee (r23): clamp-after-alloc could fold two pills onto one
     slot (seen live: ADA ENTRY×LIVE, RENDER ENTRY×TP1, TAO LIVE×chip).
@@ -4590,8 +4621,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # far_faint99p is kept in this weight/alpha path as a faint guide.
                 _faint_major8 = bool(_pat.get("far_major") or _pat.get("far_faint99p")
                                      or _head99q15)
-                _lw8 = 1.3 if _faint_major8 else (
-                    1.2 if _pat.get("child") else (2.45 if _target_pattern_chart else 2.0))
+                # ── R99q36e (his 10-20, verbatim: «خط یکی کلفته یکی نازکه»). The
+                # weight used to be decided PER LINE, so one side of a shape
+                # could be bold while its twin was a hair — the same pattern
+                # read as two different drawings. The weight is now a property
+                # of the PATTERN: both sides identical, de-emphasis only via
+                # alpha (the far/child hierarchy still exists, per shape).
+                _pat.setdefault("_lw36", 1.3 if _faint_major8 else (
+                    1.2 if _pat.get("child") else (2.45 if _target_pattern_chart else 2.0)))
+                _lw8 = float(_pat["_lw36"])
                 _al8 = 0.55 if _faint_major8 else (
                     0.60 if _pat.get("child") else 0.95)
                 # R16 phase 3: draw the CALIBRATED geometry. A log-fitted line
@@ -6335,6 +6373,25 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     return None
         except Exception as _exc74:
             print(f"honesty-veto check skipped: {_exc74}")
+
+        # ── R99q36d: the 70–75 % height law, on the axis that is actually saved.
+        if not _is_spot:
+            try:
+                # ONLY the bars the picture actually shows: a 250-bar min/max on
+                # a zoomed frame would open the axis around candles that are not
+                # on the canvas and shrink the tape for nothing (his «زوم خراب
+                # شد»). The window is the x-limit the chart is saved with.
+                _xl74 = ax.get_xlim()
+                _vis74 = frame.iloc[max(0, int(math.floor(_xl74[0]))):
+                                    min(len(frame), int(math.ceil(_xl74[1])) + 1)]
+                if _vis74.empty:
+                    _vis74 = frame.tail(60)
+                _grew = _enforce_block_share(ax, float(_vis74["low"].min()),
+                                             float(_vis74["high"].max()))
+                if _grew and os.getenv("VIVA_BLOCK_DEBUG"):
+                    print(f"[q36d] candle block opened back to 72% for {candidate.signal_id}")
+            except Exception as _b36:
+                print(f"block-share guard skipped: {_b36}")
 
         # R99l (Viva 10-15): thin black frame around the whole chart.
         try:
