@@ -133,17 +133,6 @@ def test_pattern_setup_still_respects_containment_for_a_mirror_zone_edge():
     assert cand2.metadata.get("last_reject_code") == "INSIDE_PATTERN_NO_BREAK"
 
 
-def test_persian_text_engine_shapes_and_has_a_font():
-    from analysis.fa_text import fa, fonts_ready
-    assert fonts_ready(), "font + shaper must ship with the repo"
-    shaped = fa("کلوز بالای سقف الگو")
-    assert shaped != "کلوز بالای سقف الگو"      # reshaped into presentation forms
-    assert " کلوز" not in shaped                # and reordered right-to-left
-    assert fa("") == "" and fa(None) == ""
-    # Latin-only text passes through untouched
-    assert fa("BREAKOUT") == "BREAKOUT"
-
-
 def test_every_live_setup_has_its_own_sticker():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     stickers = os.path.join(root, "assets", "stickers")

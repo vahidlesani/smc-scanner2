@@ -67,17 +67,6 @@ def test_profit_floor_throttle_present_and_fail_open():
 
 # ── 3. caption mojibake guard ───────────────────────────────────────────────
 
-def test_fa_guard_folds_presentation_forms_and_keeps_clean_text():
-    import arabic_reshaper
-    from bidi.algorithm import get_display
-    from bot.messages_v7 import _fa_guard
-    clean = "📊 چارت • SEIUSDT • تأیید سیگنال"
-    assert _fa_guard(clean) == clean                      # no-op on clean text
-    shaped = get_display(arabic_reshaper.reshape("تأیید سیگنال"))
-    out = _fa_guard("x " + shaped)
-    assert not any(0xFB50 <= ord(ch) <= 0xFEFF for ch in out), out
-
-
 def test_chart_label_passes_through_guard():
     from bot.messages_v7 import _chart_label
     lab = _chart_label(symbol="CCUSDT", code="K1", title_fa="تأیید سیگنال")

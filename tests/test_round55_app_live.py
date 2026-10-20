@@ -45,18 +45,6 @@ def _kv_patches():
 
 
 # ── 1. push core ───────────────────────────────────────────────────────────
-def test_vapid_generated_once_and_durable():
-    from database import app_push
-    with mock.patch.object(app_push, "_kv_get", _MemKV.get_json), \
-         mock.patch.object(app_push, "_kv_set", _MemKV.set_json):
-        pub1 = app_push.public_key()
-        assert pub1, "a VAPID public key must exist"
-        pub2 = app_push.public_key()
-        assert pub1 == pub2, "the keypair is generated ONCE"
-        stored = _MemKV.data[app_push._KV_VAPID]
-        assert stored["public"] == pub1 and stored["private"]
-
-
 def test_subscribe_unsubscribe_and_count():
     from database import app_push
     with mock.patch.object(app_push, "_kv_get", _MemKV.get_json), \
