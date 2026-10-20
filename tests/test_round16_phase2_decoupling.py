@@ -94,7 +94,8 @@ def test_spot_confirmed_text_carries_label_and_invalidation():
     text = _tf_channel_text(cand, "🔗 آخرین نتیجه: —")
     assert "VIVA-SPOT-MON" in text
     assert "ابطال پوزیشن" in text
-    assert "۸٫۰٪" in text or "8.0٪" in text      # (100-92)/100 written out
+    # R99q32c: Persian digits, Persian decimal separator kept as «.»
+    assert "۸.۰٪" in text or "8.0٪" in text or "۸٫۰٪" in text
 
 
 def test_log_wherever_it_matters_default_on():

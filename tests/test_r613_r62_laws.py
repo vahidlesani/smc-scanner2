@@ -129,8 +129,9 @@ def test_confirmed_message_stops_at_tp3():
         "targets": [cl * 1.02, cl * 1.04, cl * 1.06, cl * 1.08, cl * 1.10],
         "weights": [40.0, 30.0, 30.0, 0.0, 0.0]}
     out = M._tf_channel_text(cand, "تست")
+    # R99q32c: the rows are Persian now — «هدف ۳» — not «TP3».
     assert "TP4" not in out and "TP5" not in out
-    assert out.count("TP3") >= 1
+    assert out.count("هدف ۳") >= 1
 
 
 # ── 4. an established break is never «out of reach» ─────────────────────────

@@ -7430,6 +7430,8 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
     Viva intends to purge these channels periodically, so every message must
     stand alone and carry its own latest-result link."""
     md = candidate.metadata or {}
+    # R99q32c RTL: one digit table for the whole card (see the block below).
+    _FA_D = str.maketrans("0123456789.", "۰۱۲۳۴۵۶۷۸۹.")
     ladder = md.get("target_ladder") or {}
     # r61.3-R62 (Viva 10-01: «اهداف ۴ و ۵ رو از همه پیامها حذف بکن چون تا
     # تی پی ۳ داریم»): the doctrine ladder is THREE targets — anything past
@@ -7445,7 +7447,9 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
     # پیام‌های اسپات فراموش نشه») + the written invalidation numbers
     # («عدد ضرر و ابطال پوزیشن نوشتاری با پیام بیاد»)
     _is_spot = str(md.get("market") or "").upper() == "SPOT"
-    _spot_tag = "🪙 <b>VIVA-SPOT-MON</b> · SPOT\n" if _is_spot else ""
+    # R99q32c: the chip opens with a Persian word — a Latin-led first token is
+    # exactly what flips the line inside an RTL paragraph.
+    _spot_tag = "🪙 روی اسپات · <b>VIVA-SPOT-MON</b>\n" if _is_spot else ""
     try:
         _kill_pct = abs(float(candidate.planned_entry) - float(candidate.sl)) \
             / max(abs(float(candidate.planned_entry)), 1e-12) * 100.0
@@ -7454,24 +7458,34 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
     _spot_kill = (f"\n🧯 ابطال پوزیشن: <b>{_price(candidate.sl)}</b> "
                   f"(حداکثر ضرر ≈ {_kill_pct:.1f}٪ · سقف اسپات ۱۰٪)"
                   if _is_spot else "")
+    _tf_fa32 = {"15m": "۱۵ دقیقه", "30m": "۳۰ دقیقه", "1h": "۱ ساعته",
+                "2h": "۲ ساعته", "4h": "۴ ساعته", "8h": "۸ ساعته",
+                "12h": "۱۲ ساعته", "1d": "روزانه", "3d": "۳ روزه",
+                "1w": "هفتگی"}.get(str(candidate.trigger_timeframe or "").lower(),
+                                   str(candidate.trigger_timeframe or ""))
+    _dir_fa32 = "صعودی" if str(direction) == "LONG" else "نزولی"
     head = (f"✅ <b>سیگنال تأییدشده</b>   🆔 <code>{_e(_public_code(candidate))}</code>\n\n"
             f"{_spot_tag}"
-            f"🏦 <b>{_e(candidate.symbol)}</b> • {_e(str(candidate.trigger_timeframe or ''))} • "
-            f"{_e(str(candidate.style or ''))} • {arrow}\n"
-            f"🏷 <b>{_e(_setup_display(candidate.setup_code))}</b>   ⭐ {candidate.score}/10\n\n"
+            f"🏦 نماد <b>{_e(candidate.symbol)}</b> • تایم {_e(_tf_fa32)} • "
+            f"{_e(str(candidate.style or ''))} • {arrow.replace('LONG', _dir_fa32).replace('SHORT', _dir_fa32)}\n"
+            f"🏷 ستاپ <b>{_e(_setup_display(candidate.setup_code))}</b>   ⭐ {candidate.score}/10\n\n"
             f"🔰 ورود: <b>{_price(candidate.planned_entry)}</b>\n"
             f"⛔️ استاپ: <b>{_price(candidate.sl)}</b>{_spot_kill}"
             + ("\n<i>استاپ روی سقفِ همین تایم‌فریم تنظیم شده است.</i>" if stops else "")
-            + "\n\n🎯 <b>اهداف</b>\n")
+            + "\n\n🎯 <b>اهداف</b>\n").translate(_FA_D)
     rows = []
+    # R99q32c: «• TP1: <b>…</b> · 2.37٪ …» opened with Latin and closed with
+    # «٪» — the exact bidi sandwich he photographed. The row now opens with a
+    # Persian word and every number is a Persian digit.
     for i, tgt in enumerate(targets, start=1):
         try:
             dist = abs(float(tgt) - float(candidate.planned_entry)) / max(abs(float(candidate.planned_entry)), 1e-12) * 100.0
         except Exception:
             dist = 0.0
         w = weights[i - 1] if i - 1 < len(weights) else 0
-        tag = "ℹ️" if i >= 4 else f"{w:.0f}%"
-        rows.append(f"• TP{i}: <b>{_price(tgt)}</b> · {dist:.2f}٪ فاصله · {tag}")
+        tag = "اطلاعاتی" if i >= 4 else f"{w:.0f}٪".translate(_FA_D)
+        rows.append(f"• هدف {str(i).translate(_FA_D)}: <b>{_price(tgt)}</b> · "
+                    f"{dist:.2f}٪ فاصله · {tag}".translate(_FA_D))
     # r35 (Viva 09-26): the on-chain REFERENCE block on spot cards — the
     # free witness engine (CoinGecko + Fear&Greed + DefiLlama) was already
     # built and running fail-open; the card now SHOWS it, 4 lines max,
@@ -7489,24 +7503,50 @@ def _tf_channel_text(candidate: SignalCandidate, result_line: str) -> str:
                               + "\n".join(f"• {x}" for x in _mtf35[:2]) + "\n")
             _snap35 = market_snapshot() or {}
             _dex35 = _snap35.get("dex") or {}
+            # ── R99q32c RTL LAW (his 10-20: «آخر پیام اول جمله‌ها کلمات یا حروف
+            # انگلیسی یا اعداد و نمادها میاد که باعث میشه به هم بریزه … اگر
+            # اول همه خط‌ها کلمه فارسی باشه درست میشه»). Three rules:
+            #   1. every line OPENS with a Persian word (never Latin/+/digit),
+            #   2. numbers are PERSIAN digits (they behave inside RTL runs),
+            #   3. no Latin units and no «+» sign at a line's tail — the sign
+            #      is spoken as «افزایش/کاهش» instead of a bidi-flipping glyph.
+            def _fa_n(v, nd=0) -> str:
+                try:
+                    t = f"{float(v):.{nd}f}" if nd else f"{int(round(float(v)))}"
+                except Exception:
+                    return str(v)
+                return t.translate(str.maketrans("0123456789.", "۰۱۲۳۴۵۶۷۸۹."))
+
+            def _fa_dir_word(v) -> str:
+                try:
+                    _f = float(v)
+                except Exception:
+                    return ""
+                return "افزایش" if _f >= 0 else "کاهش"
+
             if _dex35.get("change_1d_pct") is not None:
-                _lines35.append(f"🌊 موج DEX ۲۴ساعته بازار: {_dex35['change_1d_pct']:+.1f}٪")
+                _d35 = _dex35["change_1d_pct"]
+                _lines35.append(f"🌊 موج DEX بازار در ۲۴ ساعت: {_fa_dir_word(_d35)} "
+                                f"{_fa_n(abs(float(_d35)), 1)} درصد")
             _fng35 = _snap35.get("fear_greed") or {}
             if _fng35.get("value"):
                 # r57: fully Persian — «شاخص ترس و طمع: ۷۴ (طمع)» never "(Greed)"
                 _lbl35 = f" ({_fng35.get('label_fa') or _fng35.get('label') or ''})" \
                     if (_fng35.get("label_fa") or _fng35.get("label")) else ""
-                _lines35.append(f"🧭 شاخص ترس و طمع: {_fng35['value']}{_lbl35}")
+                _lines35.append(f"🧭 شاخص ترس و طمع: {_fa_n(_fng35['value'])}{_lbl35}")
             _st35 = (symbol_stats([str(candidate.symbol)]) or {}).get(
                 str(candidate.symbol).upper()) or {}
             if _st35:
                 _chg35 = _st35.get("change_24h_pct")
-                _bits35 = [f"گردش ۲۴ساعته {_st35.get('volume_24h', 0)/1e6:.0f}M$"]
+                _bits35 = [f"گردش روزانه {_fa_n(_st35.get('volume_24h', 0)/1e6)} میلیون دلار"]
                 if _st35.get("market_cap"):
-                    _bits35.append(f"مارکت‌کپ {_st35['market_cap']/1e9:.1f}B$")
+                    _bits35.append(f"ارزش بازار {_fa_n(_st35['market_cap']/1e9, 1)} میلیارد دلار")
                 if _chg35 is not None:
-                    _bits35.append(f"تغییر ۲۴س {_chg35:+.1f}٪")
-                _lines35.append("📊 " + str(candidate.symbol) + ": " + " · ".join(_bits35))
+                    _bits35.append(f"تغییر روزانه {_fa_dir_word(_chg35)} "
+                                   f"{_fa_n(abs(float(_chg35)), 1)} درصد")
+                # the line OPENS with a Persian word: «آمار» comes first, the
+                # ticker rides inside the sentence, never at its head.
+                _lines35.append("📊 آمار " + str(candidate.symbol) + " — " + " · ".join(_bits35))
             if _lines35:
                 # r57: MTF block (may already sit in _onchain35) + onchain block
                 _onchain35 = (_onchain35

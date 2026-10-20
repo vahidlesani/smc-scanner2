@@ -227,7 +227,8 @@ def test_tf_channel_text_is_self_contained_and_rd_free():
     # law of round 14: never an R multiple anywhere
     assert " R" not in text and "R:R" not in text
     assert "1:2" not in text
-    assert "<b>100</b>" in text or "100" in text
+    # R99q32c: prices are Persian digits on the card now.
+    assert "<b>۱۰۰</b>" in text or "۱۰۰" in text
 
 
 def test_link_refresh_edits_the_card_and_falls_back_to_a_fresh_post():
