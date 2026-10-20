@@ -187,14 +187,13 @@ _ZONE_SHADES = {
 _CANDLE_STYLE = (os.getenv("CHART_CANDLE_STYLE", "cryptocove") or "cryptocove").lower()
 
 
-# R99q36a: where the setup canvas ends. His 10-20: «پشت محور قیمت در چارت‌های
-# ستاپ‌ها … حاشیهٔ خالی گذاشتی که بیهوده است و باید فضای نمودار اضافه بشه».
-# The panel used to stop at 0.885 — 11.5 % of the width was white. It now runs to
-# 0.930, the ladder digits print INSIDE it (negative tick pad measured from the
-# widest label) and only a narrow value-pill column remains at the right, exactly
-# like his own reference charts. Dead band 11.5 % → 7.0 %, candles +4.5 %.
+# R99q36g — his exact words (10-20, after I first overshot): «حاشیه سفید حدود
+# ۳ تا ۳.۵ درصد جای محور قیمت، بقیه اضافه به پنل». So the white band holds the
+# PRICE AXIS only (3.5 %) and everything else belongs to the candles. The panel
+# used to stop at 0.885 (11.5 % white); it now runs to 0.965 and the digits are
+# printed in the remaining 3.5 % — never on the tape, never a wide dead band.
 SETUP_PANEL_LEFT = 0.040
-SETUP_PANEL_RIGHT = 0.9300
+SETUP_PANEL_RIGHT = 0.9650
 SETUP_PANEL_W = SETUP_PANEL_RIGHT - SETUP_PANEL_LEFT
 
 CHART_THEME = {
@@ -3448,7 +3447,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         _s36, _prop36, False)[0]))
                 except Exception:
                     pass
-            _pad36 = -(_w36 * 72.0 / float(fig.dpi) + 16.0)   # 16 px of air: the digits never touch the canvas edge
+            # R99q36g: the digits live in the white band, NOT on the tape — a
+            # small positive pad, right-aligned inside the 3.5 % margin.
+            _pad36 = 5.0
             for _price_ax in axes[:2]:
                 _price_ax.tick_params(axis="y", labelsize=7.5, pad=_pad36)
             fig.canvas.draw()
@@ -6171,12 +6172,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         _xlab0 = float(ax.get_window_extent(_rend0).x1)
                     _est0 = (0.62 * 7.2 * max(len(str(_p[1])) for _p in _axis_tags)
                              + 8.0) * float(fig.dpi) / 72.0
-                    # ── R99q36a: the digits moved INSIDE the panel, so the value
-                    # pill now starts where the numbers END (measured) and grows
-                    # rightwards in the narrow band his own charts keep — never
-                    # over a digit, never over a candle, never a wide white gap.
-                    _atag_px = min(_xlab0 + 4.0, _fw0 - _est0 - 3.0)
-                    _atag_px = max(_atag_px, _xlab0 + 4.0)
+                    # ── R99q36g: the digits own the 3.5 % white band, so a value
+                    # pill sits immediately LEFT of them — right-aligned at the
+                    # ladder's measured left edge, over the empty future strip
+                    # (his reference charts: the coloured value boxes stand beside
+                    # the numbers, never on them, never over a candle).
+                    _atag_px = max(4.0, float(_ladder_x0) * _fw0 - 8.0) if _ladder_x0 else _fw0 - _est0 - 6.0
                     _atag_x = max(_atag_px, 1.0) / _fw0
                 except Exception:
                     _atag_x = None
@@ -6204,7 +6205,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # wears its line color, white bold text, larger.
                     ax.text(_atag_x, _yv9, _pv9, transform=_tr9, color="white",
                             fontsize=7.2, fontweight="bold", va="top",
-                            ha="left", zorder=13,
+                            ha="right", zorder=13,
                             clip_on=False,
                             bbox={"boxstyle": "round,pad=0.28",
                                   "facecolor": _cv9,

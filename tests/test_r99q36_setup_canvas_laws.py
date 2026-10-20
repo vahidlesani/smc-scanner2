@@ -26,17 +26,21 @@ MSG = open(os.path.join(ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()
 
 # ── 1) the dead white band behind the ladder ──────────────────────────────
 def test_the_setup_panel_reclaims_the_dead_band():
-    assert "SETUP_PANEL_RIGHT = 0.9300" in MSG
+    # his 10-20 doctrine: the white band holds the PRICE AXIS only, 3–3.5 %
+    assert "SETUP_PANEL_RIGHT = 0.9650" in MSG
     assert "SETUP_PANEL_W = SETUP_PANEL_RIGHT - SETUP_PANEL_LEFT" in MSG
     assert "price_position = [0.040, 0.235, SETUP_PANEL_W, 0.665]" in MSG
     assert "price_position = [0.040, 0.235, 0.845, 0.665]" not in MSG     # the old 11.5 % band
 
 
 def test_the_ladder_is_printed_inside_and_measured():
-    assert "_pad36 = -(_w36 * 72.0 / float(fig.dpi) + 16.0)" in MSG
+    # the digits own the band (positive pad, right of the tape)
+    assert "_pad36 = 5.0" in MSG
     assert "_ladder_x0 = min(_xs36) / float(fig.bbox.width)" in MSG
     # ranks stay at the last candle; value pills start where the digits end
-    assert "_atag_px = min(_xlab0 + 4.0, _fw0 - _est0 - 3.0)" in MSG
+    # value pills stand LEFT of the measured ladder edge
+    assert '_atag_px = max(4.0, float(_ladder_x0) * _fw0 - 8.0) if _ladder_x0 else _fw0 - _est0 - 6.0' in MSG
+    assert 'ha="right", zorder=13' in MSG
     assert "_led_x = (float(_ladder_x0) - 0.010) if _ladder_x0 else (_pl32.x1 - 0.012)" in MSG
 
 
@@ -145,7 +149,7 @@ def _panel_right(a):
     A short fixture tape leaves a lot of the panel blank, so a colour-probe can
     mistake blank panel for dead margin. The geometry is what matters here.
     """
-    return 0.040 + (0.9300 - 0.040)
+    return 0.040 + (0.9650 - 0.040)
 
 
 def test_the_rendered_setup_panel_keeps_only_a_narrow_right_band(monkeypatch):
@@ -153,9 +157,9 @@ def test_the_rendered_setup_panel_keeps_only_a_narrow_right_band(monkeypatch):
     import bot.messages_v7 as M
     assert abs((M.SETUP_PANEL_LEFT + M.SETUP_PANEL_W) - M.SETUP_PANEL_RIGHT) < 1e-9
     dead = 1.0 - M.SETUP_PANEL_RIGHT
-    assert 0.03 <= dead <= 0.085, f"{dead * 100:.1f} % of the width is dead white"
-    # and the ladder/labels sit INSIDE that edge
-    assert "SETUP_PANEL_RIGHT = 0.9300" in MSG
+    # his number: «حاشیه سفید حدود ۳ تا ۳.۵ درصد جای محور قیمت»
+    assert 0.028 <= dead <= 0.037, f"{dead * 100:.1f} % of the width is dead white"
+    assert "SETUP_PANEL_RIGHT = 0.9650" in MSG
 
 
 def test_the_rendered_candles_stay_under_seventy_five_percent(setup_canvas):
