@@ -6833,9 +6833,23 @@ def _tech_aids_lines(candidate) -> list:
     md = candidate.metadata or {}
     rows = []
     sess = str(md.get("session") or "").strip()
+    # ── R99q31f ONE SESSION LINE (his 10-20: «بلوکِ تأییدِ سشن در یک خط اعلام
+    # شود همراه با تحلیلش»). The block used to print the name on one row and the
+    # session's own analysis on the NEXT row — two «🕐» lines, and the second
+    # one also ate an EMA/Fibo/RSI slot. Now: name + its analysis, one line.
+    _sess_note = ""
+    try:
+        from analysis.aids_bank import session_note as _sn31
+        _sess_note = str(_sn31(sess) or "") if sess else ""
+    except Exception:
+        _sess_note = ""
     if sess:
-        rows.append(f"• 🕐 سشن آخرین کندل: {_e(_SESS_FA.get(sess.upper(), sess))}")
+        _name = _SESS_FA.get(sess.upper(), sess)
+        rows.append(f"• 🕐 سشن آخرین کندل: {_e(_name)}"
+                    + (f" — {_e(_sess_note)}" if _sess_note else ""))
     for line in (md.get("tech_aids") or []):
+        if str(line).lstrip().startswith("🕐"):
+            continue                      # already said in ONE line above
         rows.append(f"• {_e(_fa_start(str(line)))}")
     return rows
 
