@@ -38,7 +38,7 @@ def test_the_mark_is_resampled_and_the_brand_sits_beside_it():
     assert "VAHID LESANI — VIVA SIGNALS PRO" in SPOT
     assert SPOT.count("interpolation=\"lanczos\"") >= 3
     assert "_logo_img()" in SPOT                       # the 4× asset loader
-    assert "0.072" in SPOT                             # bigger than the old 0.055
+    assert "_lh30 = 0.062" in SPOT                    # bigger than the old 0.055
 
 
 def test_the_credit_cannot_land_on_the_price_axis():
@@ -94,10 +94,12 @@ def test_a_solid_edge_always_spans_first_pivot_to_last_touch():
 def test_the_trade_strip_exists_and_is_opt_in():
     assert "def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = \"\"," in SPOT
     assert "trade: dict = None" in SPOT
-    assert "TRADE STRIP" in SPOT
+    assert "uid: str = \"\"" in SPOT          # R99q31b unique id
+    assert "TRADE BOX" in SPOT
     for tag in ('"ENTRY"', '"STOP"', 'f"TP{_i30 + 1}"'):
         assert tag in SPOT
-    assert "_y30 = 0.084" in SPOT        # clear of the time axis
+    assert "_by30 = 0.062" in SPOT       # level with the volume band
+    assert "_bx30 = 0.984 - _box_w30" in SPOT   # the RIGHT column
 
 
 def test_the_candidate_supplies_the_strip():
@@ -147,3 +149,22 @@ def test_hourly_cap_behaves():
     finally:
         os.environ.pop("VIVA_HOURLY_CAP", None)
         t._kv = old
+
+
+# ── R99q31b: geometry of the spot chrome ───────────────────────────────────
+def test_the_credit_stays_inside_the_frame():
+    """His 10-20: «گوشه سمت راست بالا اسم و برند و لوگو من از کادر خارج شده»."""
+    assert "_right30 = 0.982" in SPOT
+    assert "_lx30 = _right30 - _lw30" in SPOT
+    assert "0.990 - _lw30" not in SPOT          # the clipped placement is gone
+
+
+def test_the_panel_leaves_a_column_for_the_trade_box():
+    assert "right=0.826" in SPOT
+    assert "right=0.952" not in SPOT
+
+
+def test_the_unique_id_is_drawn_and_sits_clear_of_the_time_axis():
+    assert 'f"ID  {uid}"' in SPOT
+    assert 'fig.text(0.020, 0.032, f"ID  {uid}"' in SPOT
+    assert 'uid=str((candidate.metadata or {}).get("public_code")' in MSG

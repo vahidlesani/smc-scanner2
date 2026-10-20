@@ -39,7 +39,7 @@ def test_spot_chart_trims_to_scan_window_before_live_row(monkeypatch):
     from analysis.spot_engine import _spot_count
     seen = {}
 
-    def fake_render(df, a, path=None, symbol="", stage="", title="", trade=None):
+    def fake_render(df, a, path=None, symbol="", stage="", title="", trade=None, uid=""):
         # R99q18: the spot call now also carries the ALERT's own pattern title
         seen["n"] = len(df)
         seen["title"] = title
@@ -63,7 +63,7 @@ def test_spot_chart_keeps_short_frames_untouched(monkeypatch):
     import bot.messages_v7 as M
     seen = {}
 
-    def fake_render(df, a, path=None, symbol="", stage="", title="", trade=None):
+    def fake_render(df, a, path=None, symbol="", stage="", title="", trade=None, uid=""):
         seen["n"] = len(df)
         seen["title"] = title
         return b"PNG" * 400
@@ -82,7 +82,7 @@ def test_futures_chart_frame_untouched(monkeypatch):
     import bot.messages_v7 as M
     seen = {}
 
-    def fake_render(df, a, path=None, symbol="", stage="", title="", trade=None):
+    def fake_render(df, a, path=None, symbol="", stage="", title="", trade=None, uid=""):
         seen["n"] = len(df)
         seen["title"] = title
         return b"PNG" * 400
@@ -109,7 +109,7 @@ def test_spot_alert_geometry_never_calls_the_second_engine(monkeypatch):
     import bot.messages_v7 as M
     seen = {}
 
-    def fake_render(df, a, path=None, symbol="", stage="", title="", trade=None):
+    def fake_render(df, a, path=None, symbol="", stage="", title="", trade=None, uid=""):
         seen["a"] = a
         seen["title"] = title
         return b"PNG" * 400

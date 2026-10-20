@@ -272,7 +272,8 @@ def _log_ticks(lo: float, hi: float, target: int = 11):
 
 
 def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
-           stage: str = "", title: str = "", trade: dict = None) -> "str | bytes":
+           stage: str = "", title: str = "", trade: dict = None,
+           uid: str = "") -> "str | bytes":
     """رندر واحد اسپات. اگر path خالی باشد بایت PNG برمی‌گرداند.
 
     `trade` (R99q30, his 10-20: «اطلاعات ورود به پوزیشن هم بیاد روبروی
@@ -350,7 +351,12 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     # حاشیهٔ کم (یادداشت خودش: «حاشیهٔ پشت محور و پایین صفحه رو کم کن»)
     # R99q30: the top band grew (0.915 -> 0.898) — the credit used to sit level
     # with the topmost price tick («بردی روی محور قیمت»).
-    fig.subplots_adjust(left=0.016, right=0.952, top=0.898, bottom=0.066)
+    # R99q31b: bottom grew to 0.084 so the time-axis labels and the trade box
+    # have their own bands and neither lands on the other.
+    # R99q31b: `right` 0.952 reserved only the price ladder; the trade box needs
+    # its own column. The panel ends at 0.868 so the box (0.872..0.984) sits in
+    # genuinely empty space — never over a candle, never over the histogram.
+    fig.subplots_adjust(left=0.016, right=0.826, top=0.898, bottom=0.084)
 
     top_rgb = np.array([253, 244, 159]) / 255.0
     bot_rgb = np.array([145, 203, 248]) / 255.0
@@ -564,29 +570,35 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     # from the 4× asset with a lanczos resample, and the NAME + BRAND line sits
     # BESIDE it — the credit block ends inside the header band, never on the
     # price axis (top moved to 0.898 above).
+    # ── R99q31b (his 10-20: «گوشه سمت راست بالا اسم و برند و لوگو من از کادر
+    # خارج شده .. باید کمی بیاد پایین‌تر و کالیبره بشه در اسپات»). The figure
+    # ended at x=1.000 with the mark's right edge at 0.990 + its own width —
+    # it clipped. The block is now measured INSIDE a safe right margin and sits
+    # lower, level with the header's second line instead of over the title.
     _brand30 = "VAHID LESANI — VIVA SIGNALS PRO"
-    _lh30 = 0.072
+    _lh30 = 0.062
+    _right30 = 0.982                 # hard right edge, inside the canvas
     if os.path.isfile(logo_path):
         try:
             _lim = _logo_img()
             _lw30 = _lh30 * (float(_lim.shape[1]) / float(_lim.shape[0])) \
                 * (float(fig.get_figheight()) / float(fig.get_figwidth()))
-            _lx30 = 0.990 - _lw30
-            _lax = fig.add_axes([_lx30, 0.978 - _lh30 / 2.0, _lw30, _lh30], zorder=12)
+            _lx30 = _right30 - _lw30
+            _lax = fig.add_axes([_lx30, 0.958 - _lh30 / 2.0, _lw30, _lh30], zorder=12)
             _lax.imshow(_lim, alpha=1.0, interpolation="lanczos", resample=True)
             _lax.axis("off")
             _lax.patch.set_alpha(0)
-            fig.text(_lx30 - 0.008, 0.978, _brand30, fontsize=12.5,
+            fig.text(_lx30 - 0.008, 0.958, _brand30, fontsize=11.5,
                      fontweight="bold", color=INK, ha="right", va="center")
         except Exception as _e23:
             print(f"spot credit logo warning: {_e23}")
     else:
-        fig.text(0.990, 0.978, _brand30, fontsize=12.5, fontweight="bold",
+        fig.text(_right30, 0.958, _brand30, fontsize=11.5, fontweight="bold",
                  color=INK, ha="right", va="center")
 
     # ── 10) فوتر
-    fig.text(0.020, 0.024, f"{sym}  •  VIVA  •  SPOT  •  BINANCE SPOT",
-             fontsize=11, color=INK)
+    fig.text(0.020, 0.010, f"{sym}  •  VIVA  •  SPOT  •  BINANCE SPOT",
+             fontsize=10, color=INK)
     # R99q23: the footer brand word is GONE too — only the mark remains.
     if os.path.isfile(logo_path):
         try:
@@ -596,51 +608,70 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
         except Exception:
             pass
 
-    # ── 10b) R99q30 TRADE STRIP — entry / stop / targets beside the volume
-    # histogram (his 10-20: «اطلاعات ورود به پوزیشن هم بیاد روبروی هیستوگرام
-    # های حجم هم در ستاپ ها هم در اسپات»). Drawn on the figure, under the
-    # price panel and level with the volume band, so it never covers a candle
-    # and never shifts the geometry. Display only.
+    # ── 10b) R99q31b TRADE BOX — one grouped pill column on the RIGHT, beside
+    # the volume histogram (his 10-20, verbatim: «در مورد برچسب های ورود و خروج
+    # اسپات یک باکس کلی کوچک مثل ستاپ‌ها درست بکن و روبروی هیستوگرام های ولوم
+    # در سمت راست چارت مقابلش فرار بده اونجا هیچوقت نه کندل وجود داره نه ابزار
+    # شورت یا باکس هیستوگرام ها هم زیر نمیره»).
+    #
+    # The 10-19 version printed loose pills along the bottom-left, straight over
+    # the time axis. This is ONE framed block in the bottom-right corner: the
+    # right margin past the last candle is always empty, so nothing is covered.
     if trade:
         try:
-            _d30 = str(trade.get("direction") or "LONG").upper()
-            _is_long30 = _d30 in ("LONG", "UP", "BULL", "BULLISH")
-            _cells = []
+            _rows30 = []
             _e30 = float(trade.get("entry") or 0)
             _s30 = float(trade.get("stop") or 0)
             if _e30 > 0:
-                _cells.append(("ENTRY", _e30, "#1F6FEB"))
+                _rows30.append(("ENTRY", _e30, "#1F6FEB"))
             if _s30 > 0:
-                _cells.append(("STOP", _s30, "#C62828"))
+                _rows30.append(("STOP", _s30, "#C62828"))
             for _i30, _k30 in enumerate(("tp1", "tp2", "tp3")):
                 _v30 = float(trade.get(_k30) or 0)
                 if _v30 > 0:
-                    _cells.append((f"TP{_i30 + 1}", _v30, "#2E7D32"))
-            if _cells:
-                _x30 = 0.020
-                # sits level with the volume band's floor, clear of the time
-                # axis labels underneath (0.047 printed them on top of it)
-                _y30 = 0.084
-                for _lab30, _val30, _col30 in _cells:
-                    _txt30 = f"{_lab30}  {_price_fmt(_val30)}"
-                    _t30 = fig.text(_x30, _y30, _txt30, fontsize=9.5,
-                                    fontweight="bold", color="#FFFFFF",
-                                    ha="left", va="center", zorder=14,
-                                    bbox=dict(boxstyle="round,pad=0.32",
-                                              facecolor=_col30, edgecolor="none"))
-                    # advance by the rendered width so pills never overlap
-                    try:
-                        fig.canvas.draw()
-                        _bb = _t30.get_window_extent(renderer=fig.canvas.get_renderer())
-                        _x30 += (_bb.width / fig.bbox.width) + 0.006
-                    except Exception:
-                        _x30 += 0.085
-                _tag30 = "LONG" if _is_long30 else "SHORT"
-                fig.text(_x30 + 0.004, _y30, _tag30, fontsize=9.5,
-                         fontweight="bold", color=MUTED, ha="left", va="center",
-                         zorder=14)
+                    _rows30.append((f"TP{_i30 + 1}", _v30, "#2E7D32"))
+            _d30 = str(trade.get("direction") or "LONG").upper()
+            _tag30 = "SHORT" if _d30 in ("SHORT", "DOWN", "BEAR", "BEARISH") else "LONG"
+            if _rows30:
+                _row_h30 = 0.028
+                _box_w30 = 0.112
+                _box_h30 = _row_h30 * len(_rows30) + 0.022
+                _bx30 = 0.984 - _box_w30
+                _by30 = 0.062           # level with the volume band
+                # the frame: one grouped box, exactly like the setup charts
+                fig.patches.append(Rectangle(
+                    (_bx30, _by30), _box_w30, _box_h30,
+                    transform=fig.transFigure, facecolor="#FFFFFF",
+                    edgecolor="#D8D2C2", linewidth=0.9, alpha=0.94, zorder=13))
+                fig.text(_bx30 + 0.010, _by30 + _box_h30 - 0.012,
+                         f"TRADE  ·  {_tag30}", fontsize=7.6, fontweight="bold",
+                         color=MUTED, ha="left", va="center", zorder=14)
+                for _r30, (_lab30, _val30, _col30) in enumerate(_rows30):
+                    _yy30 = _by30 + _box_h30 - 0.030 - _r30 * _row_h30
+                    fig.patches.append(Rectangle(
+                        (_bx30 + 0.008, _yy30 - 0.010), 0.008, 0.020,
+                        transform=fig.transFigure, facecolor=_col30,
+                        edgecolor="none", zorder=14))
+                    fig.text(_bx30 + 0.021, _yy30, _lab30, fontsize=7.8,
+                             fontweight="bold", color=_col30, ha="left",
+                             va="center", zorder=14)
+                    fig.text(_bx30 + _box_w30 - 0.010, _yy30, _price_fmt(_val30),
+                             fontsize=8.4, fontweight="bold", color=INK,
+                             ha="right", va="center", zorder=14)
         except Exception as _t30e:
-            print(f"spot trade strip warning: {_t30e}")
+            print(f"spot trade box warning: {_t30e}")
+
+    # ── 10c) R99q31b UNIQUE ID, bottom-LEFT, BELOW the time-axis labels so it
+    # can never cover a date (his 10-20: «پایین سمت چپ اسپات قرار بود شماره
+    # شناسه یکتا زده بشه جوری که روی اعداد محور زمان رو نپوشاند»). The footer
+    # line sits at y=0.024; the ticks render above it at ~0.045.
+    if uid:
+        try:
+            fig.text(0.020, 0.032, f"ID  {uid}", fontsize=8.6,
+                     fontweight="bold", color=INK, ha="left", va="bottom",
+                     zorder=14)
+        except Exception as _u30e:
+            print(f"spot uid warning: {_u30e}")
 
     # ── 11) محورها
     ax.yaxis.tick_right()

@@ -2958,7 +2958,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _spot_png = _rs2(df, _a2, None,
                                  symbol=str(getattr(candidate, "symbol", "")),
                                  stage=_stage2, title=(_title18 or ""),
-                                 trade=_trade30 or None)
+                                 trade=_trade30 or None,
+                                 uid=str((candidate.metadata or {}).get("public_code")
+                                         or getattr(candidate, "signal_id", "") or ""))
                 if _spot_png and len(_spot_png) > 1000:
                     _chart_cache_set(_ck, _spot_png)
                     return _spot_png
