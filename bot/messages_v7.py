@@ -5926,6 +5926,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             for _chip in _deferred_chips:
                 _cx = float(_chip["x"])
                 _wb2 = 1.4 + 0.52 * len(str(_chip["text"]))
+                # ── R99q33d (his 10-20 ZEC: «TARGET · FVG» / «TARGET · FLIP»
+                # chips land on the 1/2/3 rank pills and the LIVE tag). A zone
+                # chip is drawn ha="left", so one sitting near the box's right
+                # end spilled PAST the panel and straight into the pill
+                # column. Chips are now clamped so their full width stays
+                # inside the tape — the level they describe is still under
+                # them, the label column stays clean.
+                _cx = max(0.0, min(_cx, float(_n9) - _wb2 - 1.0))
                 _a2 = int(max(0, _cx))
                 _b2 = int(min(_n9, _cx + _wb2 + 1))
                 _cy = float(_chip["y"])
@@ -5980,17 +5988,55 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # coloured by their own line — never a big label over the candles.
             if _axis_tags:
                 import matplotlib.transforms as _mtr9
-                _tr9 = _mtr9.blended_transform_factory(ax.transAxes, ax.transData)
-                for _lv9, _pv9, _cv9 in _axis_tags:
-                    _yv9 = min(max(_lv9, _lo2), _hi2)
+                # ── R99q33c (his 10-20 ZEC, verbatim: the coloured values sit
+                # «روی اعداد قیمت» — 1,200 / 1,150 / 1,100 half-covered). The
+                # tags were right-aligned on a FIXED anchor (x=1.078 axes) that
+                # itself sits inside the tick-label column, so every pill grew
+                # LEFTWARDS over the ladder. The anchor is now MEASURED from the
+                # rendered tick labels and expressed in FIGURE pixels, so the
+                # pill always starts where the numbers end and grows into the
+                # white band before the canvas edge.
+                _fw0 = float(fig.canvas.get_width_height()[0])
+                _atag_x = None
+                try:
+                    _rend0 = fig.canvas.get_renderer()
+                    _xlab0 = 0.0
+                    for _tl0 in ax.get_yticklabels():
+                        if (_tl0.get_text() or "").strip():
+                            _xlab0 = max(_xlab0, float(_tl0.get_window_extent(_rend0).x1))
+                    if _xlab0 <= 0:
+                        _xlab0 = float(ax.get_window_extent(_rend0).x1)
+                    _est0 = (0.62 * 7.2 * max(len(str(_p[1])) for _p in _axis_tags)
+                             + 8.0) * float(fig.dpi) / 72.0
+                    _atag_px = min(_xlab0 + 5.0, max(_fw0 - _est0 - 2.0, _xlab0 + 5.0))
+                    _atag_x = max(_atag_px, 1.0) / _fw0
+                except Exception:
+                    _atag_x = None
+                if _atag_x is None:
+                    _atag_x = 1.010
+                _tr9 = _mtr9.blended_transform_factory(fig.transFigure, ax.transData)
+                # R99q33c-2: two levels a hair apart (ENTRY 1,150.00 / TP1
+                # 1,151.65) printed one pill ON another. The value tags now go
+                # through the same deterministic slot allocator the rank column
+                # uses, in ascending price order, so the stack stays monotone.
+                _rows9: List[List[float]] = []
+                try:
+                    _axh0 = float(ax.get_window_extent(_rend0).height) or 1.0
+                    _gap9 = (_hi2 - _lo2) * 13.0 / _axh0
+                    for _lv9, _pv9, _cv9 in sorted(_axis_tags, key=lambda t: float(t[0])):
+                        _rows9.append([min(max(float(_lv9), _lo2), _hi2), _pv9, _cv9])
+                    _relayout_pills(_rows9, _lo2, _hi2, _gap9)
+                except Exception:
+                    _rows9 = [[min(max(float(_l), _lo2), _hi2), _pp, _cc]
+                              for _l, _pp, _cc in _axis_tags]
+                for _yv9, _pv9, _cv9 in _rows9:
                     # r39b: sit the tag BELOW the ladder number, not ON it —
                     # the old 1.004/center printed «159.9210.00» mash-ups.
                     # R99l (Viva 10-15: black tags unreadable): the tag
-                    # wears its line color, white bold text, larger --
-                    # parked clear right of the ladder numbers (r39c).
-                    ax.text(1.078, _yv9, _pv9, transform=_tr9, color="white",
+                    # wears its line color, white bold text, larger.
+                    ax.text(_atag_x, _yv9, _pv9, transform=_tr9, color="white",
                             fontsize=7.2, fontweight="bold", va="top",
-                            ha="right", zorder=13,
+                            ha="left", zorder=13,
                             clip_on=False,
                             bbox={"boxstyle": "round,pad=0.28",
                                   "facecolor": _cv9,
