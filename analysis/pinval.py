@@ -248,12 +248,24 @@ def pinval_trailing_check(*, entry, stop, live, direction="LONG", trail=None,
 
 
 def pinval_tohom_fired(candidate, lower_closed_df=None, **kw):
+    """PINVAL OWNS the zone lanes (his 10-20: «نواحی رو به پین‌وال بسپری»).
+
+    A zone is reacted to, not broken. The engine judges the candidate by
+    PINVAL's own anatomy first (touch + rejection + volume, no break needed)
+    and only then lets the generic edge engine try — never twice, never a
+    veto in either direction.
+    """
     try:
-        from analysis.tohom import evaluate_tohom_confirmation as _ev
-        _ok, _c, _reason = _ev(candidate, lower_closed_df, **kw)
+        from analysis.tohom_policy import confirm_by_policy as _cbp
+        _ok, _c, _reason = _cbp(candidate, lower_closed_df, **kw)
         return bool(_ok)
     except Exception:
-        return False
+        try:
+            from analysis.tohom import evaluate_tohom_confirmation as _ev
+            _ok, _c, _reason = _ev(candidate, lower_closed_df, **kw)
+            return bool(_ok)
+        except Exception:
+            return False
 
 
 # ── R99q14 PRE-BREAK EARLY ALERT — PINVAL's OWN pin lines (Viva 10-15: the first
