@@ -1487,7 +1487,7 @@ def _setup_stickers(candidate: SignalCandidate, confirmed: bool) -> list:
 
 
 def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool = False,
-                         fig=None) -> None:
+                         fig=None, allow_expand: bool = True) -> None:
     """Structural notes INSIDE the axes, parked in the EMPTY sky corner.
 
     Viva 09-23 (after the margin-carve experiment he rejected — «یک‌سوم
@@ -1511,13 +1511,29 @@ def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool =
     _step = 0.037
     _stack_h = _step * (_n - 1) + 0.030
 
+    # ── R99q33h (his 10-20 XRP: the whole chip stack prints OVER the candles).
+    # The old probe sampled the oldest third of the frame and ignored WHERE the
+    # chips actually land on the x-axis, so a band could pass the test while
+    # the stack sat on the tape. The probe now measures the exact column span
+    # the chips occupy, and — when no band is clean — the chart grows a small
+    # slice of sky (bounded, never a candle sacrificed) so the notes always
+    # have their own empty corner.
+    _x0f, _x1f = float(ax.get_xlim()[0]), float(ax.get_xlim()[1])
+    _xspan = max(_x1f - _x0f, 1e-9)
+    # the chip column is only as wide as its longest label actually renders
+    _chip_w_ax = min(0.55, 0.020 + 0.0062 * max(len(str(_t)) for _t, _ in notes[:_n]))
+    _c0 = int(max(0, _x0f + 0.012 * _xspan))
+    _c1 = int(min(len(frame), max(_c0 + 8, _x0f + (0.012 + _chip_w_ax) * _xspan)))
+
     def _candle_hits(y_top: float, y_bot: float) -> float:
-        """Share of the LEFT quarter candles piercing the candidate band —
+        """Share of candles under the CHIP COLUMNS piercing the candidate band —
         the ledger goes where the tape is NOT (Viva 09-23/24: BTC/RENDER
         renders parked the stack ON the early candles)."""
         try:
-            _s = frame.iloc[:max(8, int(len(frame) * 0.27))]
-            _hit = (( _s["high"] >= y_bot) & (_s["low"] <= y_top)).sum()
+            _s = frame.iloc[_c0:_c1]
+            if _s.empty:
+                return 0.0
+            _hit = ((_s["high"] >= y_bot) & (_s["low"] <= y_top)).sum()
             return float(_hit) / max(1, len(_s))
         except Exception:
             return 0.0
@@ -1539,6 +1555,16 @@ def _render_corner_notes(ax, notes: list, frame: pd.DataFrame, confirmed: bool =
         if _best_hits is None or _hits < _best_hits - 1e-9:
             _best, _best_hits, _best_tag = _yc, _hits, _tag
     _y0 = float(_best)
+    # crowed sky → grow a bounded slice of sky above the tape under the chips
+    if allow_expand and (_best_hits or 0.0) > 0.02:
+        try:
+            _sky_hi = float(frame.iloc[_c0:_c1]["high"].max())
+            _need_top = _sky_hi + (_stack_h + 0.02) * span
+            if _need_top > hi and (_need_top - hi) < 0.16 * span:
+                ax.set_ylim(lo, _need_top)
+                _y0 = 0.975
+        except Exception:
+            pass
     # R67 (Viva 10-03, INJ 30M: the label stack printed ON itself) — exact
     # duplicate notes collapse to one, and a crowded ledger splits into TWO
     # columns so the stack never crawls down onto the tape.
@@ -6083,7 +6109,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             except Exception:
                 pass
         if not _is_spot:
-            _render_corner_notes(ax, notes, frame, confirmed=confirmed, fig=fig)
+            _render_corner_notes(
+                ax, notes, frame, confirmed=confirmed, fig=fig,
+                allow_expand=not bool((candidate.metadata or {}).get("chart_zoom_frozen")))
 
         # ── r32 (Viva 09-26): the bottom-right LEDGER ────────────────────
         # «آقا پایین چارت سمت راست معمولا همیشه خالیه — اینتری و استاپ اولیه
