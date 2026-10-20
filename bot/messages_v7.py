@@ -1711,6 +1711,36 @@ def _law_note_lines(candidate: SignalCandidate) -> List[str]:
                 str(md.get("line_role") or "").upper(), "")
             rows.append(f"📐 وضعیت خط: {_e(line_state_fa)}"
                         + (f" · نقش: {_role}" if _role else ""))
+        # ── R99q31g TAP/GRID COUNT IN THE TEXT (his 10-20: «تعداد تپ و گرید در
+        # متن تلگرام هم بیاید»). The counts existed only inside the chart's
+        # legend — a reader on a phone in text-only mode never saw how well the
+        # rails were tested. 4/5-pivot geometry is unchanged; this only SAYS it.
+        try:
+            _taps31 = md.get("pattern_taps") or {}
+            if not _taps31:
+                _dom31 = None
+                try:
+                    from analysis.pattern_law import select_shape as _ss31
+                    _dom31 = _ss31(md)
+                except Exception:
+                    _dom31 = None
+                _dom31 = _dom31 or (md.get("pattern_law_all") or [None])[0] or {}
+                if isinstance(_dom31, dict) and (_dom31.get("upper_taps") is not None
+                                                 or _dom31.get("lower_taps") is not None):
+                    _taps31 = {"upper": _dom31.get("upper_taps"),
+                               "lower": _dom31.get("lower_taps")}
+            _up31 = _taps31.get("upper")
+            _lo31 = _taps31.get("lower") if isinstance(_taps31, dict) else None
+            if slug and (_up31 is not None or _lo31 is not None):
+                _grid31 = " / ".join(
+                    str(int(v)) for v in (_up31, _lo31) if isinstance(v, (int, float)))
+                _row31 = f"🎯 تستِ ضلع‌ها: {_e(_grid31)} برخورد (بالا / پایین)"
+                _g31 = str(md.get("pattern_grade") or "").strip()
+                if _g31:
+                    _row31 += f" · گرید {_e(_g31)}"
+                rows.append(_row31)
+        except Exception as _e31g:
+            print(f"tap row warning: {_e31g}")
         _cd = str(md.get("candle_evidence") or "")
         if _cd:
             from analysis.pattern_law import CANDLE_FA as _CFA
