@@ -7897,17 +7897,16 @@ def _setup_announce_channel(setup_code: str) -> str:
     انجام نشده»): the three channels are CONFIRMED-ANNOUNCE boards routed by
     SETUP ONLY, with NO timeframe dimension left:
       PINVAL family (PINVAL/PINWALLQ/PINWALL)  → کوتاه‌مدت (Pival)
-      ALBROX + TLBREAK                         → میان‌مدت قدیمی
-      TECHCLASSIC (every TF)                   → بلندمدت قدیمی
+      ALBROX + TLBREAK + TECHCLASSIC           → میان‌مدت
     Anything else (spot SPOTBREAK rides CHAT_ID_SPOT via the override) → "".
     The result-link behaviour of every card is unchanged."""
     s = str(setup_code or "").upper()
     if s in ("PINVAL", "PINWALLQ", "PINWALL"):
         return CHAT_ID_SWING_SHORT or ""
-    if s in ("ALBROX", "TLBREAK"):
+    if s in ("ALBROX", "TLBREAK", "TECHCLASSIC"):
+        # R99q32b (his 10-20: «آلبروکس و تی‌ال‌بریک به کانال میان مدت و
+        # تکنوکلاسیک هم به کانال میان مدت») — TC now rides the SAME mid board.
         return CHAT_ID_SWING_MID or ""
-    if s == "TECHCLASSIC":
-        return CHAT_ID_SWING_LONG or ""
     return ""
 
 
@@ -7953,6 +7952,28 @@ def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
     chat = str(chat_override or "") or _setup_announce_channel(
         str(getattr(candidate, "setup_code", "") or ""))
     if not chat or not code:
+        # ── R99q32b ROUTING DIAGNOSTIC (his 10-20: «چندین سیگنال تایید شده
+        # داریم اما به کانال‌های مخصوص نمیاد»). A silent `return 0` made this
+        # undebuggable from the logs: it could be a missing CHAT_ID or a
+        # missing code, and nothing said which. Now the reason is named once
+        # per signal, so the next deploy's log answers the question directly.
+        _sc32 = str(getattr(candidate, "setup_code", "") or "").upper()
+        _why32 = ("no announce channel configured for " + _sc32
+                  + " — set CHAT_ID_TF_15M_1H / CHAT_ID_TF_2H_4H / CHAT_ID_TF_1D"
+                  " (or CHAT_ID_SWING_SHORT / MID / LONG) in the Railway variables"
+                  ) if not chat else "no public code on this candidate"
+        print(f"⚠️ announce skipped {getattr(candidate, 'signal_id', '?')} "
+              f"[{_sc32}]: {_why32}")
+        try:
+            from database.bot_kv import set_json as _sj32
+            _sj32("tf_channel_route", {
+                "setup": _sc32, "chat": bool(chat), "why": _why32,
+                "short_configured": bool(CHAT_ID_SWING_SHORT),
+                "mid_configured": bool(CHAT_ID_SWING_MID),
+                "long_configured": bool(CHAT_ID_SWING_LONG),
+            })
+        except Exception:
+            pass
         return 0
     result_line = "🔗 آخرین نتیجه: <i>در انتظار نتیجه</i>"
     text = _tf_channel_text(candidate, result_line)
@@ -7997,6 +8018,122 @@ def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
     except Exception as exc:
         print(f"TF-channel publish error {code}: {exc}")
         return 0
+
+
+# ── R99q32b LIVE TICKS (his 10-20: «هیت ۱ لینک میشه به هیت ۱ و هیت یک پیام
+# باید تیک بخوره ... چه هیت‌ها چه استاپ باید تیک بخوره بصورت زنده»).
+# The announce card used to carry ONE link — the latest result — so a reader
+# could never see WHICH legs had already printed. Every leg now owns its own
+# link and gets a live ✅ the moment it fires.
+_MARK_ROW = {
+    "tp1": ("TP1", "✅"), "tp2": ("TP2", "✅"), "tp3": ("TP3", "✅"),
+    "stop": ("⛔️ استاپ", "🛑"), "final": ("", ""),
+}
+
+
+def _tf_channel_apply_mark(text: str, kind: str, url: str,
+                           label: str = "") -> str:
+    """Tick ONE leg of an announce card (pure, testable).
+
+    tpN  → «• TP1: <b>1.17</b> …»   becomes  «• ✅ TP1: <a …><b>1.17</b></a> …»
+    stop → «⛔️ استاپ: <b>…</b>»    becomes  «🛑 استاپ: <a …>…</a>»
+    Idempotent: a leg that is already ticked is never ticked twice.
+    """
+    try:
+        txt = str(text or "")
+        k = str(kind or "").lower()
+        href = f'<a href="{url}">' if url else ""
+        close = "</a>" if url else ""
+        if k in ("tp1", "tp2", "tp3", "tp4", "tp5"):
+            i = int(k[2:])
+            mark = "✅"
+            needle = f"• TP{i}: <b>"
+            if f"• {mark} TP{i}:" in txt:
+                return txt
+            j = txt.find(needle)
+            if j < 0:
+                return txt
+            k2 = txt.find("</b>", j)
+            if k2 < 0:
+                return txt
+            price = txt[j + len(needle):k2]
+            new = f"• {mark} TP{i}: {href}<b>{price}</b>{close}"
+            return txt[:j] + new + txt[k2 + 4:]
+        if k in ("stop", "trail_stop"):
+            if "🛑 استاپ:" in txt:
+                return txt
+            j = txt.find("⛔️ استاپ: <b>")
+            if j < 0:
+                j = txt.find("⛔ استاپ: <b>")
+            if j < 0:
+                return txt
+            k2 = txt.find("</b>", j)
+            if k2 < 0:
+                return txt
+            price = txt[j + len("⛔️ استاپ: <b>"):k2] if "⛔️" in txt[j:j + 8] \
+                else txt[j + len("⛔ استاپ: <b>"):k2]
+            return txt[:j] + f"🛑 استاپ: {href}<b>{price}</b>{close}" + txt[k2 + 4:]
+        return txt
+    except Exception:
+        return text
+
+
+def tf_channel_mark_hit(code: str, kind: str, results_chat: str,
+                        results_mid: int, label: str = "") -> bool:
+    """Tick the fired leg on the announce card AND point «آخرین نتیجه» at it.
+
+    One Telegram edit does both, so the card a member opens mid-trade shows
+    every hit printed so far with a working link to each one.
+    """
+    code = str(code or "")
+    if not code:
+        return False
+    chain = _chain_by_code_get(code)
+    chat = str(chain.get("tfc_chat") or "")
+    mid = int(chain.get("tfc_mid") or 0)
+    if not chat or not mid:
+        return False
+    link = _telegram_message_link(results_chat, int(results_mid)) if results_mid else ""
+    text = str(chain.get("tfc_text") or "")
+    marks = dict(chain.get("tfc_marks") or {})
+    if not text:
+        return False
+    new_text = _tf_channel_apply_mark(text, kind, link)
+    _lbl = label or (f"{str(kind).upper()} HIT" if str(kind).lower().startswith("tp")
+                     else ("خروج با استاپ" if str(kind).lower() in ("stop", "trail_stop")
+                           else "نتیجه نهایی"))
+    line = (f'🔗 آخرین نتیجه: <a href="{link}">{_e(_lbl)}</a>' if link
+            else f"🔗 آخرین نتیجه: {_e(_lbl)}")
+    if "🔗 آخرین نتیجه:" in new_text:
+        head = new_text.split("🔗 آخرین نتیجه:")[0].rstrip()
+        new_text = head + "\n" + line + "\n\n📌 <b>VIVAMON-Labs-Pro</b>"
+    else:
+        new_text = new_text.replace("📌 <b>VIVAMON", line + "\n\n📌 <b>VIVAMON", 1)
+    ok = _tf_channel_edit(chat, mid, new_text)
+    if ok:
+        marks[str(kind).lower()] = link or label
+        chain["tfc_text"] = new_text
+        chain["tfc_marks"] = marks
+        chain["tfc_last_result"] = f"{results_mid}"
+        try:
+            _setup_chain_set_by_code(code, chain)
+        except Exception:
+            pass
+    else:
+        # purged / no longer editable → a fresh standalone card keeps the board
+        # truthful instead of silently going stale (his «بصورت زنده بررسی»).
+        try:
+            fresh = send_message(new_text.split("📌 <b>VIVAMON")[0].rstrip()
+                                 + "\n\n📌 <b>VIVAMON-Labs-Pro</b>", chat)
+            if fresh:
+                chain["tfc_mid"] = int(fresh)
+                chain["tfc_text"] = new_text
+                chain["tfc_marks"] = marks
+                _setup_chain_set_by_code(code, chain)
+                ok = True
+        except Exception as exc:
+            print(f"TF-channel tick fallback error {code}: {exc}")
+    return bool(ok)
 
 
 def _tf_channel_edit(chat: str, mid: int, text: str) -> bool:
@@ -8799,10 +8936,13 @@ def send_tp1_event(signal: dict) -> bool:
         target,
     ) or 0)
     try:
-        tf_channel_set_latest_result(str(signal.get("public_code") or ""), target,
-                                     _tp_mid, f"{event_key} HIT")
+        # R99q32b: the fired leg is ticked on the announce card and linked to
+        # THIS message — not only the final-result line («هیت ۱ به هیت ۱»).
+        tf_channel_mark_hit(str(signal.get("public_code") or ""),
+                            str(event_key).lower(), target, _tp_mid,
+                            f"{event_key} HIT")
     except Exception as exc:
-        print(f"TF-channel link refresh skipped ({event_key}): {exc}")
+        print(f"TF-channel tick skipped ({event_key}): {exc}")
     return _tp_mid
 
 
@@ -8839,10 +8979,12 @@ def send_stop_event_to_results(event: dict, pro_mid: int) -> int:
         f"━━━━━━━━━━━━━━━━━━\n📌 <b>VIVAMON-Labs-Pro</b>",
         target) or 0)
     try:
-        tf_channel_set_latest_result(str(event.get("public_code") or ""), target,
-                                     _stop_mid, "خروج با استاپ" if not trailed else f"خروج محافظت‌شده TP{hit}")
+        # R99q32b: a stopped trade ticks its own stop row — «استاپ به استاپ».
+        tf_channel_mark_hit(str(event.get("public_code") or ""), "stop", target,
+                            _stop_mid,
+                            "خروج با استاپ" if not trailed else f"خروج محافظت‌شده TP{hit}")
     except Exception as exc:
-        print(f"TF-channel stop-link refresh skipped: {exc}")
+        print(f"TF-channel stop tick skipped: {exc}")
     return _stop_mid
 
 
@@ -9300,8 +9442,9 @@ def send_trade_result(event: dict) -> bool:
         target,
     ) or 0)
     try:
-        tf_channel_set_latest_result(str(event.get("public_code") or ""), target,
-                                     _res_mid, f"نتیجه نهایی {result}")
+        # R99q32b: the final result still ends the chain on the same link line.
+        tf_channel_mark_hit(str(event.get("public_code") or ""), "final", target,
+                            _res_mid, f"نتیجه نهایی {result}")
     except Exception as exc:
         print(f"TF-channel final-link refresh skipped: {exc}")
     return _res_mid

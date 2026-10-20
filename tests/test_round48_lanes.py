@@ -74,8 +74,10 @@ def test_routing_map_is_setup_final():
     part = src.split("def _setup_announce_channel")[1].split("def tf_channel_publish_confirmed")[0]
     assert '"PINVAL", "PINWALLQ", "PINWALL"' in part
     assert "CHAT_ID_SWING_SHORT" in part
-    assert '"ALBROX", "TLBREAK"' in part and "CHAT_ID_SWING_MID" in part
-    assert '"TECHCLASSIC"' in part and "CHAT_ID_SWING_LONG" in part
+    # R99q32b (his 10-20): «آلبروکس و تی‌ال‌بریک به کانال میان مدت و
+    # تکنوکلاسیک هم به کانال میان مدت» — TC rides the SAME mid board now.
+    assert '"ALBROX", "TLBREAK", "TECHCLASSIC"' in part
+    assert "CHAT_ID_SWING_MID" in part
     assert "_setup_routes" not in src          # the TF-routed primary + mirrors are gone
     assert 'tf_channel_id(str(candidate.trigger_timeframe or ""))' not in src
 
