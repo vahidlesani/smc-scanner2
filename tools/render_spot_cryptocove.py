@@ -50,6 +50,21 @@ LIVE_PINK = "#E0197D"
 # چپ = پیوت اول الگو منهای این تعداد کندل کانتکست؛ راست = کندلِ آینده.
 PAD_LEFT_BARS = 8
 PAD_RIGHT_BARS = 14
+# ── R99q35 (his 10-20, verbatim: «حاشیه پشت محور قیمت‌ها باید به چارت نمودار
+# اضافه بشه … پشت محور قیمت‌ها حدود ۱۵ درصد از چارت کندل‌ها کم کردی و فقط به
+# خاطر جدول ورود خروج فضای کندل‌ها رو کوچک کردی … این قسمت سفید پشت قیمت‌ها
+# باید به فضای نمودار کندل‌ها اضافه بشه و جدول ورود و خروج و تی پی‌ها پایین
+# چارت روی جایی که فلش زدم قرار بگیره»). The panel used to stop at 0.870 of the
+# figure and the whole right column (13 %) was DEAD WHITE — candle space thrown
+# away for a price ladder and a floating table. Now:
+#   • the canvas reaches the right edge (SPOT_PANEL_RIGHT) and the price ladder
+#     is printed ON the gradient, inside the panel (his ENA reference);
+#   • the trade table lives INSIDE that panel, in the bottom-right corner level
+#     with the histogram — the empty strip his arrow pointed at;
+#   • the empty strip is a LAW, not a leftover: ≥11.5 % of the visible window,
+#     so the table can never land on a candle or a volume bar.
+SPOT_PANEL_RIGHT = 0.9955
+SPOT_RIGHT_PAD_FRAC = 0.128
 MAX_BARS = 240                      # سقفِ کلی (بالاترین سقف per-TF)
 SPOT_WINDOW_CAP = {"1m": 200, "3m": 200, "5m": 200, "15m": 220, "30m": 220,
                    "1h": 230, "2h": 230, "4h": 220, "6h": 230, "8h": 260,
@@ -79,6 +94,36 @@ def spot_y_window(d_lo: float, d_hi: float, d_span: float = None) -> tuple:
                 _hi * math.exp(_pad_total * (1.0 - SPOT_PAD_BELOW_FRAC) * _sp))
     except Exception:
         return float(d_lo), float(d_hi)
+
+
+def enforce_block_share(ax, d_lo: float, d_hi: float,
+                        target: float = 0.72) -> tuple:
+    """The candle block owns ≤ `target` of the price panel — enforced LAST.
+
+    그의 law (10-16 and again 10-20: «ارتفاع پایین‌ترین پیوت تا بالاترین پیوت
+    نباید بیشتر از ۷۰ تا ۷۵ درصد ارتفاع چارت را بگیرد») was applied while the
+    window was being BUILT, so anything that touched the y-limits afterwards
+    (a target box, a near level, a live-price nudge) could quietly take the
+    block back over it. This runs at the very end, on the FINAL limits, and
+    only ever ADDS air — symmetrically, so the approved centering survives.
+    Returns the (lo, hi) actually in force.
+    """
+    try:
+        _lo, _hi = ax.get_ylim()
+        _lo, _hi = float(min(_lo, _hi)), float(max(_lo, _hi))
+        _blk = math.log(max(float(d_hi), 1e-12)) - math.log(max(float(d_lo), 1e-12))
+        _span = math.log(max(_hi, 1e-12)) - math.log(max(_lo, 1e-12))
+        if _blk <= 0 or _span <= 0 or _blk / _span <= target:
+            return _lo, _hi
+        _need = _blk / float(target)
+        _mid = 0.5 * (math.log(max(_hi, 1e-12)) + math.log(max(_lo, 1e-12)))
+        _lo2 = math.exp(_mid - 0.5 * _need)
+        _hi2 = math.exp(_mid + 0.5 * _need)
+        ax.set_ylim(_lo2, _hi2)
+        return _lo2, _hi2
+    except Exception as _eb:
+        print(f"spot block-share guard skipped: {_eb}")
+        return ax.get_ylim()
 
 
 def spot_window_count(tf, x0p: int, n: int) -> int:
@@ -301,6 +346,11 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
         x_from = max(0, x_to - MAX_BARS)
     if x_to - x_from < min(125, n):         # قفل سخت: هرگز زیر کفِ قانون
         x_from = max(0, x_to - min(125, n))
+    # R99q35: the right strip must stay wide enough for the trade table — it is
+    # empty by construction (it is the future), so growing it costs no candle.
+    _need_pad35 = int(math.ceil((x_to - x_from) * SPOT_RIGHT_PAD_FRAC / (1.0 - SPOT_RIGHT_PAD_FRAC)))
+    if (x_to - (n - 1)) < _need_pad35:
+        x_to = (n - 1) + _need_pad35
     n_show = slice(x_from, n)
     d_lo, d_hi = float(np.min(l[n_show])), float(np.max(h[n_show]))
     d_span = math.log(max(d_hi, 1e-12)) - math.log(max(d_lo, 1e-12))
@@ -362,7 +412,12 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     # the trade box a whole column — a dead white band he circled twice. The
     # panel is back near its former reach (0.870); the trade box stays, compact
     # and grouped, in the narrow strip that remains.
-    fig.subplots_adjust(left=0.016, right=0.870, top=0.898, bottom=0.084)
+    # ── R99q35 (his 10-20: «پشت محور قیمت‌ها حدود ۱۵ درصد از چارت کندل‌ها کم
+    # کردی … این قسمت سفید پشت قیمت‌ها باید به فضای نمودار کندل‌ها اضافه بشه»):
+    # the panel now runs to the canvas edge. The ladder is printed INSIDE it and
+    # the table sits in the panel's own bottom-right corner — nothing is drawn
+    # in a white gutter any more, so the candles get the whole width back.
+    fig.subplots_adjust(left=0.016, right=SPOT_PANEL_RIGHT, top=0.898, bottom=0.084)
 
     top_rgb = np.array([253, 244, 159]) / 255.0
     bot_rgb = np.array([145, 203, 248]) / 255.0
@@ -374,6 +429,70 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     ax.set_ylim(y_lo, y_hi)
     ax.grid(True, which="major", color="#D8D2C2", alpha=0.45, linewidth=0.6,
             linestyle="-", zorder=1)
+
+    # ── R99q35 PRICE LADDER INSIDE THE PANEL (his 10-20: «این قسمت سفید پشت
+    # قیمت‌ها باید به فضای نمودار کندل‌ها اضافه بشه»، his ENA reference: the
+    # digits sit ON the gradient, left-aligned under a thin spine). The ladder is
+    # built BEFORE the live pill and the trade table because both are placed
+    # against its measured left edge — that is what keeps the pill beside the
+    # digits and the table clear of them on every symbol (BTC's «81,766.50» is
+    # three times wider than ARB's «0.19»).
+    ax.yaxis.tick_right()
+    _ladder_x0 = None
+    try:
+        from matplotlib.ticker import FixedLocator as _FL99
+        # چگالی لیبل قیمت (قانون ۱۰-۱۵ خودش): ۱۰ تا ۱۸ لیبل، دقت متناسب گام.
+        # R99q30: LOG-space ticks (a linear ladder bunched the cheap levels).
+        _tk99, _dp99 = _log_ticks(*ax.get_ylim())
+        if len(_tk99) < 6:
+            _tk99, _dp99 = vg.nice_price_ticks(*ax.get_ylim())
+        if len(_tk99) >= 6:
+            ax.yaxis.set_major_locator(_FL99(_tk99))
+            ax.yaxis.set_minor_locator(_FL99([]))
+            _f99 = "{:,.%df}" % _dp99
+            ax.yaxis.set_major_formatter(
+                FuncFormatter(lambda _v, _p=None, _f=_f99: _f.format(_v)))
+            ax.yaxis.set_minor_formatter(
+                FuncFormatter(lambda _v, _p=None: ""))
+        else:
+            ax.yaxis.set_major_formatter(FuncFormatter(_fmt_axis))
+            ax.yaxis.set_minor_formatter(FuncFormatter(_fmt_axis))
+        # a negative pad prints the digits INSIDE the frame; how far inside is
+        # measured from the widest label, never guessed (that guess is what put
+        # «81,766.50» on top of the candles).
+        from matplotlib import font_manager as _fm35
+        _prop35 = _fm35.FontProperties(size=9.2)
+        _rd35 = fig.canvas.get_renderer()
+        _w35 = 0.0
+        for _t35 in ax.get_yticklabels():
+            _s35 = (_t35.get_text() or "").strip()
+            if not _s35:
+                continue
+            try:
+                _w35 = max(_w35, float(_rd35.get_text_width_height_descent(
+                    _s35, _prop35, False)[0]))
+            except Exception:
+                pass
+        _pad35 = -(_w35 * 72.0 / float(fig.dpi) + 7.0)
+        ax.tick_params(axis="y", labelsize=9.2, colors="#3A362F", pad=_pad35)
+        fig.canvas.draw()
+        _rd35b = fig.canvas.get_renderer()
+        _xs35 = [float(_t35.get_window_extent(_rd35b).x0)
+                 for _t35 in ax.get_yticklabels()
+                 if (_t35.get_text() or "").strip()]
+        if _xs35:
+            _ladder_x0 = min(_xs35) / float(fig.bbox.width)
+    except Exception as _ax35:
+        print(f"spot price ladder warning: {_ax35}")
+        ax.tick_params(axis="y", labelsize=9.2, colors="#3A362F", pad=-34)
+    _ts_axis(ax, df, tf)
+    ax.tick_params(axis="x", labelsize=10.5, colors="#3A362F", pad=4)
+    for s in ("top", "left"):
+        ax.spines[s].set_visible(False)
+    ax.spines["right"].set_color("#8A857D")
+    ax.spines["bottom"].set_color("#8A857D")
+    if _ladder_x0 is None:
+        _ladder_x0 = SPOT_PANEL_RIGHT - 0.020
 
     # ── R99q21 CENTRE-WATERMARK LAW (his 10-16 evening: «ویوا سیگنالز پرو رو از
     # وسطش بردار» + «وحید لسانی با همون اندازهٔ ستاپ‌ها، توی اسپات یه خرده
@@ -603,31 +722,46 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     # price ladder and ate a tick number («0.054»). It is back in the white
     # margin BEHIND the price now — the ENA reference placement — measured so
     # it never touches the ladder digits.
-    _live_x = 1.010
+    # R99q35: the ladder now lives INSIDE the panel, so the pill does too —
+    # right-aligned just before the digits (his ENA reference), never in a dead
+    # white gutter.
+    _live_x, _live_ha = 0.995, "right"
     try:
         ax.figure.canvas.draw()
         _rd0 = ax.figure.canvas.get_renderer()
         _ab0 = ax.get_window_extent(_rd0)
-        _xl0 = _ab0.x1
-        for _tl0 in ax.get_yticklabels():
-            if (_tl0.get_text() or "").strip():
-                _xl0 = max(_xl0, float(_tl0.get_window_extent(_rd0).x1))
-        if _ab0.width > 1:
-            _live_x = (_xl0 + 4.0 - _ab0.x0) / float(_ab0.width)
-        _fw0 = float(ax.figure.canvas.get_width_height()[0])
-        _est0 = (0.62 * 9.5 * len(" " + _price_fmt(live) + " ") + 7.0) * \
-            float(ax.figure.dpi) / 72.0
-        _live_x = min(_live_x, max((_fw0 - _est0 - 2.0 - _ab0.x0) / float(_ab0.width), 1.006))
+        _lbl_px = float(_ladder_x0) * float(fig.bbox.width)
+        if _ab0.width > 1 and _lbl_px > _ab0.x0:
+            _live_x = (_lbl_px - 6.0 - _ab0.x0) / float(_ab0.width)
     except Exception:
-        _live_x = 1.010
-    _live_x = max(_live_x, 1.004)
+        _live_x = 0.995
+    _live_x = max(0.60, min(_live_x, 0.99))
     import matplotlib.transforms as _mtr33
     _tr33 = _mtr33.blended_transform_factory(ax.transAxes, ax.transData)
     _live_art = ax.text(_live_x, live, f" {_price_fmt(live)} ",
-                        transform=_tr33, ha="left", va="center", clip_on=False,
+                        transform=_tr33, ha=_live_ha, va="center", clip_on=False,
                         fontsize=9.5, fontweight="bold", color="#FFFFFF", zorder=21,
                         bbox=dict(boxstyle="square,pad=0.28", facecolor=LIVE_PINK,
                                   edgecolor=LIVE_PINK))
+    # ── R99q35b LABEL-COLLISION LAW (his standing rule: «برچسب‌ها همدیگه رو
+    # نپوشونن»). The pill rides the live price, so sooner or later it lands on the
+    # tick that carries the same level — the last render printed «2,388» straight
+    # through «2,400». When the pill's box meets a tick's box, the TICK steps
+    # aside: the pill already states that price (his ENA reference does exactly
+    # this), and the pill itself is never hidden because it is the live number.
+    try:
+        fig.canvas.draw()
+        _rdp = fig.canvas.get_renderer()
+        _pb = _live_art.get_window_extent(_rdp)
+        for _tp in ax.get_yticklabels():
+            if not (_tp.get_text() or "").strip():
+                continue
+            _tb = _tp.get_window_extent(_rdp)
+            if _pb.x1 > (_tb.x0 - 7.0) and _pb.x0 < _tb.x1 \
+                    and _pb.y0 < _tb.y1 and _pb.y1 > _tb.y0:
+                _tp.set_visible(False)
+    except Exception as _cp:
+        print(f"spot label collision warning: {_cp}")
 
     # ── 8) استمپ زمان تهران — R99q33b (his 10-20, verbatim: «کلمه live رو از
     # برچسب زمان حذف بکن تا روی هیستوگرام ولوم رو نپوشونه»). The word is gone
@@ -734,11 +868,23 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
             _d30 = str(trade.get("direction") or "LONG").upper()
             _tag30 = "SHORT" if _d30 in ("SHORT", "DOWN", "BEAR", "BEARISH") else "LONG"
             if _rows30:
-                _row_h30 = 0.028
-                _box_w30 = 0.084
-                _box_h30 = _row_h30 * len(_rows30) + 0.022
-                _bx30 = 0.995 - _box_w30
-                _by30 = 0.062           # level with the volume band
+                _row_h30 = 0.0215
+                # R99q35: the table moved INTO the panel's own bottom-right
+                # corner (his arrow), left of the price digits and fully inside
+                # the empty future strip — never over a candle, never over a
+                # volume bar, never in a white gutter.
+                # width is whatever fits between the last candle and the
+                # ladder's measured left edge (BTC-safe), capped for looks
+                try:
+                    _last_px = ax.transData.transform((n - 1, float(c[-1])))[0]
+                    _last_frac = _last_px / float(fig.bbox.width)
+                except Exception:
+                    _last_frac = 0.86
+                _room30 = max(0.0, float(_ladder_x0) - _last_frac - 0.012)
+                _box_w30 = max(0.060, min(0.086, _room30))
+                _box_h30 = _row_h30 * len(_rows30) + 0.020
+                _bx30 = float(_ladder_x0) - 0.008 - _box_w30
+                _by30 = 0.096           # sits on the panel floor, clear of the axis
                 # the frame: one grouped box, exactly like the setup charts
                 fig.patches.append(Rectangle(
                     (_bx30, _by30), _box_w30, _box_h30,
@@ -748,9 +894,9 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
                          f"TRADE  ·  {_tag30}", fontsize=7.6, fontweight="bold",
                          color=MUTED, ha="left", va="center", zorder=14)
                 for _r30, (_lab30, _val30, _col30) in enumerate(_rows30):
-                    _yy30 = _by30 + _box_h30 - 0.030 - _r30 * _row_h30
+                    _yy30 = _by30 + _box_h30 - 0.028 - _r30 * _row_h30
                     fig.patches.append(Rectangle(
-                        (_bx30 + 0.008, _yy30 - 0.010), 0.008, 0.020,
+                        (_bx30 + 0.008, _yy30 - 0.0082), 0.008, 0.0164,
                         transform=fig.transFigure, facecolor=_col30,
                         edgecolor="none", zorder=14))
                     fig.text(_bx30 + 0.021, _yy30, _lab30, fontsize=7.8,
@@ -789,40 +935,9 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
         except Exception as _u30e:
             print(f"spot uid warning: {_u30e}")
 
-    # ── 11) محورها
-    ax.yaxis.tick_right()
-    # چگالی لیبل قیمت (قانون ۱۰-۱۵ خودش: «محور قیمت‌ها خالیه باید قیمت‌ها دقیق
-    # نوشته بشه»): تیک‌های رُندِ مشترک از هستهٔ هندسه — ۱۰ تا ۱۸ لیبل با دقتی
-    # متناسب با گام (BTC صفر اعشار، ENA/DOGE سه اعشار).
-    try:
-        from matplotlib.ticker import FixedLocator as _FL99
-        # R99q30: LOG-space ticks. Spot is always log; a linear tick ladder
-        # bunched the cheap levels and thinned the expensive ones — his
-        # «محور قیمت‌ها همه قیمت‌ها له شده به بالا».
-        _tk99, _dp99 = _log_ticks(*ax.get_ylim())
-        if len(_tk99) < 6:
-            _tk99, _dp99 = vg.nice_price_ticks(*ax.get_ylim())
-        if len(_tk99) >= 6:
-            ax.yaxis.set_major_locator(_FL99(_tk99))
-            ax.yaxis.set_minor_locator(_FL99([]))
-            _f99 = "{:,.%df}" % _dp99
-            ax.yaxis.set_major_formatter(
-                FuncFormatter(lambda _v, _p=None, _f=_f99: _f.format(_v)))
-            ax.yaxis.set_minor_formatter(
-                FuncFormatter(lambda _v, _p=None: ""))
-        else:
-            ax.yaxis.set_major_formatter(FuncFormatter(_fmt_axis))
-            ax.yaxis.set_minor_formatter(FuncFormatter(_fmt_axis))
-    except Exception:
-        ax.yaxis.set_major_formatter(FuncFormatter(_fmt_axis))
-        ax.yaxis.set_minor_formatter(FuncFormatter(_fmt_axis))
-    _ts_axis(ax, df, tf)
-    ax.tick_params(axis="x", labelsize=10.5, colors="#3A362F", pad=4)
-    ax.tick_params(axis="y", labelsize=9, colors=MUTED)
-    for s in ("top", "left"):
-        ax.spines[s].set_visible(False)
-    ax.spines["right"].set_color("#8A857D")
-    ax.spines["bottom"].set_color("#8A857D")
+
+    # ── the envelope law, enforced on the FINAL limits (his 10-20 restatement)
+    _yl_fin = enforce_block_share(ax, d_lo, d_hi, SPOT_ENVELOPE_TARGET)
 
     if path is None:
         buf = io.BytesIO()

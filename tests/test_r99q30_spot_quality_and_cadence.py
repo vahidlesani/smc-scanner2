@@ -98,10 +98,13 @@ def test_the_trade_strip_exists_and_is_opt_in():
     assert "TRADE BOX" in SPOT
     for tag in ('"ENTRY"', '"STOP"', 'f"TP{_i30 + 1}"'):
         assert tag in SPOT
-    assert "_by30 = 0.062" in SPOT       # level with the volume band
-    # R99q33g (his 10-20): the box is COMPACT and sits flush to the right edge
-    assert "_bx30 = 0.995 - _box_w30" in SPOT   # the RIGHT column, flush
-    assert "_box_w30 = 0.084" in SPOT           # one small grouped box
+    assert "_by30 = 0.096" in SPOT       # sits on the panel floor, clear of the axis
+    # R99q35 (his 10-20: «جدول ورود و خروج و تی‌پی‌ها پایین چارت روی جایی که
+    # فلش زدم قرار بگیره»): the box is COMPACT and lives INSIDE the panel's own
+    # bottom-right corner, anchored to the measured price ladder — never in a
+    # white gutter and never over a candle.
+    assert "_bx30 = float(_ladder_x0) - 0.008 - _box_w30" in SPOT
+    assert "_box_w30 = max(0.060, min(0.086, _room30))" in SPOT    # one small box
 
 
 def test_the_candidate_supplies_the_strip():
@@ -166,7 +169,10 @@ def test_the_panel_leaves_a_column_for_the_trade_box():
     رو سریع به حالت قبلی برگردون» + «این جا رو به چارت اضافه کن». The dead
     white column of R99q31b (0.826) is gone, but a narrow strip remains for
     the trade box AND the live price tag (never over the candles)."""
-    assert "right=0.870" in SPOT
+    # R99q35: the dead white column is GONE — the panel runs to the canvas
+    # edge and the price ladder is printed inside it (his 10-20).
+    assert "right=SPOT_PANEL_RIGHT" in SPOT
+    assert "right=0.870" not in SPOT
     assert "right=0.826" not in SPOT            # the dead column is retired
     assert "right=0.952" not in SPOT            # and the edge-cramped one too
 
