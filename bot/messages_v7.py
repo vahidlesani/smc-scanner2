@@ -8209,18 +8209,32 @@ def _tf_channel_apply_mark(text: str, kind: str, url: str,
         if k in ("tp1", "tp2", "tp3", "tp4", "tp5"):
             i = int(k[2:])
             mark = "✅"
-            needle = f"• TP{i}: <b>"
-            if f"• {mark} TP{i}:" in txt:
-                return txt
-            j = txt.find(needle)
-            if j < 0:
-                return txt
-            k2 = txt.find("</b>", j)
-            if k2 < 0:
-                return txt
-            price = txt[j + len(needle):k2]
-            new = f"• {mark} TP{i}: {href}<b>{price}</b>{close}"
-            return txt[:j] + new + txt[k2 + 4:]
+            # ── R99q34b: the card stopped speaking Latin («• TP1: <b>1.17</b>»)
+            # and now writes Persian digits — «• هدف ۱: <b>۱۱۰</b>». The tick
+            # searched only for the OLD row, so every hit silently no-opped and
+            # the announce card never showed a ✅. Both lexicons are accepted;
+            # the card keeps its own wording when it is ticked.
+            _fa9 = "۰۱۲۳۴۵۶۷۸۹"
+            _fa_i = _fa9[i] if 1 <= i <= 9 else str(i)
+            variants = [
+                (f"• {mark} TP{i}:", f"• TP{i}: <b>", f"• {mark} TP{i}: "),
+                (f"• {mark} هدف {_fa_i}:", f"• هدف {_fa_i}: <b>",
+                 f"• {mark} هدف {_fa_i}: "),
+            ]
+            for _done, _needle, _lead in variants:
+                if _done in txt:
+                    return txt
+            for _done, _needle, _lead in variants:
+                j = txt.find(_needle)
+                if j < 0:
+                    continue
+                k2 = txt.find("</b>", j)
+                if k2 < 0:
+                    return txt
+                price = txt[j + len(_needle):k2]
+                new = f"{_lead}{href}<b>{price}</b>{close}"
+                return txt[:j] + new + txt[k2 + 4:]
+            return txt
         if k in ("stop", "trail_stop"):
             if "🛑 استاپ:" in txt:
                 return txt

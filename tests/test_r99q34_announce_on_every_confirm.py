@@ -93,3 +93,51 @@ def test_routing_still_returns_the_right_board(monkeypatch):
     for code in ("ALBROX", "TLBREAK", "TECHCLASSIC"):
         assert M._setup_announce_channel(code) == "-1002"
     assert M._setup_announce_channel("SPOTBREAK") == ""
+
+
+# ── the card's OWN lexicon must tick (R99q34b) ───────────────────────────
+def _real_card():
+    """A REAL card from the real builder — not a hand-typed string."""
+    import bot.messages_v7 as M
+    from analysis.models import SignalCandidate
+    c = SignalCandidate(
+        signal_id="tick1", symbol="WLDUSDT", style="x", setup_code="PINVAL",
+        setup_name="PINVAL", strategy_fa="f", direction="LONG", score=8,
+        status="CONFIRMED", entry_zone_bottom=107.5, entry_zone_top=107.5,
+        planned_entry=107.5, sl=96.75, tp1=110.0, tp2=112.0, rr_tp1=1.0,
+        rr_tp2=2.0, bias="LONG", trigger_timeframe="4h",
+        market={"asset_class": "CRYPTO", "venue": "BYBIT"},
+        metadata={"market": "FUTURES", "engine": "SWING", "public_code": "WLD-1",
+                  "target_ladder": {"targets": [110.0, 112.6, 115.0]}})
+    return M._tf_channel_text(c, "🔗 آخرین نتیجه: <i>در انتظار نتیجه</i>")
+
+
+def test_the_real_card_uses_persian_target_rows():
+    card = _real_card()
+    assert "• هدف ۱: <b>" in card          # what the ticker must understand
+
+
+def test_ticking_a_real_card_hits_the_right_row():
+    import bot.messages_v7 as M
+    card = _real_card()
+    ticked = M._tf_channel_apply_mark(card, "tp2", "https://t.me/x/2")
+    assert "• ✅ هدف ۲: <a href=\"https://t.me/x/2\"><b>" in ticked
+    assert "• ✅ هدف ۱:" not in ticked        # only TP2 ticked
+    assert "• هدف ۱: <b>" in ticked           # TP1 untouched
+    # idempotent: a second hit never double-ticks
+    assert M._tf_channel_apply_mark(ticked, "tp2", "https://t.me/x/2") == ticked
+
+
+def test_ticking_the_stop_of_a_real_card():
+    import bot.messages_v7 as M
+    card = _real_card()
+    ticked = M._tf_channel_apply_mark(card, "stop", "https://t.me/x/9")
+    assert "🛑 استاپ: <a href=\"https://t.me/x/9\"><b>" in ticked
+    assert M._tf_channel_apply_mark(ticked, "stop", "https://t.me/x/9") == ticked
+
+
+def test_the_old_latin_lexicon_still_ticks():
+    import bot.messages_v7 as M
+    old = "🎯 اهداف\n• TP1: <b>1.17</b> · 2%\n"
+    out = M._tf_channel_apply_mark(old, "tp1", "https://t.me/x/1")
+    assert "• ✅ TP1: <a href=\"https://t.me/x/1\"><b>1.17</b></a>" in out
