@@ -583,15 +583,17 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
             bbox=dict(boxstyle="square,pad=0.28", facecolor=LIVE_PINK,
                       edgecolor=LIVE_PINK))
 
-    # ── 8) استمپ زندهٔ تهران (سبک رفرنس‌ها: جعبهٔ روشن، پایین-راست داخل پنل)
+    # ── 8) استمپ زمان تهران — R99q33b (his 10-20, verbatim: «کلمه live رو از
+    # برچسب زمان حذف بکن تا روی هیستوگرام ولوم رو نپوشونه»). The word is gone
+    # and the stamp now lives BELOW the panel, right-aligned under the price
+    # ladder: inside the panel it sat on the volume bars on every tight chart.
     try:
         _now = datetime.now(ZoneInfo("Asia/Tehran"))
-        ax.text(0.995, 0.012,
-                f" LIVE: {_now.strftime('%d %b %Y')} • {_now.strftime('%H:%M')} (Tehran) ",
-                transform=ax.transAxes, ha="right", va="bottom", fontsize=8.5,
-                color=INK, zorder=12,
-                bbox=dict(boxstyle="round,pad=0.28", facecolor="#FFFDF2",
-                          edgecolor="#B9B29F", linewidth=0.8))
+        fig.text(0.826, 0.052,
+                 f" {_now.strftime('%d %b %Y')} • {_now.strftime('%H:%M')} ",
+                 ha="right", va="center", fontsize=8.2, color=INK, zorder=12,
+                 bbox=dict(boxstyle="round,pad=0.26", facecolor="#FFFDF2",
+                           edgecolor="#B9B29F", linewidth=0.7))
     except Exception:
         pass
 
