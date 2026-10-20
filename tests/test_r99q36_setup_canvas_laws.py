@@ -194,3 +194,78 @@ def test_the_retest_zone_is_drawn_only_for_the_zone_family():
     assert '_zone_fam36 = str(getattr(candidate, "setup_code", "") or "").upper() in {' in MSG
     assert '"PINVAL", "PINWALL", "PINWALLQ", "ZONE", "RANGE", "ALBROX"}' in MSG
     assert 'if zone and len(zone) == 2 and _zone_fam36:' in MSG
+
+
+# ── 11) ONE GEOMETRY PER UNIQUE ID (his 10-20 15:20 proof) ───────────────
+# «یک آیدی یکتا در فاصلهٔ چند دقیقه دو هندسهٔ کاملاً متفاوت» — the same id
+# rendered through analysis / ready / confirmed must land on the identical
+# x-window, y-window and panel. This is the law the three levers below serve.
+def test_the_future_strip_is_a_fraction_never_a_bar_count():
+    assert ("future = 45 if _is_spot else max(8, int(round(0.093 * float(count))))"
+            in MSG)
+    assert "future = 45 if _is_spot else (18 if _cfm73 else 16)" not in MSG
+
+
+def test_the_price_window_is_frozen_per_id_not_per_message_kind():
+    assert "_cfm73 = bool(confirmed or preconfirm_tool)" in MSG     # still the tool flag
+    # the freeze is READ with no message-kind gate any more
+    assert "if True:\n            try:\n                _fz = (candidate.metadata or {}).get(\"chart_zoom_frozen\")" in MSG
+    # and the ladder joins the zoom subject on every path
+    assert "if True:\n                ladder_targets = list(" in MSG
+
+
+def test_the_visible_span_is_frozen_per_id():
+    assert '_fx37 = _gjx37(f"zoom_freeze_x:{candidate.signal_id}")' in MSG
+    assert '_sjx37(f"zoom_freeze_x:{candidate.signal_id}", [_nv37b, _pd37b])' in MSG
+    # a label column may never stretch a frozen axis
+    assert "if _need > count + future and not _xfroz:" in MSG
+    # the card that stamps obeys its own stamp
+    assert "_ca.set_xlim(max(-1.0, _r37c - float(_nv37b)), _r37c)" in MSG
+
+
+def test_same_id_same_geometry_through_every_path(monkeypatch):
+    """analysis / ready / confirmed on one tape: identical xlim, ylim, panel."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.figure as mfig
+    from analysis.models import SignalCandidate
+    import bot.messages_v7 as M
+
+    seen = []
+    _orig = mfig.Figure.savefig
+
+    def _spy(self, *a, **k):
+        try:
+            ax = [x for x in self.axes if x.get_position().height > 0.30][0]
+            seen.append((tuple(round(float(v), 4) for v in ax.get_xlim()),
+                         tuple(round(float(v), 6) for v in ax.get_ylim()),
+                         round(float(ax.get_position().x1), 4)))
+        except Exception:
+            seen.append(None)
+        return _orig(self, *a, **k)
+
+    store = {}
+    import database.bot_kv as kv
+    monkeypatch.setattr(kv, "get_json", lambda k: store.get(k))
+    monkeypatch.setattr(kv, "set_json", lambda k, v: store.__setitem__(k, v))
+    monkeypatch.setattr(mfig.Figure, "savefig", _spy)
+
+    df = _tape()
+    lo = float(df["low"].tail(60).min())
+    hi = float(df["high"].tail(60).max())
+
+    def _cand():
+        return SignalCandidate(
+            signal_id="onegeom", symbol="BTCUSDT", style="SWING", setup_code="TECHCLASSIC",
+            setup_name="TECHCLASSIC", strategy_fa="f", direction="SHORT", score=8,
+            status="READY", entry_zone_bottom=hi, entry_zone_top=hi * 1.002,
+            planned_entry=hi, sl=hi * 1.01, tp1=lo * 1.01, tp2=lo * 0.99,
+            rr_tp1=1.2, rr_tp2=2.0, bias="SHORT", trigger_timeframe="4h",
+            market={"asset_class": "CRYPTO", "venue": "BYBIT"},
+            metadata={"market": "FUTURES", "engine": "SWING", "public_code": "ONE-1",
+                      "target_ladder": {"targets": [lo * 1.01, lo * 0.99, lo * 0.97]}})
+
+    for conf, pre in ((False, False), (False, True), (True, False)):
+        assert M.generate_chart(df, _cand(), confirmed=conf, preconfirm_tool=pre)
+    assert len(seen) == 3 and None not in seen
+    assert seen[0] == seen[1] == seen[2], seen

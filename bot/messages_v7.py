@@ -3473,9 +3473,39 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # future margin read as «یک سوم خالی» — HALVE it and let real
         # candles fill the reclaimed width (his reference charts keep
         # only a slim right margin for the pills).
-        # R99l (Viva 10-15: the right side sits too empty): tighter
-        # future on futures; spot keeps its own window.
-        future = 45 if _is_spot else (18 if _cfm73 else 16)
+        # ── R99q37b (his 10-20 15:20 — THE «یک آیدی، دو چارت» BUG) ───────
+        # The blank strip was a FIXED 16–18 BARS. On a 60-bar window that is
+        # 21 % of the panel, on a 130-bar window 11 % — and the paths do not
+        # chop the same number of candles (analysis vs ready vs confirm, the
+        # r65 focus window, a frozen zoom). So the SAME unique id came out
+        # with a narrow strip on one card and a third of the panel empty on
+        # the next: «یکی پر از کندل یکی تا آخر سفید». The strip is now a
+        # constant FRACTION of the panel — screen space, never bar space.
+        # Spot keeps its own window (R99q35 law, untouched).
+        future = 45 if _is_spot else max(8, int(round(0.093 * float(count))))
+        # ── R99q37d (his 10-20 15:20, the proof he handed me: ONE unique id,
+        # TWO charts minutes apart). q37b fixed the SIZE of the strip; this
+        # fixes the WINDOW itself. The visible span (bars from the left edge
+        # to the last candle) and the pad are stamped on the first card of a
+        # chain and restored on every later card of the SAME id — analysis,
+        # ready and confirm now draw the identical x geometry, and a later
+        # update keeps that zoom while the tape advances into it. Spot keeps
+        # its own R99q35 window and is exempt.
+        _xfroz = None
+        if not _is_spot:
+            try:
+                _mdx37 = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+                _fx37 = _mdx37.get("chart_x_frozen")
+                if not (_fx37 and len(_fx37) == 2):
+                    from database.bot_kv import get_json as _gjx37
+                    _fx37 = _gjx37(f"zoom_freeze_x:{candidate.signal_id}")
+                if _fx37 and len(_fx37) == 2:
+                    _nv37 = int(float(_fx37[0])); _pd37 = int(float(_fx37[1]))
+                    if 20 <= _nv37 <= 600 and 3 <= _pd37 <= 90:
+                        _xfroz = (_nv37, _pd37)
+                        future = _pd37
+            except Exception:
+                _xfroz = None
         # R99o/R99p (Viva 10-15, R99i-pattern consult): TC/ALBROX own their
         # windows (r65 widens the FRAME to the earliest stored anchor — a
         # far-major context line would hold the VIEW at 6 weeks; the view
@@ -3578,11 +3608,27 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                             print(f"[q20] widen skipped: {_e20}")
         except Exception:
             _xlim99o = None
-        for chart_ax in axes:
-            if _xlim99o is not None:
-                chart_ax.set_xlim(_xlim99o[0], count + future)
-            else:
-                chart_ax.set_xlim(-1, count + future)
+        if _xfroz:
+            # same id -> same window: the newest candle keeps its frozen pad
+            _r37 = float(count + future)
+            _l37 = max(-1.0, _r37 - float(_xfroz[0]))
+            try:
+                _anc37 = pattern_frame_anchors(
+                    candidate.metadata,
+                    frame["timestamp"] if "timestamp" in frame.columns else frame.index)
+                if _anc37:
+                    # a frozen window may never cut a drawn shape
+                    _l37 = min(_l37, max(0.0, float(min(_anc37)) - 6.0))
+            except Exception:
+                pass
+            for chart_ax in axes:
+                chart_ax.set_xlim(_l37, _r37)
+        else:
+            for chart_ax in axes:
+                if _xlim99o is not None:
+                    chart_ax.set_xlim(_xlim99o[0], count + future)
+                else:
+                    chart_ax.set_xlim(-1, count + future)
         if _is_spot:
             try:
                 _mid_y = math.sqrt(float(frame["low"].min()) * float(frame["high"].max()))
@@ -5861,7 +5907,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # frozen box (the tool-exit path — which itself bumps the view TF and
         # notes it), the window is recomputed and re-frozen.
         _froz28 = None
-        if _cfm73:
+        # ── R99q37c (his 10-20 15:20: «یک آیدی یکتا، دو هندسهٔ کاملاً متفاوت») ──
+        # The freeze was READ only by the ready/confirm paths (_cfm73). The
+        # analysis card of the very same id did a FRESH smart zoom every
+        # time, so AKE 30m T605103 came out twice in the same minute with two
+        # different price windows — and the same defect let an analysis card
+        # re-fit after the tape moved while the chain's other cards stayed
+        # frozen. The window belongs to the ID, not to the message kind.
+        if True:
             try:
                 _fz = (candidate.metadata or {}).get("chart_zoom_frozen")
                 if not _fz:
@@ -5946,7 +5999,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         else:
             _ovs28 = [float(candidate.entry_zone_bottom), float(candidate.entry_zone_top),
                       float(candidate.sl)]
-            if _cfm73:
+            # R99q37c: every card prints the ladder, so every path fits it —
+            # otherwise the same id gets two candle-block heights.
+            if True:
                 ladder_targets = list(((candidate.metadata or {}).get("target_ladder") or {}).get("targets") or [candidate.tp1, candidate.tp2])
                 _ovs28 += [float(v) for v in ladder_targets]
                 # r37: the spot green box tops out at spot_box_top — zoom must
@@ -6053,7 +6108,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                                    - _vf["low"].astype(float).to_numpy()))
             if _win28:
                 ax.set_ylim(*_win28)
-                if _cfm73 and not os.getenv("VIVA_NO_FREEZE_WRITE"):
+                if not os.getenv("VIVA_NO_FREEZE_WRITE"):   # R99q37c: stamp on the FIRST card of the id
                     try:
                         _md29 = candidate.metadata if isinstance(candidate.metadata, dict) else {}
                         _md29["chart_zoom_frozen"] = [float(_win28[0]), float(_win28[1])]
@@ -6220,11 +6275,35 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _need = max(_need, float(_inv.transform((_bb.x1 + 7, 0))[0]) + 1.2)
                 except Exception:
                     continue
-            if _need > count + future:
-                _fut2 = min(_need - count, future + 30.0)
+            if _need > count + future and not _xfroz:
+                # R99q37b: the text-driven widening is capped by the same
+                # fraction law (was future+30 bars => up to 30 % dead panel).
+                _fut2 = min(_need - count, max(float(future), 0.145 * float(count)))
                 for _ca in axes:
                     _ca.set_xlim(-1, count + _fut2)
                 fig.canvas.draw()
+            if not _xfroz and not _is_spot:
+                # R99q37d: this card's window becomes THE window of the id.
+                try:
+                    _x0f37, _x1f37 = ax.get_xlim()
+                    _nv37b = int(round(float(_x1f37) - float(_x0f37)))
+                    _pd37b = int(round(float(_x1f37) - float(count)))
+                    if 20 <= _nv37b <= 600 and 3 <= _pd37b <= 90:
+                        _md37b = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+                        _md37b["chart_x_frozen"] = [_nv37b, _pd37b]
+                        candidate.metadata = _md37b
+                        # the card that stamps must obey its own stamp — the
+                        # first chart of a chain is not an exception
+                        _r37c = float(count + _pd37b)
+                        for _ca in axes:
+                            _ca.set_xlim(max(-1.0, _r37c - float(_nv37b)), _r37c)
+                        try:
+                            from database.bot_kv import set_json as _sjx37
+                            _sjx37(f"zoom_freeze_x:{candidate.signal_id}", [_nv37b, _pd37b])
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
         except Exception as exc:
             print(f"chip column clamp warning: {exc}")
         # r47/r48 (Viva 09-27, «حتما که لگاریتمی» + «لگاریتمی از جایی فعال
