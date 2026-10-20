@@ -3603,9 +3603,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # The POI / entry box keeps its ORIGINAL time origin (stamped once at
         # alert time) and still extends into the candle-free margin — the
         # origin never slides right as candles print.
+        # ── R99q36b ENTRY-BOX LAW (his 10-20, verbatim: «جای درست باکس ورود به
+        # پوزیشن رو مقابل پنل ولوم نذاشتی میاد روی کندل ها»). The POI/ENTRY band
+        # started 55 bars back — i.e. it hosed a third of the tape — because its
+        # left edge was the tool anchor. The band now lives where he wants it:
+        # in the candle-free strip opposite the volume panel (right of the live
+        # candle), so it can never sit on a candle on any timeframe. The price
+        # levels are unchanged; only the painted span moved.
         zone_start = int(_anchored_x((candidate.metadata or {}).get("tool_anchor_ts"),
                                      max(0, count - 55)))
         zone_end = count + future - 0.5  # box extends into the candle-free margin
+        zone_start = max(int(zone_start), int(count) - 1)
         # r58: an update chart is analysis, not a trade — no POI/entry band
         # (Viva: «آپدیت‌ها هم با چارت زنده» + spot no-trade-tools r37), so its
         # chip can never sit on the live candles.
@@ -4562,8 +4570,17 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # r59.2 (PENGU 15m: the green trend ended MID-AIR — stored x1
                 # is a detection-window artifact). A line price hasn't broken
                 # runs to the LIVE bar, never to a stale stored end.
+                # ── R99q36c (his 10-20, verbatim: «ترندهای پترن‌ها هم بالا هم
+                # پایین و ترندلاین‌ها رو گفتم تا اندازه ۵ کندل بعد از کندل لایو
+                # بصورت خط ممتد و کامل رسم بکن و بعدش نقطه چین بشه»). The solid
+                # edge used to stop exactly ON the live candle and switch to a
+                # dash there — so the actionable five bars ahead of the live bar
+                # (where the break happens) were drawn as a guess. The solid run
+                # now continues five bars PAST live and only then goes dashed.
+                _SOLID_PAST_LIVE36 = 5.0
                 _xend8 = (min(float(count), float(_bx8))
-                          if _bx8 is not None else float(count))
+                          if _bx8 is not None
+                          else min(float(count) + _SOLID_PAST_LIVE36, float(_xe)))
                 # spec §13: parent patterns thick & solid, children thin;
                 # r59 far-majors sit between (a thin BLUE background major)
                 # R67.1: faint far / thin child / bold parent — same hue
@@ -4601,8 +4618,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         color=_col8, linewidth=_lw8, alpha=_al8, zorder=7,
                         solid_capstyle="round")
 
-                if _bx8 is None and count < _xe - 0.6:
-                    _xsB, _ysB = _line_xy(_ln, count, _xe)
+                if _bx8 is None and _xend8 < _xe - 0.6:
+                    _xsB, _ysB = _line_xy(_ln, _xend8, _xe)
                     ax.plot(_xsB, _ysB,
                             color=_col8,
                             linewidth=(max(0.75, _lw8 * 0.42) if _target_pattern_chart
@@ -5490,8 +5507,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         x0 = max(0.0, min(_in_xs9) - 1.0)
                     else:
                         x0 = max(0.0, min(xs))
-                    x1 = min(max(xs) + 0.15 * max(1.0, max(xs) - min(xs)), x_edge, count)
-                    _xr = max(x1, min(x_edge, count))
+                    # R99q36c: solid through LIVE + 5 bars, dashed after.
+                    _solid_to36 = min(x_edge, count + 5.0)
+                    x1 = min(max(xs) + 0.15 * max(1.0, max(xs) - min(xs)), x_edge, _solid_to36)
+                    _xr = max(x1, min(x_edge, _solid_to36))
                     # r61.3-R62 FAR-FLOAT LAW (Viva 09-30, STX 15M/30M: the
                     # «trendline» floated FAR BELOW the whole window — a bold
                     # red main line nobody touched in days): a stored edge
@@ -5558,14 +5577,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         # LONG signal). The trade tool owns the forward story;
                         # the pattern now STOPS at its apex.
                         pass
-                    elif count < x_edge - 0.6:
+                    elif _xr < x_edge - 0.6:
                         # r60.6 (his ONDO note): the projection past LIVE is
                         # the actionable half of a broken line — draw it BOLD
                         # so the break + projection read at a glance.
                         # R99q15: reached only when the pair is STILL converging
                         # ahead of LIVE (apex > count) — the dash then has a head
                         # at LIVE and a tail AT the apex.
-                        ax.plot([count, x_edge], [_fy9(count), _fy9(x_edge)],
+                        ax.plot([_xr, x_edge], [_fy9(_xr), _fy9(x_edge)],
                                 color=_col9, linewidth=2.0 if not _far9 else 1.0,
                                 alpha=.95 if not _far9 else 0.5, zorder=6,
                                 linestyle=(0, (5, 3)), solid_capstyle="butt")
