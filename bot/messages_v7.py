@@ -5657,7 +5657,19 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     ax.hlines(float(line), max(0, count-45), count+future-.5, color=CHART_THEME["structure"], linewidth=1.15, linestyles=(0,(5,3)), zorder=6)
                     notes.append((f"BREAK LINE  {_price(float(line))}", CHART_THEME["structure"]))
                 zone = md.get("viva_retest_zone")
-                if zone and len(zone) == 2:
+                # ── R99q36f (his 10-20, the thousandth time: «من اصلا درک نمی‌کنم
+                # کدوم گیتی وجود داره که جلوی تایید های تکنوکلاسیک و تی ال بریک
+                # و آلبروکس رو بعد از بریک ها میگیره؟؟ نواحی مختص پینوال هستن»).
+                # The CONFIRM law was already right (TC/TLBREAK confirm on the
+                # line close only — quality_engine's pure-break lane skips the
+                # zone edge entirely), but the CHART still painted a RETEST ZONE
+                # band and a «RETEST ZONE» chip on every TC/TLBREAK card, so the
+                # picture told him zones were deciding. Zones are drawn (and
+                # named) only for the zone family and ALBROX — the two lanes he
+                # himself gave to zone confirmation.
+                _zone_fam36 = str(getattr(candidate, "setup_code", "") or "").upper() in {
+                    "PINVAL", "PINWALL", "PINWALLQ", "ZONE", "RANGE", "ALBROX"}
+                if zone and len(zone) == 2 and _zone_fam36:
                     lo, hi = sorted(map(float, zone))
                     ax.fill_between([max(0,count-35), count+future-.5], lo, hi, color=CHART_THEME["liquidity"], alpha=.08, zorder=1)
                     notes.append(("RETEST ZONE", CHART_THEME["liquidity"]))

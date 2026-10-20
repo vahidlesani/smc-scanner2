@@ -182,3 +182,11 @@ def test_the_rendered_candles_stay_under_seventy_five_percent(setup_canvas):
     y0, y1 = ax.get_ylim()
     share = (_m.log(hi) - _m.log(lo)) / (_m.log(y1) - _m.log(y0))
     assert share <= 0.725, f"the guard left the block at {share * 100:.1f} %"
+
+
+# ── 7) zones are a PINVAL/ALBROX concept, never a TC/TLBREAK picture ──────
+def test_the_retest_zone_is_drawn_only_for_the_zone_family():
+    """His 10-20: «نواحی مختص پین‌وال هستن» — including on the canvas."""
+    assert '_zone_fam36 = str(getattr(candidate, "setup_code", "") or "").upper() in {' in MSG
+    assert '"PINVAL", "PINWALL", "PINWALLQ", "ZONE", "RANGE", "ALBROX"}' in MSG
+    assert 'if zone and len(zone) == 2 and _zone_fam36:' in MSG
