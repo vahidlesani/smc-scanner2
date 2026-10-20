@@ -6590,6 +6590,9 @@ def _compact_alert_caption(candidate: SignalCandidate, extra_lines: Optional[lis
          if setup_line else f"🎯 ستاپ: <b>VIVA-{_e(candidate.setup_code)}</b>"),
         f"⭐ امتیاز فعلی: {int(candidate.score if score is None else score)}/10",
         f"🆔 <code>{_e(code)}</code>",
+        # R99q32d: the same live row the setup cards carry (his «قیمت لایو اون
+        # نماد اضافه بشن .. شبیه پیام‌های ستاپ‌ها»).
+        _live_row32(candidate),
         *_law_note_lines(candidate),
         VIVA_SEP,
         "🔎 <b>ناحیه‌ای که زیر نظر داریم</b>",
@@ -7053,6 +7056,22 @@ def _fa_num(value) -> str:
     return str(value).translate(_FA_DIGITS)
 
 
+def _live_row32(candidate: SignalCandidate) -> str:
+    """One live-price row, identical in every message family (his 10-20).
+
+    An update or an alert that shows only the zone and the invalidation makes
+    the reader hunt for the current price. The ticker call is fail-open: a
+    dead probe says so instead of printing a stale number.
+    """
+    try:
+        _lp = float(_live_price_for_message(candidate) or 0)
+    except Exception:
+        _lp = 0.0
+    if _lp > 0:
+        return f"📈 قیمت لحظه‌ای: <b>{_price(_lp)}</b>"
+    return "📈 قیمت لحظه‌ای: <i>در دسترس نیست</i>"
+
+
 def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
                           state_fa: str = "🔄 <b>به‌روزرسانی رصد</b>",
                           upd_n: int = 0, has_chart: bool = True) -> str:
@@ -7091,6 +7110,10 @@ def _setup_update_caption(candidate: SignalCandidate, note_fa: str = "",
         VIVA_SEP,
         f"🪙 <b>{_e(candidate.symbol)}</b>  •  {_e(candidate.style)}  •  {_e(str(candidate.trigger_timeframe or '').upper())}",
         f"📍 ناحیه: {_price(candidate.entry_zone_bottom)} تا {_price(candidate.entry_zone_top)} • ابطال: {_price(candidate.sl)}",
+        # ── R99q32d (his 10-20: «قیمت لایو اون نماد اضافه بشن .. شبیه پیام‌های
+        # ستاپ‌ها»): an update that only names a zone leaves the reader to
+        # guess where price is NOW. Same wording as the setup cards.
+        _live_row32(candidate),
         f"⭐ امتیاز فعلی: {int(candidate.score)}/10 • {dir_fa}",
     ]
     if note_fa:
