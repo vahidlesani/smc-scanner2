@@ -187,6 +187,16 @@ _ZONE_SHADES = {
 _CANDLE_STYLE = (os.getenv("CHART_CANDLE_STYLE", "cryptocove") or "cryptocove").lower()
 
 
+# R99q36a: where the setup canvas ends. His 10-20: «پشت محور قیمت در چارت‌های
+# ستاپ‌ها … حاشیهٔ خالی گذاشتی که بیهوده است و باید فضای نمودار اضافه بشه».
+# The panel used to stop at 0.885 — 11.5 % of the width was white. It now runs to
+# 0.930, the ladder digits print INSIDE it (negative tick pad measured from the
+# widest label) and only a narrow value-pill column remains at the right, exactly
+# like his own reference charts. Dead band 11.5 % → 7.0 %, candles +4.5 %.
+SETUP_PANEL_LEFT = 0.040
+SETUP_PANEL_RIGHT = 0.9300
+SETUP_PANEL_W = SETUP_PANEL_RIGHT - SETUP_PANEL_LEFT
+
 CHART_THEME = {
     key: os.getenv(f"CHART_{key.upper()}_COLOR", default)
     for key, default in _BASE.items()
@@ -1326,15 +1336,24 @@ def _add_author_credit(fig) -> bool:
         # R99q28 (his 10-19: «و مقابلش متن زیر VAHID LESANI - VIVA SIGNALS
         # PRO ... این تغییر جای نام و برند در ستاپ هم انجام بشه»): the top-right
         # credit is the full brand line, not just the name.
-        fig.text(0.888, 0.936, "VAHID LESANI — VIVA SIGNALS PRO", fontsize=10.5,
-                 fontweight="bold", color=CHART_THEME["text"], ha="right",
-                 va="center", zorder=24)
+        # R99q36a: the credit is a HEADER-band element. The panel now reaches the
+        # canvas edge (his «حاشیهٔ خالی پشت قیمت باید به چارت اضافه بشه»), so the
+        # mark moved with it — still fully inside the frame, still above the
+        # ladder, never over a candle.
+        _right36 = 0.9955
+        _lh = 0.058
         if os.path.isfile(CHART_LOGO_PATH):
             _lim = mpimg.imread(CHART_LOGO_PATH)
-            _lh = 0.058
             _lw = _lh * (float(_lim.shape[1]) / float(_lim.shape[0])) \
                 * (float(fig.get_figheight()) / float(fig.get_figwidth()))
-            _lax = fig.add_axes([0.898, 0.936 - _lh / 2.0, _lw, _lh], zorder=24)
+            _lx36 = _right36 - _lw
+        else:
+            _lim, _lx36 = None, _right36
+        fig.text(_lx36 - 0.010, 0.936, "VAHID LESANI — VIVA SIGNALS PRO", fontsize=10.5,
+                 fontweight="bold", color=CHART_THEME["text"], ha="right",
+                 va="center", zorder=24)
+        if _lim is not None:
+            _lax = fig.add_axes([_lx36, 0.936 - _lh / 2.0, _lw, _lh], zorder=24)
             _lax.imshow(_lim, alpha=0.95)
             _lax.axis("off")
         return True
@@ -3248,8 +3267,16 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # candle to the price ladder, leaving every chart label readable.
         # Viva 09-23: «مثل چارت تریدینگ ویو کامل باشه» — the tape owns the
         # width; only a slim right margin stays for the price ladder.
-        price_position = [0.040, 0.235, 0.845, 0.665]
-        volume_position = [0.040, 0.085, 0.845, 0.125]
+        # ── R99q36a (his 10-20, verbatim: «پشت محور قیمت در چارت‌های ستاپ‌ها
+        # مثل ایرادی که دور قبل برای اسپات گفتم حاشیه خالی گذاشتی که بیهوده
+        # است و باید فضای نمودار اضافه بشه»). The panel stopped at 0.885 of the
+        # figure; the column to its right carried nothing but the ladder — the
+        # same dead white band he made me delete from spot. The tape now runs to
+        # the canvas edge and the ladder is printed INSIDE it (ENA reference),
+        # so the candles get that width back. The ledger and the value pills
+        # anchor to the ladder's MEASURED left edge, never to a guessed x.
+        price_position = [0.040, 0.235, SETUP_PANEL_W, 0.665]
+        volume_position = [0.040, 0.085, SETUP_PANEL_W, 0.125]
         for index, chart_ax in enumerate(axes):
             chart_ax.set_position(price_position if index < 2 else volume_position)
             chart_ax.set_facecolor(CHART_THEME["panel"])
@@ -3371,6 +3398,41 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             axes[1].tick_params(axis="y", labelleft=False, labelright=False)
         if len(axes) > 3:
             axes[3].tick_params(axis="y", labelleft=False, labelright=False)
+        # ── R99q36a: print the ladder INSIDE the panel. How far inside is
+        # measured from the widest label the axis will actually render (BTC's
+        # «81,766.50» is three times wider than a 0.07904) — a guessed pad is
+        # what put digits on top of the tape on cheap symbols.
+        _ladder_x0 = None
+        try:
+            from matplotlib import font_manager as _fm36
+            _prop36 = _fm36.FontProperties(size=7.5)
+            _rend36 = fig.canvas.get_renderer()
+            _w36 = 0.0
+            for _t36 in axes[0].get_yticklabels():
+                _s36 = (_t36.get_text() or "").strip()
+                if not _s36:
+                    continue
+                try:
+                    _w36 = max(_w36, float(_rend36.get_text_width_height_descent(
+                        _s36, _prop36, False)[0]))
+                except Exception:
+                    pass
+            _pad36 = -(_w36 * 72.0 / float(fig.dpi) + 16.0)   # 16 px of air: the digits never touch the canvas edge
+            for _price_ax in axes[:2]:
+                _price_ax.tick_params(axis="y", labelsize=7.5, pad=_pad36)
+            fig.canvas.draw()
+            _rend36b = fig.canvas.get_renderer()
+            _xs36 = [float(_t36.get_window_extent(_rend36b).x0)
+                     for _t36 in axes[0].get_yticklabels()
+                     if (_t36.get_text() or "").strip()]
+            if _xs36:
+                _ladder_x0 = min(_xs36) / float(fig.bbox.width)
+        except Exception as _lad36:
+            print(f"setup ladder warning: {_lad36}")
+            for _price_ax in axes[:2]:
+                _price_ax.tick_params(axis="y", labelsize=7.5, pad=-26)
+        if _ladder_x0 is None:
+            _ladder_x0 = SETUP_PANEL_RIGHT - 0.045
 
         count = len(frame)
         # 30–34 bars of blank future space keeps the last candle roughly seven
@@ -6040,7 +6102,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                         _xlab0 = float(ax.get_window_extent(_rend0).x1)
                     _est0 = (0.62 * 7.2 * max(len(str(_p[1])) for _p in _axis_tags)
                              + 8.0) * float(fig.dpi) / 72.0
-                    _atag_px = min(_xlab0 + 5.0, max(_fw0 - _est0 - 2.0, _xlab0 + 5.0))
+                    # ── R99q36a: the digits moved INSIDE the panel, so the value
+                    # pill now starts where the numbers END (measured) and grows
+                    # rightwards in the narrow band his own charts keep — never
+                    # over a digit, never over a candle, never a wide white gap.
+                    _atag_px = min(_xlab0 + 4.0, _fw0 - _est0 - 3.0)
+                    _atag_px = max(_atag_px, _xlab0 + 4.0)
                     _atag_x = max(_atag_px, 1.0) / _fw0
                 except Exception:
                     _atag_x = None
@@ -6142,7 +6209,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     _rows32.append(f"TP{_r32}  {_price(float(_lv32))}"
                                    + ("  ✓" if _hit32 >= _r32 else ""))
                 _rows32.append(f"LIVE  {_price(float(frame['close'].iloc[-1]))}")
-                fig.text(_pl32.x1 - 0.012, _pl32.y0 + 0.022,
+                # ── R99q36a: the ledger is anchored to the ladder's MEASURED
+                # left edge, so it ends before the price digits instead of under
+                # them (the value pills of ENTRY/TP now live in that band).
+                _led_x = (float(_ladder_x0) - 0.010) if _ladder_x0 else (_pl32.x1 - 0.012)
+                fig.text(_led_x, _pl32.y0 + 0.022,
                          "\n".join(_rows32),
                          ha="right", va="bottom", fontsize=7.6, linespacing=1.5,
                          color=CHART_THEME["text"], fontweight="bold",
