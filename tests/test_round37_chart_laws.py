@@ -81,8 +81,12 @@ def test_healthy_overlays_included_fully():
 # ── 3+4+5. spot: no tool, no arrows, no name pills, upper-edge box ───────
 def test_spot_never_renders_the_futures_tool():
     src = _src()
-    assert "if confirmed and not _is_spot:" in src          # tool block
-    assert "if confirmed and not _is_spot:\n            try:\n                _pl32" in src  # ledger
+    # the TP/entry TOOL stays confirm-only and never on spot (10-09 law holds)
+    assert "if _cfm73 and not _is_spot:" in src             # tool block
+    # R99q33e (his 10-20 ZEC): the bottom-right ledger is no longer a
+    # confirmed-only luxury — every SETUP chart carries entry/stop/TP/LIVE,
+    # spot keeps its own trade box on the spot canvas.
+    assert "if not _is_spot:\n            try:\n                _pl32" in src  # ledger
     # the pattern-name pills are GONE (Viva: «اسم الگوها رو بزنی بردار»)
     assert 'str(_pat.get("label") or _pat.get("type"))' not in src
     # no double-arrow spine anywhere — «وسطش هم فلش نمیخواد»

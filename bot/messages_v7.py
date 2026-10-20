@@ -3011,6 +3011,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
     # Always initialize chart-only price-axis tags before entering any render branch.
     # This is display state only and never affects setup detection or message format.
     _axis_tags: list = []
+    # R99q33e: the bottom-right ledger now runs on WATCH cards too, and the
+    # ladder used to be born INSIDE the confirmed tool block — an unconfirmed
+    # chart raised UnboundLocalError and printed nothing. Born here, used by
+    # both paths, identical values.
+    ladder = (candidate.metadata or {}).get("target_ladder") or {}
+    ladder_targets = list(ladder.get("targets") or [candidate.tp1, candidate.tp2])
     try:
         # Preserve enough history for real channel / wedge / range geometry;
         # the blank future panel is added separately, never by sacrificing bars.
@@ -6083,7 +6089,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # «آقا پایین چارت سمت راست معمولا همیشه خالیه — اینتری و استاپ اولیه
         # رو بنویس و تریلینگ استاپ اول خالی و تی پی ها و قیمت لایو رو هم بنویس»
         # On hits the TOOL keeps its original face; the ledger row ticks.
-        if confirmed and not _is_spot:
+        # ── R99q33e (his 10-20 ZEC: «جای … / اطلاعات … / ورود … / و خروج ..»
+        # marked exactly this corner on a WATCH card). The ledger used to be a
+        # CONFIRMED-only luxury, so a setup chart carried no entry/stop/TP/LIVE
+        # read-out at all. Every setup chart now carries it — spot has its own
+        # trade box on the spot canvas and stays out of this path.
+        if not _is_spot:
             try:
                 _pl32 = ax.get_position()
                 _hit32 = int(ladder.get("hit_index") or (candidate.metadata or {}).get("hit_index") or 0)
