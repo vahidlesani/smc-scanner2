@@ -330,19 +330,28 @@ def run_discovery_scan() -> Dict[str, int]:
     _break_reserve = {"left": 2}
     _BREAK_LANES63 = {"TECHCLASSIC", "ALBROX", "TLBREAK"}
 
-    def _budget_ok(cand) -> bool:
+    def _budget_ok(cand, relaxed: bool = False) -> bool:
         _sc = str(getattr(cand, "setup_code", "") or "").upper()
-        if _setup_used.get(_sc, 0) >= _per_setup_cap:
+        # ── R99q31h FAIR SHARE (his 10-20: the `budget` gate was throttling
+        # PINVAL — funnel `PINVAL seen=66 ready_new=4 budget=58`). The per-setup
+        # share was a hard wall: a family with 60 ready candidates posted 4 and
+        # the remaining 56 were counted and DROPPED, never retried. In the
+        # end-of-cycle retry pass (relaxed=True) the cap doubles, so leftover
+        # cycle budget flows to whichever family still has demand. Volume is
+        # unchanged in the sweep and still bounded by the hourly cap (10 per
+        # setup per clock hour) and the weekly wallet above it.
+        _cap = _per_setup_cap * 2 if relaxed else _per_setup_cap
+        if _setup_used.get(_sc, 0) >= _cap:
             return False
         if _edu_budget["left"] > 0:
             return True
         return _sc in _BREAK_LANES63 and _break_reserve["left"] > 0
 
-    def _educate(cand, frame):
+    def _educate(cand, frame, relaxed: bool = False):
         _md9 = getattr(cand, "metadata", None) or {}
         _is_watch = str(_md9.get("viva_state") or "").upper().startswith("S0_WATCH")
         _sc9 = str(getattr(cand, "setup_code", "") or "").upper()
-        if not _is_watch and not _budget_ok(cand):
+        if not _is_watch and not _budget_ok(cand, relaxed):
             stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
             return False
         _b9 = _watch_budget if _is_watch else _edu_budget
@@ -697,6 +706,15 @@ def run_discovery_scan() -> Dict[str, int]:
                 if (not _is_watch62 and not _budget_ok(candidate)) or (_is_watch62 and _watch_budget["left"] <= 0):
                     stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
                     _t(candidate)["budget_deferred"] = _t(candidate).get("budget_deferred", 0) + 1
+                    # ── R99q31h: the same rule the educate path already follows
+                    # (R99q15) — a budget deferral is NOT a ghost. Hold it for
+                    # the end-of-cycle retry with the freed budget instead of
+                    # silently dropping it (that drop is why PINVAL showed
+                    # ready_new=4 and 58 straight into the void).
+                    try:
+                        _deferred_edu.append((candidate, _chart_frame(candidate, bundle)))
+                    except Exception as _de31:
+                        print(f"deferral queue warning {getattr(candidate, 'signal_id', '?')}: {_de31}")
                     continue  # not persisted; next scan retries when budget frees
                 # R99j TIER DAILY CAP (futures): the R99c cap never counted --
                 # nothing incremented the counter, so daily_budget_ok() was
@@ -844,9 +862,26 @@ def run_discovery_scan() -> Dict[str, int]:
         if _SHUTDOWN:
             break
         try:
-            if _educate(_dc, _dfr):
+            if _educate(_dc, _dfr, relaxed=True):
                 stats["edu_retry_posted"] = stats.get("edu_retry_posted", 0) + 1
                 stats["new"] += 1
+                # ── R99q31h: a RETRY posts for real, so it must SPEND for real.
+                # The retry pass used to publish without touching the quota
+                # book — no weekly licence, no daily set counter, no hourly
+                # pace, no session slot. Those alerts were invisible to the
+                # cadence that is supposed to bound them, so the hourly cap
+                # could be exceeded through the back door. Same accounting as
+                # the sweep, fail-open.
+                try:
+                    from analysis import tiered_scan as _tier31h
+                    _sc31h = str(getattr(_dc, "setup_code", "") or "")
+                    _tier31h.weekly_licence_incr(_sc31h)
+                    _tier31h.daily_setup_incr(_sc31h)
+                    _tier31h.daily_count_incr("futures")
+                    _tier31h.hourly_pace_incr(_sc31h)
+                    _tier31h.session_licence_incr(_sc31h)
+                except Exception as _ac31h:
+                    print(f"retry accounting warning {getattr(_dc, 'signal_id', '?')}: {_ac31h}")
                 continue
         except Exception as _dr_exc:
             print(f"deferred education retry error {getattr(_dc, 'signal_id', '?')}: {_dr_exc}")
