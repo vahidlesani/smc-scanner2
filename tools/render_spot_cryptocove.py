@@ -356,7 +356,13 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     # R99q31b: `right` 0.952 reserved only the price ladder; the trade box needs
     # its own column. The panel ends at 0.868 so the box (0.872..0.984) sits in
     # genuinely empty space — never over a candle, never over the histogram.
-    fig.subplots_adjust(left=0.016, right=0.826, top=0.898, bottom=0.084)
+    # ── R99q33g (his 10-20 WLFI/XRP, verbatim: «حاشیه چارت پشت قیمت رو سریع به
+    # حالت قبلی برگردون» + «این جا رو به چارت اضافه کن» + «حاشیه ستاپ‌ها هم
+    # زیاده قیمت به چارت اضافه بشه»). R99q31b shrank the panel to 0.826 to give
+    # the trade box a whole column — a dead white band he circled twice. The
+    # panel is back near its former reach (0.870); the trade box stays, compact
+    # and grouped, in the narrow strip that remains.
+    fig.subplots_adjust(left=0.016, right=0.870, top=0.898, bottom=0.084)
 
     top_rgb = np.array([253, 244, 159]) / 255.0
     bot_rgb = np.array([145, 203, 248]) / 255.0
@@ -486,7 +492,27 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
         _zs32 = [z for z in _zs32 if float(z.get("top") or 0) > float(z.get("bottom") or 0)]
         _near32 = sorted(_zs32,
                          key=lambda z: abs(0.5 * (float(z["top"]) + float(z["bottom"])) - _live31))
-        _keep32 = _near32[:3]
+        # one box per side, one per kind — «SUPPLY · FLIP» twice on the same
+        # price is not a second level, it is the same level drawn twice.
+        _keep32, _seen32 = [], set()
+        for _z in _near32:
+            _sd = "SUPPLY" if 0.5 * (float(_z["top"]) + float(_z["bottom"])) >= _live31 else "DEMAND"
+            _kk = (_sd, str(_z.get("kind") or "").upper())
+            if _kk in _seen32:
+                continue
+            _seen32.add(_kk)
+            _keep32.append(_z)
+            if len(_keep32) >= 2:
+                break
+        # ── R99q33a SMALL BOX LAW (his 10-20, verbatim: «گفتم یک باکس کوچک مثل
+        # ستاپ‌ها درست کن و بذار جایی که من به مربع کشیدم»). The first cut drew
+        # a full-width band from the zone's origin to the live edge — one pale
+        # wall behind the whole tape, exactly what he circled. A zone is now a
+        # SHORT box (≤ 26 bars) sitting at the live edge, one per side, so the
+        # canvas keeps the tape it had and the box only marks the level.
+        _zw32 = int(min(max(12, n // 8), 26))
+        _x1z32 = n + 1
+        _x0z32 = max(_x1z32 - _zw32, x_from)
         for _z32 in _keep32:
             _zb32, _zt32 = float(_z32["bottom"]), float(_z32["top"])
             if _zt32 <= _zb32:
@@ -496,21 +522,14 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
                 _f32, _e32, _t32 = "#F6D6C6", "#E08A5B", "#B4531F"
             else:
                 _f32, _e32, _t32 = "#D3E6C4", "#6DA35A", "#2F6B33"
-            _x0z32 = max(int(_z32.get("x0") or x_from), x_from)
-            _x1z32 = n + 1
             ax.add_patch(Rectangle((_x0z32, _zb32), max(_x1z32 - _x0z32, 1),
                                    _zt32 - _zb32, facecolor=_f32, edgecolor=_e32,
-                                   linewidth=0.9, alpha=0.34, zorder=1))
-            # the chip must never be clipped by the panel edge: it sits INSIDE
-            # the box's right end, flipping to the left edge when the box is
-            # short or the frame is tight.
+                                   linewidth=0.9, alpha=0.30, zorder=1))
+            # the chip rides the box's own top-right corner, just outside it —
+            # never over a candle, never clipped by the panel edge.
             _lbl32 = f"{_side32} · {str(_z32.get('kind') or '')}".strip()
-            _tx32 = _x1z32 - 0.8
-            _ha32 = "right"
-            if _tx32 - _x0z32 < 8:
-                _tx32, _ha32 = _x0z32 + 0.8, "left"
-            ax.text(_tx32, 0.5 * (_zb32 + _zt32), _lbl32,
-                    color=_t32, fontsize=6.0, va="center", ha=_ha32,
+            ax.text(_x0z32 + 0.6, _zt32, " " + _lbl32 + " ",
+                    color=_t32, fontsize=5.8, va="bottom", ha="left",
                     fontweight="bold", zorder=12,
                     bbox={"boxstyle": "round,pad=0.20", "facecolor": "#FFFDF2",
                           "edgecolor": "none", "alpha": 0.80})
@@ -578,10 +597,37 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
     # ── 7) خط لایو + پیل قیمت (صورتی، رفرنس ENA)
     live = float(c[-1])
     ax.axhline(live, color=INK, ls=":", lw=1.0, alpha=0.55, zorder=2)
-    ax.text(x_to + 0.4, live, f" {_price_fmt(live)} ", ha="left", va="center",
-            fontsize=9.5, fontweight="bold", color="#FFFFFF", zorder=9,
-            bbox=dict(boxstyle="square,pad=0.28", facecolor=LIVE_PINK,
-                      edgecolor=LIVE_PINK))
+    # ── R99q33f (his 10-20 WLFI, verbatim: «حاشیه چارت پشت قیمت رو سریع به
+    # حالت قبلی برگردون» + «سریعا این جا رو به چارت اضافه کن»). The live pill
+    # used to be stuffed at x_to+0.4 INSIDE the panel, where it landed on the
+    # price ladder and ate a tick number («0.054»). It is back in the white
+    # margin BEHIND the price now — the ENA reference placement — measured so
+    # it never touches the ladder digits.
+    _live_x = 1.010
+    try:
+        ax.figure.canvas.draw()
+        _rd0 = ax.figure.canvas.get_renderer()
+        _ab0 = ax.get_window_extent(_rd0)
+        _xl0 = _ab0.x1
+        for _tl0 in ax.get_yticklabels():
+            if (_tl0.get_text() or "").strip():
+                _xl0 = max(_xl0, float(_tl0.get_window_extent(_rd0).x1))
+        if _ab0.width > 1:
+            _live_x = (_xl0 + 4.0 - _ab0.x0) / float(_ab0.width)
+        _fw0 = float(ax.figure.canvas.get_width_height()[0])
+        _est0 = (0.62 * 9.5 * len(" " + _price_fmt(live) + " ") + 7.0) * \
+            float(ax.figure.dpi) / 72.0
+        _live_x = min(_live_x, max((_fw0 - _est0 - 2.0 - _ab0.x0) / float(_ab0.width), 1.006))
+    except Exception:
+        _live_x = 1.010
+    _live_x = max(_live_x, 1.004)
+    import matplotlib.transforms as _mtr33
+    _tr33 = _mtr33.blended_transform_factory(ax.transAxes, ax.transData)
+    _live_art = ax.text(_live_x, live, f" {_price_fmt(live)} ",
+                        transform=_tr33, ha="left", va="center", clip_on=False,
+                        fontsize=9.5, fontweight="bold", color="#FFFFFF", zorder=21,
+                        bbox=dict(boxstyle="square,pad=0.28", facecolor=LIVE_PINK,
+                                  edgecolor=LIVE_PINK))
 
     # ── 8) استمپ زمان تهران — R99q33b (his 10-20, verbatim: «کلمه live رو از
     # برچسب زمان حذف بکن تا روی هیستوگرام ولوم رو نپوشونه»). The word is gone
@@ -689,9 +735,9 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
             _tag30 = "SHORT" if _d30 in ("SHORT", "DOWN", "BEAR", "BEARISH") else "LONG"
             if _rows30:
                 _row_h30 = 0.028
-                _box_w30 = 0.112
+                _box_w30 = 0.084
                 _box_h30 = _row_h30 * len(_rows30) + 0.022
-                _bx30 = 0.984 - _box_w30
+                _bx30 = 0.995 - _box_w30
                 _by30 = 0.062           # level with the volume band
                 # the frame: one grouped box, exactly like the setup charts
                 fig.patches.append(Rectangle(
@@ -713,6 +759,21 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
                     fig.text(_bx30 + _box_w30 - 0.010, _yy30, _price_fmt(_val30),
                              fontsize=8.4, fontweight="bold", color=INK,
                              ha="right", va="center", zorder=14)
+                # R99q33g: the live pill keeps its TRUE level, but if that level
+                # falls inside the trade box the pill slides to the box's top
+                # edge — never a price badge printed through a table.
+                try:
+                    fig.canvas.draw()
+                    _rr = fig.canvas.get_renderer()
+                    _pb = _live_art.get_window_extent(_rr)
+                    _fbb = fig.bbox
+                    if _pb.y0 < (_by30 + _box_h30) * _fbb.height and \
+                            _pb.y1 > _by30 * _fbb.height:
+                        _ynew = (_by30 + _box_h30 + 0.012) * _fbb.height
+                        _pv = ax.transData.inverted().transform((_pb.x0, _ynew))[1]
+                        _live_art.set_position((_live_x, float(_pv)))
+                except Exception as _lp:
+                    print(f"spot live pill nudge warning: {_lp}")
         except Exception as _t30e:
             print(f"spot trade box warning: {_t30e}")
 

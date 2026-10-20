@@ -20,14 +20,20 @@ def test_it_refines_them_before_drawing():
     assert "from analysis.zone_refine import prepare_zones as _pz32" in SRC
 
 
-def test_it_keeps_the_canvas_clean_at_three_boxes():
-    assert "_near32[:" in SRC
-    assert "[:3]" in SRC
+def test_it_keeps_the_canvas_clean_with_one_small_box():
+    """R99q33a (his 10-20, verbatim: «گفتم یک باکس کوچک مثل ستاپ‌ها درست کن و
+    بذار جایی که من به مربع کشیدم»): ONE small short box per side instead of
+    wide full-width bands, and never the same level twice."""
+    assert "_keep32, _seen32 = [], set()" in SRC      # one per side+kind
+    assert "_zw32 = int(min(max(12, n // 8), 26))" in SRC   # a SHORT box
+    assert "_x0z32 = max(_x1z32 - _zw32, x_from)" in SRC    # at the live edge
 
 
-def test_a_label_can_never_be_clipped_by_the_frame_edge():
-    assert '_tx32 = _x1z32 - 0.8' in SRC
-    assert 'if _tx32 - _x0z32 < 8:' in SRC
+def test_a_label_rides_its_own_box_corner():
+    """The chip sits on the box's own top-left corner — inside the frame,
+    never over a candle, never clipped by the panel edge."""
+    assert 'ax.text(_x0z32 + 0.6, _zt32, " " + _lbl32 + " "' in SRC
+    assert 'va="bottom", ha="left"' in SRC
 
 
 def test_supply_is_above_and_demand_below_the_live_price():

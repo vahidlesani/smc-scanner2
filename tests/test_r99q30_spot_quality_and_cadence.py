@@ -99,7 +99,9 @@ def test_the_trade_strip_exists_and_is_opt_in():
     for tag in ('"ENTRY"', '"STOP"', 'f"TP{_i30 + 1}"'):
         assert tag in SPOT
     assert "_by30 = 0.062" in SPOT       # level with the volume band
-    assert "_bx30 = 0.984 - _box_w30" in SPOT   # the RIGHT column
+    # R99q33g (his 10-20): the box is COMPACT and sits flush to the right edge
+    assert "_bx30 = 0.995 - _box_w30" in SPOT   # the RIGHT column, flush
+    assert "_box_w30 = 0.084" in SPOT           # one small grouped box
 
 
 def test_the_candidate_supplies_the_strip():
@@ -160,8 +162,13 @@ def test_the_credit_stays_inside_the_frame():
 
 
 def test_the_panel_leaves_a_column_for_the_trade_box():
-    assert "right=0.826" in SPOT
-    assert "right=0.952" not in SPOT
+    """R99q33g: the panel is back near its old reach — «حاشیه چارت پشت قیمت
+    رو سریع به حالت قبلی برگردون» + «این جا رو به چارت اضافه کن». The dead
+    white column of R99q31b (0.826) is gone, but a narrow strip remains for
+    the trade box AND the live price tag (never over the candles)."""
+    assert "right=0.870" in SPOT
+    assert "right=0.826" not in SPOT            # the dead column is retired
+    assert "right=0.952" not in SPOT            # and the edge-cramped one too
 
 
 def test_the_unique_id_is_drawn_and_sits_clear_of_the_time_axis():
