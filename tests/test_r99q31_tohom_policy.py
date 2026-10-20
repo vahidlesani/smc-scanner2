@@ -23,7 +23,12 @@ def _cand(code="PINVAL", direction="LONG", lo=100.0, hi=102.0):
         status="APPROACHING", entry_zone_bottom=lo, entry_zone_top=hi,
         planned_entry=(lo + hi) / 2, sl=lo * 0.97, tp1=hi * 1.05,
         tp2=hi * 1.1, rr_tp1=2.0, rr_tp2=3.0, bias="bull",
-        trigger_timeframe="1h", metadata={})
+        trigger_timeframe="1h", metadata={},
+        # the zone judge only counts lower-TF closes that happened AFTER the
+        # candidate was born; `created_at` defaults to the wall clock, so a
+        # 08:00 fixture silently went EMPTY once the clock passed 08:30 UTC and
+        # four laws turned red for no code change. Pinned here, deterministic.
+        created_at="2026-10-20T07:00:00+00:00")
 
 
 def _subs(rows, tf="15min"):
