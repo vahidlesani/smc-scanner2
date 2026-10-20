@@ -3224,7 +3224,9 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         # a zone). G1: a chain with trade lines paints ONLY the traded edges.
         try:
             from analysis.snapshot_lock import lock_render_geometry as _lock63
-            _lock63(candidate, frame=frame)
+            _lock_res37 = _lock63(candidate, frame=frame)
+            if os.getenv("VIVA_Q37_DEBUG"):
+                print(f"[q37] lock={_lock_res37} sid={candidate.signal_id}")
         except Exception as _l63:
             print(f"R63 snapshot-lock warning: {_l63}")
         market_colors = _make_market_colors(
@@ -4206,6 +4208,21 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _draw_pats = _uniq19
         except Exception:
             pass
+        # ── R99q37e (his 10-20: «هشدار ابتدایی پترن درست اسنپ‌شات بشه») ────
+        # The chain's snapshot is rewritten from the set THIS card draws, so
+        # the alert, the ready card and the confirmation paint one geometry.
+        try:
+            if str(locals().get("_lock_res37") or "") == "STAMPED":
+                _md37e = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+                _md37e["render_patterns"] = [dict(_p37e) for _p37e in (_draw_pats or [])
+                                             if isinstance(_p37e, dict)]
+                candidate.metadata = _md37e
+                from analysis.snapshot_lock import restamp_render_geometry as _rs37e
+                if os.getenv("VIVA_Q37_DEBUG"):
+                    print(f"[q37] restamp drawn={[(_x.get('type')) for _x in _md37e['render_patterns']]}")
+                _rs37e(candidate)
+        except Exception as _e37e:
+            print(f"R99q37e restamp warning: {_e37e}")
 
         for _pat in _draw_pats:
             if _pat.get("type") == "RANGE":

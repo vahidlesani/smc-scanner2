@@ -269,3 +269,25 @@ def test_same_id_same_geometry_through_every_path(monkeypatch):
         assert M.generate_chart(df, _cand(), confirmed=conf, preconfirm_tool=pre)
     assert len(seen) == 3 and None not in seen
     assert seen[0] == seen[1] == seen[2], seen
+
+
+# ── 12) the alert's snapshot freezes what the alert DREW ──────────────────
+# «هشدار ابتدایی پترن درست اسنپ‌شات بشه» — the lock stamps before the painter
+# decides which shapes survive, so a chain could freeze a set the first card
+# never showed and every later card painted something else.
+def test_the_snapshot_is_written_from_the_drawn_set():
+    from analysis.snapshot_lock import restamp_render_geometry
+    md = {"render_patterns": [{"type": "CHANNEL_ASCENDING"}], "render_zones": []}
+    cand = type("C", (), {"signal_id": "RS1", "metadata": md})()
+    store = {}
+    assert restamp_render_geometry(cand, kv_set=lambda k, v: store.__setitem__(k, v))
+    assert store["render_identity:RS1"]["render_patterns"][0]["type"] == "CHANNEL_ASCENDING"
+    assert store["render_identity:RS1"]["drawn_set"] is True
+
+
+def test_the_restore_never_drops_a_frozen_pattern():
+    src = open(os.path.join(ROOT, "analysis", "snapshot_lock.py"), encoding="utf-8").read()
+    assert "_pats21 = [x for x in _pats21 if id(x) in _keep_ids21]" not in src
+    assert "stay ON THE CHART (frozen" in src
+    # and the painter hands its final set back on the card that stamped
+    assert 'str(locals().get("_lock_res37") or "") == "STAMPED"' in MSG

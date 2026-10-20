@@ -198,9 +198,23 @@ def lock_render_geometry(candidate, kv_get=None, kv_set=None, frame=None) -> str
                         pass
                     _pats21.append(_p21)
                 if _pats21:
+                    # ── R99q37e (his 10-20: «یک آیدی یکتا، دو هندسه») ──────
+                    # The gate DROPS past-market patterns — correct at
+                    # DETECTION time, fatal on RESTORE: the first card of the
+                    # chain had already drawn them, so card #2 came out
+                    # without the channel card #1 showed (and, through the
+                    # zoom subject, with a different price window). The
+                    # snapshot is immutable by law: on restore the patterns
+                    # are re-JUDGED (verdict/near_break stamped) but never
+                    # removed — the chain keeps the geometry it froze.
                     try:
                         from analysis.pattern_law import gate_patterns as _g21
-                        _pats21 = _g21(_pats21, tag=f"{sid} restore")
+                        _kept21 = _g21(list(_pats21), tag=f"{sid} restore")
+                        if len(_kept21) < len(_pats21):
+                            print(f"R99q37e snapshot {sid}: "
+                                  f"{len(_pats21) - len(_kept21)} past-market "
+                                  f"pattern(s) stay ON THE CHART (frozen "
+                                  f"geometry is immutable)")
                     except Exception:
                         pass
                     md["render_patterns"] = _pats21
@@ -276,3 +290,36 @@ def lock_render_geometry(candidate, kv_get=None, kv_set=None, frame=None) -> str
         return ""
     md["snapshot_locked"] = True
     return "STAMPED"
+
+def restamp_render_geometry(candidate, kv_set=None) -> bool:
+    """R99q37e — freeze what the FIRST card actually DREW.
+
+    The lock stamps at the top of the render, before the painter has decided
+    which shapes survive (native refit, far-major preserve, both-edges
+    guarantee, dedupe). So a chain could freeze a set the alert never showed,
+    and every later card painted something the alert did not — his «هشدار
+    ابتدایی پترن درست اسنپ‌شات بشه». The painter now hands its final set
+    back and the snapshot is re-written from it, once, on the card that
+    stamped the chain.
+    """
+    sid = str(getattr(candidate, "signal_id", "") or "")
+    md = getattr(candidate, "metadata", None)
+    if not sid or not isinstance(md, dict):
+        return False
+    if kv_set is None:
+        try:
+            from database.bot_kv import set_json as _s
+            kv_set = _s
+        except Exception:
+            return False
+    try:
+        snap = {k: md.get(k) for k in SNAPSHOT_KEYS if k in md}
+        snap.setdefault("render_patterns", md.get("render_patterns") or [])
+        snap.setdefault("render_zones", md.get("render_zones") or [])
+        snap["render_geometry_source"] = md.get("render_geometry_source") or "RENDER"
+        snap["geom_law"] = GEOM_LAW
+        snap["drawn_set"] = True
+        kv_set(snapshot_key(sid), snap)
+        return True
+    except Exception:
+        return False
