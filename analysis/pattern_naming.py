@@ -219,6 +219,19 @@ def name_candidate(candidate, df, setup_code: str = "") -> Dict:
             int(cu.get("touches") or 0), int(cl.get("touches") or 0),
             span=int(m.get("span") or 0))
 
+        # ── R99q31d NEW-BASE EXTENSION (his JUP/ZEC law: «وقتی قیمت یک ترند را
+        # رد کرد و بیس جدید ساخت، ترند تا بیس جدید ادامه پیدا می‌کند»).
+        # `extend_line_to_new_base` existed but was only called from the
+        # detect_patterns path, so a pair named by THIS layer kept cutting
+        # through a base it should have respected. Both edges pass through it;
+        # it returns the original object untouched when no base was built.
+        try:
+            from analysis.render_kit import extend_line_to_new_base as _ext31
+            _df31 = df.reset_index(drop=True)
+            upper = _ext31(upper, _df31, "HIGH") if upper is not None else None
+            lower = _ext31(lower, _df31, "LOW") if lower is not None else None
+        except Exception:
+            pass
         shape = {
             "type": slug, "law_slug": slug,
             "name_fa": label_fa(slug),
