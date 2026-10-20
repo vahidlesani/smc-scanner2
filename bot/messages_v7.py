@@ -1695,6 +1695,16 @@ def _law_note_lines(candidate: SignalCandidate) -> List[str]:
             ref = str(md.get("pattern_ref") or "")
             if ref:
                 rows.append(f"📖 مرجع: {_e(ref)}")
+        else:
+            # R99q31e: no classic shape on this candidate — the engine's OWN
+            # structure is named instead of the block staying silent (his
+            # «نام‌گذاری پترن در موتورهای زون و آلبروکس»).
+            _stn31 = str(md.get("structure_name_fa") or "")
+            if _stn31:
+                line = f"🧩 ساختار: <b>{_e(_stn31)}</b>"
+                if st_fa:
+                    line += f" · حالت: {_e(st_fa)}"
+                rows.append(line)
         line_state_fa = str(md.get("line_state_fa") or "")
         if line_state_fa:
             _role = {"SUPPORT": "حمایت", "RESISTANCE": "مقاومت"}.get(

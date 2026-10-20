@@ -1057,6 +1057,11 @@ def engine_stamp(md: dict, df=None, setup_code: str = "") -> dict:
                 if isinstance(p, dict)]
         if not pats:
             md["law_state"] = md.get("law_state") or ""
+            # R99q31e: no CLASSIC shape was drawn — the engine still names the
+            # structure it is trading (his «نام‌گذاری پترن در موتورهای زون و
+            # آلبروکس»). Display-only; `law_slug` stays empty.
+            _st31 = engine_structure(setup_code, md)
+            out.update(_st31)
             return out
         # R99q24: the shape this CANDIDATE is about (lineage → cited → drawn)
         dom = select_shape(md) or pats[0]
@@ -1185,6 +1190,51 @@ def label_fa(slug: str) -> str:
     k = str(slug or "").upper()
     d = PATTERN_LAW.get(k)
     return str(d.get("fa")) if d else k.replace("_", " ")
+
+
+# ── R99q31e ENGINE-OWN STRUCTURE NAMES (his 10-20: «نام‌گذاری پترن در موتورهای
+# زون و آلبروکس»). `engine_stamp` deliberately never invents a CLASSIC pattern —
+# but an ALBROX alert that says only «اسپایک غیرعادی» and a zone alert that
+# names nothing at all leave the reader without the shape's name. Every engine
+# already knows what it is looking at; it now says it. These are STRUCTURES,
+# not classic patterns, so they live in their own key and can never overwrite
+# a law slug.
+ENGINE_STRUCTURE = {
+    "ALBROX": ("ALBROX_SPIKE_BASE", "اسپایک و بیس"),
+    "PINVAL": ("ZONE_REACTION", "واکنش به ناحیه"),
+    "PINWALL": ("ZONE_REACTION", "واکنش به ناحیه"),
+    "ZONE": ("ZONE_REACTION", "واکنش به ناحیه"),
+    "RANGE": ("ZONE_REACTION", "واکنش به ناحیه"),
+    "TLBREAK": ("BREAK_RETEST", "شکست و ریتست"),
+    "TECHCLASSIC": ("CLASSIC_ON_ZONE", "الگوی کلاسیک روی ناحیه"),
+}
+
+
+def engine_structure(setup_code: str, md: dict = None) -> Dict[str, str]:
+    """The name of the structure THIS engine trades, when the law has no slug.
+
+    Never overrides a synthesized classic pattern: if the candidate already
+    carries a `law_slug`, that is the truth and this returns empty.
+    """
+    out = {"structure_slug": "", "structure_name_fa": ""}
+    try:
+        if isinstance(md, dict) and str(md.get("law_slug") or "").strip():
+            return out
+        code = str(setup_code or (md or {}).get("setup_code") or "").upper()
+        hit = ENGINE_STRUCTURE.get(code)
+        if not hit:
+            return out
+        out["structure_slug"], out["structure_name_fa"] = hit
+        if isinstance(md, dict):
+            # display-only keys: `pattern_type` is read by the pill, the rest by
+            # the caption. `law_slug` stays EMPTY — the law still owns it.
+            md["structure_slug"] = out["structure_slug"]
+            md["structure_name_fa"] = out["structure_name_fa"]
+            md.setdefault("pattern_label_fa", out["structure_name_fa"])
+            md.setdefault("pattern_type", out["structure_slug"])
+        return out
+    except Exception:
+        return {"structure_slug": "", "structure_name_fa": ""}
 
 
 LABEL_KEYS = ("pattern_type", "tl_pattern", "render_htf_pattern", "viva_pattern")
