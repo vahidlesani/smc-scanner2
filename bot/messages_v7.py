@@ -8150,9 +8150,23 @@ def tf_channel_publish_confirmed(candidate: SignalCandidate, chart=None,
             # بعدی با قبلی و همینجوری»): the SPOT confirm quotes its own
             # first warning; futures keep their existing chains.
             reply_to=int(reply_to or 0) or None)
+        if not mid and chart is not None:
+            # R99q34: a photo/render failure used to drop the whole card. The
+            # card's text is self-contained — retry it alone before giving up.
+            print(f"TF-channel chart post failed {code} → {chat}; retrying text-only")
+            try:
+                _ph, mid = _post_chart_then_text(
+                    None, text, chat,
+                    label=_chart_label(symbol=candidate.symbol, code=code,
+                                       title_fa="تأیید سیگنال"),
+                    reply_to=int(reply_to or 0) or None)
+            except Exception as _tf84b:
+                print(f"TF-channel text retry error {code}: {_tf84b}")
+                mid = 0
         if not mid:
             print(f"TF-channel publish failed {code} → {chat}")
             return 0
+        print(f"📡 announce published {code} [{str(getattr(candidate, 'setup_code', '') or '').upper()}] → {chat}")
         chain = _chain_by_code_get(code)
         chain["tfc_chat"] = str(chat)
         chain["tfc_mid"] = int(mid)
@@ -8684,7 +8698,25 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
     # frozen tools) is ALREADY in the channel — activation is a zero-fetch,
     # zero-render REPLY to it, reading levels from the frozen snapshot.
     if (candidate.metadata or {}).get("stage_b_sent") and not candidate.metadata.get("confirmation_message_sent"):
-        return _send_activation_reply(candidate)
+        # ── R99q34 (his 10-20, verbatim: «هنوز در کانال های مجزا هیچ پیام
+        # تاییدی نمیاد .. درحالیکه ۶ تایید داشتیم»). Stage-C activation posts
+        # the «پوزیشن فعال شد» reply in the MAIN channel and returns — it never
+        # reached the announce-channel card at the bottom of this function. So
+        # every confirmation that rode the A/B/C design (i.e. every SETUP that
+        # had sent stage B) landed in the main channel and NOWHERE else.
+        # The announce card is now published on BOTH confirm paths; the chart
+        # is rendered here when the caller handed a frame, otherwise the card
+        # goes text-only (its own text IS the card) — never silence.
+        _ok84 = _send_activation_reply(candidate)
+        if _ok84:
+            try:
+                _ch84 = None
+                if chart_df is not None and not getattr(chart_df, "empty", True):
+                    _ch84 = generate_chart(chart_df, candidate, confirmed=True)
+                tf_channel_publish_confirmed(candidate, _ch84)
+            except Exception as _tf84:
+                print(f"TF-channel mirror skipped {candidate.signal_id}: {_tf84}")
+        return _ok84
     # ── Viva 09-23 (round 20): the confirmed ladder's FIRST pill also obeys
     # the lower-TF law — snap it to the nearest LTF swing (the touch a member
     # actually watches) instead of a pure 20%-of-path step. Fail-open.
@@ -8814,6 +8846,12 @@ def send_confirmed(candidate: SignalCandidate, chart_df: Optional[pd.DataFrame])
                             reply_kind="approach", link="", link_text="")
             except Exception:
                 pass
+            # R99q34: a chart-less confirm is still a CONFIRM — the announce
+            # channel gets its card (text-only) instead of nothing at all.
+            try:
+                tf_channel_publish_confirmed(candidate, None)
+            except Exception as _tf72:
+                print(f"TF-channel mirror skipped {candidate.signal_id}: {_tf72}")
             return True
         source_chat = CHAT_ID_EDUCATION or CHAT_ID_ADMIN
         source_mid = candidate.metadata.get("education_chart_message_id") or candidate.metadata.get("education_message_id")
