@@ -210,6 +210,119 @@ def _structural_weight(pat: dict) -> float:
         return 0.0
 
 
+def _frac_index_at(d: pd.DataFrame, when) -> Optional[float]:
+    """Fractional bar index of time ``when`` in frame ``d`` (buckets may skip
+    gaps, so this interpolates between consecutive timestamps)."""
+    try:
+        ts = pd.to_datetime(d["timestamp"]).dt.tz_localize(None) \
+            if getattr(pd.to_datetime(d["timestamp"]).dt, "tz", None) is not None \
+            else pd.to_datetime(d["timestamp"])
+        w = pd.Timestamp(when)
+        if w.tzinfo is not None:
+            w = w.tz_convert("UTC").tz_localize(None)
+        if w <= ts.iloc[0]:
+            return 0.0
+        if w >= ts.iloc[-1]:
+            step = (ts.iloc[-1] - ts.iloc[-2]).total_seconds() if len(ts) > 1 else 0.0
+            return float(len(ts) - 1 + ((w - ts.iloc[-1]).total_seconds() / step if step else 0.0))
+        i = int(ts.searchsorted(w) - 1)
+        step = (ts.iloc[i + 1] - ts.iloc[i]).total_seconds() or 1.0
+        return float(i + (w - ts.iloc[i]).total_seconds() / step)
+    except Exception:
+        return None
+
+
+def _confirm_fresh(cf: Optional[pd.DataFrame], tf_min: float = None) -> bool:
+    """The newest CLOSED bar of the confirm frame is at most one bar old."""
+    try:
+        if cf is None or not len(cf):
+            return False
+        _ts = pd.Timestamp(cf["timestamp"].iloc[-1])
+        if _ts.tzinfo is not None:
+            _ts = _ts.tz_convert("UTC").tz_localize(None)
+        _step = (pd.Timestamp(cf["timestamp"].iloc[-1]) - pd.Timestamp(cf["timestamp"].iloc[-2]))
+        _now = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+        return (_now - (_ts + _step)).total_seconds() <= _step.total_seconds() * 1.05
+    except Exception:
+        return False
+
+
+def confirm_frame_break(d: pd.DataFrame, cf: Optional[pd.DataFrame], pat: dict,
+                        tf: str, direction: str = "LONG") -> Optional[dict]:
+    """R99q38c — the CONFIRM-frame break of a higher-TF shape.
+
+    His 10-21: «ببین چرا اسپات روزانه و ۳ روزه و هفتگی و ۱۲ ساعته هیچ هشداری
+    نمیده؟ اگر جلوش بسته است یا محدودیت وجود داره درستش کن».
+
+    3d/1w frames only carry COMPLETE buckets (data.fetcher._aggregate_daily), so
+    their newest bar appears at the bucket boundary and the old gate («the
+    break bar must be the newest pattern bar, at most one bar old, closed in
+    the last 30 h») could only fire in a narrow window and only when the break
+    landed exactly on the boundary bar — the practical result was NO 3d/1w
+    alerts at all.
+
+    The law is unchanged — a confirmation is still the FIRST valid CLOSE beyond
+    the broken edge — but the close that confirms a 3d/1w shape is the
+    CONFIRM-TF close (1d), exactly as SPOT_CONFIRM_TF says. This helper returns
+    that first close (entry), the edge projected to it, and the age in confirm
+    bars. The pattern-TF close lane keeps running untouched.
+    """
+    if cf is None or len(cf) < 5 or not pat:
+        return None
+    try:
+        lines = list(pat.get("lines") or [])
+        if not lines:
+            return None
+        from analysis.render_kit import line_y as _ly
+        c = cf.reset_index(drop=True)
+        last = c.iloc[-1]
+        prev = c.iloc[-2]
+        edge = 0.0
+        for _l in lines:
+            _side = str(_l.get("side") or "").upper()
+            if direction == "LONG" and _side not in ("HIGH", "UPPER", ""):
+                continue
+            if direction == "SHORT" and _side not in ("LOW", "LOWER", ""):
+                continue
+            x_now = _frac_index_at(d, last["timestamp"])
+            if x_now is None:
+                continue
+            try:
+                _v = float(_ly(_l, x_now))
+            except Exception:
+                continue
+            edge = max(edge, _v) if direction == "LONG" else (min(edge, _v) if edge else _v)
+        if edge <= 0:
+            return None
+        atr_cf = _atr(c)
+        if atr_cf <= 0:
+            return None
+        eps = 0.02 * atr_cf
+        x_prev = _frac_index_at(d, prev["timestamp"])
+        edge_prev = edge
+        if x_prev is not None:
+            try:
+                vals = [float(_ly(_l, x_prev)) for _l in lines
+                        if str(_l.get("side") or "").upper() in ("HIGH", "UPPER", "")]
+                if vals:
+                    edge_prev = max(vals) if direction == "LONG" else min(vals)
+            except Exception:
+                edge_prev = edge
+        if direction == "LONG":
+            fresh = float(last["close"]) > edge + eps
+            first = float(prev["close"]) <= edge_prev + eps
+        else:
+            fresh = float(last["close"]) < edge - eps
+            first = float(prev["close"]) >= edge_prev - eps
+        if not (fresh and first):
+            return None
+        # the confirm candle itself must be the newest CLOSED one of its frame
+        return {"edge": float(edge), "entry": float(last["close"]),
+                "bar_ts": str(last["timestamp"]), "cf": cf, "atr": float(atr_cf)}
+    except Exception:
+        return None
+
+
 def _spot_count(tf: str) -> int:
     """R64: the dictated candle count of a spot TF (analysis.candle_counts)."""
     try:
@@ -336,7 +449,13 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
             # 3d/1w break is only published at ITS OWN close — otherwise the
             # «entry» would be a days-old price. Everything else stays context.
             if not _fresh(d, tf):
-                continue
+                # ── R99q38c: a 3d/1w shape whose own bucket is older than the
+                # 30 h window is still tradeable while its CONFIRM frame (1d)
+                # has just printed the first close beyond the edge — the exact
+                # law SPOT_CONFIRM_TF encodes. Everything else stays stale.
+                if not (tf in SPOT_LONG_TFS
+                        and _confirm_fresh(frames.get(SPOT_CONFIRM_TF.get(tf, "1d")))):
+                    continue
             close = float(d["close"].iloc[-1])
             n = len(d) - 1
             pats = detect_patterns(d, "LONG", log_axis=True)
@@ -367,6 +486,18 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 if not bullish_pattern_ok(_pat62, close, upper):
                     continue
                 eps = 0.02 * atr
+                # ── R99q38c (his 10-21: «۳ روزه و هفتگی هیچ هشداری نمیده»):
+                # on 3d/1w the confirming close is the CONFIRM frame's close —
+                # its first cross of the projected edge. The pattern frame's
+                # own close keeps its own lane below.
+                _cf38 = None
+                if tf in SPOT_LONG_TFS:
+                    _cf38 = confirm_frame_break(d, frames.get(SPOT_CONFIRM_TF.get(tf, "1d")),
+                                                pat, tf, "LONG")
+                    if _cf38:
+                        upper = float(_cf38["edge"])
+                        close = float(_cf38["entry"])
+                        eps = 0.02 * float(_cf38["atr"])
                 if upper is None or close <= upper + eps:
                     continue                      # no valid close above the area yet
                 kind = str(pat.get("type") or "NONE").upper()
@@ -429,6 +560,10 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 # and must not chase — anything older/أبعد belongs to the
                 # retest lanes, not to a fresh-break confirmation.
                 _chase = (close - float(upper)) / atr if atr > 0 else 99.0
+                if _cf38:
+                    # the confirming close IS the break bar of this lane
+                    _bts, _bsb = str(_cf38["bar_ts"]), 0
+                    _chase = (close - float(upper)) / max(float(_cf38["atr"]), 1e-12)
                 if not spot_break_recency_ok(_bsb, _chase):
                     if len(SPOT_BREAK_BLOCKS) < 200:
                         SPOT_BREAK_BLOCKS.append(
@@ -447,6 +582,8 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                     "break_bar_ts": _bts,
                     "break_close": close,
                     "bars_since_break": _bsb,
+                    "confirm_tf": (SPOT_CONFIRM_TF.get(tf) if _cf38 else "same_tf"),
+                    "confirm_bar_ts": (_bts if _cf38 else ""),
                     "pattern_commands": [pat],
                     "spot_pattern_id": spot_pattern_fingerprint(pat),
                     "atr": float(atr),

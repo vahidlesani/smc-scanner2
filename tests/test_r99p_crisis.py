@@ -1263,9 +1263,10 @@ def test_r99q15_spot_per_tf_gate_skips_frames_without_a_new_close():
     # nothing closed → nothing due; an unreadable frame (1w) is still scanned
     assert TS.spot_due_tfs("BTCUSDT", bundle, tfs=("4h", "1d")) == []
     assert TS.spot_due_tfs("BTCUSDT", bundle, tfs=("4h", "1w")) == ["1w"]
-    # a new close (or a live pin) pulls the frame back in
+    # a new close (or a live pin) pulls the frame back in — and R99q38d: the
+    # frame whose CONFIRM frame just closed rides along (1d is confirmed by 4h)
     bundle["4h"] = _frame("2026-10-16 04:00:00")
-    assert TS.spot_due_tfs("BTCUSDT", bundle, tfs=("4h", "1d")) == ["4h"]
+    assert TS.spot_due_tfs("BTCUSDT", bundle, tfs=("4h", "1d")) == ["4h", "1d"]
     assert TS.spot_due_tfs("BTCUSDT", bundle, tfs=("1d",), pinned=("1d",)) == ["1d"]
 
 

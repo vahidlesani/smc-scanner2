@@ -601,6 +601,20 @@ def spot_due_tfs(symbol: str, bundle, tfs=SPOT_GATE_TFS,
                 _out.append(_tf)
         except Exception:
             _out.append(_tf)
+    # ── R99q38d (his 10-21: «چرا ۱۲ساعته و روزانه و ۳ روزه و هفتگی هیچ
+    # هشداری نمیده») — a TF is ALSO due when its CONFIRM frame (the one the
+    # confirmation law reads, SPOT_CONFIRM_TF: 3d/1w←1d, 12h/1d←4h …) closed
+    # a new candle. Without this a 3d shape was only ever re-read when its own
+    # bucket completed, so the daily close that actually confirms it was never
+    # scanned — the higher TFs looked dead by construction.
+    try:
+        from analysis.spot_engine import SPOT_CONFIRM_TF as _CF38
+        _due = {str(x) for x in _out}
+        for _tf, _cf in _CF38.items():
+            if _tf in {str(x) for x in tfs} and _cf in _due and _tf not in _due:
+                _out.append(_tf)
+    except Exception:
+        pass
     return _out
 
 
