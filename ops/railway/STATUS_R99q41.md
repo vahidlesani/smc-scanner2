@@ -158,3 +158,48 @@ RAILWAY_API_TOKEN=<new> railway up --ci      # آپلود مستقیم سورس�
 
 سکرت‌های ست‌شده روی ریپو: `RAILWAY_API_TOKEN` (اکانت جدید) و
 `VIVA_ENV_JSON` (۶۲ متغیر، ۲۳۴۱ بایت).
+
+---
+
+# وضعیت ۱۰-۲۱ ۱۸:۰۰ UTC — علت قطعی پیدا شد: قطعیِ سراسریِ ریلوی
+
+`platformStatus` خودِ API:
+
+```json
+{ "isStable": false,
+  "incident": { "id": "QH8L8B3E",
+                "message": "Dashboard and API unavailable, builds paused",
+                "status": "IDENTIFIED",
+                "createdAt": "2026-10-21T07:24:24.727Z" } }
+```
+
+صفحهٔ رسمی: <https://status.railway.com/incident/QH8L8B3E> — **Major Outage**،
+شروع ۰۷:۲۴ UTC، آخرین به‌روزرسانی ۱۷:۴۵ UTC، همچنان باز. متن رسمی:
+«Builds remain paused. Our API is back up, **but some features remain
+unavailable**».
+
+پس سه چیزی که تو دیدی، هر سه یک ریشه دارند:
+
+| نشانه | ریشه |
+|---|---|
+| `projectCreate` → «Deploys have been paused temporarily» | بیلدها در همهٔ ریجن‌ها متوقف‌اند |
+| ساخت/اتصال workspace و GitHub از داشبورد | داشبورد و بخشی از API از کار افتاده |
+| توکن قدیم → `Not Authorized` با کد `INTERNAL_SERVER_ERROR` | همان «some features unavailable» — نه ریووک شدن توکن |
+
+**حساب جدید سالم است** (خوانده شد): ورک‌اسپیس `My Projects`، پلن `HOBBY`،
+`projectCount: 0`، سهمیه: ۵ دلار مصرف، ۲ پروژه، ۳ بیلد هم‌زمان، ۱ GB رم، ۲ رپلیکا.
+توکن هم معتبر است (احراز هویت پاس می‌شود؛ فقط عملیاتِ ساخت بسته است).
+
+## متغیرها: ۸۳ / ۸۴ / ۶۰ / ۱۴۴
+
+| شمارش | منبع | معنا |
+|---|---|---|
+| ۸۳ | خواندن مستقیم API از سرویس قدیم (امروز ۱۵:xx، قبل از قطعی) | مجموعهٔ واقعی اکانت قدیم — فهرست نام‌ها ذخیره شد |
+| ۷۱ | فایل ارسالی او | ۱۱ کلید `RAILWAY_*` تزریقی → **۶۰ متغیر واقعی** |
+| ۲۳ | اختلاف | **در فایل او نبودند** (SPOT_*, TIER_*, VIVA_PREBREAK_*, VIVA_CANDLE_MIN …) |
+| ۱۴۴ | `railway_values_backup.env` | فقط نام + پیش‌فرض کد؛ بک‌آپ مقدار نیست |
+| ۶۲ | `env/viva-signals.env` که ساختم | ۶۰ واقعی + ۲ کلید هزینه — **ناقص تا وقتی ۲۳ مقدار خوانده شود** |
+
+ابزار آماده: `ops/railway/pull_old_vars.py` — با توکن قدیم همهٔ ۸۳ را با مقدار
+می‌خواند، diff می‌گیرد و `*.merged.json` می‌سازد. همین حالا اجرا شد و به‌درستی
+روی قطعی متوقف شد (پیامش هم راهنمای توکن تازه می‌دهد).
