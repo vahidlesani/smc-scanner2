@@ -338,6 +338,71 @@ _FEED_SQL = """
     LIMIT 200
 """
 
+# The feed used to call bot_kv.get_json once or twice PER CARD while its outer
+# DB transaction was still open: up to 400 extra Supabase round trips every
+# 20-second state rebuild. Cache immutable message bodies by updated_at; each
+# rebuild now transfers only the tiny key/timestamp manifest and any changed
+# messages, in the existing DB connection.
+_APP_MSG_CACHE_LOCK = threading.RLock()
+_APP_MSG_CACHE: Dict[str, tuple[str, str]] = {}  # key -> (updated_at, html)
+
+
+def _app_messages_for_feed(cursor, signal_ids: List[str]) -> Dict[str, str]:
+    ids = [str(sid or "") for sid in signal_ids if str(sid or "")]
+    if not ids:
+        return {}
+    placeholder = _db_placeholder()
+    update_keys = [f"app_msg|{sid}|update" for sid in ids]
+    compact_keys = [f"app_msg|{sid}|compact" for sid in ids]
+    all_keys = update_keys + compact_keys
+    slots = ",".join([placeholder] * len(all_keys))
+
+    with _APP_MSG_CACHE_LOCK:
+        from database.bot_kv import _ensure_table
+        _ensure_table(cursor)
+        cursor.execute(
+            f"SELECT key, updated_at FROM bot_kv WHERE key IN ({slots})",
+            tuple(all_keys),
+        )
+        stamps = {str(key): str(updated_at or "") for key, updated_at in cursor.fetchall()}
+        chosen: Dict[str, str] = {}
+        for sid in ids:
+            update = f"app_msg|{sid}|update"
+            compact = f"app_msg|{sid}|compact"
+            if update in stamps:
+                chosen[sid] = update
+            elif compact in stamps:
+                chosen[sid] = compact
+
+        changed = [
+            key for key in chosen.values()
+            if key not in _APP_MSG_CACHE or _APP_MSG_CACHE[key][0] != stamps.get(key, "")
+        ]
+        if changed:
+            changed_slots = ",".join([placeholder] * len(changed))
+            cursor.execute(
+                f"SELECT key, value, updated_at FROM bot_kv WHERE key IN ({changed_slots})",
+                tuple(changed),
+            )
+            for key, value, updated_at in cursor.fetchall():
+                try:
+                    obj = json.loads(value or "{}")
+                    html_text = str((obj or {}).get("html") or "")
+                except Exception:
+                    html_text = ""
+                _APP_MSG_CACHE[str(key)] = (str(updated_at or ""), html_text)
+
+        # Bound process memory while preserving every card in the current feed.
+        if len(_APP_MSG_CACHE) > 1200:
+            keep = set(chosen.values())
+            for key in list(_APP_MSG_CACHE):
+                if key not in keep:
+                    _APP_MSG_CACHE.pop(key, None)
+        return {
+            sid: _APP_MSG_CACHE.get(key, ("", ""))[1]
+            for sid, key in chosen.items()
+        }
+
 
 def _row_is_spot(code: str, source: Any, market_json: Any) -> bool:
     mkt = str(market_json or "")
@@ -453,7 +518,11 @@ def _rebuild_state() -> Dict[str, Any]:
             # r46: the app journal is ALL-TIME (latest 120) — the since-midnight
             # window made every headline zero right after 00:00 UTC.
             c.execute(_FEED_SQL)
-            for r in c.fetchall():
+            _feed_rows42 = c.fetchall()
+            _app_text42 = _app_messages_for_feed(
+                c, [str(row[0] or "") for row in _feed_rows42]
+            )
+            for r in _feed_rows42:
                 (sid, symbol, source, fa, direction, entry, sl, tp1, tp2, result, pnl, score,
                  style, code, tf, created_at, closed_at, confirmed, partial_win, market_json,
                  tp1_hit, tp1_hit_at, sl_moved, description, entry_conditions, confirmations,
@@ -505,12 +574,7 @@ def _rebuild_state() -> Dict[str, Any]:
                                    * float(leverage or 0) / 100.0, 2)
                              if pnl is not None else None),
                 ))
-                try:
-                    from database.bot_kv import get_json as _app_gj
-                    _am = _app_gj(f"app_msg|{sid}|update", {}) or _app_gj(f"app_msg|{sid}|compact", {}) or {}
-                    feed[-1]["telegram_text"] = str(_am.get("html") or "")
-                except Exception:
-                    pass
+                feed[-1]["telegram_text"] = _app_text42.get(str(sid or ""), "")
             # App is a same-day journal: headline totals are derived from the
             # exact feed shown above, never from the historical dashboard aggregate.
             _closed_feed = [x for x in feed if x.get("result") in ("WIN", "LOSS")]
