@@ -7,6 +7,9 @@ price-touch TP/SL/trailing events are executed from fresh venue tickers so a
 from __future__ import annotations
 
 import json
+import os
+import threading
+import time
 from typing import Dict, List
 
 from config import get_settings
@@ -15,6 +18,46 @@ from database.repository_v7 import _bool_value, _now
 from analysis.trade_management import advance_ladder
 
 SETTINGS = get_settings()
+
+# Supabase egress guard (2026-10-22). Prices still refresh every 5 seconds, but
+# the durable position plan changes only when this process confirms/fills/closes
+# a trade. Keep those rows in memory for one minute and invalidate immediately
+# after every local lifecycle write. This removes the measured 952,130 repeated
+# JSON-row SELECTs without delaying TP/SL price checks.
+_PENDING_ROWS_LOCK = threading.RLock()
+_PENDING_ROWS = None
+_PENDING_ROWS_AT = 0.0
+_PHANTOM_SWEEP_LOCK = threading.Lock()
+_PHANTOM_SWEEP_AT = 0.0
+
+
+def _pending_rows_seconds() -> float:
+    try:
+        return max(5.0, float(os.getenv("REALTIME_DB_CACHE_SECONDS", "60") or 60))
+    except (TypeError, ValueError):
+        return 60.0
+
+
+def invalidate_pending_rows() -> None:
+    global _PENDING_ROWS, _PENDING_ROWS_AT
+    with _PENDING_ROWS_LOCK:
+        _PENDING_ROWS = None
+        _PENDING_ROWS_AT = 0.0
+
+
+def _phantom_sweep_due() -> bool:
+    """Integrity repair is periodic, not a 5-second full-table monitor."""
+    global _PHANTOM_SWEEP_AT
+    try:
+        interval = max(60.0, float(os.getenv("PHANTOM_SWEEP_SECONDS", "300") or 300))
+    except (TypeError, ValueError):
+        interval = 300.0
+    now = time.monotonic()
+    with _PHANTOM_SWEEP_LOCK:
+        if _PHANTOM_SWEEP_AT and now - _PHANTOM_SWEEP_AT < interval:
+            return False
+        _PHANTOM_SWEEP_AT = now
+        return True
 
 
 def _void_signal_row(cursor, signal_id: str, now: str, reason: str) -> None:
@@ -107,6 +150,7 @@ def void_phantom_positions() -> int:
         with legacy_db.db_cursor() as cursor:
             for signal_id, reason in verdicts.items():
                 _void_signal_row(cursor, signal_id, now, reason)
+        invalidate_pending_rows()
         return len(verdicts)
     except Exception as exc:
         print(f"phantom sweep skipped: {exc}")
@@ -141,27 +185,45 @@ def pending_filled_count() -> int:
         return 1
 
 
+def _pending_filled_rows() -> list:
+    """Durable plans for the 5-second price lane, with write-through invalidation."""
+    global _PENDING_ROWS, _PENDING_ROWS_AT
+    now = time.monotonic()
+    with _PENDING_ROWS_LOCK:
+        if (_PENDING_ROWS is not None
+                and now - _PENDING_ROWS_AT < _pending_rows_seconds()):
+            return list(_PENDING_ROWS)
+        truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
+        p = legacy_db._ph()
+        with legacy_db.db_cursor() as cursor:
+            cursor.execute(f"""
+                SELECT signal_id,symbol,direction,entry,sl_original,leverage,margin_usd,
+                       trade_style,confirmed_at,source,strategy_fa,strategy_version,
+                       pro_message_id,target_state_json,public_code,trigger_timeframe
+                FROM signals
+                WHERE confirmed={truth} AND confirmation_sent={truth}
+                  AND status='CONFIRMED' AND result='PENDING'
+                  AND entry_filled={truth} AND strategy_version={p}
+            """, (SETTINGS.strategy_version,))
+            rows = cursor.fetchall()
+        _PENDING_ROWS = list(rows)
+        _PENDING_ROWS_AT = now
+        return list(_PENDING_ROWS)
+
+
 def monitor_realtime_prices(prices: Dict[str, float]) -> List[Dict]:
     """Advance durable filled ladders using one fresh last-price snapshot."""
     try:
-        void_phantom_positions()
+        if _phantom_sweep_due():
+            void_phantom_positions()
     except Exception:
         pass
     truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
     p = legacy_db._ph()
-    with legacy_db.db_cursor() as cursor:
-        cursor.execute(f"""
-            SELECT signal_id,symbol,direction,entry,sl_original,leverage,margin_usd,
-                   trade_style,confirmed_at,source,strategy_fa,strategy_version,
-                   pro_message_id,target_state_json,public_code,trigger_timeframe
-            FROM signals
-            WHERE confirmed={truth} AND confirmation_sent={truth}
-              AND status='CONFIRMED' AND result='PENDING'
-              AND entry_filled={truth} AND strategy_version={p}
-        """, (SETTINGS.strategy_version,))
-        rows = cursor.fetchall()
+    rows = _pending_filled_rows()
 
     events: List[Dict] = []
+    cache_dirty = False
     for row in rows:
         (signal_id,symbol,direction,entry,original_sl,leverage,margin,style,
          confirmed_at,source,strategy_fa,strategy_version,pro_message_id,
@@ -217,6 +279,7 @@ def monitor_realtime_prices(prices: Dict[str, float]) -> List[Dict]:
                 event["realized_profit_usd"] = notional*event["realized_pnl_pct"]/100
                 event["realized_margin_roi_pct"] = event["realized_profit_usd"]/max(float(margin or 0),1e-12)*100
             emitted.append(event)
+        cache_dirty = True
         with legacy_db.db_cursor() as cursor:
             if int(ladder.get("hit_index") or 0) >= 1:
                 cursor.execute(f"UPDATE signals SET tp1_hit={truth}, partial_win={truth}, target_state_json={p}, sl={p}, last_checked_at={p} WHERE signal_id={p}",
@@ -245,4 +308,6 @@ def monitor_realtime_prices(prices: Dict[str, float]) -> List[Dict]:
                                 "trailing_used": bool(int(ladder.get("hit_index") or 0)>0
                                                        and abs(float(ladder.get("current_sl") or 0)-float(original_sl))>1e-9)})
         events.extend(emitted)
+    if cache_dirty:
+        invalidate_pending_rows()
     return events

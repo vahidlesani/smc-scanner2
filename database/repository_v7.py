@@ -1731,4 +1731,12 @@ def monitor_confirmed_trades() -> List[Dict]:
             events.append(tp1_event)
         if closed_event:
             events.append(closed_event)
+    # The 5-second ticker lane caches durable plans, not prices. This candle
+    # pass is the only other writer that can fill/advance/close those plans;
+    # reconcile immediately so cache efficiency never delays an exit.
+    try:
+        from database.realtime_monitor import invalidate_pending_rows
+        invalidate_pending_rows()
+    except Exception:
+        pass
     return events
