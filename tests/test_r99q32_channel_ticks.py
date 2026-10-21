@@ -72,11 +72,12 @@ def test_the_three_hit_paths_call_the_tick_engine():
     assert 'tf_channel_mark_hit(str(event.get("public_code") or ""), "stop"' in src
 
 
-def test_techclassic_now_rides_the_mid_board(monkeypatch):
+def test_techclassic_now_rides_the_long_board(monkeypatch):
+    # his 10-21: «تکنوکلاسیک … باید به کانالی بره که برای بلند مدت بود»
     monkeypatch.setattr(M, "CHAT_ID_SWING_SHORT", "-1001")
     monkeypatch.setattr(M, "CHAT_ID_SWING_MID", "-1002")
     monkeypatch.setattr(M, "CHAT_ID_SWING_LONG", "-1003")
-    assert M._setup_announce_channel("TECHCLASSIC") == "-1002"
+    assert M._setup_announce_channel("TECHCLASSIC") == "-1003"
     assert M._setup_announce_channel("ALBROX") == "-1002"
     assert M._setup_announce_channel("TLBREAK") == "-1002"
     assert M._setup_announce_channel("PINVAL") == "-1001"

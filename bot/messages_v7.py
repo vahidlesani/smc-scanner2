@@ -8307,9 +8307,13 @@ def _setup_announce_channel(setup_code: str) -> str:
     s = str(setup_code or "").upper()
     if s in ("PINVAL", "PINWALLQ", "PINWALL"):
         return CHAT_ID_SWING_SHORT or ""
-    if s in ("ALBROX", "TLBREAK", "TECHCLASSIC"):
-        # R99q32b (his 10-20: «آلبروکس و تی‌ال‌بریک به کانال میان مدت و
-        # تکنوکلاسیک هم به کانال میان مدت») — TC now rides the SAME mid board.
+    # ── R99q38a (his 10-21, verbatim): «تکنوکلاسیک در کانال فقط تایید‌ها باید
+    # به کانالی بره که برای بلند مدت بود / تی‌ال‌بریک و آلبروکس کانال میان
+    # مدت / پین‌وال کانال کوتاه مدت‌ها». TECHCLASSIC left the mid board and
+    # owns the long-term board now; TLBREAK + ALBROX stay mid.
+    if s == "TECHCLASSIC":
+        return (CHAT_ID_SWING_LONG or CHAT_ID_SWING_MID or "")
+    if s in ("ALBROX", "TLBREAK"):
         return CHAT_ID_SWING_MID or ""
     return ""
 

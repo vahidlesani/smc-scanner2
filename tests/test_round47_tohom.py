@@ -175,8 +175,8 @@ def test_setup_routing_map():
     src = open(os.path.join(REPO, "bot", "messages_v7.py"), encoding="utf-8").read()
     part = src.split("def _setup_announce_channel")[1].split("def tf_channel_publish_confirmed")[0]
     assert '"PINVAL", "PINWALLQ", "PINWALL"' in part and "CHAT_ID_SWING_SHORT" in part
-    # R99q32b (his 10-20): «تکنوکلاسیک هم به کانال میان مدت» — no LONG board.
-    assert "TECHCLASSIC" in part and "CHAT_ID_SWING_MID" in part
+    # his 10-21: TECHCLASSIC owns the LONG board, TLBREAK/ALBROX the mid one
+    assert 'if s == "TECHCLASSIC":' in part and "CHAT_ID_SWING_LONG" in part
     assert '"ALBROX", "TLBREAK"' in part and "CHAT_ID_SWING_MID" in part
     assert "_setup_routes" not in src
 

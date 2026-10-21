@@ -100,8 +100,8 @@ def test_confirm_mirror_mapping():
     part = src.split("def _setup_announce_channel")[1].split("def tf_channel_publish_confirmed")[0]
     assert '"PINVAL", "PINWALLQ", "PINWALL"' in part and "CHAT_ID_SWING_SHORT" in part
     assert '"ALBROX", "TLBREAK"' in part and "CHAT_ID_SWING_MID" in part
-    # R99q32b (his 10-20): «تکنوکلاسیک هم به کانال میان مدت» — no LONG board.
-    assert "TECHCLASSIC" in part and "CHAT_ID_SWING_MID" in part
+    # his 10-21: «تکنوکلاسیک … به کانالی بره که برای بلند مدت بود»
+    assert 'if s == "TECHCLASSIC":' in part and "CHAT_ID_SWING_LONG" in part
     assert "_setup_routes" not in src and "confirm_mirror" not in src
     assert "TF-channel mirror failed" not in src
 
