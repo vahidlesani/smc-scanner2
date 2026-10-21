@@ -688,6 +688,22 @@ def evaluate_confirmation(
     """
     def reject(code: str, message: str) -> Tuple[bool, SignalCandidate, str]:
         candidate.metadata["last_reject_code"] = code
+        # ── R99q40a: the log must answer «چرا هشدار نمیاد» without a DB autopsy.
+        # One compact line carries the numbers every gate judges.
+        try:
+            _d = candidate.metadata or {}
+            _edge_why = float(_d.get("confirm_level_used") or _d.get("viva_breakout_line")
+                              or _d.get("viva_break_line") or _d.get("viva_watch_line")
+                              or _d.get("pin_high") or 0.0)
+            print(f"CONFIRM_WHY | {getattr(candidate, 'symbol', '?')} | "
+                  f"{getattr(candidate, 'setup_code', '?')} | {code} | "
+                  f"edge={_edge_why:.8g} "
+                  f"fast={bool(_d.get('tl_fast_break'))} touched={bool(_d.get('touched'))} "
+                  f"stale_after={str(_d.get('stale_after_bar') or '-')[:16]} "
+                  f"consumed={bool(_d.get('confirmation_consumed') or _d.get('technical_confirmation_complete'))} "
+                  f"src={str(_d.get('confirm_edge_source') or '-')}")
+        except Exception:
+            pass
         # R64.1e CONFIRM-FUNNEL (his INJ/TLBREAK «تأیید دیر یا هیچ»): every
         # gate rejection prints ONE compact line — the boot log then answers
         # «چرا تایید نشد» without a database autopsy.
@@ -989,7 +1005,22 @@ def evaluate_confirmation(
                     _prev_row = _r
                     continue
                 _cndl = ""
-                if _lower_tf:
+                # ── R99q40d (his 10-21 «چرا هشدار نمیاد» + «تاییدها سروقت»).
+                # MEASURED on his own card (ZECUSDT TLBREAK 30m, signal
+                # viva-ZEC-SW-TLBREAK-10210301-18AF): the break close was 7.2
+                # ATR PAST the line and the 15m anatomy gate still called it
+                # «کندل خلاف‌جهت با کلوز در نیمهٔ مخالف» — so every bar of the
+                # runaway failed the test, the fast lane never fired, and the
+                # chain sat on NO_TOUCH for 48 minutes (03:01 → 03:50) while
+                # price ran 1265 against a 1147.69 line. RENDERUSDT in the same
+                # minute confirmed only because its own bar happened to pass.
+                # The law this gate enforces is written AT the line — «a
+                # shooting star or a counter-colour close AT THE LINE is a
+                # fake-out». A bar more than one ATR beyond the edge is no
+                # longer testing the line: it cannot be a fake-out of a level
+                # it has left behind, and the one-close law governs it.
+                _at_line40 = abs(float(_r["close"]) - _edge_t) <= 1.0 * _f_atr
+                if _lower_tf and _at_line40:
                     _ok62, _cndl = _r62_vbc(_r, _prev_row, candidate.direction, _edge_t, _f_atr)
                     if not _ok62:
                         candidate.metadata["last_fakeout_candle"] = f"{str(_bar_ts)[:16]} {_cndl}"
