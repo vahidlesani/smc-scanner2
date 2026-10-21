@@ -1,0 +1,414 @@
+"""TLBREAK home — فاز نظم و انضباط (R99i).
+
+Trendline-break setup. Inner ceiling↔floor law: the break side is judged
+against the INNER rails. Single-TL breaks confirm instantly (first close
+after the break — user law). Steep lines are NEVER vetoed: no steepness
+input exists anywhere in this file, by design (fix zoom/count instead).
+TLBREAK draws NO zones (TLs only).
+"""
+
+# R99n: this setup OWNS its concurrent-chain allowance (Viva 10-15:
+# no global first-come pool — a full neighbour book never starves us).
+OWN_MAX_CONCURRENT_CHAINS = 30
+
+
+TLBREAK_ENGINES = {
+    "detection": {"entry": "analysis.tlbreak.tlbreak_detect", "status": "wired",
+                  "notes": "own wrapper over detect_viva_tlbreak; tags tlbreak_owned"},
+    "zoom": {"entry": "analysis.tlbreak.tlbreak_zoom_window", "status": "wired",
+             "notes": "window from the count; TL-anchored right"},
+    "pivots": {"entry": "analysis.tlbreak.tlbreak_find_pivots", "status": "wired",
+               "notes": "fractals on wick highs/lows; shadows count"},
+    "candle_count": {"entry": "analysis.tlbreak.tlbreak_candles_for", "status": "wired",
+                     "notes": "FROM the pattern span; no min/max"},
+    "zones_render": {"entry": "analysis.tlbreak.tlbreak_zones_from_pivots", "status": "wired",
+                     "notes": "TLBREAK draws NO zones by law — always []"},
+    "confirm_entry": {"entry": "analysis.tlbreak.tlbreak_entry_check", "status": "wired",
+                      "notes": "TL break + first close = instant confirm; R99m refuses stale/late (live beyond TP1 or 30%+ chased)"},
+    "trailing": {"entry": "analysis.tlbreak.tlbreak_trailing_check", "status": "wired",
+                 "notes": "live beyond stop => STOPPED; 5% runner alarm"},
+    "tohom": {"entry": "analysis.tlbreak.tlbreak_tohom_fired", "status": "wired",
+              "notes": "early-confirm hook on the shared TOHOM evaluator"},
+    "entry_rules": {"entry": "analysis.tlbreak.tlbreak_entry_check", "status": "wired",
+                    "separate": True,
+                    "notes": "SEPARATE; foreign gates alarm + veto refused"},
+}
+
+TLBREAK_ENTRY_RULES = {
+    "inner_ceiling_floor": True,
+    "single_tl_breaks_confirm": True,
+    "steep_lines_never_vetoed": True,
+    "instant_confirm_after_break_close": True,
+    "tohom_early_entry": True,
+    "stale_late_veto_r99m": True,
+    "forbidden_gates": ["techclassic_veto", "pinval_veto", "pinwall_veto",
+                        "albrox_veto", "cross_setup_veto"],
+    "zones_may_draw": False,
+    "zones_may_gate": False,
+}
+
+
+def get_tlbreak_engine(name):
+    return TLBREAK_ENGINES.get(str(name or "").lower())
+
+
+def tlbreak_health_check(candidate=None):
+    _ = candidate
+    return []
+
+
+def tlbreak_alarm(message):
+    return f"[TLBREAK-ALARM] {message}"
+
+
+def _foreign_gate_hit(gate_name: str) -> bool:
+    _g = str(gate_name or "").lower()
+    if not _g:
+        return False
+    if _g in TLBREAK_ENTRY_RULES["forbidden_gates"]:
+        return True
+    return ("veto" in _g) and any(_s in _g for _s in
+                                  ("techclassic", "pinval", "pinwall", "albrox"))
+
+
+def tlbreak_detect(bundle, style="DAYTRADE"):
+    from analysis.setups_experimental import detect_viva_tlbreak as _det
+    cand = _det(bundle, style)
+    if cand is not None:
+        try:
+            if not isinstance(getattr(cand, "metadata", None), dict):
+                cand.metadata = {}
+            cand.metadata["tlbreak_owned"] = True
+        except Exception:
+            pass
+    return cand
+
+
+def tlbreak_find_pivots(highs, lows, left=2, right=2):
+    try:
+        # R99q14: `x or []` is a numpy/pandas landmine — `bool(array)` raises
+        # ValueError and the guard below then reports an EMPTY pivot set, i.e.
+        # geometry silently disappears on any engine given arrays/series.
+        _h = [float(x) for x in ([] if highs is None else highs)]
+        _l = [float(x) for x in ([] if lows is None else lows)]
+    except Exception:
+        return {"highs": [], "lows": []}
+    _n = min(len(_h), len(_l))
+    _hi, _lo = [], []
+    for i in range(int(left), _n - int(right)):
+        _w = list(range(i - int(left), i + int(right) + 1))
+        _w.remove(i)
+        if all(_h[i] >= _h[j] for j in _w) and any(_h[i] > _h[j] for j in _w):
+            _hi.append((i, _h[i]))
+        if all(_l[i] <= _l[j] for j in _w) and any(_l[i] < _l[j] for j in _w):
+            _lo.append((i, _l[i]))
+    return {"highs": _hi, "lows": _lo}
+
+
+# R99q v2 frame law (his 10-15: «همه انجینهای ... زوم و پیوت باید دقیق طبق
+# قانون ساخته بشه برا همون ستاپ، نه کپی هم») — TLBREAK's OWN numbers: the
+# break chart must breathe a bit more than a pattern chart (the line's last
+# pivots AND the post-break candles have to be inside the same view).
+_TLBREAK_FRAME_CAP = {"1h": 85, "2h": 85, "4h": 80, "6h": 85, "8h": 90,
+                      "12h": 95, "1d": 130, "3d": 150, "1w": 160}
+
+
+_CANDLE_FLOOR = 80   # کف قانونی او؛ VIVA_CANDLE_MIN آن را override می‌کند
+
+
+def _candle_floor() -> int:
+    """R99q14 SETUP-CANDLE LAW (Viva 10-15, verbatim: «ستاپ‌ها هم از ۱۲۰ به بالا
+    باید باشه بر اساس انتخاب پترن در زوم درست … چارت‌ها اکثرا نه هندسه دارن نه
+    اینکه زوم درستی دارن»): the setup's own floor is 120 candles now (his 80-floor
+    of 10-15 stayed for the raw detection tape; the PICTURE of a setup must show
+    the pattern), still overridable per deploy.
+    """
+    try:
+        import os as _os
+        _own = int(str(_os.getenv("VIVA_SETUP_CANDLE_MIN", "") or "").strip() or 120)
+        _old = int(str(_os.getenv("VIVA_CANDLE_MIN", "") or "").strip() or 80)
+        return max(20, _own, _old)
+    except Exception:
+        return 120
+
+
+_TLBREAK_FRAME_PAD = {"15m": 70, "30m": 75, "1h": 85, "2h": 95, "4h": 105, "6h": 110, "8h": 110, "12h": 115, "1d": 125, "3d": 145, "1w": 155}
+_TLBREAK_FRAME_CAP = {"15m": 170, "30m": 175, "1h": 185, "2h": 195, "4h": 205, "6h": 210, "8h": 215, "12h": 225, "1d": 245, "3d": 285, "1w": 305}
+
+
+def tlbreak_candles_for(tf, pattern_span, pattern=None):
+    """قانون جدید ۱۰-۱۵ (verbatim): «کف تعداد کندل‌ها ۸۰ کندل و سقفش با توجه شکل و نوع پترن، تایم‌فریم و ترندلاین» + «۴۰ تا ۵۰ کندل بیشتر تا زوم بهتر بشه» → قاب پهن: کف ۸۰ (VIVA_CANDLE_MIN قابل تنظیم)؛ TLBREAK همیشه خط + پاچ بریک را با هم نشان می‌دهد (بنابراین pad دوبل این ستاپ خودش)."""
+    try:
+        _t = str(tf or "").lower()
+        _pad = _TLBREAK_FRAME_PAD.get(_t, 90)
+        _cap = _TLBREAK_FRAME_CAP.get(_t, 200)
+        _span = max(0, int(pattern_span or 0))
+        _base = _span + _pad
+        _base = _span + 2 * _pad      # خط و پاچ بریک هر دو داخل قاب
+        return max(_candle_floor(), min(_cap, _base))
+    except Exception:
+        return 120
+
+
+def tlbreak_zoom_window(n_bars, count, pad_right_frac=0.12):
+    try:
+        _n, _c = int(n_bars), max(1, int(count))
+        _x_to = _n - 1 + int(_c * float(pad_right_frac))
+        return (max(0, _x_to - _c), _x_to)
+    except Exception:
+        return (0, max(0, int(n_bars or 0) - 1))
+
+
+def tlbreak_zones_from_pivots(pivots, direction="LONG"):
+    """TLBREAK draws NO zones by law — always empty (TLs only)."""
+    return []
+
+
+def tlbreak_entry_check(*, broke: bool, closed_after_break: bool,
+                        tohom_fired: bool = False, side: str = None,
+                        direction: str = "LONG", live=None, entry=None, tp1=None,
+                        break_age_bars=None, foreign_gates=(), day=None):
+    alarms, reasons = [], []
+    for _g in (foreign_gates or ()):
+        if _foreign_gate_hit(_g):
+            alarms.append(tlbreak_alarm(
+                f"foreign gate in TLBREAK path: {_g} — veto REFUSED, entry proceeds"))
+    if not broke:
+        reasons.append("no break yet")
+        return {"decision": "WAIT", "alarms": alarms, "reasons": reasons}
+    if not (closed_after_break or tohom_fired):
+        reasons.append("break without close/TOHOM")
+        return {"decision": "WAIT", "alarms": alarms, "reasons": reasons}
+    # The fresh close is the entry event; a historical close cannot be
+    # re-labeled as a current TLBREAK confirmation after the tape has advanced.
+    if closed_after_break and break_age_bars is not None:
+        try:
+            if int(break_age_bars) > 2:
+                _stale = f"STALE: first break close is {int(break_age_bars)} bars old"
+                try:
+                    import os as _os2
+                    _veto = str(_os2.getenv("VIVA_LATE_ENTRY_VETO", "0")).strip().lower() in (
+                        "1", "true", "yes", "on")
+                except Exception:
+                    _veto = False
+                if _veto:
+                    alarms.append(tlbreak_alarm(_stale + " -- confirm REFUSED"))
+                    reasons.append(_stale)
+                    return {"decision": "STALE", "alarms": alarms, "reasons": reasons}
+                alarms.append(tlbreak_alarm(_stale + " -- annotated, entry proceeds"))
+                reasons.append(_stale)
+        except (TypeError, ValueError):
+            pass
+    # R99q (Viva 10-15, verbatim «گفتم گیت خشک‌کننده سیگنال‌های ستاپ‌ها رو
+    # بردارررر»): the daily TOTAL budget is RETIRED — a shared cap that
+    # dried EVERY setup at once (today 21/25 by 04:40 Tehran → silence).
+    # Capacity lives in the licence seats (3 concurrent per symbol/setup/
+    # trigger-TF) and the setup's own concurrent slots. Never deferred.
+    # R99m (Viva 10-15, FIL-SW: confirmed 7.5h after the break, live 9%
+    # past entry, TP1+TP2 already printed BEFORE the send -- «chase
+    # ممنوع» is a VETO, not a note; the old branch annotated AND confirmed).
+    # NOTE: the caller passes entry=md.entry which on the TOHOM path is a
+    # live-at-freeze STAMP, not the trade entry -- so an inverted entry
+    # (SHORT entry<tp1 / LONG entry>tp1) is diagnosed, and the veto keys
+    # on live-vs-TP1, which stays sane. Any non-CONFIRM makes the R99i
+    # caller stand down (no shared edit needed).
+    try:
+        _long = str(direction or "LONG").upper() != "SHORT"
+        if live is not None:
+            _live = float(live)
+            _entry = None
+            try:
+                _entry = float(entry) if entry is not None else None
+            except Exception:
+                _entry = None
+            _tp1 = None
+            try:
+                _tp1 = float(tp1) if tp1 is not None else None
+            except Exception:
+                _tp1 = None
+            _veto = ""
+            _tp1_sane = bool(_tp1 and _tp1 > 0)
+            _entry_sane = bool(_entry and _entry > 0 and _tp1_sane
+                               and ((_entry < _tp1) if _long else (_entry > _tp1)))
+            if not _entry_sane and _entry and _tp1_sane:
+                alarms.append(tlbreak_alarm(
+                    f"entry {str(_entry)} looks like a live stamp, not a trade "
+                    f"entry (tp1 {str(_tp1)}) -- veto keys on TP1"))
+            if _tp1_sane:
+                _past_tp1 = (_live >= _tp1) if _long else (_live <= _tp1)
+                if _past_tp1:
+                    _veto = (f"STALE: live {str(_live)} already beyond TP1 "
+                             f"{str(_tp1)} -- trade played out, confirm REFUSED")
+            if not _veto and _entry_sane:
+                _leg = (_tp1 - _entry) if _long else (_entry - _tp1)
+                _beyond = (_live - _entry) if _long else (_entry - _live)
+                if _leg > 0 and _beyond >= 0.30 * _leg:
+                    _veto = (f"LATE: live {str(_live)} chased "
+                             f"{(_beyond / _leg) * 100:.0f}% of entry->TP1 "
+                             f"(entry {str(_entry)}) -- chase forbidden, REFUSED")
+            if not _veto and not _tp1_sane and _entry and _entry > 0:
+                _beyond = ((_live - _entry) if _long else (_entry - _live))
+                if _beyond / _entry > 0.015:
+                    _veto = (f"LATE: live {str(_live)} "
+                             f"{(_beyond / _entry) * 100:.1f}% beyond entry "
+                             f"{str(_entry)} (no TP1) -- chase forbidden, REFUSED")
+            if _veto:
+                alarms.append(tlbreak_alarm(_veto))
+                reasons.append(_veto)
+                return {"decision": "STALE", "alarms": alarms, "reasons": reasons}
+    except Exception:
+        pass
+    try:
+        from analysis import tiered_scan as _ts2
+        _ts2.daily_count_incr("futures", day)
+    except Exception:
+        pass
+    reasons.append(f"TL break + first close (side={side or 'inner-rail'})")
+    return {"decision": "CONFIRM", "alarms": alarms, "reasons": reasons}
+
+
+def tlbreak_trailing_check(*, entry, stop, live, direction="LONG", trail=None,
+                           profit_pct=None, confirmed=True):
+    alarms, reasons = [], []
+    try:
+        _e, _s, _l = float(entry), float(stop), float(live)
+    except Exception:
+        return {"state": "HEALTHY", "alarms": alarms,
+                "reasons": ["unusable numbers — fail-open"]}
+    _long = str(direction or "LONG").upper() != "SHORT"
+    if (_l <= _s) if _long else (_l >= _s):
+        alarms.append(tlbreak_alarm("position STOPPED (live beyond stop) — never CONFIRM"))
+        reasons.append("live beyond stop")
+        return {"state": "STOPPED", "alarms": alarms, "reasons": reasons}
+    if trail:
+        try:
+            _t = float(trail)
+            if (_l <= _t) if _long else (_l >= _t):
+                alarms.append(tlbreak_alarm("trail level hit — exit"))
+                reasons.append("trail hit")
+                return {"state": "TRAIL_HIT", "alarms": alarms, "reasons": reasons}
+        except Exception:
+            pass
+    try:
+        if profit_pct is not None and float(profit_pct) >= 5.0 and not confirmed:
+            alarms.append(tlbreak_alarm("5% runner WITHOUT confirm — bug, annotate"))
+            reasons.append("unconfirmed runner")
+    except Exception:
+        pass
+    reasons.append("healthy")
+    return {"state": "HEALTHY", "alarms": alarms, "reasons": reasons}
+
+
+def tlbreak_tohom_fired(candidate, lower_closed_df=None, **kw):
+    try:
+        from analysis.tohom import evaluate_tohom_confirmation as _ev
+        _ok, _c, _reason = _ev(candidate, lower_closed_df, **kw)
+        return bool(_ok)
+    except Exception:
+        return False
+
+
+# ── R99q14 PRE-BREAK EARLY ALERT — TLBREAK's OWN two-pivot watch line (this lane
+# already existed for TLBREAK inside setups_experimental; it now answers through
+# the setup's own engine so every setup speaks the same law pre-break).
+def _prebreak_atr(df) -> float:
+    try:
+        from analysis.brooks_pa import atr as _atr_b
+        _v = float(_atr_b(df))
+        return _v if _v > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def tlbreak_prebreak(df, tf: str, symbol: str = "", bundle=None,
+                     live_price: float = None) -> list:
+    """Pre-break events from TLBREAK's own 2-pivot watch fit."""
+    if df is None or len(df) < 45:
+        return []
+    try:
+        from analysis.viva_tlbreak import fit_two_pivot_watch
+    except Exception:
+        return []
+    atr_v = _prebreak_atr(df)
+    if atr_v <= 0:
+        return []
+    live = live_price
+    if live is None:
+        try:
+            live = float(df["close"].iloc[-1])
+        except Exception:
+            return []
+    n = len(df)
+    out = []
+    band = 1.2
+    try:
+        from analysis.prebreak_lane import band_atr as _band
+        band = max(1.2, float(_band()))
+    except Exception:
+        pass
+    for side in ("HIGH", "LOW"):
+        try:
+            w = fit_two_pivot_watch(df, side)
+        except Exception:
+            w = None
+        if w is None:
+            continue
+        try:
+            edge = float(w.price_at(n - 1))
+        except Exception:
+            continue
+        if edge <= 0:
+            continue
+        _side = "upper" if side == "HIGH" else "lower"
+        _dir = "LONG" if side == "HIGH" else "SHORT"
+        # slope must still be approaching (a high line falls onto price, a low
+        # line rises into it) — the engine's own doctrine
+        try:
+            if side == "HIGH" and float(w.slope) >= 0:
+                continue
+            if side == "LOW" and float(w.slope) <= 0:
+                continue
+        except Exception:
+            pass
+        # already broken → the confirm lane owns it
+        try:
+            closes = df["close"].astype(float).to_numpy()
+            if _side == "upper" and closes[-1] > edge + 0.10 * atr_v:
+                continue
+            if _side == "lower" and closes[-1] < edge - 0.10 * atr_v:
+                continue
+        except Exception:
+            pass
+        dist = abs(live - edge) / atr_v
+        if dist > band:
+            continue
+        try:
+            _pts = [{"ts": str(df["timestamp"].iloc[int(w.first["index"])]),
+                     "price": float(w.first["price"])},
+                    {"ts": str(df["timestamp"].iloc[int(w.last["index"])]),
+                     "price": float(w.last["price"])}]
+        except Exception:
+            _pts = []
+        out.append({
+            "setup": "TLBREAK",
+            "setup_name": "VIVA-TLBREAK",
+            "tf": tf,
+            "pattern_tf": tf,
+            "side": _side,
+            "direction": _dir,
+            "pattern": "TRENDLINE",
+            "pattern_fa": "ترندلاین دو پیوتی",
+            "edge": edge,
+            "distance_atr": round(dist, 3),
+            "line_geo": {"price": edge, "a": edge, "b": float(getattr(w, "slope", 0.0) or 0.0)},
+            "pattern_geo": {},
+            "trendline_points": _pts,
+            "measured": {"from": edge, "to": edge, "pct": 0.0, "height": 0.0},
+            "touches": 2,
+            "score": 6,
+            "atr": atr_v,
+            "state": "EDGE_NEAR",
+            "note_fa": (f"ترندلاین { 'بالایی' if _side == 'upper' else 'پایینی' } دو پیوتی معتبر "
+                        f"و قیمت درون الگو به آن نزدیک شده ({edge:g}) — بریک هنوز تأیید نشده."),
+        })
+    return out

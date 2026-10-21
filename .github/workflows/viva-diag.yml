@@ -1,0 +1,233 @@
+name: viva-diag
+
+# Read-only production diagnostic. Pulls the service variables from the
+# Railway API (never printed), connects to the app database and prints
+# aggregate counts only — no symbols of users, no tokens, no DSN.
+on:
+  workflow_dispatch:
+    inputs:
+      what:
+        description: "alerts | patterns | all"
+        required: true
+        default: "alerts"
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      WHAT: ${{ github.event.inputs.what }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: pip install -q psycopg2-binary
+
+      - name: pull variables + query
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request, sys
+
+          API = "https://backboard.railway.com/graphql/v2"
+          PID = "dfa19d15-6e78-41b5-8a0c-8ccfc3807add"
+          EID = "a787e251-94d1-4665-8ab4-dc9b92a10a2a"
+          SID = "84f5a4ef-117f-4c2d-a460-83bd290ce58a"
+
+          def gql(q, v=None):
+              body = json.dumps({"query": q, "variables": v or {}}).encode()
+              req = urllib.request.Request(
+                  API, data=body, method="POST",
+                  headers={"Authorization": "Bearer " + os.environ["RAILWAY_API_TOKEN"],
+                           "Content-Type": "application/json",
+                           "User-Agent": "viva-ops/1.0"})
+              with urllib.request.urlopen(req, timeout=90) as r:
+                  return json.loads(r.read().decode())
+
+          d = gql("""query($p:String!,$e:String!,$s:String!){
+                       variables(projectId:$p, environmentId:$e, serviceId:$s) }""",
+                  {"p": PID, "e": EID, "s": SID})
+          var = (d.get("data") or {}).get("variables") or {}
+          print("variables readable:", len(var), "names")
+          dsn = None
+          for k in ("DATABASE_URL", "VIVA_DB_DSN", "POSTGRES_URL", "PG_DSN"):
+              if var.get(k):
+                  dsn = var[k]; print("dsn key:", k); break
+          if not dsn:
+              print("NO DSN among:", sorted(var)[:40]); sys.exit(1)
+
+          import psycopg2
+          con = psycopg2.connect(dsn, connect_timeout=20)
+          con.set_session(readonly=True)
+          cur = con.cursor()
+
+          def q(label, sql, args=()):
+              print("\n──", label)
+              try:
+                  if args:
+                      cur.execute(sql, args)
+                  else:
+                      # no params: pass nothing, or psycopg2 eats the '%' in LIKE
+                      cur.execute(sql)
+                  rows = cur.fetchall()
+                  cols = [d[0] for d in cur.description]
+                  print("   ", " | ".join(cols))
+                  for r in rows[:30]:
+                      print("   ", " | ".join(str(x)[:44] for x in r))
+                  if not rows: print("    (empty)")
+              except Exception as e:
+                  con.rollback()
+                  print("    ERR:", str(e)[:180])
+
+          q("signal_candidates last 30h by setup/status", """
+            SELECT setup_code, status, count(*)
+            FROM signal_candidates
+            WHERE created_at::timestamptz > now() - interval '30 hours'
+            GROUP BY 1,2 ORDER BY 3 DESC""")
+
+          q("signal_candidates last 30h by hour", """
+            SELECT date_trunc('hour', created_at::timestamptz) h, count(*)
+            FROM signal_candidates
+            WHERE created_at::timestamptz > now() - interval '30 hours'
+            GROUP BY 1 ORDER BY 1 DESC""")
+
+          q("signals sent last 30h by source", """
+            SELECT source, count(*), max(created_at)
+            FROM signals
+            WHERE created_at::timestamptz > now() - interval '30 hours'
+            GROUP BY 1 ORDER BY 2 DESC""")
+
+          q("newest 12 candidates", """
+            SELECT created_at, setup_code, status, symbol
+            FROM signal_candidates ORDER BY created_at DESC LIMIT 12""")
+
+          q("newest 12 signals", """
+            SELECT created_at, source, symbol FROM signals
+            ORDER BY created_at DESC LIMIT 12""")
+
+          q("all setups, 7 days: count + last seen", """
+            SELECT setup_code, count(*), max(created_at)
+            FROM signal_candidates
+            WHERE created_at::timestamptz > now() - interval '7 days'
+            GROUP BY 1 ORDER BY 3 DESC""")
+
+          q("ALBROX / PINWALL ever", """
+            SELECT setup_code, count(*), max(created_at)
+            FROM signal_candidates
+            WHERE setup_code IN ('ALBROX','PINWALLQ','PINWALL')
+            GROUP BY 1""")
+
+          q("every send per source per day (7d)", """
+            SELECT date_trunc('day', created_at::timestamptz) d, source, count(*)
+            FROM signals
+            WHERE created_at::timestamptz > now() - interval '7 days'
+            GROUP BY 1,2 ORDER BY 1 DESC, 3 DESC""")
+
+          q("candidates per day (7d)", """
+            SELECT date_trunc('day', created_at::timestamptz) d, count(*)
+            FROM signal_candidates
+            WHERE created_at::timestamptz > now() - interval '7 days'
+            GROUP BY 1 ORDER BY 1 DESC""")
+
+          q("ALL TABLES", """
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema='public' ORDER BY 1""")
+
+          q("ALBROX candidates ever (any status)", """
+            SELECT status, count(*), min(created_at), max(created_at)
+            FROM signal_candidates WHERE setup_code='ALBROX' GROUP BY 1""")
+
+          q("candidate_alert_posts per setup today", """
+            SELECT setup_code, count(*), max(created_at)
+            FROM candidate_alert_posts
+            WHERE created_at::timestamptz > now() - interval '30 hours'
+            GROUP BY 1""")
+
+          q("WHY NOT CONFIRMED — last_reject_code per setup (all time)", """
+            SELECT setup_code,
+                   payload::jsonb -> 'metadata' ->> 'last_reject_code' AS code,
+                   count(*), max(created_at)
+            FROM signal_candidates
+            WHERE status <> 'CONFIRMED'
+            GROUP BY 1,2 ORDER BY 3 DESC""")
+
+          q("EVERY setup ever, with status", """
+            SELECT setup_code, status, count(*)
+            FROM signal_candidates GROUP BY 1,2 ORDER BY 1,3 DESC""")
+
+          q("candidates ever, per setup", """
+            SELECT setup_code, count(*), min(created_at), max(created_at)
+            FROM signal_candidates GROUP BY 1 ORDER BY 2 DESC""")
+
+          q("KV wallet: tier_week_count", """
+            SELECT key, value, updated_at FROM bot_kv
+            WHERE key LIKE 'tier_week_count:%' ORDER BY key""")
+
+          q("KV wallet: tier_day_setup (today)", """
+            SELECT key, value, updated_at FROM bot_kv
+            WHERE key LIKE 'tier_day_setup:%' ORDER BY key""")
+
+          q("KV wallet: tier_day_count", """
+            SELECT key, value, updated_at FROM bot_kv
+            WHERE key LIKE 'tier_day_count:%' ORDER BY key DESC LIMIT 20""")
+
+          print("\n── SETUP FLAGS (values)")
+          for k in sorted(var):
+              if any(t in k.upper() for t in ("ALBROX", "TECHCLASSIC", "PINWALL",
+                                              "PINVAL", "TLBREAK", "_ENABLED",
+                                              "SYMBOLS", "CORE_V7")):
+                  print(f"    {k} = {str(var[k])[:90]}")
+
+          print("\n── ALL env names (values hidden where the name looks secret)")
+          for k in sorted(var):
+              print("   ", k)
+          SKIP = ("TOKEN","KEY","PASSWORD","SECRET","DSN","URL","CHAT","HASH","SALT")
+          for k in sorted(var):
+              if not (k.startswith("VIVA_") or "SETUP" in k or "LICEN" in k or "PACE" in k):
+                  continue
+              if any(x in k.upper() for x in SKIP):
+                  continue
+              print("   ", k, "=", str(var[k])[:60])
+
+          # ---- runtime logs of the live deployment ----
+          print("\n── deployment logs (last 120 lines, filtered)")
+          try:
+              dep = gql("""query($p:String!,$e:String!){
+                             deployments(first:1, input:{projectId:$p, environmentId:$e}){
+                               edges{ node{ id status createdAt } } } }""",
+                        {"p": PID, "e": EID})
+              node = dep["data"]["deployments"]["edges"][0]["node"]
+              print("   deployment:", node["status"], node["createdAt"], node["id"])
+              lg = gql("""query($id:String!){ deploymentLogs(deploymentId:$id, limit:5000){
+                             timestamp message severity } }""", {"id": node["id"]})
+              rows = (lg.get("data") or {}).get("deploymentLogs") or []
+              if lg.get("errors"):
+                  print("   LOG ERR:", json.dumps(lg["errors"])[:200])
+              print("   lines:", len(rows))
+              import re as _re
+              _keys = ("CONFIRM_REJECT", "licence refused", "OUT_OF_REACH",
+                       "DISCOVERY", "Discovery", "funnel", "rejects=",
+                       "own engine", "own_defer", "DEAD_GATE", "deadgate")
+              _seen = {}
+              for r in rows:
+                  m = (r.get("message") or "").replace("\n", " ")
+                  if not any(k in m for k in _keys):
+                      continue
+                  _m2 = _re.match(r"CONFIRM_REJECT \| (\S+) \| (\S+) \| (\S+) \| (\S+)", m)
+                  if _m2:
+                      _k = f"{_m2.group(2)} :: {_m2.group(4)}"
+                      _seen[_k] = _seen.get(_k, 0) + 1
+                      continue
+                  print("   ", m[:200])
+              print("\n── ALBROX / PINWALL / SETUP-detector lines")
+              for r in rows:
+                  m = (r.get("message") or "").replace("\n", " ")
+                  if any(k in m for k in ("ALBROX", "albrox", "PINWALL", "Setup detector error",
+                                          "R99q24 retired", "own-engine consult")):
+                      print("   ", m[:200])
+
+              print("\n── CONFIRM_REJECT tally (setup :: code)")
+              for k, v in sorted(_seen.items(), key=lambda t: -t[1]):
+                  print(f"    {v:5d}  {k}")
+          except Exception as e:
+              print("   ERR:", str(e)[:200])
+          PY

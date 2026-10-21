@@ -1,0 +1,3819 @@
+"""Viva Signal Bot v7 entry point.
+
+Quality-first architecture:
+- dynamic high-liquidity Bybit universe
+- one cached data bundle per symbol
+- aligned 15-minute discovery scans
+- independent Swing and Scalp engines
+- local educational candidate lifecycle
+- Supabase persistence only after closed-candle confirmation
+"""
+from __future__ import annotations
+
+import os
+import signal
+import threading
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Optional, Tuple
+
+import pandas as pd
+
+from analysis.models import SignalCandidate
+from analysis.quality_engine import (
+    approach_stage,
+    evaluate_confirmation,
+    is_expired,
+    is_invalidated,
+    scan_bundle,
+)
+from bot.commands import start_command_listener
+from bot.messages_v7 import (
+    CHAT_ID_EXECUTION,
+    send_stage_a_watch,
+    send_stage_b_ready,
+    send_candidate_cancelled,
+    send_confirmed,
+    send_educational_setup,
+    send_setup_update,
+    send_message,
+    send_startup_message,
+    purge_candidate_alert_posts,
+    purge_pro_watch_post,
+    send_tp1_event,
+    send_ladder_event,
+    send_reentry_note,
+    send_trailing_note,
+    send_trade_result,
+    send_trade_close_event,
+    send_stop_event_to_results,
+    attach_results_link,
+    send_no_fill_event,
+)
+from config import get_settings
+from data.fetcher import get_klines, get_market_bundle
+from data.universe import UNIVERSE
+from database.candidate_store import (
+    add_candidate,
+    absorb_update_into_chain,
+    chains_last_24h,
+    open_chains_for,
+    recent_lineage_zone,
+    cleanup_candidates,
+    get_active_candidates,
+    init_candidate_store,
+    update_candidate,
+    supersede_similar,
+    find_similar,
+    is_material_update,
+    supersede_alert_lineage,
+)
+from database.repository_v7 import (
+    acquire_symbol_lock,
+    cancel_staged_confirmation,
+    has_unresolved_symbol,
+    has_open_pre_tp1_signal,
+    last_confirmed_entry,
+    init_v7_schema,
+    is_confirmation_published,
+    mark_confirmation_published,
+    monitor_confirmed_trades,
+    repair_legacy_tp1_misclassified_results,
+    release_symbol_lock,
+    reserve_public_code,
+    save_confirmed_signal,
+    record_telegram_event,
+    set_pro_message_id,
+    set_first_tp_message_id,
+    set_last_tp_message_id,
+    update_symbol_lock,
+)
+
+SETTINGS = get_settings()
+_SHUTDOWN = False
+
+
+def _request_shutdown(signum, _frame) -> None:
+    global _SHUTDOWN
+    print(f"Received signal {signum}; shutting down after current task")
+    _SHUTDOWN = True
+
+
+def _chart_frame(candidate: SignalCandidate, bundle) -> pd.DataFrame:
+    # TLBREAK alerts show the channel break itself: chart the CONTEXT timeframe
+    # (4h/1h/1d) where the trendline lives, not the fine-grained trigger chart.
+    # Viva 2026-09-14 «چارت ۱ ساعته میذاری پوزیشن رو ۱۵ دقیقه؟!» — the CHART
+    # is the position: trigger timeframe, on EVERY setup, with no context-TF
+    # preference. (Confirmation evaluation still receives the pattern-TF frame
+    # through its own argument; only the picture had been wrong.)
+    return bundle.get(candidate.trigger_timeframe)
+
+
+# Viva 2026-09-14: an in-process dict dies with every deploy — that is what
+# re-alerted the already-announced ATOM structure 80 seconds after the -11b
+# boot. The alert memory now lives in bot_kv and survives redeploys.
+_DEAD_GATE_ALERTED: Dict[str, float] = {}
+
+
+def _kv_alerted(key: str, ttl_hours: float) -> bool:
+    """Persistent first-alert dedup marker across restarts (KV, pruned to TTL)."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        now = time.time()
+        data = {k: float(v) for k, v in (_g("alert_dedup", {}) or {}).items()
+                if now - float(v) < max(0.25, float(ttl_hours)) * 3600}
+        if key in data:
+            return True
+        data[key] = now
+        _s("alert_dedup", data)
+        return False
+    except Exception:
+        return False
+
+
+def _iso_ts(value: str) -> float:
+    try:
+        d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d.timestamp()
+    except Exception:
+        return 0.0
+
+
+def _update_too_fresh(holder: SignalCandidate) -> bool:
+    """Viva 2026-09-13: «آپدیت الکی چه دردی داره» — an update may only report
+    a price event that happened AFTER the alert (or after the previous
+    update). Same-minute echoes are swallowed; the chain stays refreshed."""
+    meta = getattr(holder, "metadata", None) or {}
+    gap = max(120, int(getattr(SETTINGS, "update_min_gap_seconds", 300) or 300))
+    anchor_t = _iso_ts(str(getattr(holder, "created_at", "") or ""))
+    last_t = float(meta.get("last_update_ts") or 0.0)
+    import time as _tt
+    return (_tt.time() - max(anchor_t, last_t)) < gap
+
+
+def _zone_band(cand, level: float) -> float:
+    """R64.5: what counts as «همان ناحیه» — half a candle of ATR, floor 0.75%."""
+    try:
+        _atr = float((getattr(cand, "metadata", None) or {}).get("atr", 0) or 0)
+    except Exception:
+        _atr = 0.0
+    return max(0.5 * _atr, 0.0075 * abs(float(level or 0.0)), 1e-12)
+
+
+def _open_zone_key(cand) -> str:
+    return (f"{str(getattr(cand, 'setup_code', '') or '').upper()}|"
+            f"{str(getattr(cand, 'symbol', '') or '').upper()}|"
+            f"{str(getattr(cand, 'trigger_timeframe', '') or '').lower()}|"
+            f"{str(getattr(cand, 'direction', '') or '').upper()}")
+
+
+def _open_zone_mark(cand) -> None:
+    """R64.5 OPEN-ZONE registry: written ONLY after a successful initial-alert
+    send (handoff law) — this zone now belongs to that chain until it resolves
+    (update / confirm / invalidation) or its own expiry passes."""
+    from database.bot_kv import get_json as _g, set_json as _s
+    from analysis.setups_v7 import expiry_hours_for
+    import time as _t
+    key = _open_zone_key(cand)
+    level = float(getattr(cand, "zone_mid"))
+    state = _g("open_alert_zone", {}) or {}
+    state[key] = {"mid": level, "band": float(_zone_band(cand, level)),
+                  "ts": _t.time(),
+                  "ttl_h": float(expiry_hours_for(getattr(cand, "style", ""),
+                                                  getattr(cand, "trigger_timeframe", ""))),
+                  "sid": str(getattr(cand, "signal_id", "") or "")}
+    _s("open_alert_zone", state)
+
+
+def _open_zone_dup(cand) -> bool:
+    """True when THIS lane already speaks for this zone and the chain is
+    still unresolved (his 10-03: ALBROX K884147/K948189 — two initial alerts
+    on one symbol/tf/zone/setup within 40 minutes must be impossible; the
+    follow-up detection waits for the ORIGINAL chain's update/confirm/abort)."""
+    from database.bot_kv import get_json as _g
+    import time as _t
+    entry = _g("open_alert_zone", {}) or {}
+    e = entry.get(_open_zone_key(cand))
+    if not isinstance(e, dict):
+        return False
+    now = _t.time()
+    ttl = float(e.get("ttl_h") or 0) * 3600.0
+    if ttl > 0 and now - float(e.get("ts") or 0) > ttl:
+        return False                     # chain's resolution window elapsed
+    level = float(getattr(cand, "zone_mid") or 0.0)
+    band = max(float(e.get("band") or 0.0), _zone_band(cand, level))
+    return abs(level - float(e.get("mid") or 0.0)) <= band
+
+
+def _dead_gate_recently_alerted(candidate: SignalCandidate) -> bool:
+    # R64.5: the zone-BUCKET, not the float — a hair-shifted re-detection of
+    # the SAME structure used to mint a fresh key (6-decimal exact) and alert
+    # again. Same zone ⇒ same key ⇒ silent until the chain resolves.
+    _lvl = float(candidate.metadata.get("structure_level", 0) or 0)
+    _band = _zone_band(candidate, _lvl)
+    key = (
+        f"{candidate.symbol}:{candidate.style}:{candidate.setup_code}:{candidate.direction}:"
+        f"{round(_lvl / _band) if _band > 0 else 0}"
+    )
+    from analysis.setups_v7 import expiry_hours_for
+    expiry_hours = expiry_hours_for(candidate.style, candidate.trigger_timeframe)
+    return _kv_alerted(key, expiry_hours)
+
+
+_SUPPRESSED_EDU_ALERTED: Dict[str, float] = {}
+
+
+def _suppressed_edu_throttled(candidate) -> bool:
+    """Viva 2026-09-11: a pre-TP1 capacity block must never swallow the FIRST
+    detailed alert — the compact anchor still goes to the alerts channel,
+    throttled per setup identity so 5-min rescans cannot spam it."""
+    key = (f"{candidate.symbol}:{candidate.style}:{candidate.setup_code}:{candidate.direction}:"
+           f"{round(float(candidate.entry_zone_bottom), 6)}")
+    from analysis.setups_v7 import expiry_hours_for
+    expiry_hours = expiry_hours_for(candidate.style, candidate.trigger_timeframe)
+    return _kv_alerted("sup:" + key, expiry_hours)
+
+
+_QUIET_RUN = 0
+
+# Structural quality lanes are exempt from the generic PinWall-oriented
+# unresolved-chain / same-zone / 24h licence suppression. Their own detector
+# geometry, score, sanity and duplicate checks remain active.
+# R99o (Viva 10-15, his order): exemption REMOVED — one licence law for
+# all 4 setups (exception clause: common anti-spam infra, not entry logic).
+_STRUCTURAL_QUALITY_LANES = frozenset()
+
+
+# ── Round-15 cost guard (Viva 09-21: «ببین استفاده الکی نداشته باشیم»).
+# A symbol whose four detection timeframes produced no new CLOSED candle cannot
+# yield a new detection — re-analysing it every 5 minutes was pure waste. The
+# guard keeps a 15-minute freshness window so a budget-deferred scenario is
+# still retried, and it never skips a symbol that has an open chain.
+_LAST_CLOSED_STAMPS: Dict[str, tuple] = {}
+_LAST_FULL_SCAN_AT: Dict[str, float] = {}
+_UNCHANGED_RETRY_SECONDS = 900
+
+
+def _closed_stamp(bundle) -> tuple:
+    out = []
+    for tf in ("15m", "30m", "1h", "2h", "4h", "1d"):
+        try:
+            df = bundle.get(tf)
+            out.append(str(df["timestamp"].iloc[-1]) if df is not None and len(df) else "-")
+        except Exception:
+            out.append("?")
+    return tuple(out)
+
+
+def _symbol_may_skip(symbol: str, bundle, open_symbols: set) -> bool:
+    """True when this symbol has no new closed candle and no open chain."""
+    try:
+        stamp = _closed_stamp(bundle)
+        prev = _LAST_CLOSED_STAMPS.get(symbol)
+        _LAST_CLOSED_STAMPS[symbol] = stamp
+        if prev is None or prev != stamp:
+            return False
+        if symbol in open_symbols:
+            return False
+        return (time.monotonic() - _LAST_FULL_SCAN_AT.get(symbol, 0.0)) < _UNCHANGED_RETRY_SECONDS
+    except Exception:
+        return False
+
+
+def run_discovery_scan() -> Dict[str, int]:
+    """Find educational setups; never writes unconfirmed rows to Supabase."""
+    started = time.monotonic()
+    symbols, metrics = UNIVERSE.get()
+    # Viva's priority rule: symbols with an open alert get scanned FIRST (in
+    # the order their alerts were issued) so follow-up scenarios on them
+    # surface before anything else.
+    try:
+        active_symbols = []
+        for candidate in get_active_candidates():
+            if candidate.setup_code == "PINVAL":
+                continue
+            if candidate.symbol in symbols and candidate.symbol not in active_symbols:
+                active_symbols.append(candidate.symbol)
+        if active_symbols:
+            symbols = active_symbols + [s for s in symbols if s not in active_symbols]
+    except Exception:
+        pass
+    stats = {"symbols": len(symbols), "detected": 0, "new": 0, "errors": 0}
+    _open_syms: set = set()
+    try:
+        for _c in get_active_candidates():
+            _open_syms.add(_c.symbol)
+    except Exception:
+        pass
+    # Viva 2026-09-11 («یهو ۱۰۰۰ تا هشدار میاد»): one scan cycle may open only a
+    # bounded number of NEW detailed alerts; everything beyond that defers to
+    # the next scan instead of flooding the channels in a single burst.
+    _edu_budget = {"left": max(1, int(getattr(SETTINGS, "education_max_per_scan", 8) or 8))}
+    # Viva 09-17 seesaw fix: WATCH/previews live on a SEPARATE small budget —
+    # a flood of two-pivot watches can never starve pins/other families again.
+    # R99q15 (his 10-16 «مهم‌ترین قسمت اینه که همه چارت‌ها … قبل از شکست تشخیص
+    # داده بشن»): the early-alert lane is the priority lane, so it gets a bigger
+    # slice of the cycle than the old 4 — still its OWN pool, so a burst of
+    # watches can never starve the break lanes' education budget.
+    _watch_budget = {"left": max(1, int(os.getenv("VIVA_WATCH_PER_SCAN", "6") or 6))}
+    # R63 (audit W3): the 8-alert cycle budget was FIRST-COME across all
+    # setups — the symbol loop order let one noisy family (zones/pins on the
+    # first symbols) eat the whole budget and defer time-critical pattern
+    # BREAKS to the next cycle (a late break alert = a chased entry). Each
+    # setup now has its own share of the cycle, and the break lanes keep a
+    # small reserve on top of the shared pool.
+    _per_setup_cap = max(2, int(getattr(SETTINGS, "education_max_per_setup_per_scan", 4) or 4))
+    _setup_used: Dict[str, int] = {}
+    _deferred_edu: list = []          # R99q15: education retry queue (see below)
+    _break_reserve = {"left": 2}
+    _BREAK_LANES63 = {"TECHCLASSIC", "ALBROX", "TLBREAK"}
+
+    def _budget_ok(cand, relaxed: bool = False) -> bool:
+        _sc = str(getattr(cand, "setup_code", "") or "").upper()
+        # ── R99q31h FAIR SHARE (his 10-20: the `budget` gate was throttling
+        # PINVAL — funnel `PINVAL seen=66 ready_new=4 budget=58`). The per-setup
+        # share was a hard wall: a family with 60 ready candidates posted 4 and
+        # the remaining 56 were counted and DROPPED, never retried. In the
+        # end-of-cycle retry pass (relaxed=True) the cap doubles, so leftover
+        # cycle budget flows to whichever family still has demand. Volume is
+        # unchanged in the sweep and still bounded by the hourly cap (10 per
+        # setup per clock hour) and the weekly wallet above it.
+        _cap = _per_setup_cap * 2 if relaxed else _per_setup_cap
+        if _setup_used.get(_sc, 0) >= _cap:
+            return False
+        if _edu_budget["left"] > 0:
+            return True
+        return _sc in _BREAK_LANES63 and _break_reserve["left"] > 0
+
+    def _educate(cand, frame, relaxed: bool = False):
+        _md9 = getattr(cand, "metadata", None) or {}
+        _is_watch = str(_md9.get("viva_state") or "").upper().startswith("S0_WATCH")
+        _sc9 = str(getattr(cand, "setup_code", "") or "").upper()
+        if not _is_watch and not _budget_ok(cand, relaxed):
+            stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
+            return False
+        _b9 = _watch_budget if _is_watch else _edu_budget
+        if _is_watch and _b9["left"] <= 0:
+            stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
+            return False
+        if not _is_watch:
+            _setup_used[_sc9] = _setup_used.get(_sc9, 0) + 1
+            if _edu_budget["left"] <= 0:
+                _b9 = _break_reserve
+        _b9["left"] -= 1
+        # ── r60.2 send-idempotency (his duplicate-post reports: INJ×2, OKB×2,
+        # LINK 1d×2, ALGO PINVAL K795612×2 within one minute): two lanes can
+        # carry the SAME candidate id (main scan + pinned mini-pass) and each
+        # posts its own message. ONE Telegram post per signal id, ever — the
+        # guard is set only AFTER a successful send, so budget-deferred
+        # candidates still retry on the next pass.
+        _post_key = ""
+        try:
+            from database.bot_kv import get_json as _gj60
+            import time as _t60
+            _post_key = f"posted|{str(getattr(cand, 'signal_id', '') or '')}"
+            _prev = _gj60(_post_key, {}) or {}
+            if float(_prev.get("ts") or 0) > _t60.time() - 36 * 3600:
+                stats["dup_send_blocked"] = stats.get("dup_send_blocked", 0) + 1
+                return True   # already posted — treat as success, no second post
+        except Exception:
+            _post_key = ""
+        _sent = send_educational_setup(cand, frame)
+        if _sent and _post_key:
+            try:
+                from database.bot_kv import set_json as _sj60
+                _sj60(_post_key, {"ts": _t60.time()})
+            except Exception:
+                pass
+        if _sent:
+            # R64.5: the zone now belongs to this chain — register it so no
+            # follow-up detection of the same zone opens a second alert.
+            try:
+                _open_zone_mark(cand)
+            except Exception as _ozm:
+                print(f"open-zone mark warning {getattr(cand, 'symbol', '?')}: {_ozm}")
+        return _sent
+    # Observability only (no behaviour change): tally where each raw detector
+    # candidate goes, per setup, so "0 confirmed" is diagnosable from logs.
+    tally = {}
+
+    def _t(cand):
+        sc = str(getattr(cand, "setup_code", "?") or "?")
+        return tally.setdefault(sc, {
+            "seen": 0, "low_score": 0, "dead_gate": 0, "blocked": {},
+            "suppressed_pre_tp1": 0, "dup": 0, "ready_new": 0,
+            "absorbed": 0, "license_cap": 0, "same_zone_quiet": 0, "sep2pct": 0,
+            "budget_deferred": 0, "add_failed": 0, "educate_failed": 0, "chain_slot": 0,
+            "open_zone_dup": 0,
+        })
+    # ── R99q28 SESSION GATE (his 10-19 «بقیه اوقات بین سشن ها کلا اسکن قطع
+    # بشه .. از ۱۵ دقیقه قبل از هر سشن اسکن پیدا کردن موقعیت رو اعمال بکنه»):
+    # discovery only looks for NEW positions inside a session window. The
+    # monitor loop is a different function and keeps confirming, hitting and
+    # stopping exactly as before — nothing open is ever abandoned.
+    try:
+        from analysis import tiered_scan as _tsess
+        if not _tsess.in_scan_window():
+            _nxt = _tsess.next_session()
+            print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC] "
+                  f"Discovery paused between sessions — next: {_nxt[0]} "
+                  f"in {_nxt[1]} min (VIVA_SESSION_SCAN_GATE=0 to disable)")
+            stats["session_scan_paused"] = stats.get("session_scan_paused", 0) + 1
+            return stats
+    except Exception:
+        pass
+    print(
+        f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC] "
+        f"Discovery scan started for {len(symbols)} dynamic symbols"
+    )
+    for index, symbol in enumerate(symbols, start=1):
+        if _SHUTDOWN:
+            break
+        try:
+            # r48 (Viva 09-27): the futures discovery bundle carries the two
+            # NEW trigger frames (30m, 2h) — derived locally, zero extra calls.
+            bundle = get_market_bundle(
+                symbol, ("1d", "4h", "2h", "1h", "30m", "15m", "5m"),
+                ticker=metrics.get(symbol, {}))
+            # ── Round-15: no new closed candle on any detection timeframe and no
+            # open chain on this symbol ⇒ nothing can be detected that the last
+            # pass did not already see. (Guarded, fail-open, 15-min window.)
+            if _symbol_may_skip(symbol, bundle, _open_syms):
+                stats["skipped_unchanged"] = stats.get("skipped_unchanged", 0) + 1
+                if index % 10 == 0:
+                    print(f"  scanned {index}/{len(symbols)} • new educational setups: {stats['new']}")
+                continue
+            _LAST_FULL_SCAN_AT[symbol] = time.monotonic()
+            candidates = scan_bundle(bundle)
+            # ── R99q14 PRE-BREAK EARLY-ALERT LAW (Viva 10-15, verbatim: «باید قبل
+            # از اینکه قیمت به اضلاع الگوها … برسه اولین هشدار ابتدایی بده .. و
+            # بعد از بریک تایید بده … در همه ستاپ‌ها یکسانه … فقط بدون هر ستاپ
+            # جدا جدا جراحی بشه»): every enabled setup answers through its OWN
+            # engine (TECHCLASSIC's NEAR/READY edges, ALBROX's own zones,
+            # PINVAL's own pin lines, TLBREAK's own two-pivot line). The minted
+            # WATCH chains ride the standard educational dispatch below — the
+            # SAME message, chart and reply-chain the confirmation later joins.
+            try:
+                from analysis.prebreak_lane import prebreak_candidates
+                _pb14 = prebreak_candidates(
+                    bundle,
+                    skip_setups={str(getattr(_c, "setup_code", "") or "").upper()
+                                 for _c in candidates})
+                if _pb14:
+                    # R99q15: the early alerts are dispatched FIRST for the
+                    # symbol (they carry their own budget, so ordering only
+                    # decides who gets the cycle's slots while they last).
+                    candidates = list(_pb14) + list(candidates)
+                    stats["prebreak"] = stats.get("prebreak", 0) + len(_pb14)
+            except Exception as exc:
+                print(f"PRE-BREAK lane skipped {symbol}: {exc}")
+            # Legacy TECHCLASSIC preview channel (its flat 8h per-edge cooldown
+            # is what let the pre-break warning slip past the break — retired by
+            # default, R99q14; the lane above is the one law now).
+            if str(os.getenv("TECHCLASSIC_PREVIEW_ALERTS", "0") or "0").strip() == "1":
+                try:
+                    from analysis.pattern_engine import send_prebreak_alerts
+                    send_prebreak_alerts(bundle)
+                except Exception as exc:
+                    print(f"TECHCLASSIC prebreak skipped {symbol}: {exc}")
+            stats["detected"] += len(candidates)
+            for candidate in candidates:
+                _t(candidate)["seen"] += 1
+                # r30 anti-flood: this exact scenario was cancelled/expired
+                # recently — do NOT resurrect it as a «new» chain (the LTC
+                # invalidate→re-find→invalidate loop flooded 113 msgs/20min).
+                if _tombstone_hit(candidate):
+                    _t(candidate)["dup"] += 1
+                    continue
+                if candidate.score < SETTINGS.educational_min_score:
+                    _t(candidate)["low_score"] += 1
+                    continue
+                # ── Viva 09-23: the mobile-app CONTROL gate (master pause +
+                # per-setup switches from bot_kv['webapp_control']). Fail-open:
+                # if the app/KV is unreachable the scanner publishes as before.
+                try:
+                    from webapp_viva import publish_allowed
+                    if not publish_allowed(candidate):
+                        stats["gated"] = stats.get("gated", 0) + 1
+                        continue
+                except Exception:
+                    pass
+                # Reserve before *any* public alert. A display code is a real
+                # position identity, not a random label that may later change.
+                # r32: publish-time score snapshot — the chart info box of
+                # lifecycle/legacy renders reads this when the row score is 0.
+                try:
+                    candidate.metadata["publish_score"] = int(candidate.score or 0)
+                except Exception:
+                    pass
+                # ── R64.5 OPEN-ZONE LAW (his 10-03, ALBROX K884147 vs K948189,
+                # two initial alerts one zone apart in <40min): the structural
+                # lanes are exempt from the generic chain gates, so their ONLY
+                # dedupe was float-exact keys. Before ANY publication (and
+                # before a public code is even reserved): if this lane already
+                # posted the initial alert for this (setup, symbol, trigger-TF,
+                # direction) ZONE and the chain is unresolved — stay silent.
+                # The ORIGINAL chain resolves by update / confirm / abort at
+                # its own (correct) level; nothing else in its flow changes.
+                if (str(getattr(candidate, "setup_code", "") or "").upper() in _STRUCTURAL_QUALITY_LANES
+                        and _open_zone_dup(candidate)):
+                    stats["open_zone_dup"] = stats.get("open_zone_dup", 0) + 1
+                    _t(candidate)["open_zone_dup"] = _t(candidate).get("open_zone_dup", 0) + 1
+                    print(f"OPEN_ZONE_DUP | {candidate.setup_code} | {candidate.symbol} | "
+                          f"{candidate.trigger_timeframe} | {candidate.direction} | suppressed")
+                    continue
+                try:
+                    reserve_public_code(candidate)
+                except Exception as exc:
+                    stats["errors"] += 1
+                    print(f"Public-code reservation failed {candidate.signal_id}: {exc}")
+                    continue  # fail closed; never publish an unreserved code
+                _quality_lane = str(getattr(candidate, "setup_code", "") or "").upper() in _STRUCTURAL_QUALITY_LANES
+                # ── Viva licence law (his 10-15 restatement, verbatim) ────────
+                # «اون ۳ زنجیره ۳ سیگنال همزمان روی یک نماد در یک تایم فریمه
+                # … نه اینکه سقف هشدار و تایید … هر ستاپ میتونه روی یک نماد
+                # در همه تایم فریمها کلا ۱۸ سیگنال همزمان بده» — the licence
+                # is a CONCURRENCY cap: 3 live unfolding chains per (symbol,
+                # setup, trigger-tf), 3 per timeframe, free across timeframes.
+                # A detection in a live chain's zone refreshes that chain; a
+                # new zone opens the next free seat. Different setup or
+                # different trigger timeframe = fully independent. A new
+                # licence also needs >=2% price distance from the last
+                # CONFIRMED price (2026-09-13).
+                if SETTINGS.chain_slot_gate_enabled and not _quality_lane:
+                    # R99q (Viva 10-15, verbatim: «اون ۳ زنجیره ۳ سیگنال همزمان
+                    # روی یک نماد در یک تایم فریمه … نه اینکه سقف هشدار و
+                    # تایید … هر ستاپ می‌تونه روی یک نماد در همه تایم فریم‌ها
+                    # کلا ۱۸ سیگنال همزمان بده»): the licence is a CONCURRENCY
+                    # cap, not a 24h publish quota — at most 3 live unfolding
+                    # chains per (symbol, setup, trigger-tf), 3 per timeframe,
+                    # free across timeframes. A chain that resolved frees its
+                    # seat immediately; no «سقف هشدار و تایید» exists.
+                    _trig = str(candidate.trigger_timeframe or "").lower()
+                    _concmax = max(1, int(getattr(
+                        SETTINGS, "chains_per_symbol_setup_24h", 3) or 3))
+                    try:
+                        live_chains = [
+                            c for c in open_chains_for(candidate.symbol, candidate.setup_code, _trig)
+                            if c.signal_id != candidate.signal_id
+                            and str(c.direction).upper() == str(candidate.direction).upper()
+                        ]
+                    except Exception:
+                        live_chains = []
+                    # turn-taking («نقش نوبتی»): a detection in the ZONE of a live
+                    # chain refreshes that chain; a new zone opens a new seat
+                    # while fewer than 3 chains of the tuple are live.
+                    _czm = float(candidate.zone_mid or 0.0)
+                    _ctol = max(max(float((candidate.metadata or {}).get("atr", 0) or 0),
+                                    1e-9) * 0.20, abs(_czm) * 1e-4)
+
+                    def _zone_hit(_c):
+                        try:
+                            return abs(float(_c.zone_mid or 0.0) - _czm) <= _ctol
+                        except Exception:
+                            return False
+
+                    _sz_live = [c for c in live_chains if _zone_hit(c)]
+                    if _sz_live:
+                        holder = _sz_live[0]
+                        stats["chain_absorbed"] = stats.get("chain_absorbed", 0) + 1
+                        t = _t(candidate)
+                        t["absorbed"] = t.get("absorbed", 0) + 1
+                        t["chain_slot"] = t.get("chain_slot", 0) + 1
+                        try:
+                            if is_material_update(holder, candidate):
+                                absorb_note = absorb_update_into_chain(holder, candidate)
+                                if _update_too_fresh(holder):
+                                    # R-4/N2 (audit 09-15): observability only —
+                                    # a MATERIAL update (zone moved ≥0.2×ATR or
+                                    # structure changed) is never blocked; the
+                                    # content-hash inside send_setup_update still
+                                    # swallows identical repeats.
+                                    stats["update_throttled"] = stats.get("update_throttled", 0) + 1
+                                # Strict Law: absorb notes update internal state without spamming Telegram
+                                # Only the single official final-warning / touch alert posts to Telegram
+                                if send_setup_update(holder, _chart_frame(holder, bundle),
+                                                        note_fa=absorb_note or "",
+                                                        critical=False):
+                                    hm = holder.metadata if isinstance(holder.metadata, dict) else {}
+                                    import time as _tt
+                                    hm["last_update_ts"] = _tt.time()
+                                    holder.metadata = hm
+                                    try:
+                                        update_candidate(holder)
+                                    except Exception:
+                                        pass
+                        except Exception as exc:
+                            print(f"chain absorb warning {candidate.symbol}/{candidate.setup_code}: {exc}")
+                        continue
+                    if len(live_chains) >= _concmax:
+                        stats["chain_license_cap"] = stats.get("chain_license_cap", 0) + 1
+                        _t(candidate)["license_cap"] = _t(candidate).get("license_cap", 0) + 1
+                        print(
+                            f"licence seats full {candidate.symbol}/{candidate.setup_code}/"
+                            f"{_trig}: {len(live_chains)} live chains (max {_concmax}) — "
+                            "the next seat frees when one chain resolves")
+                        continue
+                    # same-zone repeat dedupe: a zone already watched in 24h
+                    # never re-alerts — that is noise control, not the licence
+                    # distance rule (which is the fixed 2% below, Viva 2026-09-13).
+                    _atr = max(float((candidate.metadata or {}).get("atr", 0) or 0), 1e-9)
+                    try:
+                        _quiet = recent_lineage_zone(
+                            candidate.symbol, candidate.setup_code,
+                            float(candidate.zone_mid),
+                            max(_atr * 0.20, abs(float(candidate.zone_mid)) * 1e-4),
+                            trigger_tf=str(candidate.trigger_timeframe or "").lower())
+                    except Exception:
+                        _quiet = None
+                    if _quiet is not None and str(_quiet.signal_id) != str(candidate.signal_id):
+                        stats["same_zone_quiet"] = stats.get("same_zone_quiet", 0) + 1
+                        _t(candidate)["same_zone_quiet"] = _t(candidate).get("same_zone_quiet", 0) + 1
+                        continue
+                    # THE 2% LAW: the new licence may open only >=2% (fixed,
+                    # identical for every setup) away from the price at which
+                    # the last signal of this tuple was CONFIRMED.
+                    try:
+                        _sep = float(getattr(SETTINGS, "license_min_sep_pct", 0.02) or 0.0)
+                        _last_px = last_confirmed_entry(candidate.symbol, candidate.trigger_timeframe,
+                                                        candidate.setup_code)
+                        _px = float(candidate.planned_entry or candidate.entry_zone_bottom or 0.0)
+                        if (_sep > 0.0 and _last_px and _px
+                                and abs(_px - float(_last_px)) < _sep * abs(float(_last_px))):
+                            stats["license_sep_block"] = stats.get("license_sep_block", 0) + 1
+                            t = _t(candidate); t["sep2pct"] = t.get("sep2pct", 0) + 1
+                            print(
+                                f"licence refused {candidate.symbol}/{candidate.setup_code}/"
+                                f"{candidate.trigger_timeframe}: {_px:g} is only "
+                                f"{abs(_px - float(_last_px)) / abs(float(_last_px)) * 100:.2f}% "
+                                f"from last confirmed {_last_px:g} (<{_sep:.0%})"
+                            )
+                            continue
+                    except Exception as exc:
+                        print(f"licence distance gate skipped {candidate.signal_id}: {exc}")
+                if SETTINGS.skip_dead_gate_candidates and not candidate.execution_ready:
+                    # A failing mandatory gate can never be repaired later, so
+                    # this candidate can never confirm. Keep it educational,
+                    # but do not track it: no Approaching spam, no symbol lock.
+                    blocked = [
+                        gate for gate, valid in candidate.mandatory_gates.items() if not valid
+                    ]
+                    candidate.metadata["execution_blocked_gates"] = blocked
+                    stats["dead_gate"] = stats.get("dead_gate", 0) + 1
+                    t = _t(candidate); t["dead_gate"] += 1
+                    for g in blocked:
+                        t["blocked"][g] = t["blocked"].get(g, 0) + 1
+                    # Viva 2026-09-13 «فقط سیگنال‌های به‌دیتابیس‌رسیده هشدار
+                    # و آپدیت می‌گیرند»: a dead-on-arrival alert is recorded as
+                    # a DEAD_GATE row (tracks the lineage, consumes NO licence,
+                    # is never monitored) and only then may it post. An alert
+                    # without a row is a ghost — no updates could ever attach.
+                    candidate.status = "DEAD_GATE"
+                    try:
+                        _dead_saved = add_candidate(candidate)
+                    except Exception:
+                        _dead_saved = False
+                    if _dead_saved and not _dead_gate_recently_alerted(candidate):
+                        _educate(candidate, _chart_frame(candidate, bundle))
+                    continue
+                # Paper research permits several independent positions on a
+                # symbol/trigger. Capacity is counted in confirmed positions;
+                # it must never cause symbol-wide deletion of alerts.
+                if has_open_pre_tp1_signal(candidate.symbol, candidate.trigger_timeframe,
+                                                  candidate.setup_code):
+                    stats["suppressed_pre_tp1"] = stats.get("suppressed_pre_tp1", 0) + 1
+                    _t(candidate)["suppressed_pre_tp1"] += 1
+                    if not _suppressed_edu_throttled(candidate):
+                        _educate(candidate, _chart_frame(candidate, bundle))
+                    continue
+                previous = find_similar(candidate)
+                # A generated candidate is a separate possible position.  Never
+                # inherit an earlier candidate's public code merely because its
+                # symbol/trigger matches: multiple paper trades are allowed on
+                # that pair and each confirmed trade must retain its own links.
+                if previous and not is_material_update(previous, candidate):
+                    _t(candidate)["dup"] += 1
+                    continue  # identical state: leave the visible alert alone
+                # Delete Telegram posts only for a proven update of this same
+                # scenario lineage. Same-symbol / same-trigger setups can be
+                # independent and must remain visible.
+                # R62-ARENA (audit W1): the budget is checked BEFORE the prior
+                # lineage is superseded — a deferred replacement used to delete
+                # the live chain's posts and then never publish its successor.
+                _is_watch62 = str((candidate.metadata or {}).get("viva_state") or "").upper().startswith("S0_WATCH")
+                if (not _is_watch62 and not _budget_ok(candidate)) or (_is_watch62 and _watch_budget["left"] <= 0):
+                    stats["edu_cycle_deferred"] = stats.get("edu_cycle_deferred", 0) + 1
+                    _t(candidate)["budget_deferred"] = _t(candidate).get("budget_deferred", 0) + 1
+                    # ── R99q31h: the same rule the educate path already follows
+                    # (R99q15) — a budget deferral is NOT a ghost. Hold it for
+                    # the end-of-cycle retry with the freed budget instead of
+                    # silently dropping it (that drop is why PINVAL showed
+                    # ready_new=4 and 58 straight into the void).
+                    try:
+                        _deferred_edu.append((candidate, _chart_frame(candidate, bundle)))
+                    except Exception as _de31:
+                        print(f"deferral queue warning {getattr(candidate, 'signal_id', '?')}: {_de31}")
+                    continue  # not persisted; next scan retries when budget frees
+                # R99j TIER DAILY CAP (futures): the R99c cap never counted --
+                # nothing incremented the counter, so daily_budget_ok() was
+                # always True. Gate here (BEFORE add_candidate: a persisted
+                # row without a post is a GHOST chain) + incr after _educate.
+                # Not persisted; next scan retries when budget frees. Fail-open.
+                try:
+                    # R99n (Viva 10-15): per-setup slots — EACH setup owns 30
+                    # concurrent chains; the global first-come pool is retired.
+                    # R99q (Viva 10-15, verbatim «گیت خشک‌کننده سیگنال‌های
+                    # ستاپ‌ها رو بردارررر»): the 25/day TOTAL budget no longer
+                    # gates anything — only the setup's own slots remain.
+                    from analysis import tiered_scan as _tier99j
+                    try:
+                        _open99j = _tier99j.count_open_by_setup(
+                            get_active_candidates() or [])
+                    except Exception:
+                        _open99j = {}
+                    if not _tier99j.concurrent_ok_for_setup(
+                            str(getattr(candidate, "setup_code", "") or ""),
+                            _open99j):
+                        stats["tier_cap_skip"] = stats.get("tier_cap_skip", 0) + 1
+                        _t(candidate)["tier_deferred"] = _t(candidate).get("tier_deferred", 0) + 1
+                        continue
+                    # R99q7 (Viva 10-15 «قانون موقت جدید»): the daily frame is
+                    # BIAS ONLY in futures — it is never a setup trigger
+                    # («روزانه هم در اسپات داریم ... فقط جهت دیدن بایاس چک
+                    # می‌کنیم»). The 1d chart still prices the bias score.
+                    _trig7 = str(getattr(candidate, "trigger_timeframe", "") or "").lower()
+                    if _trig7 not in _tier99j.SETUP_TRIGGER_TFS:
+                        stats["bias_only_skip"] = stats.get("bias_only_skip", 0) + 1
+                        _t(candidate)["bias_only_skip"] = _t(candidate).get("bias_only_skip", 0) + 1
+                        continue
+                    # R99q7 weekly licence wallet: one pool PER SETUP across the
+                    # five trigger frames, refreshed at the ISO-week start.
+                    if not _tier99j.weekly_licence_ok(
+                            str(getattr(candidate, "setup_code", "") or "")):
+                        stats["weekly_licence_skip"] = stats.get("weekly_licence_skip", 0) + 1
+                        _t(candidate)["weekly_deferred"] = _t(candidate).get("weekly_deferred", 0) + 1
+                        continue
+                    # ── R99q24 WEEKLY PACE (his 10-17 «خشک شد»): a 200-licence
+                    # wallet must LAST the week instead of being burnt in one
+                    # burst night. Today may spend the honest daily share of
+                    # what is LEFT (VIVA_WEEKLY_PACE=0 switches it off).
+                    # ── R99q28 TRADING SESSIONS (his 10-19 «سشن های معاملاتی
+                    # را مشخص بکنی ... نیویورک ۱۵ ... لندن ۱۵ ... توکیو ۱۰»):
+                    # the flat daily pace is replaced by a per-session
+                    # licence book. VIVA_SESSION_LICENCES=0 falls back to it.
+                    if not _tier99j.session_licence_ok(
+                            str(getattr(candidate, "setup_code", "") or "")):
+                        stats["session_licence_skip"] = stats.get("session_licence_skip", 0) + 1
+                        _t(candidate)["session_deferred"] = _t(candidate).get("session_deferred", 0) + 1
+                        continue
+                    # R99q28: the session book REPLACES the flat daily pace.
+                    # Stacking both meant the tighter one always won — and on
+                    # 10-19 the flat pace was already at 25/25 for every setup,
+                    # so the funnel read ready_new=0 and pace=<everything> even
+                    # with the sessions switched on.
+                    # ── R99q30 (his 10-20). The TWO quota gates that were
+                    # meant to protect the wallet became the drought: the
+                    # session book and the flat weekly pace stacked, so the
+                    # tighter one always won, and the funnel read
+                    # pace=<every candidate>, ready_new=0, on every scan.
+                    # The cadence he asked for replaces BOTH sub-gates:
+                    # at most VIVA_HOURLY_CAP (10) alerts per setup per clock
+                    # hour. The weekly wallet above stays the outer bound, so
+                    # nothing about the 200-licence ceiling changes.
+                    if not _tier99j.hourly_pace_ok(
+                            str(getattr(candidate, "setup_code", "") or "")):
+                        stats["weekly_pace_skip"] = stats.get("weekly_pace_skip", 0) + 1
+                        _t(candidate)["weekly_pace_deferred"] = _t(candidate).get("weekly_pace_deferred", 0) + 1
+                        continue
+                except Exception:
+                    pass
+                for prior in supersede_alert_lineage(candidate):
+                    try:
+                        release_symbol_lock(prior.symbol, prior.signal_id)
+                    except Exception:
+                        pass
+                    purge_candidate_alert_posts(prior)
+                    purge_pro_watch_post(prior)
+                # Live alerts replace themselves on meaningful new information;
+                # symbol locks would hide those updates, so discovery has no lock.
+                if not add_candidate(candidate):
+                    _t(candidate)["add_failed"] = _t(candidate).get("add_failed", 0) + 1
+                    _t(candidate)["dup"] += 1
+                    continue
+                # Advisory is asynchronous and isolated: a Gemini timeout can
+                # never block detection, confirmation, risk or Telegram send.
+                try:
+                    from ai.gemini_advisor import request_advisory_async
+                    request_advisory_async(candidate)
+                except Exception as exc:
+                    print(f"Gemini advisory enqueue warning {candidate.signal_id}: {exc}")
+                # the detailed alert must exist BEFORE the row counts as a new
+                # chain — when the cycle budget is exhausted the candidate is
+                # left unpersisted so the very next scan retries it (nothing
+                # lost, only smoothed).
+                _cand_frame = _chart_frame(candidate, bundle)
+                if not _educate(candidate, _cand_frame):
+                    _t(candidate)["educate_failed"] = _t(candidate).get("educate_failed", 0) + 1
+                    # R99q15 (his 10-16 question «چرا … ۹۰ درصد پینوال هشدار
+                    # داده و بعدش کمی آلبروکس و …»): a BUDGET deferral is not a
+                    # ghost. ALBROX/TC/TLBREAK chains were minted, deferred by
+                    # the cycle budget and retired as UNPOSTED in the same
+                    # breath — 22 ALBROX mints are sitting UNPOSTED in prod
+                    # right now, i.e. their early alert never reached the
+                    # channel. Deferred candidates are now held here and retried
+                    # at the END of the cycle (the budget frees as other setups
+                    # finish); only a candidate that fails BOTH passes is
+                    # ghost-retired as UNPOSTED.
+                    _deferred_edu.append((candidate, _cand_frame))
+                    continue
+                stats["new"] += 1
+                _t(candidate)["ready_new"] += 1
+                try:  # R99j: the missing half of the tiered cap -- count it
+                    from analysis import tiered_scan as _tier99j2
+                    _tier99j2.daily_count_incr("futures")
+                except Exception:
+                    pass
+                try:  # R99q7: spend ONE weekly licence for this setup
+                    from analysis import tiered_scan as _tier99j3
+                    _tier99j3.weekly_licence_incr(
+                        str(getattr(candidate, "setup_code", "") or ""))
+                    _tier99j3.daily_setup_incr(
+                        str(getattr(candidate, "setup_code", "") or ""))
+                    # R99q30: and ONE slot in the current clock hour
+                    _tier99j3.hourly_pace_incr(
+                        str(getattr(candidate, "setup_code", "") or ""))
+                    # R99q28: and ONE session licence (fail-open)
+                    _tier99j3.session_licence_incr(
+                        str(getattr(candidate, "setup_code", "") or ""))
+                except Exception:
+                    pass
+            if index % 10 == 0:
+                print(f"  scanned {index}/{len(symbols)} • new educational setups: {stats['new']}")
+        except Exception as exc:
+            stats["errors"] += 1
+            print(f"Discovery error {symbol}: {exc}")
+    # ── R99q15 DEFERRED-EDUCATION RETRY (see the deferral above): every chain
+    # the cycle budget could not post gets ONE more chance with the freed
+    # budget. A candidate that still cannot post is retired as a ghost so the
+    # next scan re-mints it (nothing is left monitored-but-unposted).
+    for _dc, _dfr in _deferred_edu:
+        if _SHUTDOWN:
+            break
+        try:
+            if _educate(_dc, _dfr, relaxed=True):
+                stats["edu_retry_posted"] = stats.get("edu_retry_posted", 0) + 1
+                stats["new"] += 1
+                # ── R99q31h: a RETRY posts for real, so it must SPEND for real.
+                # The retry pass used to publish without touching the quota
+                # book — no weekly licence, no daily set counter, no hourly
+                # pace, no session slot. Those alerts were invisible to the
+                # cadence that is supposed to bound them, so the hourly cap
+                # could be exceeded through the back door. Same accounting as
+                # the sweep, fail-open.
+                try:
+                    from analysis import tiered_scan as _tier31h
+                    _tier31h.spend_publish_licence(
+                        str(getattr(_dc, "setup_code", "") or ""), "futures")
+                except Exception as _ac31h:
+                    print(f"retry accounting warning {getattr(_dc, 'signal_id', '?')}: {_ac31h}")
+                continue
+        except Exception as _dr_exc:
+            print(f"deferred education retry error {getattr(_dc, 'signal_id', '?')}: {_dr_exc}")
+        try:
+            from database.candidate_store import set_status as _set_st62b
+            _set_st62b(_dc.signal_id, "UNPOSTED")
+        except Exception as _gh_exc2:
+            print(f"ghost-chain retire failed {getattr(_dc, 'signal_id', '?')}: {_gh_exc2}")
+    cleanup_candidates()
+    try:  # Viva 2026-09-13: the funnel must be READABLE from the DB
+        from database.bot_kv import get_json as _gkv, set_json as _skv
+        try:
+            from analysis.quality_engine import _live_styles as _ls
+            _streams = ",".join(_ls())
+        except Exception:
+            _streams = "?"
+        try:
+            from analysis import tiered_scan as _tier99s
+            _by99 = _tier99s.count_open_by_setup(
+                get_active_candidates() or [])
+            _slots99 = {str(_k): {"open": int(_v),
+                                  "cap": int(_tier99s.setup_cap(_k))}
+                        for _k, _v in _by99.items()}
+            # R99q7: the weekly wallet must be readable from the DB summary
+            # («چند از ۲۰۰ مجوز این هفته خرج شد؟» without log diving).
+            _lic99 = _tier99s.weekly_licence_snapshot(
+                list(_slots99.keys()) + ["PINVAL", "ALBROX", "TLBREAK",
+                                         "TECHCLASSIC", "SPOT"])
+            for _k in ("PINVAL", "ALBROX", "TLBREAK", "TECHCLASSIC", "SPOT"):
+                _slots99.setdefault(_k, {"open": 0,
+                                         "cap": int(_tier99s.setup_cap(_k))})
+        except Exception:
+            _slots99, _lic99 = {}, {}
+        _summary = {
+            "when": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "streams": _streams,
+            "detected": stats.get("detected", 0), "new": stats.get("new", 0),
+            "errors": stats.get("errors", 0),
+            "absorbed": stats.get("chain_absorbed", 0),
+            "quiet": stats.get("same_zone_quiet", 0),
+            "liccap": stats.get("chain_license_cap", 0),
+            "sep2pct": stats.get("license_sep_block", 0),
+            "updthrottle": stats.get("update_throttled", 0),
+            "deadgate": stats.get("dead_gate", 0),
+            "pre_tp1": stats.get("suppressed_pre_tp1", 0),
+            "deferred": stats.get("edu_cycle_deferred", 0),
+            "tally": tally,
+            "slots": _slots99,
+            "licence_week": _tier99s.week_key(),
+            "licence": _lic99,
+        }
+        _skv("scan_summary", _summary)
+        # keep the last 24 cycles so «چرا این سیکل پیام نداد» is always
+        # answerable from the DB after the fact, not just for the newest one
+        _hist = _gkv("scan_history", []) or []
+        _hist.append(_summary)
+        _skv("scan_history", _hist[-24:])
+    except Exception:
+        pass
+    # Viva 09-17 silence pulse: four consecutive empty scans (or any error)
+    # prints ONE diagnostic line to the results chat so «چرا پیام نیامد» is
+    # answerable from the channel itself, with the exact gate counters.
+    global _QUIET_RUN
+    if stats.get("detected", 0) == 0 and stats.get("new", 0) == 0:
+        _QUIET_RUN += 1
+    else:
+        _QUIET_RUN = 0
+    if _QUIET_RUN >= 4 or stats.get("errors", 0) > 0:
+        try:
+            from bot.messages_v7 import send_message as _sm9, CHAT_ID_RESULTS, CHAT_ID_ADMIN
+            _t9 = tally or {}
+            _seen9 = sum(t["seen"] for t in _t9.values())
+            _low9 = sum(t["low_score"] for t in _t9.values())
+            # R99p (his «یعنی چی؟؟»): the pulse hid 9 counters — show them.
+            _dup9 = sum(t.get("dup", 0) for t in _t9.values())
+            _add9 = sum(t.get("add_failed", 0) for t in _t9.values())
+            _edf9 = sum(t.get("educate_failed", 0) for t in _t9.values())
+            _lic9 = " ".join(f"{_sc}:{_t.get('license_cap', 0)}"
+                             for _sc, _t in sorted(_t9.items())
+                             if _t.get("license_cap"))
+            _sm9(
+                f"🩺 پالس اسکن • {len(symbols)} نماد • seen={_seen9} • "
+                f"absorbed={stats.get('chain_absorbed', 0)} • "
+                f"liccap={stats.get('chain_license_cap', 0)} • "
+                f"quiet={stats.get('same_zone_quiet', 0)} • "
+                f"low_score={_low9} • errors={stats.get('errors', 0)} • "
+                f"dup={_dup9} gated={stats.get('gated', 0)} "
+                f"sep2={stats.get('license_sep_block', 0)} "
+                f"dead={stats.get('dead_gate', 0)} "
+                f"pretp1={stats.get('suppressed_pre_tp1', 0)} "
+                f"budget={stats.get('edu_cycle_deferred', 0)} "
+                f"tier={stats.get('tier_cap_skip', 0)} "
+                f"addfail={_add9} edufail={_edf9} • "
+                f"liccap_by={_lic9 or '-'} • "
+                f"پیام نیامد چون هیچ ستاپی از گیت‌ها عبور نکرد",
+                CHAT_ID_RESULTS or CHAT_ID_ADMIN,
+            )
+            _QUIET_RUN = 0
+        except Exception as _p9:
+            print(f"scan pulse skipped: {_p9}")
+    try:
+        from analysis import onchain_free as _oc2
+        _ctx_line = _oc2.context_line_fa()
+        if _ctx_line:
+            print(f"Flow context (context only, never a gate): {_ctx_line}")
+            stats["flow_context"] = _ctx_line
+    except Exception:
+        pass
+    duration = time.monotonic() - started
+    print(
+        f"Discovery scan finished in {duration:.1f}s • "
+        f"detected={stats['detected']} new={stats['new']} errors={stats['errors']} • "
+        f"deadgate={stats.get('dead_gate', 0)} "
+        f"absorbed={stats.get('chain_absorbed', 0)} quiet={stats.get('same_zone_quiet', 0)} "
+        f"liccap={stats.get('chain_license_cap', 0)} sep2pct={stats.get('license_sep_block', 0)} "
+        f"updthrottle={stats.get('update_throttled', 0)} "
+        f"deferred={stats.get('edu_cycle_deferred', 0)}"
+    )
+    # Per-setup funnel (observability only): seen -> execution-ready/blocked.
+    for sc in sorted(tally):
+        t = tally[sc]
+        blocked = ",".join(f"{g}:{n}" for g, n in sorted(t["blocked"].items())) or "-"
+        print(
+            f"  funnel {sc:8s} seen={t['seen']} ready_new={t['ready_new']} "
+            f"dead_gate={t['dead_gate']}[{blocked}] low_score={t['low_score']} "
+            f"dup={t['dup']} absorbed={t.get('absorbed',0)} quiet={t.get('same_zone_quiet',0)} "
+            f"liccap={t.get('license_cap',0)} pace={t.get('weekly_pace_deferred',0)} "
+            f"week={t.get('weekly_deferred',0)} sep2={t.get('sep2pct',0)} preTp1={t['suppressed_pre_tp1']} "
+            f"budget={t.get('budget_deferred',0)} addfail={t.get('add_failed',0)} edufail={t.get('educate_failed',0)}"
+        )
+    try:
+        import analysis.setups_experimental as _exp
+        pol = _exp.drain_polarity_rejects()
+        if pol:
+            print("  polarity-rejects: " + ", ".join(f"{k}:{n}" for k, n in sorted(pol.items())))
+        rec = _exp.drain_polarity_recovers()
+        if rec:
+            print("  polarity-recovers: " + ", ".join(f"{k}:{n}" for k, n in sorted(rec.items())))
+    except Exception as _e:
+        print(f"polarity-rejects diagnostic unavailable: {_e}")
+    try:   # round-68 TAPE: one cost line per pass — Railway-log proof of savings
+        from data.fetcher import cost_counters as _cc68
+        _c68 = _cc68()
+        print(f"  tape-cost venue_req={_c68.get('kline_calls',0)} "
+              f"route_hits={_c68.get('kline_cache_hits',0)} "
+              f"tape_serves={_c68.get('tape_serves',0)} "
+              f"tape_syncs={_c68.get('tape_syncs',0)} "
+              f"candles_dl={_c68.get('candles_downloaded',0)}")
+    except Exception:
+        pass
+    # ── R99q15 ADAPTIVE DEEP CADENCE (his 10-16 verbatim: «هر ۶۰ دقیقه نیازه که
+    # دوباره اسکن عمیق بکنه .. مگر اینکه موارد خوبی پیدا بکنه بین ۲۰۰ کوین برتر
+    # اول مارکت کپ بجز استیبل‌کوین ها و توکنیزه ها»). A pass that produced real
+    # new setups opens a burst window: the next deep passes then run on the fast
+    # cadence (5 min) instead of 60, and the window closes by itself when the
+    # market goes quiet again.
+    try:
+        from analysis.tiered_scan import mark_deep_result as _mark_deep
+        _good = int(stats.get("new", 0) or 0) + int(stats.get("detected", 0) or 0)
+        _mark_deep(_good)
+        from analysis.tiered_scan import deep_minutes as _deep_min15
+        print(f"  deep-cadence: good_finds={_good} interval_now={_deep_min15()}m")
+    except Exception as _e15:
+        print(f"deep-cadence mark skipped: {_e15}")
+    return stats
+
+
+# ── SPOT lane (round 15, phase 5) ─────────────────────────────────────────
+# Viva 09-22: «هیچی از اسپات نگفتی، آماده است؟» + he handed over VIVA-MON-SPOT.
+# The lane runs the SPOT engine (LONG only · bullish shapes only · TLBREAK +
+# TECHCLASSIC · 4h/1d/3d/1w · LOG-scale chart · green measured box) on the same
+# liquidity watchlist, one full pass per hour, and publishes ONLY fully-formed
+# signals — NO daily budget (Viva 09-28, r56: «محدودیت اسپات نداریم … هر وقت
+# موقعیت بود بیام بده»): a symbol may break an important pattern/trend area in
+# SEVERAL timeframes the same day and every one of them is delivered. The only
+# anti-spam layer is the per (symbol, tf, shape) stamp window.
+def _spot_enabled() -> bool:
+    return str(os.getenv("SPOT_ENGINE_ENABLED", "1")).strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _spot_stamp(key: str, window_hours: float, commit: bool = True) -> bool:
+    """True when this exact spot signal was already published inside the window.
+
+    r29 (Viva 09-25, «موتور اسپات از ۲ روز قبل هیچ فعالیتی نداره»): the old
+    call STAMPED BEFORE the send, so one failed chart/Telegram attempt burned
+    that (symbol, tf, shape) for the whole dedupe window — with sends failing
+    the lane went silent while `found` kept counting. The check is now
+    read-only (commit=False); the marker is written ONLY after a successful
+    publish."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        now = time.time()
+        data = {k: float(v) for k, v in (_g("spot_published", {}) or {}).items()
+                if now - float(v) < 24 * 3600 * max(1.0, float(window_hours) / 24.0)}
+        if key in data:
+            return True
+        if commit:
+            data[key] = now
+            _s("spot_published", data)
+        return False
+    except Exception:
+        return False
+
+
+def _spot_tf_position_hours() -> float:
+    try:
+        return max(1.0, float(os.getenv("SPOT_ONE_POSITION_HOURS", "24") or 24))
+    except Exception:
+        return 24.0
+
+
+def _spot_tf_position_open(symbol: str, tf: str) -> bool:
+    """10-11 spam surgery (his one-position-per-trigger-TF law): True when
+    this (symbol, trigger-TF) already published a spot POSITION inside the
+    window -- a second confirm (ANY pattern) is then a dup. Read-only;
+    the marker is written by _spot_tf_position_commit AFTER success."""
+    try:
+        from database.bot_kv import get_json as _g
+        import time as _t
+        data = _g("spot_tf_position", {}) or {}
+        ts = float(data.get(
+            f"{str(symbol or '').upper()}|{str(tf or '').upper()}") or 0)
+        return bool(ts and _t.time() - ts < _spot_tf_position_hours() * 3600.0)
+    except Exception:
+        return False
+
+
+def _spot_tf_position_commit(symbol: str, tf: str) -> None:
+    """Stamp the (symbol, TF) position -- call ONLY after a successful
+    publish (handoff law: never store a dedup marker before success)."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        import time as _t
+        data = {k: v for k, v in (_g("spot_tf_position", {}) or {}).items()
+                if _t.time() - float(v or 0) < 10 * 24 * 3600.0}
+        data[f"{str(symbol or '').upper()}|{str(tf or '').upper()}"] = _t.time()
+        _s("spot_tf_position", data)
+    except Exception:
+        pass
+
+
+def _spot_tf_position_clear(symbol: str, tf: str) -> None:
+    """Release the one-position-per-TF marker after that Spot trade is terminal."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        key = f"{str(symbol or '').upper()}|{str(tf or '').upper()}"
+        data = dict(_g("spot_tf_position", {}) or {})
+        data.pop(key, None)
+        _s("spot_tf_position", data)
+    except Exception:
+        pass
+
+
+def _spot_candidate_stamp_key(candidate) -> str:
+    md = getattr(candidate, "metadata", None) or {}
+    return (f"spot|{str(getattr(candidate, 'symbol', '') or '').upper()}|"
+            f"{str(getattr(candidate, 'trigger_timeframe', '') or '').upper()}|"
+            f"{str(md.get('pattern_type') or '').upper()}|"
+            f"{str(md.get('spot_pattern_id') or 'legacy')}")
+
+
+def _spot_candidate_pattern_retired(candidate) -> bool:
+    try:
+        from analysis.spot_engine import spot_pattern_is_retired
+        md = getattr(candidate, "metadata", None) or {}
+        return spot_pattern_is_retired(
+            getattr(candidate, "symbol", ""), getattr(candidate, "trigger_timeframe", ""),
+            str(md.get("spot_pattern_id") or ""))
+    except Exception:
+        return False
+
+
+def _spot_hit_pass(bundles: dict) -> int:
+    """R99q15 SPOT HIT LANE (charts five…seven of a unique id, his 10-16 law:
+    «بعد ۳ تا هیت شدن .. هر شناسه از لحظه شناسایی تا پایان مسیر ۷ چارت نهایتاً
+    بیشتر نشه»).
+
+    Runs inside the spot pass and spends NO extra request: the live price of
+    each open position is the last (in-progress) close of the frame the pass
+    already fetched. Each rung is claimed through the journey ledger, so a
+    position can never grow past its unique id's 7-chart budget; when the
+    budget is spent the hit still posts — as a numbered TEXT-ONLY reply.
+    """
+    posted = 0
+    try:
+        from analysis.spot_engine import (spot_positions_open as _spo,
+                                          spot_hit_scan as _shs,
+                                          spot_position_commit as _spc,
+                                          spot_hit_candidate as _shc,
+                                          _spot_journey_slot as _js15)
+        # E1 (audit 2026-10-19): `generate_chart` was never imported in this
+        # scope — every spot TP-hit that won a journey slot died on a NameError
+        # swallowed by the `except Exception` below, so the hit message was
+        # silently dropped. Bound here, once, for the whole pass.
+        from bot.messages_v7 import send_spot_hit as _ssh15, generate_chart as _gc15
+        from database.bot_kv import get_json as _g15
+        import time as _t15
+        _open = _spo()
+        if not _open:
+            return 0
+        for _code, _pos in list(_open.items()):
+            try:
+                if _pos.get("closed"):
+                    continue
+                _b = bundles.get(str(_pos.get("symbol") or "").upper())
+                if _b is None:
+                    continue
+                _frame = _b.get(str(_pos.get("tf") or ""))
+                if _frame is None or not len(_frame):
+                    continue
+                _price15 = float(_frame["close"].iloc[-1])
+                _hit15 = _shs(_pos, _price15)
+                if not _hit15:
+                    continue
+                _key15 = (f"spot_chain|{str(_pos.get('symbol') or '').upper()}"
+                          f"|{str(_pos.get('tf') or '').upper()}")
+                _m15 = dict(_g15(_key15, {}) or {})
+                _slot15 = _js15(_m15, f"h{int(_hit15.get('index') or 1)}", _t15.time())
+                _chart15 = None
+                if _slot15:
+                    _cand15 = _shc(_pos)
+                    if _cand15 is not None:
+                        _chart15 = _gc15(_frame, _cand15, confirmed=True)
+                _mid15 = _ssh15(_pos, _hit15, chart=_chart15, slot=str(_slot15 or ""))
+                if _mid15:
+                    _pos_after = _spc(_code, str(_hit15.get("kind") or ""), int(_mid15))
+                    posted += 1
+                    print(f"🪙 spot hit {_hit15.get('kind')} {_pos.get('symbol')} "
+                          f"{_pos.get('tf')} slot={_slot15 or 'text-only'} mid={_mid15}")
+                    if str((_pos_after or {}).get("closed") or "").upper() == "ALL_TARGETS":
+                        _release_terminal_spot_event({
+                            "event": "CLOSED", "source": "SPOTBREAK",
+                            "public_code": str(_pos.get("code") or _code),
+                            "symbol": str(_pos.get("symbol") or ""),
+                            "trigger_timeframe": str(_pos.get("tf") or ""),
+                            "close_reason": "ALL_TARGETS",
+                        })
+            except Exception as _he15:
+                print(f"spot hit skip {_code}: {_he15}")
+        return posted
+    except Exception as _e15:
+        print(f"spot hit lane skipped: {_e15}")
+        return posted
+
+
+def _spot_journey_book(symbol: str, tf: str, slot: str = "", chart: bool = False,
+                       mid: int = 0, alert_mid: int = 0) -> dict:
+    """R99q15 SEVEN-CHART JOURNEY ledger (his 10-16 law, verbatim: «چارت چهارم
+    همراه پیام تایید ورود به پوزیشن میاد و بعد ۳ تا هیت شدن یعنی هر شناسه از
+    لحظه شناسایی تا پایان مسیر ۷ چارت نهایتاً بیشتر نشه»).
+
+    One unique id owns: s1 recognition → s2 touch → s3 break → s4 confirmation
+    → h1/h2/h3 hits = at most 7 charts; every other update is a numbered
+    TEXT-ONLY reply. The ledger lives in `spot_chain|SYM|TF`, the same key the
+    ladder sender and the number counter already use.
+    """
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        import time as _t
+        key = f"spot_chain|{str(symbol or '').upper()}|{str(tf or '').upper()}"
+        m = dict(_g(key, {}) or {})
+        if not m.get("code"):
+            return {}
+        if slot and mid:
+            m[str(slot)] = int(mid)
+        if chart:
+            m["charts"] = int(m.get("charts") or 0) + 1
+        if mid:
+            _mid = int(mid)
+            m["mid"] = _mid
+            m["head"] = int(m.get("head") or 0) or _mid
+            m["n"] = int(m.get("n") or 0) + 1
+            if str(slot) == "s4":
+                m["confirm"] = _mid
+            else:
+                m["last"] = _mid
+        if alert_mid:
+            m["alert"] = int(alert_mid)
+        m["ts"] = _t.time()
+        _s(key, m)
+        return m
+    except Exception:
+        return {}
+
+
+def _spot_confirm_book(cand, mid: int, alert_mid: int = 0) -> None:
+    """Chart #4 = the confirmation of the SAME unique id (slot s4)."""
+    _spot_journey_book(getattr(cand, "symbol", ""), getattr(cand, "trigger_timeframe", ""),
+                       slot="s4", chart=True, mid=int(mid or 0),
+                       alert_mid=int(alert_mid or 0))
+    # the position is now OPEN: the hit lane (h1/h2/h3) needs its ladder
+    try:
+        from analysis.spot_engine import spot_position_open as _spo65
+        md = cand.metadata or {}
+        _lad = (md.get("target_ladder") or {}).get("targets") or []
+        if _lad:
+            _spo65(cand, [float(x) for x in _lad], int(mid or 0))
+    except Exception as _spe65:
+        print(f"spot position store skipped: {_spe65}")
+
+
+def _spot_update_events_enabled() -> bool:
+    """10-11 (his kill-useless-updates law): the r57 update events
+    (vol/disp/touch) violate his r51 update-event law -- updates ONLY on
+    confirm/cancel/live-cross/final-readiness. OFF unless the Railway
+    dashboard explicitly opts back in (no redeploy needed)."""
+    return str(os.getenv("SPOT_UPDATE_EVENTS_ENABLED", "0") or "0").strip() == "1"
+
+
+def _spot_sym_tf_stamped(symbol: str, tf: str) -> bool:
+    """10-10: True when ANY pattern of this (symbol, tf) holds a fresh spot
+    confirm stamp — the ladder's BREAK_UP is then a dup of a published
+    CONFIRM chart (kindless + case-proof on purpose)."""
+    try:
+        from database.bot_kv import get_json as _g
+        import time as _t
+        window_h = 72.0 if str(tf or "") == "3d" else 36.0
+        now = _t.time()
+        want = f"spot|{str(symbol or '').upper()}|{str(tf or '').upper()}|"
+        data = _g("spot_published", {}) or {}
+        for k, v in data.items():
+            if str(k).upper().startswith(want) and now - float(v) < window_h * 3600.0:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _spot_status_write(reason: str, stats: Optional[Dict[str, int]] = None) -> None:
+    """Viva 09-23/24 («چرا اسپات رو فعال نمیکنی؟؟»): the lane's liveness is
+    VISIBLE — reason + last-pass counters in KV, surfaced in the app."""
+    try:
+        from bot.messages_v7 import CHAT_ID_SPOT
+        from database.bot_kv import set_json
+        set_json("spot_lane_status", {
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "enabled": _spot_enabled(), "chat_set": bool(CHAT_ID_SPOT),
+            "reason": str(reason or ""), "stats": dict(stats or {}),
+        })
+    except Exception:
+        pass
+
+
+def _spot_alert_mid_kv(symbol: str, tf: str, pattern: str) -> dict:
+    """The stored mid of this lane's FIRST WARNING (r57 reply-chain law)."""
+    try:
+        from database.bot_kv import get_json
+        return get_json(f"spot_alert_mid|{str(symbol or '').upper()}|"
+                        f"{str(tf or '').lower()}|{str(pattern or '').upper()}",
+                        {}) or {}
+    except Exception:
+        return {}
+
+
+def run_spot_scan() -> Dict[str, int]:
+    """One full spot pass: 4h/8h short · 12h/1d mid · 3d/1w long."""
+    stats: Dict[str, int] = {"symbols": 0, "found": 0, "published": 0,
+                             "alerts": 0, "errors": 0}
+    if not _spot_enabled():
+        _spot_status_write("disabled", stats)
+        return stats
+    try:
+        from analysis.spot_engine import spot_signals_for, SPOT_TRIGGERS
+        from bot.messages_v7 import (CHAT_ID_SPOT, generate_chart,
+                                     tf_channel_publish_confirmed)
+        from data.fetcher import get_market_bundle
+    except Exception as exc:
+        print(f"spot lane import failed: {exc}")
+        _spot_status_write(f"import_failed: {exc}", stats)
+        return stats
+    if not CHAT_ID_SPOT:
+        print("spot lane idle: CHAT_ID_SPOT is not set")
+        _spot_status_write("no_spot_channel", stats)
+        return stats
+    try:
+        symbols, _metrics = UNIVERSE.get()
+    except Exception:
+        symbols = []
+    # R99q15 (his 10-16: «هر ۶۰ دقیقه … بین ۲۰۰ کوین برتر اول مارکت کپ بجز
+    # استیبل‌کوین ها و توکنیزه ها»): the spot deep pass now covers the TOP-200
+    # by default — affordable because the per-TF closed-bar gate below stops
+    # re-fitting frames that had no new candle (see tiered_scan.spot_due_tfs).
+    limit = max(5, int(os.getenv("SPOT_SYMBOL_LIMIT", "200") or 200))
+    # stablecoins and tokenized metals are not patterns — never spend a frame on
+    # them (env SPOT_EXCLUDE extra csv is appended).
+    _spot_excl = {"USDCUSDT", "FDUSDUSDT", "TUSDUSDT", "DAIUSDT", "USDEUSDT",
+                  "USDPUSDT", "PYUSDUSDT", "USD1USDT", "EURUSDT", "XAUTUSDT",
+                  "PAXGUSDT", "USDDUSDT", "BUSDUSDT", "USDTUSDT", "BFUSDUSDT"}
+    try:
+        _spot_excl |= {x.strip().upper() for x in
+                       str(os.getenv("SPOT_EXCLUDE", "") or "").split(",") if x.strip()}
+    except Exception:
+        pass
+    try:
+        _before_excl = len(symbols)
+        symbols = [s for s in symbols if str(s).upper() not in _spot_excl]
+        if len(symbols) != _before_excl:
+            stats["excluded"] = _before_excl - len(symbols)
+    except Exception:
+        pass
+    # ── free flow context (fail-open, never a gate) ──────────────────────
+    # The spot pass owns a small symbol budget, so it is the one lane where
+    # ORDER decides what gets looked at. The first few names of the watchlist
+    # keep their place (the classics never starve); the rest is ordered by 24h
+    # turnover so an active tape can win a seat. Nothing here can confirm,
+    # reject, delay or resize a signal — a dead API just returns today's list.
+    _flow_note = ""
+    try:
+        from analysis import onchain_free as _oc
+        _head = max(0, int(os.getenv("SPOT_FLOW_HEAD", "6") or 6))
+        _ordered = _oc.order_symbols(symbols, head=_head)
+        if _ordered and _ordered != list(symbols):
+            _promoted = [s for s in _ordered[:limit] if s not in list(symbols)[:limit]]
+            symbols = _ordered
+            stats["flow_ranked"] = len(_promoted)
+            if _promoted:
+                _flow_note = f" · flow promoted: {', '.join(_promoted[:4])}"
+        _ctx = _oc.context_line_fa()
+        if _ctx:
+            _flow_note = f" · {_ctx}" + _flow_note
+    except Exception as _oc_exc:
+        print(f"spot flow order skipped: {_oc_exc}")
+    symbols = list(symbols)[:limit]
+    stats["symbols"] = len(symbols)
+    if _flow_note:
+        print(f"Spot lane order (context only, never a gate){_flow_note}")
+    started = time.monotonic()
+    _tfs_due = []
+    pending = []
+    ladder = []          # round 16: TOUCH / NEAR_BREAK / BREAK_DOWN warnings
+    bundles = {}         # one fetched bundle per symbol; charts reuse it
+    for symbol in symbols:
+        try:
+            bundle = get_market_bundle(
+                symbol, tuple(SPOT_TRIGGERS),
+                # r50 CryptoCove counts: the chart must HAVE as many candles
+                # as it renders (1w:140 needs ~985 daily bars — inside the
+                # venue's 1000-bar single call, per the round-15 aggregator).
+                # r52 CryptoCove counts (his dictation 09-28): 4h/8h→170,
+                # 12h/1d→210, 3d→300, 1w→210 candles — the deep dailies come
+                # from the one-time history store, not per-scan downloads.
+                # R64 (his 10-02 «۲۵۰ تا ۳۵۰ کندل … هم اسپات»): the ONE map.
+                limits=__import__("analysis.candle_counts", fromlist=["fetch_limits"]).fetch_limits())
+            bundles[symbol.upper()] = bundle
+            try:
+                from analysis import tiered_scan as _tier99c
+                if _tier99c.spot_unchanged_skip(symbol, bundle):
+                    stats["spot_skipped_unchanged"] = stats.get("spot_skipped_unchanged", 0) + 1
+                    continue
+            except Exception:
+                pass
+            # ── R99q15 PER-TF CLOSED-BAR GATE (cost): only the frames whose
+            # newest CLOSED candle is new are handed to the engine this pass;
+            # frames with an open watch pin stay in as well. First pass after
+            # boot (and any unreadable stamp) scans everything — fail-open.
+            _tfs_due = list(SPOT_TRIGGERS)
+            try:
+                from analysis import tiered_scan as _tier15
+                _pins15 = []
+                try:
+                    from database.bot_kv import get_json as _g15
+                    _w15 = _g15("spot_urgent_watch", {}) or {}
+                    _pins15 = [str(k).partition("|")[2] for k in _w15
+                               if str(k).startswith(f"{symbol.upper()}|")]
+                except Exception:
+                    _pins15 = []
+                _tfs_due = _tier15.spot_due_tfs(symbol, bundle,
+                                                tfs=tuple(SPOT_TRIGGERS),
+                                                force=False,
+                                                pinned=_pins15)
+                if not _tfs_due:
+                    stats["spot_tf_gate_skip"] = stats.get("spot_tf_gate_skip", 0) + 1
+                    continue
+                stats["spot_tfs_scanned"] = stats.get("spot_tfs_scanned", 0) + len(_tfs_due)
+                _view15 = _tier15._TfSubset(bundle, _tfs_due)
+            except Exception:
+                _view15 = bundle
+            for cand in spot_signals_for(symbol, _view15):
+                stats["found"] += 1
+                pending.append(cand)
+            # ── R99q38c: 3d/1w confirm lane. Their buckets are complete-only,
+            # so the same-TF lane can practically never fire on them; their
+            # confirmation is the CONFIRM frame's first close beyond the edge
+            # (his 10-21: «۳ روزه و هفتگی هیچ هشداری نمیده»). Needs no pin.
+            try:
+                from analysis.spot_engine import (scan_spot_long_frame_confirms
+                                                  as _lfc38,
+                                                  build_spot_candidate as _bsc38)
+                if any(str(_t) in ("3d", "1w") for _t in (_tfs_due or ())):
+                    for _it38 in _lfc38(symbol, bundle):
+                        try:
+                            pending.append(_bsc38(_it38))
+                            stats["found"] += 1
+                            stats["long_frame_confirms"] = \
+                                stats.get("long_frame_confirms", 0) + 1
+                        except Exception as _b38:
+                            print(f"long-frame candidate warning {symbol}: {_b38}")
+            except Exception as _l38:
+                print(f"spot long-frame lane warning {symbol}: {_l38}")
+            # the ladder rides the SAME fetched frames — zero extra downloads
+            try:
+                from analysis.spot_engine import scan_spot_alerts
+                _items58 = scan_spot_alerts(symbol, _view15)
+                ladder.extend(_items58)
+                # pin per SYMBOL|TF so the recheck scans one TF, not six
+                import time as _time      # R62: `_time` was undefined → spot pins never saved
+                # R65 SNAPSHOT: the ladder pins the SHAPE ITSELF (not just the
+                # symbol) — the later recheck judges the geometry the alert was
+                # born with, so a shifted window can never swap the drawing.
+                _pin58 = {}
+                for _i58 in _items58:
+                    # R64.4: BREAK_DOWN pins TOO — the break already printed,
+                    # that is exactly when the confirm lane must be awake. And
+                    # the pin lives as long as the BREAKOUT WINDOW of its TF:
+                    # the old flat 1h TTL died long before a 4h/1d/3d pattern
+                    # broke, so «با بریک و کلوز بازم تایید نمیده» — the urgent
+                    # lane was simply asleep at the break. (his 10-03)
+                    if str(_i58.get("stage")) not in ("NEAR_BREAK", "TOUCH", "BREAK_DOWN", "BREAK_UP"):
+                        continue
+                    _k58 = f"{symbol}|{str(_i58.get('tf') or '')}"
+                    _pin58[_k58] = {
+                        "ts": _time.time(), "stage": str(_i58.get("stage") or ""),
+                        "shape": (_i58.get("pattern_commands") or [None])[0],
+                        "level": float(_i58.get("edge") or 0.0) or None,
+                        "side": str(_i58.get("side") or "")}
+                if _pin58:
+                    from database.bot_kv import get_json as _g58, set_json as _s58
+                    _w58 = _g58("spot_urgent_watch", {}) or {}
+                    _w58.update(_pin58)
+                    _s58("spot_urgent_watch", _w58)
+                    # R64.4: the SAME pins feed the ticker line-watch — instant
+                    # touch/break alerts for every watched edge (1d/3d/1w
+                    # included) with ~one ticker request per 30s TOTAL.
+                    try:
+                        from analysis.line_watch import upsert as _lwu
+                        for _k58, _v58 in _pin58.items():
+                            _sym58, _, _tf58 = _k58.partition("|")
+                            if _v58.get("level"):
+                                _lwu(_sym58, _tf58,
+                                     level=float(_v58["level"]),
+                                     side=str(_v58.get("side") or "HIGH"),
+                                     stage=str(_v58.get("stage") or ""),
+                                     pattern=str((_v58.get("shape") or {}).get("type") or ""))
+                    except Exception as _lw58:
+                        print(f"line watch pin warning {symbol}: {_lw58}")
+            except Exception as exc:
+                print(f"spot ladder scan warning {symbol}: {exc}")
+            # Viva Law: No noisy volume/displacement spam in spot channel.
+            # Spot updates strictly restricted to 3 stages: TOUCH, BREAK, and CONFIRM.
+            # Zero unnecessary event spam to protect channel and server resources.
+            # R99q15: the processed bars are stamped ONLY now (a crash mid-pass
+            # never eats a candle — the next pass re-scans that TF).
+            try:
+                if _tfs_due:
+                    _tier15.spot_tf_mark(symbol, bundle, _tfs_due)
+            except Exception:
+                pass
+        except Exception as exc:
+            stats["errors"] += 1
+            print(f"spot scan warning {symbol}: {exc}")
+    # strongest path first — the daily budget only ever spends on the best
+    pending.sort(key=lambda c: float(((c.metadata or {}).get("target_ladder") or {})
+                                     .get("path_pct") or 0.0), reverse=True)
+    for cand in pending:   # 10-11: ONE position per (symbol, trigger-TF)
+        if _spot_candidate_pattern_retired(cand):
+            stats["retired_geometry_skip"] = stats.get("retired_geometry_skip", 0) + 1
+            continue
+        key = _spot_candidate_stamp_key(cand)
+        window = 72.0 if str(cand.trigger_timeframe) == "3d" else 36.0
+        if _spot_stamp(key, window, commit=False):
+            stats["stamp_skip"] = stats.get("stamp_skip", 0) + 1
+            continue
+        if _spot_tf_position_open(cand.symbol, cand.trigger_timeframe):
+            stats["tf_position_skip"] = stats.get("tf_position_skip", 0) + 1
+            continue
+        try:
+            # R99n (Viva 10-15): spot owns its own 30 slots (was choked by
+            # the same global pool as futures).
+            from analysis import tiered_scan as _tier99
+            try:
+                _open99 = _tier99.count_open_by_setup(
+                    get_active_candidates() or [])
+            except Exception:
+                _open99 = {}
+            # R99q: the daily TOTAL budget is retired (his «گیت خشک‌کننده») —
+            # spot obeys only its own concurrent slots.
+            if not _tier99.concurrent_ok_for_setup(
+                    str(getattr(cand, "setup_code", "") or "SPOT"),
+                    _open99):
+                stats["tier_cap_skip"] = stats.get("tier_cap_skip", 0) + 1
+                continue
+            # R99q28 (his 10-19, verbatim: «سهمیه اسپات کلا باید باز باشه .. 
+            # در اسپات روزانه و ۳ روزه و هفتگی اصلا خیلی پایینه تعدادش با اینکه
+            # بهترین کیفیت ها رو داره»): the spot lane no longer spends a weekly
+            # wallet or a daily pace. Spot is the highest-quality lane and its
+            # own concurrent-slot guard (just above) is the only brake.
+            # VIVA_SPOT_UNLIMITED=0 restores the old wallet.
+            if str(os.getenv("VIVA_SPOT_UNLIMITED", "1") or "1").strip().lower() in (
+                    "0", "false", "off", "no"):
+                if not _tier99.weekly_licence_ok(
+                        str(getattr(cand, "setup_code", "") or "SPOT")):
+                    stats["weekly_licence_skip"] = stats.get("weekly_licence_skip", 0) + 1
+                    continue
+                if not _tier99.weekly_pace_ok(
+                        str(getattr(cand, "setup_code", "") or "SPOT")):
+                    stats["weekly_pace_skip"] = stats.get("weekly_pace_skip", 0) + 1
+                    continue
+        except Exception:
+            pass
+        # R99h SPOT own-engine consult (fail-open, kill-switch SPOT_OWN_ENGINE_ENABLED=0).
+        try:
+            if str(os.getenv('SPOT_OWN_ENGINE_ENABLED', '1') or '1').strip() != '0':
+                from analysis.spot import spot_entry_check as _sp99, spot_trailing_check as _st99
+                _md99s = getattr(cand, 'metadata', None)
+                _md99s = _md99s if isinstance(_md99s, dict) else {}
+                _fg99s = [str(_k) for _k in _md99s if 'veto' in str(_k).lower()]
+                _sp99r = _sp99(broke_closed=True, foreign_gates=_fg99s)
+                for _a99s in (_sp99r.get('alarms') or []):
+                    print(_a99s)
+                    stats['spot_own_alarm'] = stats.get('spot_own_alarm', 0) + 1
+                if _sp99r.get('decision') != 'CONFIRM':
+                    stats['spot_own_skip'] = stats.get('spot_own_skip', 0) + 1
+                    continue
+                try:
+                    _b99 = bundles.get(cand.symbol.upper())
+                    _fr99 = _b99.get(cand.trigger_timeframe) if _b99 is not None else None
+                    _live99 = float(_fr99['close'].iloc[-1]) if _fr99 is not None else None
+                except Exception:
+                    _live99 = None
+                _e99 = _md99s.get('entry', _md99s.get('plan_entry', _md99s.get('spot_entry')))
+                _s99 = _md99s.get('stop', _md99s.get('initial_stop', _md99s.get('spot_stop', _md99s.get('plan_stop'))))
+                if _e99 and _s99 and _live99:
+                    _st99r = _st99(entry=_e99, stop=_s99, live=_live99)
+                    if _st99r.get('state') == 'STOPPED':
+                        print(_st99r['alarms'][0] if _st99r.get('alarms') else 'spot STOPPED')
+                        stats['spot_stop_skip'] = stats.get('spot_stop_skip', 0) + 1
+                        continue
+                stats['spot_own_confirm'] = stats.get('spot_own_confirm', 0) + 1
+        except Exception as _sp99e:
+            print(f'SPOT own-engine consult skipped: {_sp99e}')
+        # R65 SNAPSHOT AT DETECTION (spot): the shape/trend is frozen the
+        # moment its chain is born, so the confirmation or the rejection is
+        # always judged and drawn on the SAME geometry.
+        try:
+            from analysis.spot_engine import lock_spot_snapshot as _lss65b
+            _lss65b(cand)
+        except Exception:
+            pass
+        try:
+            _bundle_for_chart = bundles.get(cand.symbol.upper())
+            frame = (_bundle_for_chart.get(cand.trigger_timeframe)
+                     if _bundle_for_chart is not None else None)
+            chart = generate_chart(frame, cand, confirmed=True) if frame is not None else None
+            if not chart:
+                stats["chart_fail"] = stats.get("chart_fail", 0) + 1
+                stats["last_error"] = f"chart None {cand.symbol}:{cand.trigger_timeframe}"
+            if chart:
+                # r57 (Viva: «آپدیتهای شکست و تایید به اولین هشدار ریپلای
+                # بشه، بعدی با قبلی و همینجوری»): the spot confirm QUOTES its
+                # own first ladder warning; the returned mid becomes the
+                # chain head that every later spot update quotes.
+                _alert_kv = _spot_alert_mid_kv(
+                    cand.symbol, cand.trigger_timeframe,
+                    str((cand.metadata or {}).get("pattern_type") or ""))
+                _pub_mid = tf_channel_publish_confirmed(
+                    cand, chart=chart, chat_override=CHAT_ID_SPOT,
+                    reply_to=int(_alert_kv.get("mid") or 0))
+                if _pub_mid:
+                    stats["published"] += 1
+                    try:  # R99q28: spot is unlimited by his 10-19 law, so it
+                        # does not burn the shared weekly wallet either.
+                        from analysis import tiered_scan as _tier99w
+                        if str(os.getenv("VIVA_SPOT_UNLIMITED", "1") or "1").strip().lower() in (
+                                "0", "false", "off", "no"):
+                            _tier99w.weekly_licence_incr(
+                                str(getattr(cand, "setup_code", "") or "SPOT"))
+                        _tier99w.daily_setup_incr(
+                            str(getattr(cand, "setup_code", "") or "SPOT"))
+                    except Exception:
+                        pass
+                    _spot_stamp(key, window)      # marker ONLY after success
+                    _spot_tf_position_commit(cand.symbol, cand.trigger_timeframe)
+                    try:
+                        from analysis import tiered_scan as _tier99b
+                        _tier99b.daily_count_incr("spot")
+                    except Exception:
+                        pass
+                    try:
+                        from bot.messages_v7 import (_public_code as _pc57,
+                                                     _spot_chain_get as _scg57,
+                                                     _spot_chain_set as _scs57)
+                        _code57 = _pc57(cand)
+                        _chain57 = _scg57(_code57)
+                        _chain57.update({"alert": int(_alert_kv.get("mid") or 0),
+                                         "confirm": int(_pub_mid),
+                                         "last": int(_pub_mid)})
+                        _scs57(_code57, _chain57)
+                    except Exception as _ch57_exc:
+                        print(f"spot chain store skipped: {_ch57_exc}")
+                    _spot_confirm_book(cand, _pub_mid,
+                                       alert_mid=int(_alert_kv.get("mid") or 0))
+                else:
+                    stats["send_fail"] = stats.get("send_fail", 0) + 1
+                    stats["last_error"] = f"publish returned 0 {cand.symbol} code={str((cand.metadata or {}).get('public_code') or cand.signal_id)[:28]}"
+                    # round 16: a SEND FAILURE does not close the ladder for
+                    # its shape (only a real publish does, via the stamp)
+            if not chart:
+                # chart_fail: nothing was sent — keep the alert ladder warm
+                pass
+        except Exception as exc:
+            stats["errors"] += 1
+            stats["last_error"] = f"{type(exc).__name__}: {exc}"[:160]
+            print(f"spot publish warning {cand.symbol}: {exc}")
+    # ── round 16: the ladder — warnings are analysis, they never spend the
+    # signal budget, but they carry their own daily cap and their own dedup.
+    # Order: strongest stage first so the cap never eats a BREAK_DOWN to feed
+    # a TOUCH.
+    _stage_rank = {"BREAK_UP": 4, "BREAK_DOWN": 3, "NEAR_BREAK": 2, "TOUCH": 1}
+    ladder.sort(key=lambda it: _stage_rank.get(str(it.get("stage") or ""), 0),
+                reverse=True)
+    try:
+        from bot.messages_v7 import send_spot_alert as _send_spot_alert
+        from analysis.spot_engine import (spot_alert_check, spot_alert_commit,
+                                          build_spot_alert_candidate,
+                                          spot_break_lock_check,
+                                          spot_break_lock_commit)
+        for aitem in ladder:   # r56: no budget — cooldown stamps are the layer
+            try:
+                _stage73s = str(aitem.get('stage') or '').upper()
+                # ── 10-10 (ii): BREAK_UP is a dup when the confirm lane
+                # already published this (symbol, tf) — the CONFIRM chart
+                # owns the event (DOWN has no confirm lane: never skipped).
+                if _stage73s == 'BREAK_UP' and _spot_sym_tf_stamped(
+                        str(aitem.get('symbol') or ''),
+                        str(aitem.get('tf') or '')):
+                    stats["up_dup_skip"] = stats.get("up_dup_skip", 0) + 1
+                    continue
+                # ── 10-10 (i): kindless BREAK lock — KIND/bucket flip-flops
+                # collapse to one warning per sym|tf|side per 1xTF.
+                if not spot_break_lock_check(aitem):
+                    stats["break_lock_skip"] = stats.get("break_lock_skip", 0) + 1
+                    continue
+                if not spot_alert_check(aitem):
+                    continue
+                cand = build_spot_alert_candidate(aitem)
+                # ── 10-12 journey: each chain charts at most twice — s1 the
+                # first warning (TOUCH/NEAR/BREAK alike), s2 the first break
+                # after it. Every other ladder send is SKIPPED (no per-scan
+                # chartless texts — his final law).
+                _slot73 = None
+                try:
+                    from database.bot_kv import get_json as _gj73, set_json as _sj73
+                    from bot.messages_v7 import _spot_ladder_chain_key as _ck73
+                    from analysis.spot_engine import _spot_journey_slot as _js73f
+                    import time as _t73
+                    _ckey73 = _ck73(str(aitem.get('symbol') or ''), str(aitem.get('tf') or ''), str(aitem.get('pattern') or ''))
+                    _jm73 = _gj73(_ckey73, {}) or {}
+                    _now73 = _t73.time()
+                    # R99q15 SEVEN-CHART JOURNEY (his 10-16 law): the FIRST
+                    # warning of a chain is the recognition chart (s1), a later
+                    # press to either side is the touch chart (s2) and the break
+                    # is the third (s3); the confirmation claims s4 and the three
+                    # hits claim h1…h3 — seven charts for one unique id, and
+                    # never more (spot_engine.spot_chain_chart_cap).
+                    _want73 = []
+                    if not int(_jm73.get("charts") or 0):
+                        _want73 = ["s1"]
+                    elif _stage73s in ("BREAK_UP", "BREAK_DOWN"):
+                        _want73 = ["s3"]
+                    else:
+                        _want73 = ["s2"]
+                    if not int(_jm73.get("s1") or 0):
+                        _want73 = ["s1"] + [x for x in _want73 if x != "s1"]
+                    _slot73 = None
+                    for _w73 in _want73:
+                        _slot73 = _js73f(_jm73, _w73, _now73)
+                        if _slot73 is not None:
+                            break
+                    if _slot73 is not None:
+                        _jm73[f"{_slot73}p"] = _now73
+                        _sj73(_ckey73, _jm73)
+                        aitem["_journey_slot"] = _slot73
+                except Exception as _je73:
+                    print(f"spot journey claim skipped ({_je73})")
+                    _slot73 = None
+                if _slot73 is None:
+                    stats["journey_skip"] = stats.get("journey_skip", 0) + 1
+                    continue
+                chart = None
+                if _slot73 is not None:
+                    _bundle_for_alert = bundles.get(cand.symbol.upper())
+                    frame = (_bundle_for_alert.get(cand.trigger_timeframe)
+                             if _bundle_for_alert is not None else None)
+                    chart = (generate_chart(frame, cand, confirmed=False)
+                             if frame is not None else None)
+                if chart is None:
+                    # journey slots are charted — a failed render burns
+                    # nothing (the pending claim expires in 10 min).
+                    stats["chart_fail"] = stats.get("chart_fail", 0) + 1
+                    continue
+                if _send_spot_alert(aitem, chart):
+                    spot_alert_commit(aitem)      # marker only AFTER the send
+                    spot_break_lock_commit(aitem)  # 10-10: kindless BREAK lock
+                    stats["alerts"] = stats.get("alerts", 0) + 1
+            except Exception as exc:
+                stats["errors"] += 1
+                print(f"spot alert warning {aitem.get('symbol')}: {exc}")
+    except ImportError as exc:
+        print(f"spot ladder import failed: {exc}")
+    stats["dur_s"] = round(time.monotonic() - started, 1)
+    if stats["found"] and not stats["published"] and not stats.get("alerts"):
+        # the lane LIVES but nothing reaches the channel — make that state
+        # loud in the app instead of a green «فعال» hiding a dead sender
+        _spot_status_write("zero_sent", stats)
+    else:
+        _spot_status_write("ok", stats)
+    # ── R99q15 SPOT HIT LANE (charts five…seven of each unique id, his 10-16
+    # law). Rides the frames this pass already holds — zero extra requests.
+    try:
+        stats["hits_posted"] = _spot_hit_pass(bundles)
+    except Exception as _hp15:
+        print(f"spot hit lane warning: {_hp15}")
+    print(f"🪙 SPOT pass finished in {stats['dur_s']}s • "
+          f"symbols={stats['symbols']} found={stats['found']} "
+          f"published={stats['published']} stamp_skip={stats.get('stamp_skip', 0)} "
+          f"break_lock_skip={stats.get('break_lock_skip', 0)} "
+          f"up_dup_skip={stats.get('up_dup_skip', 0)} "
+          f"journey_skip={stats.get('journey_skip', 0)} "
+          f"send_fail={stats.get('send_fail', 0)} chart_fail={stats.get('chart_fail', 0)} "
+          f"errors={stats['errors']}")
+    return stats
+
+
+def _pinv_window_expired(candidate: SignalCandidate, closed: Optional[pd.DataFrame]) -> bool:
+    """Count only closed bars of the pin trigger timeframe after alert creation."""
+    if closed is None or closed.empty:
+        return is_expired(candidate)
+    md = candidate.metadata or {}
+    tf = str(md.get("pin_tf") or candidate.trigger_timeframe)
+    # Viva 2026-09-14: «روزانه است، ۱۵ دقیقه که نیست» — verdict windows count
+    # candles of the pin's OWN timeframe; 4h/1d fell back to 5m before this.
+    seconds = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600,
+               "4h": 14400, "1d": 86400}.get(tf, 300)
+    try:
+        # Viva 09-17: NO candle-count limit — the verdict window ends only
+        # with expiry/invalidation, whether the confirming close prints on
+        # the 5th, 20th or 100th monitor candle.
+        return is_expired(candidate)
+    except Exception:
+        return is_expired(candidate)
+
+
+def _resolve_pinv_verdict(candidate: SignalCandidate, closed: Optional[pd.DataFrame]) -> None:
+    """Pinbar alert lifecycle: within N trigger candles, a close beyond the
+    pinbar's confirming extreme = ✅ تأیید; a close beyond the wick = ❌ تأیید
+    نشد; running out of candles or expiry = ⚪ بدون تأیید. Every outcome is a
+    Telegram reply under the original alert so the loop visibly closes."""
+    from bot.messages_v7 import send_verdict_reply
+    if closed is None or len(closed) < 2:
+        if is_expired(candidate):
+            candidate.status = "VERDICT_TIMEOUT"
+            update_candidate(candidate)
+            send_verdict_reply(candidate, None, "مهلت هشدار تمام شد؛ حرکت تأییدکننده شکل نگرفت.")
+        return
+    md = candidate.metadata or {}
+    pin_ts = str(md.get("pin_ts") or "")
+    pin_high = float(md.get("pin_high") or 0)
+    pin_low = float(md.get("pin_low") or 0)
+    n_candles = int(md.get("pin_verdict_candles") or SETTINGS.alert_verdict_candles)
+    if not pin_high or not pin_low:
+        candidate.status = "VERDICT_TIMEOUT"
+        update_candidate(candidate)
+        return
+    # Verdict window = N closed candles AFTER THE ALERT, on the pin's own
+    # timeframe. (Earlier versions counted candles after the pin candle
+    # itself, so a pin one candle old at detection exhausted the whole
+    # verdict window before anyone could act — the "cancelled after 21
+    # candles in 1 minute" bug.)
+    pin_tf = str(md.get("pin_tf") or candidate.trigger_timeframe)
+    # R65: canonical table (30m/2h/3d were missing — a 2h pin got a 300 s
+    # verdict window and the monitor mass-verdicted it before it could run).
+    from analysis.candle_counts import tf_seconds as _tfsec65
+    tf_seconds = _tfsec65(str(pin_tf))
+    try:
+        det = pd.Timestamp(str(candidate.created_at)).tz_localize(None)
+        threshold = det - pd.Timedelta(seconds=tf_seconds)
+        after = closed[pd.to_datetime(closed["timestamp"]) >= threshold]
+    except Exception:
+        try:
+            ts = pd.Timestamp(pin_ts)
+            after = closed[pd.to_datetime(closed["timestamp"]) > ts]
+        except Exception:
+            after = closed.tail(n_candles)
+    direction = candidate.direction
+    for _, row in after.iterrows():   # no candle cap (Viva 09-17)
+        c = float(row["close"])
+        if direction == "LONG":
+            if c > pin_high:
+                _pinv_done(candidate, True, f"کلوز بالای {pin_high:g} — حرکت صعودی پین‌بار تأیید شد. مدیریت با خودت.")
+                return
+            if c < pin_low:
+                _pinv_done(candidate, False, f"کلوز پایین کف پین‌بار ({pin_low:g}) — سناریو باطل شد.")
+                return
+        else:
+            if c < pin_low:
+                _pinv_done(candidate, True, f"کلوز زیر {pin_low:g} — حرکت نزولی پین‌بار تأیید شد. مدیریت با خودت.")
+                return
+            if c > pin_high:
+                _pinv_done(candidate, False, f"کلوز بالای سقف پین‌بار ({pin_high:g}) — سناریو باطل شد.")
+                return
+    if is_expired(candidate):
+        candidate.status = "VERDICT_TIMEOUT"
+        update_candidate(candidate)
+        tf_fa = {"1m": "۱دقیقه‌ای", "5m": "۵دقیقه‌ای", "15m": "۱۵دقیقه‌ای", "1h": "۱ساعته"}.get(pin_tf, pin_tf)
+        send_verdict_reply(candidate, None,
+                         f"پس از {len(after)} کندل {tf_fa} (از زمان هشدار) کلوز تأییدکننده نیامد؛ هشدار بدون اجرا بسته شد.")
+
+
+def _pinv_done(candidate: SignalCandidate, ok: bool, why: str) -> None:
+    from bot.messages_v7 import send_verdict_reply
+    candidate.status = "VERDICT_YES" if ok else "VERDICT_NO"
+    print(f"PINVAL verdict {candidate.signal_id}: {candidate.status}")
+    send_verdict_reply(candidate, ok, why)
+    update_candidate(candidate)
+
+
+_TF_SECONDS_LIVE = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
+_TF_MINUTES_LIVE = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60,
+                    "2h": 120, "4h": 240, "1d": 1440}
+_TF_FA_LIVE = {"5m": "۵دقیقه‌ای", "15m": "۱۵دقیقه‌ای", "30m": "۳۰دقیقه‌ای",
+               "1h": "یک‌ساعته", "4h": "۴ساعته", "1d": "روزانه"}
+
+
+def _watch_edge_at(candidate, ts) -> float:
+    """Value of the candidate's reference line AT TIME ts: the fitted
+    trend/channel line when the detector stored its two defining points, the
+    static breakout edge otherwise, the zone edge as a last resort."""
+    md = candidate.metadata or {}
+    # R62-ARENA (audit W7): the ⚡ live note reads the SAME sloped edge the
+    # close law and TOHOM use — one level everywhere.
+    try:
+        from analysis.confirm_r62 import confirm_edge_at as _r62_cea
+        _v62 = float(_r62_cea(candidate, ts) or 0.0)
+        if _v62 > 0 and str(md.get("confirm_edge_source") or "") != "MAJOR_TL":
+            return _v62
+    except Exception:
+        pass
+    try:
+        _la = pd.Timestamp(str(md["tl_a_ts"])).tz_localize(None)
+        _lb = pd.Timestamp(str(md["tl_b_ts"])).tz_localize(None)
+        _pa, _pb = float(md["tl_a_price"]), float(md["tl_b_price"])
+        _dt = (_lb - _la).total_seconds()
+        if _dt:
+            _frac = (pd.Timestamp(ts).tz_localize(None) - _la).total_seconds() / _dt
+            return float(_pa + (_pb - _pa) * _frac)
+    except Exception:
+        pass
+    for _k in ("viva_breakout_line", "viva_break_line", "viva_watch_line"):
+        try:
+            _v = float(md.get(_k) or 0.0)
+        except Exception:
+            _v = 0.0
+        if _v > 0:
+            return _v
+    return float(candidate.entry_zone_top if candidate.direction == "LONG"
+                 else candidate.entry_zone_bottom)
+
+
+def _heal_zone_stop(candidate, live_price) -> bool:
+    """r33 (Viva 09-26, «هنوز عدد ابطال بین ناحیه هست»): chains created before
+    the r30 clamp still carry (and DISPLAY) an invalidation inside the entry
+    zone. One protective repair: LONG stop below the zone floor, SHORT stop
+    above the ceiling, using the standard structural buffer. Persists once."""
+    try:
+        zb = float(candidate.entry_zone_bottom)
+        zt = float(candidate.entry_zone_top)
+        sl = float(candidate.sl or 0)
+        direction = str(candidate.direction or "").upper()
+        if zb <= 0 or zt <= 0 or sl <= 0 or not (0 < zb < zt):
+            return False
+        if (candidate.metadata or {}).get("technical_confirmation_complete"):
+            return False
+        from analysis.trade_management import structural_buffer
+        buf = structural_buffer(float(live_price or sl))
+        if direction == "LONG" and sl >= zb:
+            candidate.sl = round(zb - buf, 8)
+        elif direction == "SHORT" and sl <= zt:
+            candidate.sl = round(zt + buf, 8)
+        else:
+            return False
+        candidate.metadata["stop_clamped"] = True
+        candidate.metadata["stop_clamp_reason"] = "r33_zone_heal"
+        try:
+            from database.candidate_store import update_candidate as _uc33
+            _uc33(candidate)
+        except Exception:
+            pass  # the in-memory repair still governs this pass
+        print(f"🛠 zone-stop heal {candidate.symbol} {candidate.signal_id} → {candidate.sl}")
+        return True
+    except Exception:
+        return False
+
+
+def _tombstone_key(candidate) -> str:
+    """r30 anti-flood tombstone: a CANCELLED/EXPIRED scenario fingerprint."""
+    try:
+        zm = (float(candidate.entry_zone_bottom) + float(candidate.entry_zone_top)) / 2.0
+        return "canceltomb|%s|%s|%s|%.4f" % (
+            candidate.symbol, candidate.setup_code, candidate.direction,
+            round(zm, 6))
+    except Exception:
+        return ""
+
+
+def _tombstone_write(candidate, hours: float = 12.0) -> None:
+    key = _tombstone_key(candidate)
+    if not key:
+        return
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        data = _g("cancel_tombstones", {}) or {}
+        data[key] = time.time()
+        # prune anything older than 24h
+        data = {k: v for k, v in data.items()
+                if time.time() - float(v) < 24 * 3600}
+        _s("cancel_tombstones", data)
+    except Exception as exc:
+        print(f"tombstone write skipped: {exc}")
+
+
+def _tombstone_hit(candidate, hours: float = 12.0) -> bool:
+    key = _tombstone_key(candidate)
+    if not key:
+        return False
+    try:
+        from database.bot_kv import get_json as _g
+        data = _g("cancel_tombstones", {}) or {}
+        ts = float(data.get(key) or 0)
+        return ts > 0 and time.time() - ts < hours * 3600
+    except Exception:
+        return False
+
+
+def _structural_break_edge(candidate) -> float:
+    """r51 CONFIRM-TIMING LAW: the break reference of a structural chain —
+    the stored breakout/trend line when the lane kept one, else the
+    scenario-side zone edge (LONG breaks UP through the top, SHORT down
+    through the bottom). 0.0 when the chain carries no edge at all."""
+    md = candidate.metadata or {}
+    try:   # R62-ARENA: the edge NOW, on its own slope (shared core)
+        from analysis.confirm_r62 import confirm_edge_at as _r62_cea
+        if md.get("break_line_geo"):
+            _v62 = float(_r62_cea(candidate, pd.Timestamp.utcnow()) or 0.0)
+            if _v62 > 0:
+                return _v62
+    except Exception:
+        pass
+    for _k51 in ("viva_breakout_line", "tl_line"):
+        try:
+            _v51 = float(md.get(_k51) or 0)
+            if _v51 > 0:
+                return _v51
+        except Exception:
+            pass
+    try:
+        _zt51 = float(candidate.entry_zone_top or 0)
+        _zb51 = float(candidate.entry_zone_bottom or 0)
+        if candidate.direction == "LONG" and _zt51 > 0:
+            return _zt51
+        if candidate.direction == "SHORT" and _zb51 > 0:
+            return _zb51
+    except Exception:
+        pass
+    return 0.0
+
+
+def _scenario_out_of_reach(candidate, price) -> bool:
+    """Viva 09-21 («۵۱ آپدیت از ۱۸ دلار رفته ۲۸ دلار ربات هنوز منتظر مونده؟»).
+
+    An unconfirmed scenario whose zone is far behind the market is not
+    «waiting» — its premise is gone. Distance > `scenario_out_of_reach_atr`
+    (default 2.0) from the zone middle, in the scenario's own direction, closes
+    the chain with a clear message instead of an hourly heartbeat for days.
+    A fresh fast break (≤ fast_break_max_chase_atr) is unaffected.
+    """
+    try:
+        if price is None:
+            return False
+        md = candidate.metadata or {}
+        atr = float(md.get("atr") or 0) or 0.0
+        if atr <= 0:
+            return False
+        px = float(price)
+        # r30 (Viva 09-26, «موقع بریک نباید ابطال بشه — باید آپدیت و بعد
+        # تأیید بیاد»): a chain the market has ALREADY TOUCHED (or broken)
+        # that then ran beyond the zone in the scenario direction is a
+        # breakout in progress — the 09-21 close-out was for zones the
+        # market never came near, not for this. Monitor, alert the break,
+        # confirm on completion; never cancel success.
+        # r33 (Viva 09-26, FIL 4H T818632: live 1.018 INSIDE the 0.889-1.05
+        # zone was «4.59 ATR away» → cancelled; LTC T101855 72.35 inside
+        # 63.37-72.4 → cancelled): distance is measured from the NEAREST zone
+        # EDGE, and a price inside the zone is NEVER out of reach — the old
+        # mid-based measure murdered approaching chains and «الکی موقعیت‌ها
+        # رو خراب می‌کرد». The 09-21 law only ever meant: the market walked
+        # far PAST the zone and never gave the entry.
+        try:
+            _zb = float(candidate.entry_zone_bottom)
+            _zt = float(candidate.entry_zone_top)
+            if _zb <= px <= _zt:
+                return False
+            # r30 law kept: a TOUCHED chain that ran BEYOND the zone in the
+            # scenario direction is a breakout in progress — monitor, alert,
+            # confirm; never cancel success.
+            _md30 = candidate.metadata or {}
+            # r61.3-R62 (his LTC T739534 fury: the trend broke UP and the
+            # chain was cancelled «6.56 ATR away» moments later): an
+            # ESTABLISHED break (detector event or a closed close beyond the
+            # edge) is a breakout in progress — R62's confirm ladder owns it
+            # now; the 09-21 distance close-out never fires on success.
+            try:
+                from analysis.confirm_r62 import break_established as _be61
+                _est61 = bool(_be61(_md30))
+            except Exception:
+                _est61 = False
+            if _est61 or bool(_md30.get("touched")) or bool(_md30.get("live_break_bar")) \
+                    or str(_md30.get("tl_stage") or "") == "JUST_BROKE":
+                if candidate.direction == "LONG" and px > _zt:
+                    return False
+                if candidate.direction == "SHORT" and px < _zb:
+                    return False
+            _edge = _zt if px > _zt else _zb
+            return abs(px - _edge) / atr > float(getattr(SETTINGS, "scenario_out_of_reach_atr", 2.0))
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+def _live_break_watch(candidate, live_frame) -> Tuple[str, str]:
+    """Viva 2026-09-14: an open pattern candle that has already thrust beyond
+    the daily/wedge/triangle/channel side is REPORTED NOW, with the live chart
+    and the countdown to its close («نباید بگوید فردا در کلوز خبر می‌دهم»).
+    One alert per candle; if price falls back inside the flag resets so a
+    fresh thrust can speak again. The close still owns confirmation.
+    Returns (note, dedup_key); the caller persists dedup_key ONLY after a
+    successful Telegram send (HOT-4)."""
+    md = candidate.metadata or {}
+    tf = str(candidate.trigger_timeframe or "")
+    secs = _TF_SECONDS_LIVE.get(tf, 3600)
+    if live_frame is None or getattr(live_frame, "empty", True) or len(live_frame) < 3:
+        return "", ""
+    _row = live_frame.iloc[-1]
+    try:
+        _ts = pd.Timestamp(_row["timestamp"] if "timestamp" in live_frame.columns
+                           else live_frame.index[-1])
+    except Exception:
+        return "", ""
+    now = pd.Timestamp.utcnow().tz_localize(None)
+    if (now - _ts).total_seconds() > secs:
+        return "", ""        # newest row is already a closed candle; close owns it
+    atr = float(md.get("atr") or 0.0) or float(
+        (live_frame["high"] - live_frame["low"]).tail(14).mean() or 0.0)
+    if atr <= 0:
+        return "", ""
+    edge = _watch_edge_at(candidate, _ts)
+    px = float(_row["close"])
+    beyond = px >= edge + 0.05 * atr if candidate.direction == "LONG"         else px <= edge - 0.05 * atr
+    _key = _ts.isoformat()
+    if not beyond:
+        if md.get("live_break_bar"):
+            md.pop("live_break_bar", None)
+            candidate.metadata = md
+            try:
+                update_candidate(candidate)
+            except Exception:
+                pass
+        return "", ""
+    if str(md.get("live_break_bar") or "") == _key:
+        return "", ""
+    # ── round 12: «⚡ عبورِ در لحظه» must mean a CROSSING, not a price that has
+    # been far beyond the line for days (the VVV chain said «در لحظه» while the
+    # price sat 12.88 ATR above the edge). The previous closed candle has to be
+    # on the near side, or the price has to be within 2 ATR of the edge.
+    try:
+        _prev_close = float(live_frame.iloc[-2]["close"])
+        if candidate.direction == "LONG":
+            _crossed_now = _prev_close < edge <= px
+        else:
+            _crossed_now = _prev_close > edge >= px
+        if not (_crossed_now or abs(px - edge) <= 2.0 * atr):
+            return "", ""
+    except Exception:
+        pass
+    # HOT-4 (audit 09-15): the dedup marker is persisted by the CALLER only
+    # after the Telegram send succeeded — a failed send must never eat the
+    # one-and-only ⚡ alert of this pattern candle.
+    rem_min = max(1, int((_ts.timestamp() + secs - now.timestamp()) // 60))
+    side = "بالای" if candidate.direction == "LONG" else "زیرِ"
+    return ((f"⚡ عبورِ {side}ِ خط/لبه در لحظه — کندلِ {_TF_FA_LIVE.get(tf, tf)} هنوز باز است "
+             f"و حدود {rem_min} دقیقه تا کلوزِ آن باقی مانده (قیمت {px:g} در برابر مرجع {edge:.6g}). "
+             "با کلوزِ معتبر، قانونِ یک‌کلوز تأیید می‌کند؛ بازگشت تا پیش از کلوز نقض است."), _key)
+
+
+def _r62_reset_stale(candidate) -> None:
+    """R62-ARENA (audit C5): a stale confirmation is DISARMED, not retried.
+    The chain stays alive (his 09-21 law) but the old break bar can never
+    confirm again: only a later close after a First-Time-Back touch of the
+    edge (FTB law, 09-29 §6) or a fresh TOHOM read may confirm it."""
+    md = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+    bar = md.get("fast_break_bar") or md.get("tohom_confirm_bar")
+    # ── 10-15 CONFIRM-TIMING LAW: disarming belongs to a chain that ALREADY
+    # published a confirmation (its old bar may not re-fire). A chain that has
+    # never published keeps its armed first-close verdict — otherwise a valid
+    # close is thrown away and the FTB precondition then silences the chain for
+    # hours (UNIUSDT·T698813: 215 min of silence caused exactly by this).
+    _consumed = bool(md.get("confirmation_consumed") or md.get("confirmation_sent")
+                     or md.get("confirmation_message_sent")
+                     or md.get("confirmation_chart_sent"))
+    if bar and _consumed:
+        md["stale_after_bar"] = str(bar)[:19]
+    for k in ("technical_confirmation_complete", "tl_fast_break", "fast_break_bar",
+              "fast_break_close", "confirm_level_used", "tohom", "tohom_note_fa",
+              "confirm_candle_pattern"):
+        md.pop(k, None)
+    if str(md.get("viva_state") or "").upper() == "S6_CONFIRMED":
+        md["viva_state"] = "S2_BREAKOUT_CLOSED"
+    if str(getattr(candidate, "status", "") or "").upper() == "CONFIRMED":
+        candidate.status = "APPROACHING"
+    candidate.confirmed_at = ""
+    candidate.metadata = md
+
+
+def _r62_tohom_attempt(candidate, current_price, stats, confirmed=False, reason=""):
+    """R62-ARENA — the smart engine (TOHOM) as a continuous listener.
+
+    Audit TH1–TH3: TOHOM used to run once per chain (a stamp set before any
+    check), only inside the confirm TF's fetch window, on cached sub-frames.
+    Now, for every pre-confirm chain whose live price is at/through its break
+    edge, the sub-TF one step below the confirm TF (1h trigger → 5m) is
+    fetched FRESH at most once per new sub-candle and judged by the dictated
+    evidence (directional sub-closes, rising volume, confirming candle beyond
+    the shared sloped edge). Returns (confirmed, candidate, reason).
+    """
+    if confirmed:
+        return confirmed, candidate, reason
+    try:
+        md = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+        if md.get("technical_confirmation_complete"):
+            return confirmed, candidate, reason
+        from analysis.tohom import evaluate_tohom_confirmation, tohom_frame_tf
+        sub = tohom_frame_tf(candidate)
+        if not sub:
+            return confirmed, candidate, reason
+        px = float(current_price or 0.0)
+        if px > 0:
+            try:
+                from analysis.confirm_r62 import confirm_edge_at as _cea
+                _edge = float(_cea(candidate, pd.Timestamp.utcnow()) or 0.0)
+            except Exception:
+                _edge = 0.0
+            _atr = float(md.get("atr") or 0.0) or px * 0.01
+            if _edge > 0:
+                _near = (px >= _edge - 0.25 * _atr) if candidate.direction == "LONG" \
+                    else (px <= _edge + 0.25 * _atr)
+                if not _near:
+                    return confirmed, candidate, reason     # nothing to confirm; no fetch
+        # once per NEW sub-candle (Railway diet): the bar that is forming now
+        _mins = float(_TF_MINUTES_LIVE.get(sub, 5) or 5)
+        _bar = pd.Timestamp.utcnow().tz_localize(None).floor(pd.Timedelta(minutes=_mins))
+        _bar_key = str(_bar)[:16]
+        if md.get("tohom_fetch_bar") == _bar_key:
+            return confirmed, candidate, reason
+        md["tohom_fetch_bar"] = _bar_key
+        live = get_klines(candidate.symbol, sub, 80, closed_only=False, use_cache=False)
+        if live is None or len(live) < 26:
+            return confirmed, candidate, reason
+        closed_sub = live.iloc[:-1].reset_index(drop=True)   # forming row dropped (TH3)
+        ok, candidate, why = evaluate_tohom_confirmation(candidate, closed_sub, sub_tf=sub)
+        if ok:
+            # the entry is the sub-close that confirmed (tool anchored there),
+            # as long as it sits between the stop and TP1 of this scenario
+            try:
+                _c = float(candidate.metadata.get("tohom_confirm_close") or 0.0)
+                _sl, _t1 = float(candidate.sl or 0.0), float(candidate.tp1 or 0.0)
+                _okc = (_sl < _c < _t1) if candidate.direction == "LONG" else (_t1 < _c < _sl)
+                if _c > 0 and _sl > 0 and _t1 > 0 and _okc:
+                    candidate.planned_entry = _c
+                    candidate.metadata["entry_source"] = "TOHOM_SUB_CLOSE"
+                    candidate.metadata["fast_break_bar"] = candidate.metadata.get("tohom_confirm_bar")
+                    candidate.metadata["fast_break_tf_min"] = _mins
+            except Exception:
+                pass
+            stats["tohom_confirms"] = stats.get("tohom_confirms", 0) + 1
+            print(f"⚡ TOHOM {candidate.symbol} {candidate.setup_code}: early confirm on "
+                  f"{candidate.metadata.get('tohom_sub_tf')} x{candidate.metadata.get('tohom_subs')} "
+                  f"vol x{candidate.metadata.get('tohom_vol_ratio')}")
+            return True, candidate, why
+        return confirmed, candidate, (reason or why)
+    except Exception as exc:
+        print(f"TOHOM check skipped {getattr(candidate, 'signal_id', '?')}: {exc}")
+        return confirmed, candidate, reason
+
+
+def _tf_fetch_window(tf: str) -> bool:
+    """Railway cost guard (Viva 09-17), WIDENED 09-21 (round 13).
+
+    His report, verbatim: «من هنوز سیگنال روزانه ندیدم که تأیید بشه یا واسش آپدیت
+    بیاد .. ۴ ساعته هم زیاد ندیدم .. حالا دقیق بررسی کن اگر کندل‌ها فقط در تایم
+    خودشون آپدیت میشن کلا ول معطل هستیم».
+
+    The old windows were 4 minutes once per candle: a 4h chain was looked at ~6% of
+    the day and a daily chain ~1% — and ANY restart inside those four minutes ate
+    the whole candle (no confirmation, no update, no heartbeat, forever). Windows
+    now span several 3-minute monitor cycles, so a candle close can never be missed,
+    while the duty cycle stays small and the cost bounded.
+    """
+    now = datetime.now(timezone.utc)
+    m = now.minute
+    tf = str(tf or "").lower()
+    if tf in ("1m", "3m", "5m"):
+        return True
+    if tf == "15m":
+        return m % 15 < 6
+    if tf == "30m":
+        return m % 30 < 10
+    if tf == "1h":
+        return m < 12
+    if tf == "2h":
+        return m < 12 and now.hour % 2 == 0
+    if tf == "4h":
+        return m < 20 and now.hour % 4 == 0
+    if tf == "1d":
+        return now.hour == 0 and m < 45
+    # R63 (audit W5): the spot/HTF frames used to fall through to «always» —
+    # a fetch on EVERY monitor cycle for a candle that closes every 8h–1w.
+    if tf == "8h":
+        return m < 25 and now.hour % 8 == 0
+    if tf == "12h":
+        return m < 30 and now.hour % 12 == 0
+    if tf in ("3d", "1w"):
+        return now.hour == 0 and m < 45
+    return True
+
+
+_PRICE_MAP: Dict[str, float] = {}
+_PRICE_MAP_AT: float = 0.0
+
+
+def _live_price_map() -> Dict[str, float]:
+    """One venue ticker call per cycle: {SYMBOL: live price} for every chain.
+
+    Round 13: a chain's liveness (invalidation, approach watch, «از ناحیه دور شد»)
+    must NOT depend on whether a kline window happens to be open — that dependency
+    is exactly why 4h/1d chains looked dead. The ticker is cached by the venue
+    layer, so this costs nothing per candidate.
+    """
+    global _PRICE_MAP, _PRICE_MAP_AT
+    now = time.monotonic()
+    if _PRICE_MAP and now - _PRICE_MAP_AT < 40:
+        return _PRICE_MAP
+    prices: Dict[str, float] = {}
+    try:
+        from data.ourbit import get_ourbit_tickers
+        for row in get_ourbit_tickers(use_cache=True):
+            _px = float(row.get("last_price") or 0)
+            if _px > 0:
+                prices[str(row.get("symbol") or "").upper()] = _px
+    except Exception as exc:
+        print(f"live price map (ourbit) warning: {exc}")
+    if not prices:
+        try:
+            from data.fetcher import get_tickers
+            for row in get_tickers():
+                _px = float(row.get("last_price") or 0)
+                if _px > 0:
+                    prices[str(row.get("symbol") or "").upper()] = _px
+        except Exception as exc:
+            print(f"live price map warning: {exc}")
+    if prices:
+        _PRICE_MAP, _PRICE_MAP_AT = prices, now
+    return _PRICE_MAP or prices
+
+
+def _confirmation_stale_minutes(candidate, closed_df) -> Optional[int]:
+    """Minutes between the confirming candle and now (None while it is fresh).
+
+    The confirming bar is the one that satisfied the one-close law
+    (`fast_break_bar` when the pattern lane fired), else the newest closed bar of
+    the confirm timeframe. Past two candles of that timeframe the entry is a
+    market of the past — his 09-21 rule, applied to confirmations too.
+    """
+    try:
+        md = getattr(candidate, "metadata", None) or {}
+        tf = str(md.get("confirm_tf") or getattr(candidate, "trigger_timeframe", "") or "15m").lower()
+        mins = float(_TF_MINUTES_LIVE.get(tf, 15) or 15)
+        # R62-ARENA (audit C5): the stamp is a real bar timestamp now (the old
+        # fast lane stored the frame's integer INDEX, so this guard parsed
+        # garbage) and age is measured from the bar's CLOSE on its own TF.
+        bar_mins = float(md.get("fast_break_tf_min") or 0.0) or mins
+        # ── 10-15 CONFIRM-TIMING LAW: the age that matters is the age of the
+        # bar the ENTRY comes from — the confirming close (rebase_confirm_entry
+        # stamps `confirm_entry_bar`). Measuring the OLD break bar instead
+        # condemned a verdict computed seconds earlier on the CURRENT close
+        # («⏳ ۱۶۵ دقیقه» and the ladder was thrown away — UNIUSDT·T698813).
+        stamp = md.get("confirm_entry_bar") or md.get("fast_break_bar") or md.get("confirm_bar")
+        bar_mins = float(md.get("confirm_entry_tf_min") or 0.0) or bar_mins
+        if not stamp and closed_df is not None and len(closed_df):
+            stamp = closed_df["timestamp"].iloc[-1]
+            bar_mins = mins
+        if not stamp:
+            return None
+        ts = pd.Timestamp(stamp)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        ts = ts + pd.Timedelta(minutes=bar_mins)
+        age_min = (datetime.now(timezone.utc) - ts.to_pydatetime()).total_seconds() / 60.0
+        # ── 10-12 STALE-BAR PACK (F1/F5, VVV·T124937): the old law measured
+        # the threshold in BREAK-detection candles (2×max(confirm, break-TF)):
+        # a 4H pattern's 30m entry aged 2.5h still scored «0.6 of a candle»
+        # and the ladder went out. Staleness now speaks ONLY the confirm
+        # timeframe (Railway-tunable), and a PRESENT-but-unreadable stamp
+        # fails CLOSED — a leaked/broken stamp must disarm the ladder, never
+        # sneak it through (the note below branches on stale_stamp_broken).
+        _mult = float(getattr(SETTINGS, "stale_confirm_bars", 2.0) or 2.0)
+        if age_min > _mult * mins:
+            return int(age_min)
+        return None
+    except Exception:
+        # Fail CLOSED only when a stamp EXISTED (a stamp key, or a newest
+        # bar whose timestamp refused to parse). A chain with no stamp and
+        # a stamp-less frame (the pinned retry contract) keeps the old
+        # None — there is nothing present-but-unreadable to distrust.
+        try:
+            _stamp_key = bool(md.get("fast_break_bar") or md.get("confirm_bar"))
+            _ts_col = bool(closed_df is not None and len(closed_df)
+                            and "timestamp" in getattr(closed_df, "columns", ()))
+            _had = _stamp_key or _ts_col
+        except Exception:
+            _had = False
+        if _had:
+            try:
+                md["stale_stamp_broken"] = True
+            except Exception:
+                pass
+            return 10 ** 9
+        return None
+
+
+def _candidate_market_frames(candidates) -> Dict[Tuple[str, str], Tuple[pd.DataFrame, pd.DataFrame, float]]:
+    """One Bybit request per active symbol/TF for monitor and confirmation.
+
+    Confirmation now runs on the candidate's finer `confirm_tf` (1m scalp /
+    5m swing) when present, so a valid retest is confirmed inside minutes;
+    charts keep using the trigger TF (see `_chart_frame`)."""
+    frames: Dict[Tuple[str, str], Tuple[pd.DataFrame, pd.DataFrame, float]] = {}
+    for candidate in candidates:
+        # R62-ARENA (audit C7): every chain listens ONE step below its TRIGGER
+        # TF (1h←15m, 4h←1h …) — old chains re-pointed from pattern-keyed TFs.
+        try:
+            from analysis.confirm_r62 import normalize_confirm_tf as _r62_norm
+            _r62_norm(candidate)
+        except Exception:
+            pass
+        confirm_tf = candidate.metadata.get("confirm_tf") or candidate.trigger_timeframe
+        from analysis.setups_v7 import confirm_late_tf as _late_tf
+        _late = _late_tf(candidate.trigger_timeframe)
+        for tf in {confirm_tf, candidate.trigger_timeframe, _late} - {None}:
+            if not _tf_fetch_window(tf):
+                continue   # Viva 09-17 cost ruling: fetch only near candle close
+            key = (candidate.symbol, tf)
+            if key in frames:
+                continue
+            # R63 RAILWAY DIET (audit W5 + «مصرف Railway خیلی بالا رفته»): the
+            # window spans several monitor cycles; once THIS chain has already
+            # been evaluated on the newest CLOSED bar of this TF, re-fetching
+            # the same closed candles is pure cost. A fetch that has not yet
+            # seen the rolled-over bar (venue latency) is retried as before.
+            _exp63 = _expected_closed_bar(tf)
+            if _exp63 and _SEEN_CLOSED.get((str(candidate.signal_id), str(tf))) == _exp63:
+                continue
+            live = get_klines(
+                candidate.symbol,
+                tf,
+                140,
+                closed_only=False,
+                use_cache=False,
+            )
+            if live is None or len(live) < 20:
+                continue
+            # Bybit's newest row is forming; only prior rows may confirm.
+            closed = live.iloc[:-1].reset_index(drop=True)
+            current_price = float(live["close"].iloc[-1])
+            # ── 10-12 STALE-BAR PACK (F2, VVV·T124937 — THE core fix): the
+            # fetcher CAN hand back a frame whose newest CLOSED bar is hours
+            # old (venue lag / fallback / a lying cache) without raising —
+            # and entry IS the newest close, so that bar BECOMES the entry
+            # (23.551 from ~19:35, sent at 22:00 with live at 24.819). A
+            # frame older than mult×TF candles never enters the dict: the
+            # chain waits for fresh data, no verdict is computed on the past.
+            try:
+                from analysis.confirm_r62 import frame_is_fresh as _fr2
+                _tfm2 = float(_TF_MINUTES_LIVE.get(str(tf).lower(), 0) or 0)
+                _newest2 = closed["timestamp"].iloc[-1] if "timestamp" in closed.columns and len(closed) else None
+                if not _fr2(_newest2, _tfm2, getattr(SETTINGS, "frame_max_age_mult", 2.0)):
+                    print(f"FRAME_STALE | {candidate.symbol} | {tf} | newest={_newest2}")
+                    continue
+            except Exception:
+                pass
+            frames[key] = (live, closed, current_price)
+            try:
+                _last63 = _bar_key63(closed["timestamp"].iloc[-1])
+                for _c63 in candidates:
+                    if str(getattr(_c63, "symbol", "")) == str(candidate.symbol):
+                        _SEEN_CLOSED[(str(_c63.signal_id), str(tf))] = _last63
+                if len(_SEEN_CLOSED) > 4000:
+                    _SEEN_CLOSED.clear()
+            except Exception:
+                pass
+    return frames
+
+
+# R63 (W5): (signal_id, tf) → newest CLOSED bar already evaluated.
+_SEEN_CLOSED: Dict[Tuple[str, str], str] = {}
+
+
+def _bar_key63(ts) -> str:
+    t = pd.Timestamp(ts)
+    if t.tzinfo is not None:
+        t = t.tz_convert("UTC").tz_localize(None)
+    return str(t)[:16]
+
+
+def _expected_closed_bar(tf: str) -> str:
+    """Start time (UTC, naive, 'YYYY-MM-DD HH:MM') of the newest CLOSED bar
+    of ``tf`` right now; '' for TFs we cannot floor exactly."""
+    try:
+        mins = int(_TF_MINUTES_LIVE.get(str(tf).lower()) or 0)
+        if mins <= 0:
+            return ""
+        now = pd.Timestamp.utcnow().tz_localize(None) if pd.Timestamp.utcnow().tzinfo is None \
+            else pd.Timestamp.utcnow().tz_convert("UTC").tz_localize(None)
+        cur = now.floor(pd.Timedelta(minutes=mins))
+        return str(cur - pd.Timedelta(minutes=mins))[:16]
+    except Exception:
+        return ""
+
+
+def monitor_candidates() -> Dict[str, int]:
+    """Approaching → closed-candle confirmation → confirmed persistence."""
+    candidates = get_active_candidates()
+    stats = {"active": len(candidates), "approaching": 0, "confirmed": 0, "cancelled": 0}
+    if not candidates:
+        return stats
+    frames = _candidate_market_frames(candidates)
+    prices = _live_price_map()
+    # ── Viva 09-21/22: every cycle, a confirmed plan is re-frozen/re-applied so
+    # no absorb, update or restart can slide its entry/stop/ladder.
+    try:
+        from analysis.quality_engine import enforce_confirmed_snapshot as _enforce_snap
+        for _c in candidates:
+            _enforce_snap(_c)
+    except Exception as _snap_exc:
+        print(f"snapshot enforcement skipped: {_snap_exc}")
+    for candidate in candidates:
+        key = (candidate.symbol, candidate.metadata.get("confirm_tf") or candidate.trigger_timeframe)
+        market_data = frames.get(key)
+        if market_data is None:
+            # Viva 09-19/20: a missing finer confirm frame must NEVER stall
+            # the candidate (the 09-17→09-19 Ourbit 3m gap did exactly that).
+            from analysis.setups_v7 import confirm_late_tf as _fb_late
+            for _fb in (candidate.trigger_timeframe, _fb_late(candidate.trigger_timeframe)):
+                if _fb:
+                    market_data = frames.get((candidate.symbol, _fb))
+                    if market_data:
+                        candidate.metadata["confirm_tf_fallback"] = _fb
+                        break
+        publication_in_progress = bool(
+            candidate.metadata.get("technical_confirmation_complete")
+            and (
+                candidate.metadata.get("confirmation_chart_sent")
+                or candidate.metadata.get("confirmation_message_sent")
+            )
+        )
+        # Once one Confirmed component is public, finish the exact same
+        # confirmation even if market data is temporarily unavailable.
+        live, closed, current_price = market_data if market_data else (None, None, None)
+        if (current_price is None or current_price <= 0) and prices:
+            # ── round 13: outside a candle window the chain is still ALIVE and
+            # still guarded — the venue ticker answers for its price. Only the
+            # closed-candle CONFIRMATION waits for the frame (by law it must be a
+            # closed candle); everything else runs every cycle for every TF.
+            current_price = prices.get(str(candidate.symbol or "").upper())
+        have_frames = market_data is not None
+        if current_price is None and not publication_in_progress:
+            continue
+        # ── r51 CONFIRM-TIMING LAW (Viva 09-27, «بلافاصله بعد از شکست تایید
+        # بدن — یا اولین کلوز بعد از شکست»): DASH T242271 swept 63→74 while
+        # its chain sat silent for 1670 minutes — the duty-cycle fetch window
+        # simply had no frame to judge. A structural chain whose LIVE price
+        # is beyond its break edge is a break IN PROGRESS: the confirm frame
+        # is fetched NOW (throttled to one forced fetch / 10 min / chain) —
+        # the cost window never gates a real break.
+        if (not have_frames and not publication_in_progress
+                and candidate.setup_code in _STRUCTURAL_QUALITY_LANES
+                and current_price):
+            try:
+                _md51 = candidate.metadata if isinstance(candidate.metadata, dict) else {}
+                _now51 = time.time()
+                if _now51 - float(_md51.get("break_bypass_at") or 0) > 600:
+                    _edge51 = _structural_break_edge(candidate)
+                    _px51 = float(current_price)
+                    _atr51 = float(_md51.get("atr") or 0) or abs(_px51) * 0.01
+                    if _edge51 > 0 and _atr51 > 0:
+                        _beyond51 = (_px51 > _edge51 + 0.05 * _atr51
+                                     if candidate.direction == "LONG"
+                                     else _px51 < _edge51 - 0.05 * _atr51)
+                        if _beyond51:
+                            _tf51 = str(_md51.get("confirm_tf")
+                                        or candidate.trigger_timeframe or "15m")
+                            _live51 = get_klines(candidate.symbol, _tf51, 140,
+                                                 closed_only=False, use_cache=False)
+                            if _live51 is not None and len(_live51) >= 20:
+                                market_data = (_live51, _live51.iloc[:-1].reset_index(drop=True),
+                                               float(_live51["close"].iloc[-1]))
+                                live, closed, current_price = market_data
+                                have_frames = True
+                                _md51["break_bypass_at"] = _now51
+                                candidate.metadata = _md51
+                                stats["break_bypass"] = stats.get("break_bypass", 0) + 1
+            except Exception as _bp51_exc:
+                print(f"r51 break-bypass {candidate.symbol}: {_bp51_exc}")
+        try:
+            if candidate.setup_code == "PINVAL":
+                # PINVAL now uses the same lower-timeframe confirmation engine
+                # as every executable setup. Its native timeframe only limits
+                # how long the alert may wait; it never counts LTF bars here.
+                md_pin = candidate.metadata or {}
+                pin_tf = str(md_pin.get("pin_tf") or candidate.trigger_timeframe)
+                pin_frame = frames.get((candidate.symbol, pin_tf))
+                # No arbitrary 3/4-candle verdict timeout: a meaningful new
+                # alert supersedes this one; only real invalidation/expiry ends it.
+            if not publication_in_progress and is_expired(candidate):
+                candidate.status = "EXPIRED"
+                update_candidate(candidate)
+                try:
+                    cancel_staged_confirmation(candidate.signal_id)
+                except Exception as exc:
+                    print(f"Could not release staged symbol {candidate.signal_id}: {exc}")
+                send_candidate_cancelled(candidate, "زمان اعتبار Setup به پایان رسید و تأیید ورود تشکیل نشد.")
+                try:
+                    from bot.messages_v7 import send_verdict_reply
+                    send_verdict_reply(candidate, None, "مهلت ستاپ تمام شد؛ کندل تأییدکننده شکل نگرفت.")
+                except Exception:
+                    pass
+                stats["cancelled"] += 1
+                continue
+            if not publication_in_progress and is_invalidated(candidate, current_price):
+                candidate.status = "CANCELLED"
+                update_candidate(candidate)
+                try:
+                    cancel_staged_confirmation(candidate.signal_id)
+                except Exception as exc:
+                    print(f"Could not release staged symbol {candidate.signal_id}: {exc}")
+                send_candidate_cancelled(
+                    candidate,
+                    f"قیمت پیش از تأیید از سطح ابطال {candidate.sl} عبور کرد.",
+                )
+                try:
+                    from bot.messages_v7 import send_verdict_reply
+                    send_verdict_reply(candidate, False, f"قیمت از سطح ابطال {candidate.sl:g} گذشت؛ سناریو باطل شد.")
+                except Exception:
+                    pass
+                stats["cancelled"] += 1
+                continue
+
+            if SETTINGS.skip_dead_gate_candidates and not candidate.execution_ready:
+                # Legacy dead-on-arrival candidate from before the gate fix:
+                # cannot ever confirm; expiry/invalidation above will close it.
+                continue
+
+            # ── r60.4 THE update law (Viva 09-30, verbatim): «آپدیت فقط برای
+            # هشدار نهایی و آماده‌سازی بیاد» — the old live-break chatter
+            # (an update + LIVE CHART per bar while price hovered at the edge:
+            # his 23:46 initial + 3 «هنوز در همان ناحیه» repeats, ~1000 msgs /
+            # 2 h, plus Railway render cost) is DEMOTED to metadata: the note
+            # is still computed and stored as evidence, it just never posts.
+            # Updates that still send: approaching (final-watch), stale/analysis
+            # note, material zone move, confirmation, verdicts.
+            if not candidate.metadata.get("technical_confirmation_complete"):
+                try:
+                    _pat_frames = frames.get((candidate.symbol, str(candidate.trigger_timeframe or "")))
+                    _live_note, _lb_key = _live_break_watch(candidate, (_pat_frames or (None, None, None))[0])
+                    if _live_note:
+                        _md = candidate.metadata or {}
+                        if _md.get("live_break_bar") != _lb_key:
+                            stats["live_break"] = stats.get("live_break", 0) + 1
+                            _md["live_break_bar"] = _lb_key
+                            _md["live_break_note"] = str(_live_note)[:220]
+                            candidate.metadata = _md
+                            try:   # r60.4: ONE metadata write per new bar (Railway diet)
+                                update_candidate(candidate)
+                            except Exception:
+                                pass
+                except Exception as _lb_exc:
+                    print(f"live-break watch {candidate.symbol}: {_lb_exc}")
+
+            if not candidate.metadata.get("technical_confirmation_complete"):
+                _heal_zone_stop(candidate, current_price)
+                _st73, _datr73, _dpct73 = approach_stage(candidate, current_price)
+                if _st73 == "A" and not candidate.metadata.get("stage_a_sent"):
+                    if send_stage_a_watch(candidate, current_price, _datr73, _dpct73):
+                        candidate.metadata["stage_a_sent"] = True
+                        candidate.approaching_sent = True
+                        candidate.status = "APPROACHING"
+                        stats["watch_a"] = stats.get("watch_a", 0) + 1
+                if _st73 == "B" and not candidate.metadata.get("stage_b_sent"):
+                    _bdf73 = (frames.get((candidate.symbol, candidate.trigger_timeframe)) or (None, closed, None))[1]
+                    if send_stage_b_ready(candidate, _bdf73, current_price, _datr73):
+                        candidate.metadata["stage_b_sent"] = True
+                        candidate.approaching_sent = True
+                        candidate.status = "APPROACHING"
+                        stats["approaching"] += 1
+
+            # ── 10-12 STALE-BAR PACK (F3): the F3 live-vs-entry veto judges
+            # FRESH confirms only — a retry re-publishes the ORIGINAL candle's
+            # entry by design («do not move Entry»), so live-drift must not
+            # veto it (the pinned retry contract: test_v7 …never_arms…).
+            _retry_pub_1012 = False
+            if (
+                candidate.metadata.get("technical_confirmation_complete")
+                and not candidate.metadata.get("confirmation_sent")
+            ):
+                # Retry publication of the original confirmed setup. Do not move
+                # Entry/confirmed_at to a later candle or inflate its score.
+                candidate.status = "CONFIRMED"
+                confirmed, reason = True, "تلاش مجدد برای تکمیل انتشار"
+                _retry_pub_1012 = True
+            elif not have_frames:
+                # window closed: no closed candle to judge — never a NO_DATA
+                # reject (it used to stamp the chain's last_reject_code and hide
+                # the real reason from the log/UI)
+                confirmed, reason = False, "پنجرهٔ کندلِ تأیید باز نیست؛ بررسی در کلوزِ بعدی"
+                # R62-ARENA (audit TH2): the smart engine is NOT tied to the
+                # confirm TF's fetch window — it has its own (finer) clock.
+                confirmed, candidate, reason = _r62_tohom_attempt(
+                    candidate, current_price, stats, confirmed, reason)
+            else:
+                _pat_frame = None
+                try:
+                    _cf = str(candidate.metadata.get("confirm_tf") or "")
+                    _trg = str(candidate.trigger_timeframe or "")
+                    if _cf and _cf != _trg:
+                        # Viva 2026-09-13: a pattern-timeframe close breaking the
+                        # line/wedge/triangle side confirms too — hand that frame
+                        # to the evaluator instead of watching only the confirm TF.
+                        _pat_frame = (frames.get((candidate.symbol, _trg)) or (None, None, None))[1]
+                except Exception:
+                    _pat_frame = None
+                _key_tf = str(candidate.metadata.get("confirm_tf_fallback") or key[1] or "")
+                confirmed, candidate, reason = evaluate_confirmation(
+                    candidate, closed, htf_closed_df=_pat_frame,
+                    frame_tf_minutes=float(_TF_MINUTES_LIVE.get(_key_tf, 0) or 0))
+                if not confirmed:
+                    # Viva 09-17 late bound: the scan/structure candle confirms
+                    # when the finer monitor TF never printed the valid close
+                    from analysis.setups_v7 import confirm_late_tf as _ltf
+                    _lt = _ltf(candidate.trigger_timeframe)
+                    _lf = frames.get((candidate.symbol, _lt)) if _lt else None
+                    if _lf and _lt != key[1]:
+                        confirmed, candidate, reason = evaluate_confirmation(
+                            candidate, _lf[1], htf_closed_df=_pat_frame,
+                            frame_tf_minutes=float(_TF_MINUTES_LIVE.get(str(_lt), 0) or 0))
+                if not confirmed:
+                    # ── r47 TOHOM (Viva 09-27, «انجین هوشمند ورود قبل از کلوز
+                    # تایم تریگر»): sub-TF directional closes with rising volume
+                    # and a confirming pattern beyond the same break edge may
+                    # confirm NOW. R62: re-evaluated on every new sub-candle
+                    # (no one-shot), one step below the confirm TF, fresh data.
+                    # (evaluate_tohom_confirmation lives in _r62_tohom_attempt)
+                    try:
+                        confirmed, candidate, reason = _r62_tohom_attempt(
+                            candidate, current_price, stats, confirmed, reason)
+                    except Exception as exc:
+                        print(f"TOHOM check skipped {candidate.signal_id}: {exc}")
+
+            # R99i per-setup own-engine consult (generalizes R99g):
+            # every chain whose setup owns a discipline home gets its own
+            # entry law consulted. Setup-gated, fail-open, kill-switches:
+            # <SETUP>_OWN_ENGINE_ENABLED=0 bypasses that setup, no deploy.
+            try:
+                _code99 = str(getattr(candidate, 'setup_code', '') or '').upper()
+                _r99i_table = {
+                    'TECHCLASSIC': ('analysis.techclassic', 'tc_entry_check',
+                                    'TC_OWN_ENGINE_ENABLED'),
+                    'PINVAL': ('analysis.pinval', 'pinval_entry_check',
+                               'PINVAL_OWN_ENGINE_ENABLED'),
+                    'ALBROX': ('analysis.albrox', 'albrox_entry_check',
+                               'ALBROX_OWN_ENGINE_ENABLED'),
+                    'TLBREAK': ('analysis.tlbreak', 'tlbreak_entry_check',
+                                'TLBREAK_OWN_ENGINE_ENABLED'),
+                }
+                _r99i = _r99i_table.get(_code99)
+                if _r99i and str(os.getenv(_r99i[2], '1') or '1').strip() != '0':
+                    import importlib as _il99
+                    _fn99 = getattr(_il99.import_module(_r99i[0]), _r99i[1])
+                    try:
+                        from analysis.confirm_r62 import break_established as _brk99
+                        _broke99 = bool(_brk99(candidate.metadata or {}))
+                    except Exception:
+                        _broke99 = False
+                    _broke99 = _broke99 or bool(confirmed)
+                    _via_tohom99 = bool(confirmed) and not have_frames
+                    _md99 = candidate.metadata or {}
+                    _fg99 = [str(_k) for _k in _md99 if 'veto' in str(_k).lower()]
+                    _lrc99 = str(_md99.get('last_reject_code') or '')
+                    if 'VETO' in _lrc99:
+                        _fg99.append(_lrc99)
+                    # TECHCLASSIC/TLBREAK judge chase against the FIRST break
+                    # close, not the plan's post-confirm rebase (which otherwise
+                    # made a delayed signal appear fresh). Other setups retain
+                    # their existing entry lookup.
+                    if _code99 in {'TECHCLASSIC', 'TLBREAK'}:
+                        _ent99 = (_md99.get('fast_break_close')
+                                  or getattr(candidate, 'planned_entry', None)
+                                  or _md99.get('entry')
+                                  or _md99.get('activation_price'))
+                    else:
+                        _ent99 = (_md99.get('entry') or getattr(candidate, 'entry', None)
+                                  or _md99.get('activation_price'))
+                    _kw99 = dict(broke=_broke99,
+                                 closed_after_break=bool(confirmed and have_frames),
+                                 tohom_fired=_via_tohom99, foreign_gates=_fg99,
+                                 direction=str(getattr(candidate, 'direction', 'LONG')
+                                               or 'LONG'),
+                                 live=current_price, entry=_ent99,
+                                 tp1=(_md99.get('tp1') or getattr(candidate, 'tp1', None)))
+                    if _code99 in {'TECHCLASSIC', 'TLBREAK'}:
+                        _kw99['break_age_bars'] = _md99.get('fast_break_age_bars')
+                    if _code99 == 'PINWALL':
+                        _kw99['carried_by'] = (_md99.get('pinwall_carried_by')
+                                               or _md99.get('carried_by'))
+                        _kw99['with_trend'] = bool(_md99.get('pinwall_with_trend', False))
+                    elif _code99 == 'PINVAL':
+                        _kw99['polarity_ok'] = bool(_md99.get('pinval_polarity_ok', True))
+                    elif _code99 == 'TLBREAK':
+                        _kw99['side'] = _md99.get('tlbreak_side')
+                    _tc99r = _fn99(**_kw99)
+                    _pfx99 = _code99.lower() + '_own_'
+                    for _a99 in (_tc99r.get('alarms') or []):
+                        print(_a99)
+                        stats['own_alarm'] = stats.get('own_alarm', 0) + 1
+                        stats[_pfx99 + 'alarm'] = stats.get(_pfx99 + 'alarm', 0) + 1
+                    if _tc99r.get('decision') == 'CONFIRM':
+                        stats['own_confirm'] = stats.get('own_confirm', 0) + 1
+                        stats[_pfx99 + 'confirm'] = stats.get(_pfx99 + 'confirm', 0) + 1
+                    else:
+                        stats['own_defer'] = stats.get('own_defer', 0) + 1
+                        stats[_pfx99 + 'defer'] = stats.get(_pfx99 + 'defer', 0) + 1
+                        confirmed = False
+                        reason = (_code99 + ' own engine: '
+                                  + '; '.join(_tc99r.get('reasons') or ['wait']))
+            except Exception as _tc99e:
+                print(f'own-engine consult skipped: {_tc99e}')
+            if confirmed:
+                # ── Viva 09-21/22: the confirmation moment FROZENS the plan
+                # (entry/stop/ladder/lines) so no later update or absorb can
+                # slide the tool he photographed as «کش اومده».
+                try:
+                    from analysis.quality_engine import freeze_confirmed_snapshot
+                    freeze_confirmed_snapshot(candidate)
+                except Exception as _snap_exc:
+                    print(f"snapshot freeze skipped: {_snap_exc}")
+                try:
+                    if current_price:
+                        candidate.metadata["activation_price"] = float(current_price)
+                except Exception:
+                    pass
+            if (not confirmed and have_frames
+                    and str(candidate.metadata.get("last_reject_code") or "") == "BREAK_RECLAIMED"
+                    and not candidate.metadata.get("technical_confirmation_complete")):
+                # ── R62-ARENA (audit C8 / r61.2 law «ری‌کلیم = مرگِ شکست»): a
+                # break the market took back is a FAILED break — the chain is
+                # closed with the standard cancel message instead of sitting
+                # on a non-terminal reject forever.
+                candidate.status = "CANCELLED"
+                candidate.metadata["cancel_reason"] = "BREAK_RECLAIMED"
+                update_candidate(candidate)
+                try:
+                    cancel_staged_confirmation(candidate.signal_id)
+                except Exception:
+                    pass
+                send_candidate_cancelled(
+                    candidate,
+                    "شکستِ مبنا پس از هشدار پس گرفته شد (کلوز به سمتِ پیش از شکست برگشت)؛ "
+                    "شکستِ نامعتبر تأیید نمی‌گیرد و سناریو باطل شد.")
+                try:
+                    from bot.messages_v7 import send_verdict_reply
+                    send_verdict_reply(candidate, False, "شکست پس گرفته شد؛ سناریو باطل شد.")
+                except Exception:
+                    pass
+                stats["cancelled"] = int(stats.get("cancelled", 0)) + 1
+                continue
+            if not confirmed:
+                # ── premise-dead closure (his 09-21 VVV report). Checked before
+                # every heartbeat/update so a runaway market can never keep a
+                # chain alive for days.
+                if not candidate.metadata.get("technical_confirmation_complete") \
+                        and _scenario_out_of_reach(candidate, current_price):
+                    _zb33 = float(candidate.entry_zone_bottom)
+                    _zt33 = float(candidate.entry_zone_top)
+                    _edge33 = _zt33 if float(current_price) > _zt33 else _zb33
+                    _zone_mid = (_zb33 + _zt33) / 2.0
+                    _atr_md = float((candidate.metadata or {}).get("atr") or 0) or 0.0
+                    _far = abs(float(current_price) - _edge33) / _atr_md if _atr_md else 0.0
+                    candidate.status = "CANCELLED"
+                    candidate.metadata["cancel_reason"] = "OUT_OF_REACH"
+                    update_candidate(candidate)
+                    _tombstone_write(candidate)
+                    try:
+                        cancel_staged_confirmation(candidate.signal_id)
+                    except Exception:
+                        pass
+                    send_candidate_cancelled(
+                        candidate,
+                        f"قیمت {_far:.2f} ATR از ناحیهٔ ورود دور شد و کندلِ تأییدِ معتبر "
+                        f"شکل نگرفت؛ سناریو از دست رفت و از پیگیری خارج می‌شود "
+                        f"(قیمت {float(current_price):g} در برابر ناحیه {_zone_mid:.6g}).",
+                    )
+                    try:
+                        from bot.messages_v7 import send_verdict_reply
+                        send_verdict_reply(candidate, False,
+                                           "ناحیه از دست رفت؛ به‌جای انتظار بی‌پایان، سناریو بسته شد.")
+                    except Exception:
+                        pass
+                    stats["cancelled"] = int(stats.get("cancelled", 0)) + 1
+                    print(f"⛔ OUT_OF_REACH {candidate.symbol} {candidate.setup_code}: "
+                          f"{_far:.2f} ATR from the zone — chain closed")
+                    continue
+                code = str(candidate.metadata.get("last_reject_code") or "UNKNOWN")
+                stats["rejects"] = stats.get("rejects", {})
+                stats["rejects"][code] = int(stats["rejects"].get(code, 0)) + 1
+                # ── r51 UPDATE-EVENT LAW (Viva 09-27, «فقط زمانی آپدیت بیاد که
+                # ورود تایید بشه یا ابطال بشه یا هشدار نهایی و آمادگی ورود
+                # باشه»): the old per-pattern-candle heartbeat («زنجیره زنده و
+                # زیر نظر است» — DASH T242271's only sign of life in 1670
+                # minutes) carried ZERO information and is retired. Updates
+                # now speak ONLY on confirmation, invalidation/cancellation,
+                # or final readiness (the ⚡ live-break note above).
+            if confirmed:
+                # Viva 2026-09-11: five identical SOL confirmations on the same
+                # trigger were USELESS. A new confirmed signal must bring NEW
+                # points; an (almost) identical re-fire is cancelled silently.
+                try:
+                    from database.repository_v7 import recent_geometry_duplicate
+                    if not candidate.metadata.get("persistence_staged") and recent_geometry_duplicate(
+                            candidate.symbol, candidate.direction,
+                            candidate.planned_entry or candidate.entry_zone_bottom,
+                            candidate.sl, candidate.tp1):
+                        stats["suppressed_geo_dup"] = stats.get("suppressed_geo_dup", 0) + 1
+                        # HOT-2 (audit 09-15): `_t()` only exists inside
+                        # run_discovery_scan; the NameError here killed the
+                        # gate silently and the duplicate got published anyway.
+                        candidate.status = "CANCELLED"
+                        candidate.metadata["geo_dup_cancelled"] = True
+                        candidate.metadata["cancel_note_fa"] = (
+                            "نقاط این سیگنال با سیگنالِ تأییدشدهِ ۲۴ ساعتِ اخیرِ همین نماد "
+                            "تقریباً یکسان بود؛ تا تشکیلِ ناحیه‌ی جدید (نقاطِ تازه) منتشر نمی‌شود")
+                        update_candidate(candidate)
+                        continue
+                except RuntimeError as exc:
+                    print(f"geometry-dup gate skipped {candidate.signal_id}: {exc}")
+                # ── round 13, the same law extended to confirmations: the
+                # confirmed entry is born on ONE closed candle — if that candle is
+                # older than two candles of the confirm timeframe (restart, missed
+                # window, a chain frozen since the fetch-gate era), the entry is
+                # NOT tradeable any more. The family still speaks: an analysis note
+                # goes out, the ladder stays disarmed, the chain stays alive.
+                # ── 10-12 STALE-BAR PACK (F3, VVV·T124937): the data-sanity
+                # wire. Entry is the confirm bar's close; the forming bar's
+                # close is live. If they already disagree by more than a few
+                # percent, SOMETHING is lying (stale frame, broken stamp,
+                # venue lag) — disarm exactly like a stale confirm, never
+                # ladder a price the market left behind. Railway-tunable.
+                try:
+                    from analysis.confirm_r62 import live_entry_diverged_pct as _div3
+                    _pct3 = _div3(current_price, candidate.planned_entry)
+                    _max3 = float(getattr(SETTINGS, "liveclose_max_pct", 3.0) or 3.0)
+                except Exception:
+                    _pct3, _max3 = None, 3.0
+                # ── 10-15 CONFIRM-TIMING LAW (Viva, verbatim: «نه اینکه یک خط
+                # بنویسی وقتی اینجوری بود وتو بشه و گیت ببنده ارسال به تلگرام
+                # رو»): the divergence between the frozen entry and the live
+                # market may NEVER gate the send. It is a CAPTION fact: the
+                # confirmation goes out with its real numbers, the distance is
+                # printed, and the ladder stays alive. The genuine data-sanity
+                # wires (FRAME_STALE, broken stamp) keep their own verdicts.
+                if _pct3 is not None and _pct3 > _max3 and not _retry_pub_1012:
+                    candidate.metadata["live_entry_drift_pct"] = round(_pct3, 2)
+                    candidate.metadata["live_entry_note_fa"] = (
+                        f"قیمت زنده در لحظهٔ تأیید {float(current_price):.8g} در برابر ورود "
+                        f"{float(candidate.planned_entry):.8g} ({_pct3:.2f}٪ فاصله) — "
+                        "فاصله فقط گزارش می‌شود؛ تأیید و نردبان سرجای خودشان می‌مانند.")
+                _stale_conf = _confirmation_stale_minutes(candidate, closed)
+                if _stale_conf is not None and candidate.metadata.get("stale_stamp_broken"):
+                    # F5 fail-closed: the stamp existed but was unreadable —
+                    # say exactly that (never print the 1e9 sentinel as minutes).
+                    try:
+                        send_setup_update(
+                            candidate, (frames.get((candidate.symbol, candidate.trigger_timeframe)) or (None, closed, None))[1],
+                            note_fa=("⚠️ تأییدِ فنی ثبت شد اما مُهرِ زمانیِ کندلِ تأیید خوانا نبود؛ "
+                                     "طبق قانونِ احتیاط، ورود صادر نمی‌شود. این مورد فقط گزارش تحلیلی است و "
+                                     "زنجیره زیر نظر می‌ماند تا تأییدِ تازه با مُهرِ سالم شکل بگیرد."),
+                            critical=True)
+                    except Exception as exc:
+                        print(f"broken-stamp note failed {candidate.signal_id}: {exc}")
+                    candidate.metadata["stale_note_sent"] = True
+                    _r62_reset_stale(candidate)
+                    stats["stale_confirmation"] = stats.get("stale_confirmation", 0) + 1
+                    update_candidate(candidate)
+                    continue
+                if _stale_conf is not None and candidate.metadata.get("stale_note_sent"):
+                    # R62-ARENA (audit C5): ONE analysis note per chain — the old
+                    # loop re-sent «⏳ …» every cycle because the retry lane kept
+                    # re-confirming the same stale bar.
+                    _r62_reset_stale(candidate)
+                    update_candidate(candidate)
+                    continue
+                if _stale_conf is not None:
+                    try:
+                        send_setup_update(
+                            candidate, (frames.get((candidate.symbol, candidate.trigger_timeframe)) or (None, closed, None))[1],
+                            note_fa=(f"⏳ تأییدِ فنی روی کندلی ثبت شد که {_stale_conf} دقیقه از آن گذشته است "
+                                     f"(بیش از دو کندلِ {candidate.metadata.get('confirm_tf') or candidate.trigger_timeframe}). "
+                                     "طبق قانون، ورودِ گذشته‌بازار صادر نمی‌شود؛ این مورد به‌جای سیگنال ورود، فقط گزارش تحلیلی است. "
+                                     "زنجیره زیر نظر می‌ماند تا ناحیه یا تأییدِ تازه شکل بگیرد."),
+                            critical=True)
+                    except Exception as exc:
+                        print(f"stale-confirmation note failed {candidate.signal_id}: {exc}")
+                    candidate.metadata["stale_confirmation_minutes"] = int(_stale_conf)
+                    candidate.metadata["stale_note_sent"] = True
+                    _r62_reset_stale(candidate)
+                    stats["stale_confirmation"] = stats.get("stale_confirmation", 0) + 1
+                    update_candidate(candidate)
+                    continue
+                was_staged = bool(candidate.metadata.get("persistence_staged"))
+                try:
+                    # Ensure candidate is marked CONFIRMED before persistence
+                    candidate.status = "CONFIRMED"
+                    if not candidate.confirmed_at:
+                        from analysis.models import iso_now
+                        candidate.confirmed_at = iso_now()
+                    # Stage first, but with AWAITING_PUBLICATION and a false gate.
+                    # Portfolio rejection therefore cannot publish an untracked trade.
+                    save_confirmed_signal(candidate)
+                    candidate.metadata["persistence_staged"] = True
+                except Exception as exc:
+                    if was_staged or publication_in_progress:
+                        candidate.status = "APPROACHING"
+                        candidate.metadata["publication_pending"] = True
+                        print(f"Staged confirmation lookup failed {candidate.signal_id}: {exc}")
+                    else:
+                        candidate.status = "CANCELLED"
+                        send_candidate_cancelled(candidate, f"تأیید تکنیکال ایجاد شد اما کنترل ریسک اجازه اجرا نداد: {exc}")
+                        stats["cancelled"] += 1
+                else:
+                    gate_lookup_ok = True
+                    try:
+                        already_published = is_confirmation_published(candidate.signal_id)
+                    except Exception as exc:
+                        gate_lookup_ok = False
+                        already_published = False
+                        candidate.status = "APPROACHING"
+                        candidate.metadata["publication_pending"] = True
+                        print(f"Confirmation gate lookup failed {candidate.signal_id}: {exc}")
+
+                    if already_published:
+                        candidate.status = "CONFIRMED"
+                        candidate.metadata["confirmation_sent"] = True
+                        candidate.metadata.pop("publication_pending", None)
+                        # 10-10 PHOTO-FOLLOWUP: text-first fallback published the
+                        # text; post the pending photo as soon as a render works.
+                        if candidate.metadata.get("confirmation_photo_pending") \
+                                and not candidate.metadata.get("confirmation_chart_sent"):
+                            try:
+                                from bot.messages_v7 import send_confirmed_photo_followup as _ph72
+                                if _ph72(candidate):
+                                    update_candidate(candidate)
+                            except Exception as _ph72_exc:
+                                print(f"Confirmed photo followup hook skipped {candidate.signal_id}: {_ph72_exc}")
+                    elif not gate_lookup_ok:
+                        pass  # Fail closed; never republish while DB state is unknown.
+                    elif send_confirmed(candidate, (frames.get((candidate.symbol, candidate.trigger_timeframe)) or (None, closed, None))[1]):
+                        # send_confirmed sets durable component receipts in metadata;
+                        # result monitoring remains disarmed until this DB update commits.
+                        candidate.status = "APPROACHING"
+                        candidate.metadata["publication_pending"] = True
+                        try:
+                            update_candidate(candidate)
+                            mark_confirmation_published(candidate.signal_id)
+                            if candidate.metadata.get("confirmation_chart_message_id"):
+                                confirmed_mid = record_telegram_event(
+                                    candidate.signal_id, "CONFIRMED",
+                                    str(CHAT_ID_EXECUTION or ""),
+                                    int(candidate.metadata["confirmation_chart_message_id"]),
+                                )
+                                # Keep legacy column as a same-signal fallback;
+                                # canonical linking is the immutable receipt above.
+                                set_pro_message_id(candidate.signal_id, confirmed_mid or int(candidate.metadata["confirmation_chart_message_id"]))
+                            # Confirmed is a reply under the final-watch chart in Pro;
+                            # the full educational alert remains reachable through its link.
+                        except Exception as exc:
+                            print(
+                                f"Confirmation was published but DB gate remains pending "
+                                f"for {candidate.signal_id}: {exc}"
+                            )
+                        else:
+                            candidate.status = "CONFIRMED"
+                            candidate.metadata["confirmation_sent"] = True
+                            candidate.metadata.pop("publication_pending", None)
+                            try:
+                                from bot.messages_v7 import send_verdict_reply
+                                send_verdict_reply(candidate, True, "تأیید ورود با کندل بسته‌شده صادر شد — پیام کانفرمد جداگانه آمد.")
+                            except Exception:
+                                pass
+                            stats["confirmed"] += 1
+                    else:
+                        candidate.status = "APPROACHING"
+                        candidate.metadata["publication_pending"] = True
+                        stats["publish_retry"] = stats.get("publish_retry", 0) + 1
+                        print(
+                            f"CONFIRM_PUBLISH_FAILED | {candidate.symbol} | "
+                            f"{candidate.setup_code} | {candidate.signal_id} — retrying next cycle "
+                            "(R99q14: a failed post is retried, never silent)"
+                        )
+            update_candidate(candidate)
+            try:
+                if candidate.status in {"EDUCATIONAL", "APPROACHING", "CONFIRMED"}:
+                    update_symbol_lock(candidate)
+                else:
+                    release_symbol_lock(candidate.symbol, candidate.signal_id)
+            except Exception as exc:
+                print(f"Could not update symbol lock {candidate.signal_id}: {exc}")
+        except Exception as exc:
+            print(f"Candidate monitor error {candidate.signal_id}: {exc}")
+    return stats
+
+
+_EXECUTION_PUBLISH_LOCK = threading.Lock()
+_CANDIDATE_MONITOR_LOCK = threading.Lock()
+
+
+def _publish_trade_events(events) -> int:
+    """Serialize lifecycle publication so ticker and candle monitors cannot race."""
+    for event in events:
+        kind = str(event.get("event") or "")
+        try:
+            _release_terminal_spot_event(event)
+        except Exception:
+            pass
+        if kind.startswith("TP"):
+            pro_tp_mid = send_ladder_event(event)
+            if pro_tp_mid:
+                canonical_mid = record_telegram_event(
+                    event["signal_id"], str(event.get("event") or "TP"),
+                    str(CHAT_ID_EXECUTION or ""), int(pro_tp_mid),
+                )
+                # Use the stored first receipt, not the last same-symbol post.
+                event["pro_event_message_id"] = canonical_mid or int(pro_tp_mid)
+                set_last_tp_message_id(event["signal_id"], event["pro_event_message_id"])
+                if event.get("event") == "TP1":
+                    set_first_tp_message_id(event["signal_id"], event["pro_event_message_id"])
+                    event["first_tp_message_id"] = event["pro_event_message_id"]
+            res_mid = send_tp1_event(event)  # Win Rate mirror, links to this TP receipt
+            if res_mid and pro_tp_mid:
+                # Viva 2026-09-14: main ↔ win-rate link is TWO-WAY via the
+                # unique code so the chain walks from either channel.
+                attach_results_link(int(pro_tp_mid), int(res_mid))
+        elif kind in {"TRAIL_STOP", "STOP"}:
+            lifecycle_mid = send_ladder_event(event)
+            if lifecycle_mid:
+                # Keep the protected-exit/stop receipt attached to this exact
+                # position too. Final WIN anchors to the last TP reached; the
+                # final result now anchors to the STOP-HIT message itself and
+                # the stop receipt is mirrored into the win-rate channel,
+                # two-way linked (link-chain law).
+                record_telegram_event(
+                    event["signal_id"], kind,
+                    str(CHAT_ID_EXECUTION or ""), int(lifecycle_mid),
+                )
+                res_mid = send_stop_event_to_results(event, int(lifecycle_mid))
+                if res_mid:
+                    attach_results_link(int(lifecycle_mid), int(res_mid))
+        elif kind in {"PROFIT_FLOOR", "EXIT_WARNING"}:
+            # Viva 09-19: short trailing lifecycle notes (main + journal
+            # mirror, no chart) — never spam per-candle micro-moves.
+            send_trailing_note(event)
+        elif kind == "REENTRY_SIGNAL":
+            # Viva 09-20 (round 9): the pullback after a protected exit is a
+            # fresh entry on the same code (banked TP1 stays locked).
+            send_reentry_note(event)
+        elif kind == "NO_FILL":
+            send_no_fill_event(event)
+        elif kind == "CLOSED":
+            close_mid = send_trade_close_event(event)
+            res_mid = send_trade_result(event)
+            if close_mid and res_mid:
+                attach_results_link(int(close_mid), int(res_mid))
+    return len(events)
+
+
+def _release_terminal_spot_event(event: dict) -> None:
+    """Retire a Spot chart's exact geometry and free its TF after final TP/stop."""
+    try:
+        if str((event or {}).get("event") or "").upper() not in {
+                "CLOSED", "STOP", "TRAIL_STOP"}:
+            return
+        source = str((event or {}).get("source") or "").upper()
+        if source not in {"SPOT", "SPOTBREAK"}:
+            return
+        code = str((event or {}).get("public_code") or "")
+        symbol = str((event or {}).get("symbol") or "").upper()
+        tf = str((event or {}).get("trigger_timeframe") or "").upper()
+        pos = {}
+        if code:
+            from analysis.spot_engine import spot_position_close
+            pos = spot_position_close(
+                code, str(event.get("close_reason") or event.get("reason")
+                          or event.get("event") or "CLOSED")) or {}
+        _spot_tf_position_clear(symbol, tf)
+        # A resolved journey may not lend its id/chart counter to the next
+        # pattern. Reset only when this terminal event owns the current chain.
+        try:
+            from database.bot_kv import get_json as _g, set_json as _s
+            chain_key = f"spot_chain|{symbol}|{tf}"
+            chain = dict(_g(chain_key, {}) or {})
+            if code and str(chain.get("code") or "") == code:
+                _s(chain_key, {})
+            pattern = str(pos.get("pattern") or "").upper()
+            if pattern:
+                _s(f"spot_alert_mid|{symbol}|{tf.lower()}|{pattern}", {})
+            watch_key = f"{symbol}|{tf.lower()}"
+            watch = dict(_g("spot_urgent_watch", {}) or {})
+            if watch.pop(watch_key, None) is not None:
+                _s("spot_urgent_watch", watch)
+            lw_prefix = f"{symbol}|{tf.lower()}|"
+            lw_state = dict(_g("line_watch", {}) or {})
+            lw_state = {k: v for k, v in lw_state.items()
+                        if not str(k).startswith(lw_prefix)}
+            _s("line_watch", lw_state)
+        except Exception:
+            pass
+    except Exception as exc:
+        print(f"spot terminal release skipped: {exc}")
+
+
+def monitor_confirmed_results() -> int:
+    with _EXECUTION_PUBLISH_LOCK:
+        events = list(monitor_confirmed_trades())
+        # Viva 09-20: one bounded pass for re-entry signals on ladders whose
+        # remainder was closed by the protection phase (pullback entries).
+        try:
+            from database.repository_v7 import reentry_scan_events
+            events.extend(reentry_scan_events())
+        except Exception as exc:
+            print(f"reentry scan skipped: {exc}")
+        return _publish_trade_events(events)
+
+
+def run_realtime_execution_cycle() -> int:
+    """Fresh ticker path: TP/SL messages must not wait for trigger candle close.
+
+    R67.2 RAILWAY COST GATE (Viva 10-04: «مصرف ریلوی بالاست، بهینه کن — اما
+    نه به قیمت دیلی هشدارها»): the 5s cadence serves LIVE positions only.
+    With zero filled PENDING positions there is nothing this lane can detect,
+    so the bulk venue-ticker fetch (≈17k calls/day) is skipped; one tiny
+    COUNT replaces it. The moment a position fills, the full 5s path is
+    back — exit latency untouched."""
+    try:
+        try:
+            from database.realtime_monitor import pending_filled_count as _pfc67
+            if _pfc67() == 0:
+                return 0
+        except Exception:
+            pass   # fail-open: never let the cost gate blind the exit lane
+        from data.ourbit import get_ourbit_tickers
+        from data.fetcher import get_tickers
+        from database.realtime_monitor import monitor_realtime_prices
+        prices = {}
+        try:
+            for row in get_ourbit_tickers(use_cache=False):
+                if float(row.get("last_price") or 0) > 0:
+                    prices[str(row.get("symbol") or "").upper()] = float(row["last_price"])
+        except Exception as exc:
+            print(f"Realtime Ourbit ticker warning: {exc}")
+        if not prices:
+            for row in get_tickers(use_cache=False):
+                if float(row.get("lastPrice") or 0) > 0:
+                    prices[str(row.get("symbol") or "").upper()] = float(row["lastPrice"])
+        if not prices:
+            return 0
+        with _EXECUTION_PUBLISH_LOCK:
+            events = monitor_realtime_prices(prices)
+            return _publish_trade_events(events)
+    except Exception as exc:
+        print(f"Realtime execution monitor error: {exc}")
+        return 0
+
+
+def _pin_ttl_sec(tf: str) -> float:
+    """R64.4: how long a spot confirm-pin stays awake, per TF — must outlive
+    the pattern's approach phase, not the clock of a 15m chart."""
+    return {"15m": 2 * 3600.0, "30m": 2 * 3600.0,
+            "1h": 8 * 3600.0, "2h": 8 * 3600.0,
+            "4h": 36 * 3600.0, "8h": 60 * 3600.0, "12h": 60 * 3600.0,
+            "1d": 96 * 3600.0, "3d": 216 * 3600.0, "1w": 384 * 3600.0,
+            }.get(str(tf or "").lower(), 3600.0)
+
+
+def _spot_urgent_recheck() -> int:
+    """r58 (Viva: «روشی پیدا بکن که هم موقعیت‌های اسپوت از بین نره هم مصرف
+    بهینه ریلوی») — symbols whose ladder showed NEAR_BREAK/TOUCH are pinned
+    in kv; every monitor cycle (5 min) a MINI-pass re-scans ONLY those few
+    symbols, so a confirmation lands within ≤5 min of its close instead of
+    waiting up to an hour for the full pass. Railway cost stays flat: 2-6
+    symbols × 6 TFs (history store), not 24. Dedup stamps prevent doubles."""
+    try:
+        from database.bot_kv import get_json as _g, set_json as _s
+        import time as _t
+        # r59.3 Railway-diet: pins are per (SYMBOL|TF) and live 1h — the
+        # mini-pass re-scans ONLY the alerting timeframe (6× less detector
+        # work) instead of all six TFs of the symbol.
+        # R64.4: the pin lives as long as its TF's breakout window (was a flat
+        # 1h — the confirm lane slept through every slow break).
+        watch = {k: v for k, v in (_g("spot_urgent_watch", {}) or {}).items()
+                 if _t.time() - float((v or {}).get("ts", 0)) < _pin_ttl_sec(k.partition("|")[2])}
+        if not watch:
+            return 0
+        syms = sorted(watch.keys())[:6]   # keys are "SYMBOL|TF"
+        from analysis.spot_engine import (spot_signals_for, scan_spot_urgent_confirms,
+                                          scan_spot_tohom_confirms, spot_confirm_tf,
+                                          spot_tohom_tf, build_spot_candidate,
+                                          SPOT_TRIGGERS)
+        from bot.messages_v7 import (CHAT_ID_SPOT, generate_chart,
+                                     tf_channel_publish_confirmed)
+        from data.fetcher import get_market_bundle
+        published = 0
+        for key58 in syms:
+            symbol, _, _want_tf = key58.partition("|")
+            _tfs58 = (_want_tf,) if _want_tf else tuple(SPOT_TRIGGERS)
+            # R65: the pinned SHAPE (snapshot) of this symbol|TF, if any
+            _pin_entry58 = watch.get(key58) or {}
+            _pin_shape58 = (_pin_entry58.get("shape")
+                            if isinstance(_pin_entry58, dict) else None)
+            # ── R65 URGENT CONFIRM (Viva 10-02: «ترند سه روزه چرا بعد از بریک
+            # تایید سیگنال نکرده و سه روز بعد تایید کرده؟ … باید بعد از بریک،
+            # کلوز معتبر خارج از ترندلاین تایید ورود صادر بشه — حتی قبل از کلوز
+            # تایم تریگر»): the pinned timeframe's shape is judged against the
+            # ONE-STEP-LOWER frame's last closed candle. A valid break close
+            # there publishes the confirmation NOW (minutes after that close)
+            # instead of waiting for the pattern TF (up to 3 days on 3d).
+            # The sub frame is fetched in the same bundle — no extra pass.
+            _sub58 = spot_confirm_tf(_want_tf) if _want_tf else ""
+            if _sub58 and _sub58 not in _tfs58:
+                _tfs58 = tuple(_tfs58) + (_sub58,)
+            # R65 SPOT-TOHOM (Viva 10-02: «تایید اسپات با موتور توهم هوشمند
+            # میتونه زودتر از کلوز تایم تریگر تایید ورود بده»): the smart engine
+            # reads ONE STEP BELOW THE CONFIRM TF, so while the confirm candle is
+            # still forming its closed sub-candles may confirm — the same bundle
+            # carries the frame, zero extra requests.
+            _th58 = spot_tohom_tf(_want_tf) if _want_tf else ""
+            if _th58 and _th58 not in _tfs58:
+                _tfs58 = tuple(_tfs58) + (_th58,)
+            try:
+                bundle = get_market_bundle(
+                    symbol, _tfs58,
+                    limits=__import__("analysis.candle_counts", fromlist=["fetch_limits"]).fetch_limits())
+                _urgent58 = []
+                if _want_tf:
+                    try:
+                        _urgent58 = scan_spot_urgent_confirms(
+                            symbol, bundle, _want_tf, shape=_pin_shape58)
+                    except Exception as _u58:
+                        print(f"spot urgent confirm warning {symbol}: {_u58}")
+                    # the SMART lane first: TOHOM may confirm on the forming
+                    # confirm candle, i.e. strictly earlier than the urgent lane
+                    try:
+                        _urgent58 = (scan_spot_tohom_confirms(
+                            symbol, bundle, _want_tf, shape=_pin_shape58)
+                                     + list(_urgent58))
+                    except Exception as _t58:
+                        print(f"spot tohom confirm warning {symbol}: {_t58}")
+                for _u58item in _urgent58:
+                    try:
+                        _uc58 = build_spot_candidate(_u58item)
+                    except Exception as _ub58:
+                        print(f"spot urgent candidate warning {symbol}: {_ub58}")
+                        continue
+                    # R65 SNAPSHOT AT DETECTION: freeze the geometry now, so the
+                    # first chart and every later update/alert draw ONE picture.
+                    try:
+                        from analysis.spot_engine import lock_spot_snapshot as _lss65
+                        _lss65(_uc58)
+                    except Exception:
+                        pass
+                    if _spot_candidate_pattern_retired(_uc58):
+                        continue
+                    key = _spot_candidate_stamp_key(_uc58)
+                    window = 72.0 if str(_uc58.trigger_timeframe) == "3d" else 36.0
+                    if _spot_stamp(key, window, commit=False):
+                        continue
+                    if _spot_tf_position_open(_uc58.symbol, _uc58.trigger_timeframe):
+                        continue   # 10-11: one position per (symbol, TF)
+                    _frame58 = bundle.get(_uc58.trigger_timeframe)
+                    chart = (generate_chart(_frame58, _uc58, confirmed=True)
+                             if _frame58 is not None else None)
+                    if not chart:
+                        continue
+                    _alert_kv = _spot_alert_mid_kv(
+                        _uc58.symbol, _uc58.trigger_timeframe,
+                        str((_uc58.metadata or {}).get("pattern_type") or ""))
+                    mid = tf_channel_publish_confirmed(
+                        _uc58, chart=chart, chat_override=CHAT_ID_SPOT,
+                        reply_to=int(_alert_kv.get("mid") or 0))
+                    if mid:
+                        _spot_stamp(key, window)
+                        _spot_tf_position_commit(_uc58.symbol, _uc58.trigger_timeframe)
+                        published += 1
+                        print(f"🪙 spot urgent confirm published {_uc58.symbol} "
+                              f"{_uc58.trigger_timeframe} (confirm "
+                              f"{(_uc58.metadata or {}).get('spot_confirm_tf')})")
+                        try:
+                            from bot.messages_v7 import (_public_code as _pc,
+                                                         _spot_chain_get as _scg,
+                                                         _spot_chain_set as _scs)
+                            _chain = _scg(_pc(_uc58))
+                            _chain.update({"alert": int(_alert_kv.get("mid") or 0),
+                                           "confirm": int(mid), "last": int(mid)})
+                            _scs(_pc(_uc58), _chain)
+                        except Exception:
+                            pass
+                        _spot_confirm_book(_uc58, mid,
+                                           alert_mid=int(_alert_kv.get("mid") or 0))
+                # R64.4 THE SPOT CHART ECONOMY (Viva 10-03: «آپدیت‌ها هنوز همگی
+                # با چارت لایو میان و مصرف بشدت بالا بردن»): generic r57 update
+                # events are TEXT-ONLY replies; charts render only at the
+                # chain's key stages (alert / confirm / TP / stop / result).
+                try:
+                    # 10-11: OFF by default (his kill-useless-updates law +
+                    # r51 update-event law) -- Railway may opt back in via
+                    # SPOT_UPDATE_EVENTS_ENABLED=1, no redeploy needed.
+                    if not _spot_update_events_enabled():
+                        pass
+                    else:
+                        from analysis.spot_engine import (
+                            scan_spot_update_events as _scan57,
+                                commit_spot_update_events as _commit57)
+                        from bot.messages_v7 import send_spot_event
+                        for _ev57 in _scan57(symbol, bundle):
+                            if send_spot_event(_ev57):
+                                _commit57([_ev57])
+                except Exception as _e57:
+                    print(f"spot update events warning {symbol}: {_e57}")
+                for cand in spot_signals_for(symbol, bundle):
+                    if _spot_candidate_pattern_retired(cand):
+                        continue
+                    key = _spot_candidate_stamp_key(cand)
+                    window = 72.0 if str(cand.trigger_timeframe) == "3d" else 36.0
+                    if _spot_stamp(key, window, commit=False):
+                        continue
+                    if _spot_tf_position_open(cand.symbol, cand.trigger_timeframe):
+                        continue   # 10-11: one position per (symbol, TF)
+                    frame = bundle.get(cand.trigger_timeframe)
+                    chart = (generate_chart(frame, cand, confirmed=True)
+                             if frame is not None else None)
+                    if not chart:
+                        continue
+                    _alert_kv = _spot_alert_mid_kv(
+                        cand.symbol, cand.trigger_timeframe,
+                        str((cand.metadata or {}).get("pattern_type") or ""))
+                    mid = tf_channel_publish_confirmed(
+                        cand, chart=chart, chat_override=CHAT_ID_SPOT,
+                        reply_to=int(_alert_kv.get("mid") or 0))
+                    if mid:
+                        _spot_stamp(key, window)
+                        _spot_tf_position_commit(cand.symbol, cand.trigger_timeframe)
+                        published += 1
+                        try:
+                            from bot.messages_v7 import (_public_code as _pc,
+                                                         _spot_chain_get as _scg,
+                                                         _spot_chain_set as _scs)
+                            _chain = _scg(_pc(cand))
+                            _chain.update({"alert": int(_alert_kv.get("mid") or 0),
+                                           "confirm": int(mid), "last": int(mid)})
+                            _scs(_pc(cand), _chain)
+                        except Exception:
+                            pass
+            except Exception as exc:
+                print(f"spot urgent recheck warning {symbol}: {exc}")
+        if published:
+            print(f"🪙 spot urgent recheck published={published} syms={syms}")
+        return published
+    except Exception as exc:
+        print(f"spot urgent recheck skipped: {exc}")
+        return 0
+
+
+def run_monitor_cycle() -> None:
+    try:
+        trade_events = monitor_confirmed_results()
+    except Exception as exc:
+        print(f"Confirmed trade monitor error: {exc}")
+        trade_events = 0
+    try:   # r58: pinned near-break symbols confirm within the 5-min cycle
+        _spot_urgent_recheck()
+    except Exception:
+        pass
+    try:
+        with _CANDIDATE_MONITOR_LOCK:
+            stats = monitor_candidates()
+        if stats["active"] or trade_events:
+            print(
+                f"Monitor • candidates={stats['active']} approaching={stats['approaching']} "
+                f"confirmed={stats['confirmed']} cancelled={stats['cancelled']} trade_events={trade_events} "
+                f"rejects={stats.get('rejects', {})}"
+            )
+        try:  # Viva 2026-09-14: live proof of the watch/heartbeat machine
+            from datetime import timezone as _tz
+            from database.bot_kv import set_json as _skv
+            _skv("monitor_summary", {
+                "when": datetime.now(_tz.utc).isoformat(timespec="seconds"),
+                "active": int(stats.get("active", 0)),
+                "live_break": int(stats.get("live_break", 0)),
+                "heartbeat": int(stats.get("heartbeat", 0)),
+                "confirmed": int(stats.get("confirmed", 0)),
+                "cancelled": int(stats.get("cancelled", 0)),
+                "rejects": stats.get("rejects", {}),
+            })
+        except Exception:
+            pass
+    except Exception as exc:
+        print(f"Candidate monitor cycle error: {exc}")
+
+
+def _next_aligned(now: datetime, interval: int, offset: int) -> datetime:
+    """Next grid-aligned time `offset` minutes into each `interval` block."""
+    interval = max(1, int(interval))
+    offset = int(offset) % interval
+    base = now.replace(second=0, microsecond=0)
+    minute = base.minute
+    next_minute = ((minute - offset) // interval + 1) * interval + offset
+    if next_minute >= 60:
+        return (base.replace(minute=offset) + timedelta(hours=1))
+    candidate = base.replace(minute=next_minute)
+    return candidate if candidate > now else candidate + timedelta(minutes=interval)
+
+
+def _next_aligned_scan(now: datetime) -> datetime:
+    """Next :01/:16/:31/:46 UTC, shortly after a 15m candle closes."""
+    try:
+        from analysis.tiered_scan import deep_minutes as _tier_deep_minutes
+        interval = max(1, int(_tier_deep_minutes()))
+    except Exception:
+        interval = max(1, SETTINGS.full_scan_minutes)
+    offset = SETTINGS.scan_offset_minute % interval
+    base = now.replace(second=0, microsecond=0)
+    minute = base.minute
+    next_minute = ((minute - offset) // interval + 1) * interval + offset
+    if next_minute >= 60:
+        return (base.replace(minute=offset) + timedelta(hours=1))
+    candidate = base.replace(minute=next_minute)
+    return candidate if candidate > now else candidate + timedelta(minutes=interval)
+
+
+def _realtime_execution_loop() -> None:
+    """Independent daemon so lengthy discovery scans cannot delay exits."""
+    interval = max(2, int(SETTINGS.realtime_execution_seconds))
+    while not _SHUTDOWN:
+        started = time.monotonic()
+        run_realtime_execution_cycle()
+        time.sleep(max(0.2, interval - (time.monotonic() - started)))
+
+
+def _candidate_monitor_loop() -> None:
+    """Confirmation/final-watch monitor independent of long discovery scans.
+
+    R67.2: with ZERO active chains the full pass is one DB SELECT that can
+    do nothing — idle ticks stretch to CANDIDATE_MONITOR_IDLE_SECONDS
+    (default 20s). The instant any chain exists the cadence snaps back to
+    the full 10s; a confirmation waits for CLOSED candles anyway, and
+    discovery (not this loop) mints candidates, so no alert can be delayed."""
+    interval = max(5, int(SETTINGS.candidate_monitor_seconds))
+    idle_interval = max(interval, int(os.getenv("CANDIDATE_MONITOR_IDLE_SECONDS", "20") or 20))
+    _idle_ticks = 0
+    while not _SHUTDOWN:
+        started = time.monotonic()
+        try:
+            with _CANDIDATE_MONITOR_LOCK:
+                _stats67 = monitor_candidates()
+            _idle_ticks = 0 if int((_stats67 or {}).get("active") or 0) else _idle_ticks + 1
+        except Exception as exc:
+            print(f"Realtime candidate monitor error: {exc}")
+            _idle_ticks = 0
+        # R64.4 LINE-WATCH: ticker-priced edge cross alerts (~1 request/30s
+        # per market, ALL watched symbols) — instant 1d/3d/1w break/touch
+        # without fetching a single candle early.
+        try:
+            from analysis.line_watch import run_once as _lw_run
+            _lw_run()
+        except Exception as exc:
+            print(f"Line watch error: {exc}")
+        _cur67 = interval if _idle_ticks < 3 else idle_interval
+        time.sleep(max(0.5, _cur67 - (time.monotonic() - started)))
+
+
+def _daily_report() -> None:
+    try:
+        from database.db import get_dashboard_summary, get_strategy_performance
+        summary = get_dashboard_summary()
+        strategies = get_strategy_performance()[:5]
+        lines = [
+            "📊 <b>گزارش روزانه سیگنال‌های Confirmed</b>",
+            f"کل: {summary['total_signals']} • Win: {summary['wins']} • Loss: {summary['losses']}",
+            f"Win Rate: <b>{summary['winrate']}%</b> • Avg PnL: <b>{summary['avg_pnl']:+.2f}%</b>",
+            "",
+            "🏆 <b>عملکرد Setupها</b>",
+        ]
+        for item in strategies:
+            lines.append(
+                f"• {item['strategy_fa']}: {item['wins']}W/{item['losses']}L • {item['winrate']:.1f}%"
+            )
+        send_message("\n".join(lines))
+        from bot.messages_v7 import purge_resolved_alert_posts
+        removed = purge_resolved_alert_posts()
+        print(f"Daily alert cleanup: removed {removed} resolved posts")
+    except Exception as exc:
+        print(f"Daily report error: {exc}")
+
+
+def main() -> None:
+    # Combined Railway service runs the scanner in a background thread while
+    # Waitress owns the main thread. Python only permits signal handlers in the
+    # process main thread, so register them conditionally.
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, _request_shutdown)
+        signal.signal(signal.SIGINT, _request_shutdown)
+    if not os.getenv("TELEGRAM_TOKEN"):
+        print("WARNING: TELEGRAM_TOKEN is not set")
+
+    # ── Viva 09-21 (round-12 incident): a schema hiccup at boot used to kill the
+    # scanner thread → the container restarted in a loop → detections, updates
+    # and monitors went silent while the dashboard still looked healthy. Boot
+    # steps now retry, and a failure is loud but never fatal.
+    for _label, _fn in (("candidate store", init_candidate_store),
+                        ("v7 schema", init_v7_schema)):
+        for _attempt in range(1, 4):
+            try:
+                _fn()
+                break
+            except Exception as _boot_exc:
+                print(f"⚠️ Boot step '{_label}' failed (attempt {_attempt}/3): {_boot_exc}")
+                if _attempt >= 3:
+                    print(f"❌ Boot step '{_label}' gave up — scanner continues, "
+                          f"schema problems will be retried next cycle.")
+                else:
+                    time.sleep(5 * _attempt)
+    # R99p (Viva 10-15, the #18 silence): retire exempt-era chain-per-scan
+    # duplicates (same zone+direction open dupes, keep newest) so fresh
+    # scenarios flow again. Loud-but-never-fatal like every boot step.
+    try:
+        from database.candidate_store import retire_open_duplicate_chains as _rd99p
+        _rd99p()
+    except Exception as _rd99p_exc:
+        print(f"⚠️ Boot hygiene skipped: {_rd99p_exc}")
+    # Viva 2026-09-11: deploy heartbeat — the DB becomes proof-of-life, so we
+    # never have to guess whether the NEW build is actually running.
+    try:
+        from database.bot_kv import set_json as _boot_set
+        # Viva 2026-09-14: no more hand-edited build strings — the truth is the
+        # stamped commit (BUILD_INFO, committed one ref behind by design) plus
+        # the Railway APP_VERSION env. If either is stale, it is stale visibly.
+        _bi = "local"
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "BUILD_INFO")) as _bif:
+                _bi = _bif.read().strip()[:40]
+        except Exception:
+            _bi = os.getenv("COMMIT_SHA", "local")[:12]
+        _boot_set("boot_version", {
+            "sha": _bi,
+            "build": os.getenv("APP_VERSION", "dev"),
+            "round": "R67.2",   # bumped per round so the KV proves WHICH code booted
+            "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+    except Exception as _boot_exc:
+        print(f"boot_version heartbeat skipped: {_boot_exc}")
+    try:
+        repaired = repair_legacy_tp1_misclassified_results()
+        print(f"🔎 Legacy protected-exit audit: repaired={repaired}")
+    except Exception as exc:
+        print(f"Legacy TP1 repair skipped: {exc}")
+    symbols, _ = UNIVERSE.get()
+    if SETTINGS.startup_message_enabled:
+        send_startup_message(len(symbols))
+    try:
+        start_command_listener()
+        print("🤖 Telegram command listener active")
+    except Exception as exc:
+        print(f"Command listener error: {exc}")
+
+    threading.Thread(target=_realtime_execution_loop, name="viva-realtime-execution", daemon=True).start()
+    threading.Thread(target=_candidate_monitor_loop, name="viva-candidate-monitor", daemon=True).start()
+    print(f"⚡ Realtime execution monitor active • every {SETTINGS.realtime_execution_seconds}s")
+    print(f"⚡ Candidate monitor active • every {SETTINGS.candidate_monitor_seconds}s")
+
+    now = datetime.now(timezone.utc)
+
+    def _write_heartbeat(payload: dict) -> None:
+        """Liveness proof (round-12 incident): the first discovery scan takes
+        ~11 minutes, so the heartbeat is written BEFORE it starts too — the bot
+        can never look silent-and-alive at the same time again."""
+        payload = dict(payload)
+        payload["when"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        payload["pid"] = os.getpid()
+        try:
+            from database.bot_kv import set_json as _hb_set
+            _hb_set("scanner_heartbeat", payload)
+        except Exception as _hb_exc:
+            print(f"heartbeat write skipped: {_hb_exc}")
+        print(f"♥ HEARTBEAT • {payload['when']} • {payload.get('stage', 'loop')} • "
+              f"scans={payload.get('scans', 0)} monitors={payload.get('monitors', 0)}")
+    _write_heartbeat({"stage": "boot", "scans": 0, "monitors": 0})
+    if SETTINGS.run_scan_on_start:
+        run_discovery_scan()
+    next_scan = _next_aligned_scan(datetime.now(timezone.utc))
+    next_spot = datetime.now(timezone.utc) + timedelta(minutes=2)
+    # Monitor on a candle-close grid: each cycle sees the most decisive final
+    # minute of the smallest trigger timeframe (5m), and every 12th/48th/288th
+    # cycle coincides with the 1h/4h/1D close.
+    next_monitor = _next_aligned(
+        datetime.now(timezone.utc), SETTINGS.monitor_minutes, SETTINGS.monitor_offset_minute
+    )
+    last_daily_report = ""
+    last_weekly_digest = ""
+    _SPOT_THREAD = [None]   # r56: single-flight spot-pass slot
+    print(
+        f"Scheduler active • next discovery {next_scan.isoformat(timespec='minutes')} • "
+        f"monitor every {SETTINGS.monitor_minutes} minutes"
+    )
+
+    # ── Viva 09-21 (round-12 incident): the outage was invisible — the web part
+    # was healthy while the scanner thread was dead, and nothing on the outside
+    # proved silence. The scanner now writes a heartbeat every 5 minutes, to the
+    # log AND to the durable KV store, so liveness is checkable from outside.
+    _hb = {"next": 0.0, "loops": 0, "scans": 0, "monitors": 0,
+           "last_scan": None, "last_monitor": None, "stats": {}, "mon_stats": {}}
+    while not _SHUTDOWN:
+        now = datetime.now(timezone.utc)
+        _hb["loops"] += 1
+        if now >= next_monitor:
+            _hb["monitors"] += 1
+            _hb["last_monitor"] = now.strftime("%H:%M")
+            _hb["mon_stats"] = dict(run_monitor_cycle() or {})
+            next_monitor = _next_aligned(
+                datetime.now(timezone.utc), SETTINGS.monitor_minutes, SETTINGS.monitor_offset_minute
+            )
+        if now >= next_scan:
+            _hb["scans"] += 1
+            _hb["last_scan"] = now.strftime("%H:%M")
+            _hb["stats"] = dict(run_discovery_scan() or {})
+            next_scan = _next_aligned_scan(datetime.now(timezone.utc))
+        # ── spot lane on its own cadence (never blocks the futures scan).
+        # r56 RAILWAY OPTIMISATION (his «بهینه‌سازی ریلوی فراموش نشه»): the
+        # pass takes ~8.5 min (24 symbols × 6 TFs) and used to run INLINE in
+        # this loop — every monitor/confirm cycle stalled for it («ستاپ‌ها
+        # کم‌کار شدند» had a second, mechanical cause). It now runs in its
+        # own single-flight thread; a still-running pass skips its slot
+        # instead of stacking.
+        if now >= next_spot:
+            if _SPOT_THREAD[0] is not None and _SPOT_THREAD[0].is_alive():
+                print("spot pass still running — slot skipped, no stacking")
+            else:
+                _hb["spot_runs"] = _hb.get("spot_runs", 0) + 1
+
+                def _spot_pass_job():
+                    try:
+                        _hb["spot_stats"] = dict(run_spot_scan() or {})
+                    except Exception as _sp_exc:
+                        print(f"spot pass thread failed: {_sp_exc}")
+                _SPOT_THREAD[0] = threading.Thread(
+                    target=_spot_pass_job, name="viva-spot-pass", daemon=True)
+                _SPOT_THREAD[0].start()
+            try:
+                from analysis.tiered_scan import spot_deep_minutes as _tier_spot_deep
+                _spot_min99 = _tier_spot_deep()
+            except Exception:
+                _spot_min99 = max(15, int(os.getenv("SPOT_SCAN_MINUTES", "60") or 60))
+            next_spot = now + timedelta(minutes=_spot_min99)
+        if time.time() >= _hb["next"]:
+            _hb["next"] = time.time() + 300
+            _write_heartbeat({
+                "stage": "loop",
+                "scans": _hb["scans"], "monitors": _hb["monitors"],
+                "last_scan": _hb["last_scan"], "last_monitor": _hb["last_monitor"],
+                "scan_stats": _hb["stats"], "monitor_stats": _hb["mon_stats"],
+            })
+            try:
+                from data.fetcher import cost_counters as _cc
+                _c = _cc()
+                print(f"📉 COST · kline calls={_c['kline_calls']} "
+                      f"(cache hits={_c['kline_cache_hits']}) • "
+                      f"last scan skipped_unchanged={_hb['stats'].get('skipped_unchanged', 0)}"
+                      f"/{_hb['stats'].get('symbols', 0)}")
+            except Exception:
+                pass
+            print(f"   last discovery={_hb['last_scan']} {_hb['stats']} • "
+                  f"last monitor={_hb['last_monitor']}")
+        report_key = now.strftime("%Y-%m-%d")
+        if now.hour == 8 and now.minute < 2 and report_key != last_daily_report:
+            _daily_report()
+            last_daily_report = report_key
+        # PROP-3 (Viva 09-16): Friday 19:00 Tehran — one chic per-setup
+        # results digest into the results + journal channels.
+        teh_now = datetime.now(timezone(timedelta(hours=3, minutes=30)))
+        _iso = teh_now.isocalendar()
+        week_key = f"{_iso[0]}-W{_iso[1]:02d}"
+        if (teh_now.weekday() == 4 and teh_now.hour == 19 and teh_now.minute < 2
+                and week_key != last_weekly_digest):
+            try:
+                from bot.messages_v7 import send_weekly_results_digest
+                send_weekly_results_digest()
+            except Exception as exc:
+                print(f"Weekly digest error: {exc}")
+            last_weekly_digest = week_key
+        time.sleep(5)
+    print("Viva Signal Bot stopped cleanly")
+
+
+if __name__ == "__main__":
+    main()

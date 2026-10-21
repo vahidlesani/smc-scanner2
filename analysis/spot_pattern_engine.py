@@ -1,0 +1,651 @@
+"""
+Dedicated Pattern & Trendline Engine for SPOT and Macro Charts.
+Calibrated 100% to Authentic VIVA SIGNALS PRO Standards:
+1. Strict G1 Law (Chart = Trade):
+   Renders the EXACT geometry, pattern type, and pivot anchors detected by the trading engine
+   (TRIANGLE_ASCENDING, TRIANGLE_SYMMETRICAL, FLAG_BULL, FLAG_BEAR, WEDGE, TRENDLINE, etc.).
+   Zero disconnected OLS hallucinations.
+2. Live Market Centric Zoom:
+   Frames from the actual pattern origin (first anchor point), eliminating stale months-old candles.
+   The active live structure fills the full width of the canvas.
+3. Maximum Canvas Utilization (Tight Margins):
+   Left & Right borders minimized via subplots_adjust, dedicating >92% of space to candles.
+4. Crisp High-Resolution Rendering:
+   DPI increased to 180 for razor-sharp TradingView aesthetics.
+5. Exact Tehran Clock & Single Clean Price Tag:
+   Displays precise Tehran date and time under youngest candle.
+   Clean, single-value live price pill on the price axis without colliding labels.
+6. Honest Directional Measured Move:
+   Bullish breakouts show upward green target box.
+   Bearish breakdowns show downward breakdown guide (never a fantasy long box on a breakdown alert!).
+"""
+from __future__ import annotations
+import os
+import io
+import math
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import matplotlib.image as mpimg
+from matplotlib.ticker import FuncFormatter, LogLocator, MaxNLocator, FixedLocator
+
+
+def _map_pattern_title(pat_type: str, pat_name_fa: str = "") -> str:
+    pat_upper = str(pat_type or "").upper()
+    mapping = {
+        "TRIANGLE_ASCENDING": "Ascending Triangle",
+        "TRIANGLE_DESCENDING": "Descending Triangle",
+        "TRIANGLE_SYMMETRICAL": "Symmetrical Triangle",
+        "FLAG_BULL": "Bull Flag",
+        "FLAG_BEAR": "Bear Flag",
+        "WEDGE_FALLING": "Falling Wedge",
+        "WEDGE_RISING": "Rising Wedge",
+        "CHANNEL_ASCENDING": "Ascending Channel",
+        "CHANNEL_DESCENDING": "Descending Channel",
+        "CHANNEL": "Parallel Channel",
+        "TRENDLINE": "Major Trendline",
+        "HEAD_AND_SHOULDERS": "Head & Shoulders",
+        "INVERSE_H_AND_S": "Inverse H&S",
+        "DOUBLE_TOP": "Double Top",
+        "DOUBLE_BOTTOM": "Double Bottom"
+    }
+    for k, v in mapping.items():
+        if k in pat_upper:
+            return v
+    if pat_name_fa:
+        fa_map = {
+            "مثلث صعودی": "Ascending Triangle",
+            "مثلث متقارن": "Symmetrical Triangle",
+            "مثلث نزولی": "Descending Triangle",
+            "پرچم صعودی": "Bull Flag",
+            "پرچم نزولی": "Bear Flag",
+            "گوه صعودی": "Rising Wedge",
+            "گوه نزولی": "Falling Wedge",
+            "خط روند اصلی": "Major Trendline",
+            "کانال صعودی": "Ascending Channel",
+            "کانال نزولی": "Descending Channel"
+        }
+        for fk, fv in fa_map.items():
+            if fk in pat_name_fa:
+                return fv
+    return pat_upper.replace("_", " ").title() or "Macro Structure"
+
+
+_SPOT_BOX_TF_MULT = {"4h": 1.25, "8h": 1.35, "12h": 1.50,
+                     "1d": 1.75, "3d": 2.50, "1w": 3.00}
+
+
+def _spot_box_target(upper_level: float, tf: str, ceiling=None) -> float:
+    """10-10 (his spot-box law): the green box rides to the NEXT STRUCTURAL
+    ceiling; only in virgin ATH air (no ceiling) does the TF-sized fallback
+    apply — never a flat 25% for every timeframe. Pure (unit-tested)."""
+    try:
+        up = float(upper_level)
+    except Exception:
+        up = 0.0
+    try:
+        ce = float(ceiling or 0.0)
+    except Exception:
+        ce = 0.0
+    if ce > up * 1.005:
+        return ce
+    mult = _SPOT_BOX_TF_MULT.get(str(tf or "").lower(), 1.25)
+    return up * mult
+
+
+def _spot_future_bars(n: int) -> int:
+    """10-11 (geometry pass): the projection tail scales with the visible
+    frame so candles always fill the panel — small frames stop drowning in
+    empty future, big frames keep the refs' ~10% tail. Pure (unit-tested)."""
+    try:
+        n = int(n)
+    except Exception:
+        n = 0
+    return max(8, min(24, max(n, 0) // 6))
+
+
+def _spot_engine_line_frame(line_info: dict, start_idx: int):
+    """10-11 (G1): the ENGINE's calibrated line re-expressed in render-frame
+    coordinates. Detection fits live in GLOBAL x (the full df); the chart
+    draws a TRIMMED frame starting at start_idx, so y(xf) = f(xf + start_idx).
+    Returns (log_slope, log_intercept_frame, x0_frame) or None when the line
+    carries no usable fit (caller falls back to the legacy pivot polyfit).
+    Pure (unit-tested)."""
+    try:
+        li = line_info or {}
+        s_idx = int(start_idx)
+        x0f = int(li.get("x0", 0)) - s_idx
+        if (li.get("log_fit") and li.get("log_slope") is not None
+                and li.get("log_intercept") is not None):
+            s = float(li.get("log_slope"))
+            c = float(li.get("log_intercept"))
+            return (s, c + s * s_idx, x0f)
+        if li.get("slope") is not None and li.get("intercept") is not None:
+            s = float(li.get("slope"))
+            c = float(li.get("intercept"))
+            # linear-space engine line, log-linearized at the frame start
+            # (the chart axis is log; downstream box math is log-convention).
+            y0 = s * float(s_idx) + c
+            y1 = s * float(s_idx + 1) + c
+            if y0 > 0 and y1 > 0 and y1 != y0:
+                sl = math.log10(y1) - math.log10(y0)
+                return (sl, math.log10(y0), x0f)
+            if y0 > 0:
+                return (0.0, math.log10(y0), x0f)
+        return None
+    except Exception:
+        return None
+
+
+def _spot_map_pivots(points, frame_ts):
+    """10-11 (G2): pivot ts → frame x. Out-of-frame pivots are SKIPPED
+    (never snapped to an edge). Pure (unit-tested)."""
+    out_x, out_y = [], []
+    try:
+        ts = list(frame_ts or [])
+        n = len(ts)
+        if n < 2 or not points:
+            return out_x, out_y
+        t0 = pd.to_datetime(ts[0])
+        t1 = pd.to_datetime(ts[-1])
+        bar_sec = abs((t1 - t0).total_seconds()) / max(1, n - 1)
+        bar_sec = bar_sec if bar_sec > 0 else 1.0
+        for pt in points:
+            try:
+                pt_dt = pd.to_datetime((pt or {}).get("ts"))
+                price = float((pt or {}).get("price"))
+            except Exception:
+                continue
+            diffs = [abs((pd.to_datetime(t) - pt_dt).total_seconds())
+                     for t in ts]
+            j = int(np.argmin(diffs))
+            if diffs[j] > 1.5 * bar_sec:
+                continue
+            out_x.append(j)
+            out_y.append(price)
+        return out_x, out_y
+    except Exception:
+        return out_x, out_y
+
+
+def _spot_earliest_inframe(point_tses, frame_start, frame_end, bar_sec: float):
+    """10-11 (G6): earliest pivot ts inside the frame (+-2 bars tolerance);
+    stale/unparsable pivots are ignored so the zoom follows the VISIBLE
+    pattern. None when nothing qualifies. Pure (unit-tested)."""
+    try:
+        t0 = pd.to_datetime(frame_start)
+        t1 = pd.to_datetime(frame_end)
+        tol = pd.Timedelta(seconds=2 * (float(bar_sec) if float(bar_sec) > 0 else 1.0))
+        good = []
+        for p in point_tses or []:
+            try:
+                pt = pd.to_datetime(p.get("ts") if isinstance(p, dict) else p)
+            except Exception:
+                continue
+            if t0 - tol <= pt <= t1 + tol:
+                good.append(pt)
+        return min(good) if good else None
+    except Exception:
+        return None
+
+
+def _spot_is_breakdown(stage: str, direction: str = "LONG") -> bool:
+    """10-12 (his ONDO chart: the target box MUST be drawn): a bearish-NAMED
+    shape (descending channel, falling wedge) still breaks UP for a LONG —
+    the box is skipped ONLY on a real BREAK_DOWN stage (or a SHORT
+    direction). Pure (unit-tested)."""
+    try:
+        if "BREAK_DOWN" in str(stage or "").upper():
+            return True
+        return str(direction or "LONG").upper() == "SHORT"
+    except Exception:
+        return False
+
+
+def render_cryptocove_spot_chart(df: pd.DataFrame, candidate, confirmed: bool = False) -> bytes:
+    """
+    Render the definitive VIVA SIGNALS PRO Spot Chart obedient to Law G1:
+    - Renders the exact pattern and lines from candidate metadata (never disconnected hallucinated lines).
+    - Intelligent framing anchored at the pattern's true start date.
+    - Minimal left and right borders giving maximum canvas to candles.
+    - Precise live price pill and Tehran timestamp.
+    """
+    symbol = str(getattr(candidate, 'symbol', '') or 'UNKNOWN').upper()
+    tf = str((getattr(candidate, 'metadata', None) or {}).get('chart_view_tf')
+             or getattr(candidate, 'trigger_timeframe', '8h') or '8h').lower()
+
+    if len(df) < 25:
+        return b''
+
+    md = getattr(candidate, 'metadata', {}) or {}
+    rp_list = md.get('render_patterns') or []
+    stage = str(md.get('spot_alert_stage') or getattr(candidate, 'status', '') or '').upper()
+    side = str(md.get('spot_alert_side') or getattr(candidate, 'direction', 'LONG') or 'LONG').upper()
+    raw_pat_type = str(md.get('pattern_type') or '')
+
+    # 1. Identify active pattern from candidate
+    primary_pat = rp_list[0] if rp_list else None
+    pat_name_fa = str(primary_pat.get('name_fa') or '') if primary_pat else ''
+    pat_type_str = primary_pat.get('type') or raw_pat_type or 'SPOTBREAK'
+    pat_title = _map_pattern_title(pat_type_str, pat_name_fa)
+
+    # 2. Determine frame start based on pattern anchor points (Live Market Focus)
+    all_points = []
+    if primary_pat and 'lines' in primary_pat:
+        for l in primary_pat['lines']:
+            all_points.extend(l.get('points', []))
+
+    df_clean = df.copy().reset_index(drop=True)
+    df_clean['ts_dt'] = pd.to_datetime(df_clean['timestamp'])
+
+    start_idx = 0
+    if all_points:
+        # 10-11 (G6): only IN-FRAME pivots anchor the zoom — a stale pivot
+        # (e.g. a snapshot-locked ts the frame has moved past) must not
+        # stretch the window; the zoom follows the visible pattern.
+        try:
+            _t0s = pd.to_datetime(df_clean['ts_dt'].iloc[0])
+            _t1s = pd.to_datetime(df_clean['ts_dt'].iloc[-1])
+            _bar73 = abs((_t1s - _t0s).total_seconds()) / max(1, len(df_clean) - 1)
+            earliest_pts = _spot_earliest_inframe(all_points, _t0s, _t1s, _bar73)
+        except Exception:
+            earliest_pts = None
+        if earliest_pts is not None:
+            matches = df_clean.index[df_clean['ts_dt'] <= earliest_pts]
+            if len(matches) > 0:
+                first_pt_idx = matches[-1]
+                # Prepend 10-15 bars for context around pattern origin
+                start_idx = max(0, first_pt_idx - 14)
+
+    # If start_idx leaves too few bars, ensure at least 45 bars; if too many, clamp to 180 max
+    n_total = len(df_clean)
+    if (n_total - start_idx) < 45:
+        start_idx = max(0, n_total - 65)
+    elif (n_total - start_idx) > 220:
+        start_idx = max(0, n_total - 200)
+
+    frame = df_clean.iloc[start_idx:].copy().reset_index(drop=True)
+    n = len(frame)
+    if n < 20:
+        frame = df_clean.tail(min(n_total, 60)).copy().reset_index(drop=True)
+        n = len(frame)
+
+    highs = frame['high'].astype(float).values
+    lows = frame['low'].astype(float).values
+    opens = frame['open'].astype(float).values
+    closes = frame['close'].astype(float).values
+    timestamps = frame['ts_dt'].values
+    live_price = float(closes[-1])
+
+    # 3. Canvas setup with maximum width (Tight left/right margins)
+    # R99q28 (his 10-19: «کیفیت کل چارتهای اسپات به شدت پایینه و باید بالا بره»)
+    # 180 dpi → 220, and every image drawn below uses lanczos resampling.
+    fig, ax = plt.subplots(figsize=(16, 9), dpi=220)
+    plt.subplots_adjust(left=0.022, right=0.955, top=0.925, bottom=0.16)
+
+    # Authentic Lemon-to-Sky Vertical Gradient
+    top_rgb = np.array([253, 244, 159]) / 255.0  # #FDF49F
+    bot_rgb = np.array([145, 203, 248]) / 255.0  # #91CBF8
+    gradient = np.linspace(top_rgb, bot_rgb, 256).reshape(256, 1, 3)
+    ax.imshow(gradient, aspect='auto', extent=[0, 1, 0, 1], origin='upper', zorder=0, transform=ax.transAxes)
+
+    ax.set_yscale('log')
+    # R99q28 (his law: «گریدلاین‌های پشت کندل‌ها در اسپات حذف بشه»): no grid at
+    # all behind the candles. Price labels on the right axis carry the scale.
+    ax.grid(False)
+
+    # 4. Draw Official Viva Signals Watermark in Center
+    logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assets', 'vivasignals-logo.png')
+    if os.path.isfile(logo_path):
+        try:
+            mark_ax = ax.inset_axes([0.255, 0.20, 0.49, 0.62], transform=ax.transAxes, zorder=1)
+            # R99q28 (his 10-19: «کیفیت لوگوهام در چارتهای اسپات بشدت پایینه»):
+            # lanczos instead of the default nearest-neighbour downsample.
+            mark_ax.imshow(mpimg.imread(logo_path), alpha=0.070,
+                           interpolation='lanczos', resample=True)
+            mark_ax.set_axis_off()
+            mark_ax.patch.set_alpha(0)
+        except Exception:
+            pass
+
+    # 5. Candlesticks (Emerald & Coral with substantial width)
+    # R99q28 (his law: «کندلهای چارتها در اسپات قرمز و سبز خوشرنگ»): a real
+    # green/red pair, not the teal TradingView default.
+    c_up = '#16A34A'
+    c_dn = '#DC2626'
+    width = 0.66
+    for i in range(n):
+        o, c, h, l = opens[i], closes[i], highs[i], lows[i]
+        col = c_up if c >= o else c_dn
+        ax.plot([i, i], [l, h], color=col, linewidth=1.2, zorder=3)
+        rect = patches.Rectangle((i - width/2, min(o, c)), width, max(abs(c - o), 1e-6),
+                                 facecolor=col, edgecolor=col, linewidth=0.8, zorder=4)
+        ax.add_patch(rect)
+
+    # 6. Draw EXACT pattern lines from candidate (Honest Geometry)
+    # 10-11 (G1): the ENGINE's calibrated line (log_fit keys, global x) is
+    # drawn re-expressed in frame coords — the renderer never refits what
+    # the engine validated. Legacy lines without fit keys keep the polyfit.
+    future = _spot_future_bars(n)
+    drawn_lines = []
+    if primary_pat and 'lines' in primary_pat:
+        for line_info in primary_pat['lines']:
+            pts = line_info.get('points', []) or []
+            # G2: pivots map by ts; out-of-frame ones are skipped (no snap).
+            x_pts, y_pts = _spot_map_pivots(pts, list(frame['ts_dt']))
+            slope_l = ic_l = None
+            x_start = None
+            _eng73 = _spot_engine_line_frame(line_info, start_idx)
+            if _eng73 is not None:
+                slope_l, ic_l, _x0f73 = _eng73
+                x_start = max(0, min([_x0f73] + x_pts)) if x_pts else max(0, _x0f73)
+            elif len(x_pts) >= 2 and max(x_pts) > min(x_pts):
+                # Legacy metadata without fit keys: fit in log10 space.
+                log_ys = np.log10(np.clip(y_pts, 1e-12, None))
+                slope_l, ic_l = np.polyfit(x_pts, log_ys, 1)
+                slope_l, ic_l = float(slope_l), float(ic_l)
+                x_start = max(0, min(x_pts))
+            if slope_l is None or x_start is None:
+                continue
+            # R99q28 (his 10-19: «ترندلاین‌های پترن باید کمی نازک‌تر بشه و تا
+            # ادامه به اندازه ۵ کندل بعد از کندل لایو خط کامل باشه اگر نیاز بود
+            # بعدش خط چین بشه»): thinner stroke, and the line stays SOLID for
+            # five bars past the live candle — only then does it break up.
+            _hold = 5
+            xs_solid = np.linspace(x_start, n - 1 + _hold, 120)
+            ys_solid = 10.0 ** (slope_l * xs_solid + ic_l)
+            ax.plot(xs_solid, ys_solid, color='#1F2328', linewidth=1.5, zorder=5)
+
+            if (n - 1 + _hold) < (n + future - 4):
+                xs_proj = np.linspace(n - 1 + _hold, n + future - 4, 40)
+                ys_proj = 10.0 ** (slope_l * xs_proj + ic_l)
+                ax.plot(xs_proj, ys_proj, color='#1F2328', linewidth=1.15,
+                        linestyle=(0, (5, 3)), alpha=0.70, zorder=5)
+
+            # Scatter pivot touch points
+            for px, py in zip(x_pts, y_pts):
+                ax.scatter(px, py, s=36, facecolor='#FDF49F', edgecolor='#1F2328', linewidth=1.3, zorder=6)
+
+            drawn_lines.append({'slope': float(slope_l), 'intercept': float(ic_l), 'side': line_info.get('side')})
+
+    # If no lines in metadata (fallback to adaptive fit)
+    if not drawn_lines:
+        pk_idx = int(np.argmax(highs[:max(5, n//3)]))
+        lo_idx = int(np.argmin(lows[:max(5, n//3)]))
+        slope_u = (np.log10(highs[-2]) - np.log10(highs[pk_idx])) / max(1, (n - 2 - pk_idx))
+        ic_u = np.log10(highs[pk_idx]) - slope_u * pk_idx
+        xs_u = np.linspace(pk_idx, n + future - 4, 100)
+        ax.plot(xs_u, 10.0 ** (slope_u * xs_u + ic_u), color='#1F2328', linewidth=1.4, zorder=5)
+
+    # 7. Measured Move Box or Breakdown Marker
+    # Only draw bullish target box if it is actually a bullish setup or confirmation!
+    is_breakdown = _spot_is_breakdown(stage, getattr(candidate, "direction", "LONG"))
+    
+    y_min_data = float(np.min(lows))
+    y_max_data = float(np.max(highs))
+    
+    if not is_breakdown and (confirmed or 'BREAK_UP' in stage or 'TOUCH' in stage or 'NEAR_BREAK' in stage):
+        # Calculate target from upper line or pattern height
+        upper_level = live_price * 1.05
+        if drawn_lines:
+            up_cand = [ln for ln in drawn_lines if ln.get('side') == 'HIGH']
+            if up_cand:
+                upper_level = float(10.0 ** (up_cand[0]['slope'] * (n - 1) + up_cand[0]['intercept']))
+        
+        # 10-10: ceiling-first box (the alert builder's md value wins;
+        # confirms recompute from the visible frame; virgin air → TF size).
+        try:
+            _ceil73s = float(md.get("spot_box_top") or 0.0)
+        except Exception:
+            _ceil73s = 0.0
+        if not (_ceil73s > upper_level * 1.005):
+            try:
+                from analysis.spot_engine import _structural_high_above as _sha73
+                _rc73s = _sha73(frame, float(frame["close"].iloc[-1])) or 0.0
+                if float(_rc73s) > upper_level * 1.005:
+                    _ceil73s = float(_rc73s) * 1.01  # «کمی بالاترش»
+            except Exception:
+                pass
+        target_price = _spot_box_target(upper_level, tf, _ceil73s)
+        delta_p = target_price - upper_level
+        pct_gain = (delta_p / max(1e-6, upper_level)) * 100.0
+
+        bx0 = n - 1
+        bx1 = n + future - 4   # 10-11: box spans the future tail (24→n+20, as before)
+        bw = bx1 - bx0
+        ax.hlines(upper_level, bx0, bx1, colors='#1F2328', linewidth=1.4, zorder=6)
+        rect_box = patches.Rectangle((bx0, upper_level), bw, target_price - upper_level,
+                                     facecolor='#A8D49B', edgecolor='#388E3C',
+                                     linewidth=1.2, alpha=0.60, zorder=5)
+        ax.add_patch(rect_box)
+        arrow_x = bx0 + bw * 0.5
+        ax.annotate('', xy=(arrow_x, target_price), xytext=(arrow_x, upper_level),
+                    arrowprops=dict(arrowstyle='->', color='#1F2328', lw=1.5, mutation_scale=12), zorder=7)
+        ticks = int(round(delta_p * 1000)) if delta_p < 10 else int(round(delta_p))
+        label_text = f'{delta_p:.4g} (+{pct_gain:.2f}%) {ticks:,}'
+        # 10-12 (his GEO rule: candles must NEVER squash): near boxes
+        # (top within 1.35x data top) still fit whole (refs unchanged);
+        # far boxes run off-canvas (auto-clipped) with the % label pinned
+        # at the top edge.
+        _clip73b = bool(target_price > y_max_data * 1.35)
+        _cap73b = y_max_data * 1.07 * 1.28
+        # his 10-19 law: the label sits ABOVE the box, tight to its top edge.
+        _ly73b = _cap73b * 0.995 if _clip73b else target_price * 1.006
+        ax.text(arrow_x, _ly73b, label_text,
+                color='#1F2328', fontsize=9.2, fontweight='bold', ha='center',
+                va='top' if _clip73b else 'bottom', zorder=8)
+        y_max = _cap73b if _clip73b else max(y_max_data, target_price) * 1.07
+        y_min = y_min_data * 0.96
+    elif is_breakdown and (confirmed or 'BREAK_DOWN' in stage or 'TOUCH' in stage
+                           or 'NEAR_BREAK' in stage):
+        # R99q28 (his 10-19: «باکس رو طبق چارت ارسالی باید طراحی بکنی و
+        # برعکسش قرمز برای شورتها»): the mirror image of the long box — the
+        # floor line, the breakdown candle as the left edge, and the measured
+        # move hanging BELOW, in red. Same label convention above/below.
+        _floor73 = live_price * 0.95
+        if drawn_lines:
+            _dn_cand = [ln for ln in drawn_lines if ln.get('side') == 'LOW']
+            if _dn_cand:
+                _floor73 = float(10.0 ** (_dn_cand[0]['slope'] * (n - 1)
+                                          + _dn_cand[0]['intercept']))
+        try:
+            _bot73s = float(md.get("spot_box_bottom") or 0.0)
+        except Exception:
+            _bot73s = 0.0
+        _pattern_h = max(1e-9, y_max_data - y_min_data)
+        _target_dn = _bot73s if _bot73s > 0 else (_floor73 - _pattern_h)
+        if _target_dn >= _floor73:
+            _target_dn = _floor73 - _pattern_h
+        _delta_dn = _floor73 - _target_dn
+        _pct_dn = (_delta_dn / max(1e-6, _floor73)) * 100.0
+
+        _bx0 = n - 1
+        _bx1 = n + future - 4
+        _bw = _bx1 - _bx0
+        ax.hlines(_floor73, _bx0, _bx1, colors='#1F2328', linewidth=1.4, zorder=6)
+        _rect_dn = patches.Rectangle((_bx0, _target_dn), _bw, _floor73 - _target_dn,
+                                     facecolor='#F2B8B5', edgecolor='#C62828',
+                                     linewidth=1.2, alpha=0.60, zorder=5)
+        ax.add_patch(_rect_dn)
+        _ax_dn = _bx0 + _bw * 0.5
+        ax.annotate('', xy=(_ax_dn, _target_dn), xytext=(_ax_dn, _floor73),
+                    arrowprops=dict(arrowstyle='->', color='#C62828', lw=1.5,
+                                    mutation_scale=12), zorder=7)
+        _ticks_dn = int(round(_delta_dn * 1000)) if _delta_dn < 10 else int(round(_delta_dn))
+        ax.text(_ax_dn, _target_dn * 0.982,
+                f'{_delta_dn:.4g} (-{_pct_dn:.2f}%) {_ticks_dn:,}',
+                color='#C62828', fontsize=9.2, fontweight='bold', ha='center',
+                va='top', zorder=8)
+        y_max = y_max_data * 1.05
+        y_min = min(y_min_data, _target_dn) * 0.96
+    else:
+        # For a warning state: no invented target box.
+        y_max = y_max_data * 1.05
+        y_min = y_min_data * 0.95
+
+    ax.set_ylim(y_min, y_max)
+    ax.set_xlim(-1.0, n + future)
+
+    # 7b. Volume histogram (TradingView-like, R99f thin R99h) — fail-soft.
+    _vx = None
+    try:
+        _vol = frame['volume'].astype(float).values if 'volume' in frame.columns else None
+    except Exception:
+        _vol = None
+    if _vol is not None and len(_vol) == n:
+        try:
+            _vx = fig.add_axes([0.022, 0.075, 0.933, 0.062], zorder=1)
+            _vcol = ['#1f9d55' if closes[i] >= opens[i] else '#d23f5c' for i in range(n)]
+            _vx.bar(range(n), _vol, color=_vcol, width=0.55, alpha=0.55, zorder=2)
+            _vx.set_xlim(-1.0, n + future)
+            _vx.set_ylim(0, max(float(_vol.max()) * 1.45, 1e-9))
+            _vx.set_yticks([])
+            _vx.set_xticks([])
+            for _sp in ('top', 'left', 'right'):
+                _vx.spines[_sp].set_visible(False)
+            _vx.spines['bottom'].set_color('#8A857D')
+            _vx.tick_params(colors='#4A4640')
+        except Exception:
+            pass
+
+    # 8. Live Price Guide & Single Distinct Live Price Pill on Axis
+    ax.axhline(live_price, color='#1F2328', linestyle=':', linewidth=1.1, alpha=0.60, zorder=6)
+    fmt_live = f'{live_price:,.4g}' if live_price < 10 else f'{live_price:,.2f}'
+    ax.text(n + future - 0.2, live_price, f' {fmt_live} ',
+            color='#FFFFFF', fontsize=9.5, fontweight='bold', va='center', ha='left',
+            bbox=dict(boxstyle='square,pad=0.25', facecolor='#1F2328', edgecolor='#D5D0C5', lw=0.9),
+            zorder=9)
+
+    # 9. Tehran Live Clock & Time Axis
+    try:
+        tehran_now = datetime.now(ZoneInfo("Asia/Tehran")).strftime("%d %b %Y • %H:%M")
+        ax.text(n - 1, y_min * 1.012, f'LIVE: {tehran_now} (Tehran)',
+                color='#FFFFFF', fontsize=8.5, fontweight='bold', ha='right', va='bottom',
+                bbox=dict(boxstyle='round,pad=0.2', facecolor='#1F2328', edgecolor='#1F2328', alpha=0.95),
+                zorder=9)
+    except Exception:
+        pass
+
+    # 10. Header — R99q28 brand block per his 10-19 law:
+    #     «سمت راست بالا انتهای چارت لوگو کوچک با کیفیت .. و مقابلش متن زیر
+    #      VAHID LESANI - VIVA SIGNALS PRO .. از پایین سمت راست لوگو کوچک
+    #      برداشته بشه».
+    #     So: symbol/title top-LEFT (untouched), mark + full brand top-RIGHT,
+    #     and the old bottom-right badge is GONE.
+    sub_title = f'{stage.replace("_", " ")} • {pat_title} • Log Scale'
+    fig.text(0.022, 0.955, f'{symbol}  •  {tf.upper()}  •  SPOTBREAK',
+             fontsize=15, fontweight='bold', color='#1F2328')
+    fig.text(0.022, 0.930, sub_title, fontsize=10.5, color='#4A4640')
+
+    BRAND = 'VAHID LESANI — VIVA SIGNALS PRO'
+    _brand_y = 0.949
+    if os.path.isfile(logo_path):
+        try:
+            _lg_ax = fig.add_axes([0.958, 0.916, 0.030, 0.040], zorder=10)
+            _lg_ax.imshow(mpimg.imread(logo_path), alpha=1.0,
+                          interpolation='lanczos', resample=True)
+            _lg_ax.axis('off')
+            _lg_ax.patch.set_alpha(0)
+            fig.text(0.940, _brand_y, BRAND, fontsize=11.0, fontweight='bold',
+                     color='#1F2328', ha='right', va='center')
+        except Exception:
+            fig.text(0.955, _brand_y, BRAND, fontsize=11.0, fontweight='bold',
+                     color='#1F2328', ha='right', va='center')
+    else:
+        fig.text(0.955, _brand_y, BRAND, fontsize=11.0, fontweight='bold',
+                 color='#1F2328', ha='right', va='center')
+
+    # 11. Unique ID bottom-LEFT, deliberately BELOW the volume pane's tick
+    # labels so it can never sit on the time-axis numbers (his law).
+    try:
+        _md_id = getattr(candidate, 'metadata', None) or {}
+        _uid = str(_md_id.get('public_code') or getattr(candidate, 'signal_id', '') or '')
+        if _uid:
+            fig.text(0.022, 0.030, f'ID  {_uid}', fontsize=9.0, fontweight='bold',
+                     color='#4A4640', ha='left', va='center', zorder=12)
+    except Exception:
+        pass
+
+    # 12. Axis Formatting (No Colliding Numbers)
+    ax.spines['top'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.spines['right'].set_color('#8A857D')
+    ax.spines['bottom'].set_color('#8A857D')
+    ax.tick_params(colors='#4A4640', labelsize=9.5)
+    ax.yaxis.tick_right()
+    # R99q28 his law: NO gridlines behind the candles, here or anywhere else.
+    ax.grid(False)
+
+    step = max(15, n // 6)
+    pos_list = list(range(5, n, step))
+    labels = [pd.to_datetime(timestamps[p]).strftime('%b %d') for p in pos_list]
+    ax.set_xticks(pos_list)
+    if _vx is not None:
+        # R99h TV-style: time labels live under the volume pane, not mid-chart.
+        try:
+            ax.set_xticks([])
+            _vx.set_xticks(pos_list)
+            _vx.set_xticklabels(labels, fontsize=9.5, color='#4A4640')
+        except Exception:
+            ax.set_xticklabels(labels, fontsize=9.5, color='#4A4640')
+    else:
+        ax.set_xticklabels(labels, fontsize=9.5, color='#4A4640')
+
+    # 10-12 (his axis law: MORE price labels on EVERY spot chart, every TF):
+    # LogLocator(subs) density depends on the matplotlib VERSION (proven:
+    # sparse {10} on old-mpl, dense on new-mpl for the SAME code) — so
+    # sub-1.5-decade views now take EXPLICIT linear-nice ticks (his beloved
+    # ONDO density; FixedLocator = identical on every mpl); wider views
+    # keep log subs='all'.
+    try:
+        _lo73a = float(ax.get_ylim()[0])
+        _hi73a = float(ax.get_ylim()[1])
+        _dec73a = math.log10(_hi73a) - math.log10(_lo73a)
+        # version-proof subs census (tick_values itself delegates on
+        # new-mpl): pure arithmetic over subs x decades inside the view.
+        _in73a = []
+        _e073a = int(math.floor(math.log10(_lo73a)))
+        _e173a = int(math.ceil(math.log10(_hi73a)))
+        for _e73a in range(_e073a - 1, _e173a + 2):
+            for _s73a in (1.0, 1.5, 2.0, 3.0, 5.0, 7.0):
+                _t73a = _s73a * (10.0 ** _e73a)
+                if _lo73a <= _t73a <= _hi73a:
+                    _in73a.append(_t73a)
+    except Exception:
+        _dec73a, _in73a = 99.0, []
+    if _dec73a >= 1.5 or len(_in73a) >= 7:
+        ax.yaxis.set_major_locator(LogLocator(base=10.0, subs="all", numticks=20))
+    else:
+        try:
+            _lin73a = [t for t in MaxNLocator(nbins=9, min_n_ticks=7).tick_values(_lo73a, _hi73a)
+                       if _lo73a <= t <= _hi73a]
+        except Exception:
+            _lin73a = []
+        if len(_lin73a) >= 2:
+            ax.yaxis.set_major_locator(FixedLocator(_lin73a))
+        elif _in73a:
+            ax.yaxis.set_major_locator(FixedLocator(_in73a))
+        else:
+            ax.yaxis.set_major_locator(LogLocator(base=10.0, subs="all", numticks=20))
+    def price_fmt(x, _):
+        if x <= 0: return ''
+        if abs(x - live_price) / live_price < 0.035:
+            return ''  # Hide tick label if too close to live price pill to avoid collision!
+        if x >= 1000: return f'{x:,.0f}'
+        elif x >= 10: return f'{x:,.1f}'
+        elif x >= 1: return f'{x:.2f}'
+        elif x >= 0.01: return f'{x:.4f}'
+        else: return f'{x:.6f}'
+    ax.yaxis.set_major_formatter(FuncFormatter(price_fmt))
+    ax.yaxis.set_minor_formatter(FuncFormatter(lambda x, _: ''))
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', facecolor='white', edgecolor='none')
+    plt.close()
+    buf.seek(0)
+    return buf.read()

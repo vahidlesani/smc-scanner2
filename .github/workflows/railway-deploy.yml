@@ -1,0 +1,91 @@
+name: railway-deploy
+
+# R99q41 — ONE DEPLOY PER RELEASE (his 10-21 order: «کامیت‌ها رو در قالب یک پچ
+# پوش و دیپلوی کن تا دوباره لیمیت نشه»).
+#
+# Discipline encoded here:
+#   * this workflow never runs on push — only on an explicit dispatch;
+#   * it refuses any ref that is not the squashed `release` branch, so a dev
+#     commit on `main` can never reach the platform;
+#   * it refuses to do anything unless confirm=DEPLOY is typed;
+#   * IDs come from repository VARIABLES (Railway account changed on 10-21) —
+#     nothing is hardcoded to the old, limited workspace any more.
+#
+# Repository variables required:
+#   RAILWAY_PROJECT_ID · RAILWAY_ENVIRONMENT_ID · RAILWAY_SERVICE_ID
+# Repository secret required:
+#   RAILWAY_API_TOKEN   (account token of the NEW Railway account)
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type DEPLOY to build and deploy (anything else = inspect only)"
+        required: true
+        default: "inspect"
+
+concurrency:
+  group: railway-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PID: ${{ vars.RAILWAY_PROJECT_ID }}
+      EID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+      SID: ${{ vars.RAILWAY_SERVICE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: guard + deploy
+        env:
+          CONFIRM: ${{ github.event.inputs.confirm }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys, urllib.request, urllib.error
+
+          API = "https://backboard.railway.com/graphql/v2"
+          TOKEN = os.environ.get("RAILWAY_API_TOKEN", "")
+          PID, EID, SID = os.environ.get("PID", ""), os.environ.get("EID", ""), os.environ.get("SID", "")
+          MISSING = [n for n, v in (("RAILWAY_PROJECT_ID", PID),
+                                    ("RAILWAY_ENVIRONMENT_ID", EID),
+                                    ("RAILWAY_SERVICE_ID", SID)) if not v]
+          if TOKEN.startswith("${{") or not TOKEN:
+              sys.exit("RAILWAY_API_TOKEN secret is not set")
+          if MISSING:
+              sys.exit("missing repository variables: " + ", ".join(MISSING))
+
+          def gql(q, v=None):
+              req = urllib.request.Request(
+                  API, data=json.dumps({"query": q, "variables": v or {}}).encode(),
+                  method="POST",
+                  headers={"Authorization": "Bearer " + TOKEN,
+                           "Content-Type": "application/json",
+                           "User-Agent": "viva-ops/1.0"})
+              try:
+                  with urllib.request.urlopen(req, timeout=90) as r:
+                      return json.loads(r.read().decode())
+              except urllib.error.HTTPError as e:
+                  print("!! HTTP", e.code, e.read().decode(errors="replace")[:600])
+                  raise
+
+          inst = gql('query($e:String!,$s:String!){serviceInstance(environmentId:$e,serviceId:$s)'
+                     '{latestDeployment{id status meta}}}', {"e": EID, "s": SID})
+          print("── instance:", json.dumps(inst)[:400])
+          if inst.get("errors"):
+              sys.exit("cannot read the service instance — check the variables")
+
+          if os.environ.get("CONFIRM") != "DEPLOY":
+              print("inspect-only run; pass confirm=DEPLOY to deploy")
+              raise SystemExit(0)
+
+          out = gql('mutation($e:String!,$s:String!){serviceInstanceDeploy('
+                    'environmentId:$e,serviceId:$s)}', {"e": EID, "s": SID})
+          print("── deploy:", json.dumps(out)[:400])
+          if out.get("errors"):
+              sys.exit("DEPLOY FAILED: " + json.dumps(out["errors"])[:400])
+          print("── deploy accepted ✅")
+          PY

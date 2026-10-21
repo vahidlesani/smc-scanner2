@@ -1,0 +1,1630 @@
+"""CHART-8 (Viva 09-16): the unified DETECT → ORDER-TO-RENDER kit.
+
+Viva's ruling (verbatim): «اول باید تابعی باشه که تشخیص بده و دستور رسم اون
+الگو رو بده» and «همه ستاپها باید نواحی مشخص روشون رسم بشه». Every setup
+calls enrich_render(); the chart renderer only obeys the render commands
+stored in metadata — detection and painting are separate, testable layers.
+
+Zone kinds (his vocabulary, English abbreviations on charts per 09-16 night):
+FVG, IFVG, OB (order block), FLIP (flip zone), BOS (break level), SUPPLY and
+DEMAND swing clusters; DIAMOND / FLAG-LIMIT reserved for future detectors.
+Patterns reuse the validated Edwards-&-Magee/Brooks edge fitter and the
+honest wedge/triangle/channel/flag classifier in analysis.pattern_engine.
+"""
+from __future__ import annotations
+
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+
+ZONE_KINDS = ("FVG", "IFVG", "OB", "FLIP", "BOS", "SUPPLY", "DEMAND",
+              "DIAMOND", "FLAG-LIMIT")
+
+
+def _atr(df: pd.DataFrame, k: int = 14) -> float:
+    try:
+        return float((df["high"] - df["low"]).tail(k).mean()) or 0.0
+    except Exception:
+        return 0.0
+
+
+def detect_zones(df: pd.DataFrame, direction: str,
+                 entry_bottom: float = 0.0, entry_top: float = 0.0,
+                 cap: int = 6) -> List[Dict]:
+    """Every zone the doctrine can name inside the visible window, newest
+    first, de-duplicated, entry zone excluded (the renderer paints that one
+    itself with the POI label)."""
+    zones: List[Dict] = []
+    n = len(df)
+    atr = _atr(df)
+    if n < 30 or atr <= 0:
+        return zones
+    hi = df["high"].to_numpy(float)
+    lo = df["low"].to_numpy(float)
+    cl = df["close"].to_numpy(float)
+    # Viva 09-20 time-axis law: every drawing command carries the TIMESTAMP of
+    # its origin bar, never only a bar index. The renderer anchors zones by
+    # time — an old tool must not slide along the time axis when candles
+    # outrun it («ابزار روی محور تاریخ و زمان حرکت میکنه»).
+    try:
+        _ts_col = [str(x) for x in df["timestamp"].tolist()] \
+            if "timestamp" in df.columns else [str(x) for x in df.index]
+    except Exception:
+        _ts_col = [""] * n
+
+    def _ts_at(idx: int) -> str:
+        if not _ts_col:
+            return ""
+        try:
+            return _ts_col[max(0, min(int(idx), len(_ts_col) - 1))]
+        except Exception:
+            return ""
+
+    def _overlaps_entry(b: float, t: float) -> bool:
+        return not (t < entry_bottom - 0.3 * atr or b > entry_top + 0.3 * atr)
+
+    def _add(kind: str, bottom: float, top: float, x0: int, bias: str) -> None:
+        if top - bottom <= 0 or _overlaps_entry(bottom, top):
+            return
+        # Viva 09-17: «نواحی فقط با کیفیت» — a zone 8+ ATR away is history,
+        # not a level price can act on inside this alert's life.
+        if abs((bottom + top) / 2 - float(cl[-1])) > 8 * atr:
+            return
+        if any(abs(bottom - z["bottom"]) < 0.5 * atr and z["kind"] == kind
+               for z in zones):
+            return
+        zones.append({"kind": kind, "bottom": float(bottom),
+                      "top": float(top), "x0": int(x0), "bias": bias,
+                      "ts0": _ts_at(x0)})
+
+    # ── FVG / IFVG: three-candle imbalances, fresh first ─────────────────
+    start = max(2, n - 90)
+    for i in range(start, n):
+        h0, l0 = float(hi[i - 2]), float(lo[i - 2])
+        if lo[i] > h0:                      # bullish imbalance
+            b, t, bias = h0, float(lo[i]), "DEMAND"
+        elif hi[i] < l0:                    # bearish imbalance
+            b, t, bias = float(hi[i]), l0, "SUPPLY"
+        else:
+            continue
+        later_l = lo[i + 1:]
+        later_h = hi[i + 1:]
+        traversed = bool((later_l <= b).any()) if bias == "DEMAND" \
+            else bool((later_h >= t).any())
+        if not traversed:
+            _add("FVG", b, t, i - 2, bias)
+        elif bias == "DEMAND" and cl[-1] < b:
+            _add("IFVG", b, t, i - 2, "SUPPLY")   # failed demand → inverse
+        elif bias == "SUPPLY" and cl[-1] > t:
+            _add("IFVG", b, t, i - 2, "DEMAND")  # failed supply → inverse
+
+    # ── OB: last opposite candle before a displacement move ─────────────
+    for i in range(max(3, n - 70), n - 2):
+        move = cl[i + 2] - cl[i]
+        body = cl[i] - cl[i - 1]
+        if move > 1.6 * atr and body < 0:     # bull impulse out of a red candle
+            _add("OB", min(cl[i], float(hi[i - 1]) * 0 + float(min(cl[i], cl[i - 1]))),
+                 max(cl[i], cl[i - 1]), i - 1, "DEMAND")
+        elif move < -1.6 * atr and body > 0:  # bear impulse out of a green one
+            _add("OB", min(cl[i], cl[i - 1]), max(cl[i], cl[i - 1]),
+                 i - 1, "SUPPLY")
+
+    # ── BOS / FLIP: last broken swing level; retest after break = flip ───
+    try:
+        from analysis.indicators import pivots as _piv
+        ph, pl = _piv(df.reset_index(drop=True).assign(timestamp=df.index
+                      if "timestamp" not in df.columns else df["timestamp"]),
+                      3, 3)
+    except Exception:
+        ph, pl = [], []
+    last_close = float(cl[-1])
+    for pts, bias in ((ph, "SUPPLY"), (pl, "DEMAND")):
+        for pt in list(pts)[-10:]:
+            lvl = float(pt["price"])
+            x0 = int(pt.get("index", n - 20))
+            after = cl[x0 + 1:]
+            if len(after) < 3:
+                continue
+            broke = bool((after > lvl + 0.15 * atr).any()) if bias == "SUPPLY" \
+                else bool((after < lvl - 0.15 * atr).any())
+            if not broke:
+                continue
+            retest = bool(((after > lvl - 0.25 * atr) &
+                           (after < lvl + 0.25 * atr)).sum() >= 1)
+            _add("FLIP" if retest else "BOS", lvl - 0.12 * atr,
+                 lvl + 0.12 * atr, x0,
+                 "DEMAND" if bias == "SUPPLY" else "SUPPLY")
+
+    # ── swing-cluster SUPPLY / DEMAND (his «کف و سقف و میانه») ───────────
+    for pts, kind in ((ph, "SUPPLY"), (pl, "DEMAND")):
+        for pt in list(pts)[-12:]:
+            y = float(pt["price"])
+            if abs(y - last_close) > 6 * atr:
+                continue
+            x0 = int(pt.get("index", n - 30))
+            _add(kind, y - 0.26 * atr, y + 0.26 * atr, x0, kind)
+
+    # per-kind quota: a FVG staircase must never crowd out the S/D map
+    quota = {"FVG": 2, "IFVG": 1, "OB": 2, "FLIP": 2, "BOS": 2,
+             "SUPPLY": 2, "DEMAND": 2, "DIAMOND": 1, "FLAG-LIMIT": 1}
+    taken: Dict[str, int] = {}
+    picked: List[Dict] = []
+    for z in sorted(zones, key=lambda z: -z["x0"]):   # newest first
+        k = z["kind"]
+        if taken.get(k, 0) >= quota.get(k, 1):
+            continue
+        taken[k] = taken.get(k, 0) + 1
+        picked.append(z)
+    order = {k: i for i, k in enumerate(("FLIP", "OB", "FVG", "IFVG", "BOS",
+                                         "SUPPLY", "DEMAND", "DIAMOND",
+                                         "FLAG-LIMIT"))}
+    picked.sort(key=lambda z: (order.get(z["kind"], 9), -z["x0"]))
+    return picked[:cap]
+
+
+
+# ── R16 phase 3 · calibrated line geometry ──────────────────────────────
+# A validated line may carry a log10 fit (wide-span window / log axis). These
+# helpers are THE way to ask a serialized line for its value or its polyline —
+# never `slope * x + intercept` by hand, or the line leaves the pivots it was
+# fit through on a log chart («خط قرمز لنگ در هوا»).
+_LINE_STEPS = 24
+
+
+def line_y(line, x: float) -> float:
+    """Calibrated price of a serialized render line at x."""
+    if not line:
+        return float("nan")
+    if line.get("log_fit"):
+        try:
+            return float(10.0 ** (float(line["log_slope"]) * float(x)
+                                  + float(line["log_intercept"])))
+        except Exception:
+            pass
+    return float(line.get("slope") or 0.0) * float(x) + float(line.get("intercept") or 0.0)
+
+
+def line_tangent(line, x: float) -> float:
+    """Δprice per bar at x — the value legacy projections want."""
+    if line and line.get("log_fit"):
+        try:
+            return float(np.log(10.0) * float(line["log_slope"]) * line_y(line, x))
+        except Exception:
+            pass
+    return float(line.get("slope") or 0.0)
+
+
+def line_xy(line, x_from: float, x_to: float, steps: int = _LINE_STEPS):
+    """(xs, ys) for ax.plot: an exact polyline for log fits (a straight segment
+    for linear ones — identical to the old two-point draw)."""
+    x0, x1 = float(x_from), float(x_to)
+    if line and line.get("log_fit"):
+        xs = np.linspace(x0, x1, max(3, int(steps)))
+        try:
+            ys = 10.0 ** (float(line["log_slope"]) * xs + float(line["log_intercept"]))
+        except Exception:
+            return [x0, x1], [line_y(line, x0), line_y(line, x1)]
+        return xs, ys
+    return [x0, x1], [line_y(line, x0), line_y(line, x1)]
+
+
+def _recently_broken(line, n: int) -> bool:
+    """Viva 09-24 (his five SL/EN/TP schematics: «آیا این خط آبی شناسایی شده
+    بود؟؟»): a line the market JUST broke with a close is THE story of the
+    chart — the break-down of a rising support IS the SHORT's evidence. The
+    anti-floating rules must never delete it; it paints solid to its break
+    bar and dotted beyond (the painter already renders break_ts/break_x)."""
+    try:
+        if isinstance(line, dict):
+            bx = line.get("break_x")
+        else:
+            bx = getattr(line, "break_index", None)
+        if bx is None:
+            return False
+        age = n - int(bx)
+        # his charts show the break mid-frame (DOT/ADA/ARB ~09-23 16:00 in a
+        # 41h window): a line broken within HALF the visible frame stays.
+        # r33 LAW (Viva 09-26): after the break the line stays dotted/faint
+        # for AT LEAST 50 candles so retest touches stay visible — unless a
+        # better-ranked valid line replaces it (the fitter's best-score pick).
+        # (The «retire at 48 bars» override of 10-06..10-11 violated this law
+        # and deleted the retest story from the charts — retired.)
+        return 0 <= age <= max(50, int(0.5 * max(n, 1)))
+    except Exception:
+        return False
+
+
+def _line_contradicts(line, side: str, direction: str, df: pd.DataFrame,
+                      sub: bool = False) -> bool:
+    """True when a validated trendline contradicts the trade context.
+
+    Viva 09-20 round 10 (BNB: «این ترند قرمز لنگ در هوا چه اژه؟» crossed out):
+      • SHORT trade → a HIGH-side line that RISES with the price window is the
+        old up-leg's resistance-to-nothing; if the same side also has a
+        descending (or flat) line, the ascending one is noise.
+      • also drop a HIGH-side line price has clearly left (close more than
+        2×ATR ABOVE it and rising into it is fine; the dead case is price far
+        BELOW a rising support the market already broke).
+    LONG trades are mirrored. Sub-lines are exempt while they stay short.
+    """
+    try:
+        if line is None or str(direction or "").upper() not in ("LONG", "SHORT"):
+            return False
+        # accepts both the validated line OBJECT and its serialized dict
+        if isinstance(line, dict):
+            slope = float(line.get("slope") or 0.0)
+            inter = float(line.get("intercept") or 0.0)
+        else:
+            slope = float(getattr(line, "slope", 0.0) or 0.0)
+            inter = float(getattr(line, "intercept", 0.0) or 0.0)
+        n = len(df) - 1
+        # R62-ARENA (audit G7): a serialized dict keeps its log fields too —
+        # the old getattr() on a dict silently evaluated log lines linearly.
+        _g = (line.get if isinstance(line, dict) else (lambda k, d=None: getattr(line, k, d)))
+        y_last = line_y({"log_fit": bool(_g("log_fit", False)),
+                         "log_slope": float(_g("log_slope", 0.0) or 0.0),
+                         "log_intercept": float(_g("log_intercept", 0.0) or 0.0),
+                         "slope": slope, "intercept": inter}, n)
+        close = float(df["close"].iloc[-1])
+        atr = 0.0
+        try:
+            atr = float((df["high"] - df["low"]).tail(14).mean() or 0.0)
+        except Exception:
+            atr = 0.0
+        # a JUST-broken line survives (it is the break evidence — the painter
+        # shows it solid to the break, dotted after); only ORIENTATION noise
+        # (rising HIGH over a short) still vetoes.
+        _brok9 = _recently_broken(line, n)
+        if str(direction).upper() == "SHORT":
+            # an ascending line on the HIGH side of a short = «لنگ در هوا»
+            if side == "HIGH" and slope > 0 and (y_last - close) > 0.5 * atr:
+                return True
+            # a support line the market fell far below is history, not context
+            if (side == "LOW" and (close - y_last) > 2.0 * atr and slope > 0
+                    and not _brok9):
+                return True
+        else:
+            # R62-ARENA (audit G3): the exact mirror of the SHORT rule — a
+            # FALLING support the price has rallied away from (line BELOW the
+            # close by > 0.5 ATR). The old sign tested the line ABOVE price.
+            if side == "LOW" and slope < 0 and (close - y_last) > 0.5 * atr:
+                return True
+            if (side == "HIGH" and (y_last - close) > 2.0 * atr and slope < 0
+                    and not _brok9):
+                return True
+        return False
+    except Exception:
+        return False
+
+def _chart_will_be_log(candidate, df: pd.DataFrame) -> bool:
+    """Is THIS chart drawn on a log price axis?  (R99q20 LOG-FIT TRUTH.)
+
+    Viva 10-16 (verbatim): «دقت بکن ببین الان از نماگر کندل بصورت هوشمند
+    لگاریتمی استفاده می‌شه؟؟ اگر بصورت لگاریتمی استفاده بشه و از قوانین درست
+    استفاده بشه بنظرم کمک می‌کنه». The painter has drawn EVERY chart on a log
+    axis since r57 («چارت حتماً لگاریتمی باشه، در اسپات و فیوچرز») — but the
+    FITTER still used the old conditional test (ratio>1.03 / 1h+1.35 / TC-4h),
+    so on the remaining frames the geometry was fitted LINEAR and then painted
+    LOG: the line is straight in percent space only when it was fitted there,
+    a linear fit bows away from its pivots on a log canvas.
+
+    One rule now — the fit space IS the paint space: log whenever the prices are
+    positive (log domain), for every system and every TF. `VIVA_LOG_FIT_OFF=1`
+    is the emergency switch back to the legacy conditional behaviour.
+    """
+    md = getattr(candidate, "metadata", None) or {}
+    if md.get("log_scale"):
+        return True                                   # spot engine: always log
+    try:
+        import os as _os
+        if str(_os.getenv("VIVA_LOG_FIT_OFF", "") or "").strip() in ("1", "true", "True"):
+            raise RuntimeError("legacy path")
+    except RuntimeError:
+        try:
+            lo = float(df["low"].min()); hi = float(df["high"].max())
+            return (hi / lo) > 1.03 if lo > 0 else False
+        except Exception:
+            return False
+    try:
+        return float(df["low"].min()) > 0
+    except Exception:
+        return False
+
+
+def extend_lines_to_live(shape: dict, df: pd.DataFrame, atr: float,
+                         max_violation_atr: float = 0.35) -> dict:
+    """R99q22 condition 6 (his 10-17, verbatim: «ترند بالایی و پایینی پترن اکثر
+    قبل از رسیدن به لایو قیمت تلاقی کرده و متوقف شده .. در این موارد ترندهای
+    پترن‌ها باید اکستند بشه به پیوت‌های جدید بالا و پایین بشرط اینکه اعتبار اون
+    ترندها از بین نره»).
+
+    A pattern's upper/lower lines must reach the LIVE bar. The extension is
+    validity-gated: if price closed beyond a boundary by more than
+    `max_violation_atr` during the gap, that trend is broken — it is left as
+    the fitter drew it. When the two edges would CROSS before the live bar
+    (the exhausted apex he sees), the naive extension is refused and the line
+    is re-anchored to the newest extreme pivot instead (extend_line_to_new_base).
+    Sets `lines_extended` / `apex_clamped` on the shape.
+    """
+    try:
+        if not isinstance(shape, dict) or df is None or not len(df):
+            return shape
+        n = int(len(df))
+        lns = [l for l in (shape.get("lines") or []) if isinstance(l, dict)]
+        if not lns:
+            return shape
+        closes = [float(v) for v in df["close"].tolist()]
+        touched = False
+        for ln in lns:
+            try:
+                x1 = int(ln.get("x1", n - 1))
+            except Exception:
+                continue
+            if x1 >= n - 1:
+                continue
+            side = str(ln.get("side") or "").upper()
+            ok = True
+            for x in range(max(int(x1), 0), n):
+                try:
+                    v = float(line_y(ln, x))
+                except Exception:
+                    ok = False
+                    break
+                beyond = (closes[x] - v) if side == "HIGH" else (v - closes[x])
+                if beyond > max_violation_atr * float(atr or 1.0):
+                    ok = False
+                    break
+            if ok:
+                ln["x1"] = n - 1
+                touched = True
+            else:
+                try:                     # re-anchor to the new pivot (validity kept)
+                    fixed = extend_line_to_new_base(ln, df, side)
+                    if fixed is not ln and fixed:
+                        _y0 = line_y(fixed, n - 1)
+                        beyond_end = (closes[-1] - _y0) if side == "HIGH" \
+                            else (_y0 - closes[-1])
+                        if beyond_end <= max_violation_atr * float(atr or 1.0):
+                            ln.update({k: v for k, v in fixed.items() if k != "side"})
+                            ln["x1"] = n - 1
+                            touched = True
+                except Exception:
+                    pass
+        # crossed edges before the live bar = exhausted apex → clamp the shorter
+        try:
+            if len(lns) >= 2:
+                _up = next((l for l in lns if str(l.get("side") or "").upper() == "HIGH"), lns[0])
+                _lo = next((l for l in lns if str(l.get("side") or "").upper() == "LOW"), lns[1])
+                cross = None
+                for x in range(n - 1, -1, -1):
+                    yu, yl = line_y(_up, x), line_y(_lo, x)
+                    if yu <= yl:
+                        cross = x
+                        break
+                if cross is not None and cross < n - 1:
+                    shape["apex_clamped"] = True
+        except Exception:
+            pass
+        if touched:
+            shape["lines_extended"] = True
+        return shape
+    except Exception:
+        return shape
+
+
+def extend_line_to_new_base(line: dict, df: pd.DataFrame, side: str):
+    """10-12 (his JUP/ZEC law: when price crosses a trend and builds a NEW
+    base, the trend extends to the new base): a line cutting through a fresh
+    base is rewritten through (first pivot -> new extreme pivot) so it
+    respects the base it used to cut. A wick-only pierce (fake breakout —
+    bodies stay inside, his ZEC lower) is IGNORED. Self-contained (no new
+    module imports). Returns a NEW dict or the ORIGINAL."""
+    try:
+        ln = dict(line or {})
+        s = str(side or (ln.get("side") or "")).upper()
+        if s not in ("HIGH", "LOW"):
+            return line
+        if df is None or len(df) < 10:
+            return line
+        try:
+            import numpy as _np73
+        except Exception:
+            return line
+        dd = df.reset_index(drop=True)
+        n = len(dd)
+        try:
+            x0 = int(ln.get("x0", 0))
+        except Exception:
+            return line
+        if x0 < 0 or x0 >= n - 5:
+            return line
+        try:
+            closes = dd["close"].astype(float).to_numpy()
+            series = (dd["high"] if s == "HIGH" else dd["low"]).astype(float).to_numpy()
+        except Exception:
+            return line
+        try:
+            _ys = _np73.array([line_y(ln, float(x)) for x in range(x0, n)], dtype=float)
+        except Exception:
+            return line
+        if s == "HIGH":
+            beyond = closes[x0:] > _ys * 1.0005
+        else:
+            beyond = closes[x0:] < _ys * 0.9995
+        # a BASE needs conviction: 3+ closes beyond (a lone pierce = noise)
+        if int(_np73.sum(beyond)) < 3:
+            return line
+        rng = _np73.arange(x0 + 2, n - 2)
+        if len(rng) == 0:
+            return line
+        seg = series[x0 + 2:n - 2]
+        if s == "HIGH":
+            is_sw = (seg >= series[x0 + 1:n - 3]) & (seg >= series[x0 + 3:n - 1]) \
+                & (seg >= series[x0:n - 4]) & (seg >= series[x0 + 4:n])
+            cands = [int(x) for x, f in zip(rng, is_sw)
+                     if f and closes[x] > float(line_y(ln, float(x))) * 1.0005]
+        else:
+            is_sw = (seg <= series[x0 + 1:n - 3]) & (seg <= series[x0 + 3:n - 1]) \
+                & (seg <= series[x0:n - 4]) & (seg <= series[x0 + 4:n])
+            cands = [int(x) for x, f in zip(rng, is_sw)
+                     if f and closes[x] < float(line_y(ln, float(x))) * 0.9995]
+        if not cands:
+            return line
+        # the new base = the LAST extreme swing beyond (freshest base wins)
+        xp = max(cands)
+        if xp <= x0 + 2:
+            return line
+        # anchor = the line's FIRST pivot (respected, never moved)
+        pts = list(ln.get("points") or [])
+        try:
+            yp0 = float(pts[0].get("price")) if pts else float(line_y(ln, float(x0)))
+        except Exception:
+            return line
+        yp = float(series[xp])
+        if xp <= x0 or yp <= 0 or yp0 <= 0:
+            return line
+        # the extension preserves the trend's CHARACTER: a slope sign-flip
+        # (descending -> ascending) is a different move (R67 pole vs drift),
+        # not an extension — the fitter finds that new trend fresh.
+        if ln.get("log_fit"):
+            try:
+                l0, l1 = float(_np73.log10(yp0)), float(_np73.log10(yp))
+                sl = (l1 - l0) / float(xp - x0)
+                _old = float(ln.get("log_slope") or 0.0)
+            except Exception:
+                return line
+            if _old * sl < 0:
+                return line
+            out = dict(ln)
+            out["log_slope"] = float(sl)
+            out["log_intercept"] = float(l0 - sl * x0)
+            try:
+                out["slope"] = float((yp - yp0) / float(xp - x0))
+                out["intercept"] = float(yp0 - out["slope"] * x0)
+            except Exception:
+                pass
+        else:
+            sl = (yp - yp0) / float(xp - x0)
+            try:
+                _old = float(ln.get("slope") or 0.0)
+            except Exception:
+                _old = 0.0
+            if _old * sl < 0:
+                return line
+            out = dict(ln)
+            out["slope"] = float(sl)
+            out["intercept"] = float(yp0 - sl * x0)
+        try:
+            _ts = dd["timestamp"].iloc[xp] if "timestamp" in dd.columns else None
+            out["points"] = pts + [{"ts": str(_ts), "price": float(yp)}]
+        except Exception:
+            out["points"] = pts
+        try:
+            out["x1"] = int(n - 1)
+        except Exception:
+            pass
+        out["extended73"] = True
+        return out
+    except Exception:
+        return line
+
+
+def _law_stamp(cmd: dict, df, upper, lower, replace_type: bool = False) -> dict:
+    """R99q21 — ONE reference law stamps EVERY drawn shape.
+
+    Viva 10-16: «شرایط درست تشخیص پترن‌ها در رندر یا انجین تشخیص پترن‌ها کد
+    نشده» — so no shape leaves this module without the law's own verdict: the
+    final slug, its bias, the breakout side it trades, and whether the pattern
+    is still actionable (near the break / at the start of it). Spot, setups and
+    the message layer read these fields instead of re-guessing from a name.
+    `replace_type=True` lets the law RENAME the old engine's label (the legacy
+    wedge/triangle ifs), while band/trendline commands keep their paint type
+    and carry the law verdict alongside as `law_slug`.
+    """
+    try:
+        from analysis.pattern_law import (pair_metrics as _pm, classify_pair as _cp,
+                                          near_break as _nb, bias_of as _bias,
+                                          break_side_of as _bs)
+        n = len(df)
+        meta: dict = {}
+        try:
+            slug = str(_cp(_pm(upper, lower, n, df=df), meta) or "")
+        except Exception:
+            slug = ""
+        if slug and slug != "NONE":
+            if replace_type:
+                cmd["type"] = slug
+            if str(cmd.get("type")) in ("TRENDLINE", "RANGE", "TRIANGLE", "NONE", ""):
+                cmd["law_slug"] = slug
+        _up, _lo = upper, lower
+        if _up is None and _lo is None:
+            _up = _lo = {"slope": 0.0, "intercept": float(df["close"].iloc[-1])}
+        elif _up is None:
+            _up = _lo
+        elif _lo is None:
+            _lo = _up
+        _ok, _info = _nb(_up, _lo, n, float(df["close"].iloc[-1]), _atr(df))
+        _key = str(cmd.get("law_slug") or cmd.get("type") or "")
+        cmd.update({
+            "law_bias": _bias(_key),
+            "break_side": _bs(_key),
+            "near_break": bool(_ok),
+            "break_state": (_info or {}).get("state"),
+            "dist_atr": (_info or {}).get("dist_atr"),
+            "law_why": (meta.get("why") or [])[:6],
+        })
+    except Exception as _exc:
+        print(f"law stamp warning: {_exc}")
+    return cmd
+
+
+def detect_patterns(df: pd.DataFrame, direction: str = "",
+                    log_axis: Optional[bool] = None,
+                    include_past_market: bool = False) -> List[Dict]:
+    """Validated edge geometry + honest shape classification (doctrine:
+    Edwards & Magee / Brooks / E&M) as render commands; plus a trading-range
+    box when the window is flat between two tested horizontals.
+
+    Viva 09-20 (round 10, his crossed-out «این ترند قرمز لنگ در هوا چه اژه؟»
+    BNB chart,
+): a line that contradicts the trade's own trend context is
+    noise — an ASCENDING high-side line on a SHORT, or a support line price
+    left long ago. When a slope-consistent line exists on the same side it
+    wins the slot; the contradicting twin is dropped instead of drawn."""
+    out: List[Dict] = []
+    if df is None or len(df) < 45:
+        return out
+    try:
+
+        import dataclasses as _dc
+        from analysis.viva_tlbreak import fit_validated_line, load_config, \
+            pivots as _pv8
+        from analysis.pattern_engine import classify_shape
+        from analysis import patterns as _pats_lib
+        # RENDER-ONLY clone (Viva 09-17): painting tolerates 2-touch lines and
+        # a wider residual than TRADE detection ever may — doctrine lines are
+        # drawn for the eye here; entries keep the strict fitter.
+        # r57+r58 (his shadow law, refined by him: «نگفتم از بادی بگیر فقط ..
+        # شدوهای معقول رو محاسبه بکنه و وصل بکنه»): HYBRID anchors — an EXTREME
+        # wick (liquidation spike) anchors on the body, reasonable wicks stay
+        # wicks; the winner is scored by touches² (majors win).
+        cfg = _dc.replace(load_config(), pivot_left=3, pivot_right=3,
+                          min_touches=2, touch_tolerance_atr=0.20,
+                          max_fit_residual_atr=0.45, require_alive=True,
+                          wick_policy="hybrid")
+        # R16 phase 3: fit in the space the chart is drawn in. A linear chart
+        # keeps the linear fit (futures look untouched); a log chart fits in
+        # log10 so the painted line lands exactly on its pivots.
+        if log_axis is False:
+            cfg = _dc.replace(cfg, log_fit_min_span=99.0)
+        n = len(df) - 1
+
+        def _score(ln) -> float:
+            """Viva 09-17 (his option 1): validity = touches x fit x span —
+            the MOST valid line wins, never merely the nearest one.
+            Viva 09-20 round 10 (BNB «ترند قرمز لنگ در هوا»): a validated line
+            whose right edge floats many ATR away from price (and keeps
+            leaving) is NOT the chart's trend — it gets a proximity penalty so
+            the line price actually respects wins the main slot."""
+            span = max(1, int(getattr(ln, "last_index", n)) - int(ln.first_index))
+            touch = max(1, int(getattr(ln, "touch_count", len(ln.points or ())) or 1))
+            fit = 1.0 / (1.0 + float(getattr(ln, "fit_residual_atr", 0.0) or 0.0))
+            prox = 1.0
+            try:
+                _a = float((df["high"] - df["low"]).tail(14).mean() or 0.0)
+                if _a > 0:
+                    _y = float(getattr(ln, "slope")) * n + float(getattr(ln, "intercept"))
+                    _d = abs(_y - float(df["close"].iloc[-1])) / _a
+                    prox = 1.0 / (1.0 + max(0.0, _d - 1.0))
+            except Exception:
+                prox = 1.0
+            return (touch ** 2) * fit * (span ** 0.5) * prox  # r57: majors win
+
+        def _best(side: str):
+            """Best-fitting validated line across lookback windows —
+            returns (line, x-offset) WITHOUT mutating the frozen dataclass."""
+            cands = []
+            for w in (90, 130, 200, len(df)):
+                if w < 45:
+                    continue
+                off = max(0, len(df) - w)
+                ln = fit_validated_line(df.tail(w).reset_index(drop=True), side, cfg)
+                if ln is not None:
+                    cands.append((ln, off))
+            return max(cands, key=lambda t: _score(t[0]), default=(None, 0))
+
+        # Viva 09-18 context ruling: price sitting ON a valid/local demand
+        # means the UPPER trend must paint (its future break = the alert);
+        # mirror for supply → the lower trend. Relaxed recency/edge gates
+        # let that opposite-side line survive while price hugs the zone.
+        _c0 = float(df["close"].iloc[-1]); _a0 = _atr(df)
+        _hi8, _lo8 = _pv8(df.reset_index(drop=True), 3, 3)
+        _on_dem = any((n - float(q["index"]) <= 25)
+                      and (0 <= _c0 - float(q["price"]) <= 1.2 * _a0)
+                      for q in _lo8[-6:]) and _a0 > 0
+        _on_sup = any((n - float(q["index"]) <= 25)
+                      and (0 <= float(q["price"]) - _c0 <= 1.2 * _a0)
+                      for q in _hi8[-6:]) and _a0 > 0
+        _cfg_hi = _dc.replace(cfg, recency_bars=90, edge_atr=16.0) \
+            if _on_dem else cfg
+        _cfg_lo = _dc.replace(cfg, recency_bars=90, edge_atr=16.0) \
+            if _on_sup else cfg
+
+        def _scale(side: str, cfgx=None):
+            """Viva 09-18 flexibility law (his BCH/BTC/AVAX annotations):
+            the market nests structures — a leg channel inside a bigger leg,
+            a small wedge inside a channel (Brooks: spike → channel → TR).
+            Fit every scale, keep the MAIN line plus ONE distinct sub-line
+            (different anchor OR clearly different slope) so both the old
+            leg trend AND the fresh small pattern paint together."""
+            found = []
+            # R64 smart zoom: the 300-candle chart is fitted at five «zoom
+            # levels» — the score (touches²·fit·√span·proximity) keeps the
+            # most valid line near price; a spike that only fits a small
+            # window cannot outrank a major that holds across the big one.
+            for w in (60, 90, 120, min(180, len(df))):
+                if w < 45:
+                    continue
+                off = max(0, len(df) - w)
+                ln = fit_validated_line(df.tail(w).reset_index(drop=True),
+                                        side, cfgx or cfg)
+                if ln is not None:
+                    found.append((_score(ln), _glob(ln, off, side)))
+            found.sort(key=lambda t: -t[0])
+            main = found[0][1] if found else None
+            sub = None
+            for _, g in found:
+                if main is None or g is main:
+                    continue
+                if abs(g["x0"] - main["x0"]) >= 20 or \
+                        abs(g["slope"] - main["slope"]) > 0.6 * max(
+                            abs(main["slope"]), 1e-12):
+                    sub = g
+                    break
+            return main, sub
+
+        def _glob(ln, off, side):
+            """Serialize into GLOBAL x-coordinates (windows are local)."""
+            return {
+                "side": side,
+                "slope": float(ln.slope),
+                "intercept": float(ln.intercept) - float(ln.slope) * off,
+                "log_fit": bool(getattr(ln, "log_fit", False)),
+                "log_slope": float(getattr(ln, "log_slope", 0.0) or 0.0),
+                "log_intercept": (float(getattr(ln, "log_intercept", 0.0) or 0.0)
+                                  - float(getattr(ln, "log_slope", 0.0) or 0.0) * off),
+                "break_x": (int(off + ln.break_index)
+                            if ln.break_index is not None else None),
+                "x0": int(off + ln.first_index), "x1": int(n),
+                "points": [{"ts": str(pp.get("timestamp")),
+                            "price": float(pp.get("price"))}
+                           for pp in (ln.points or ())],
+            }
+
+        upper, sub_u = _scale("HIGH", _cfg_hi)
+        lower, sub_l = _scale("LOW", _cfg_lo)
+        # Viva 09-20 round 10: when a side offers two validated lines and one
+        # of them contradicts the trade direction, the consistent one takes
+        # the MAIN slot (the other is demoted to the light child slot instead
+        # of painting as a solid line that «hangs in the air»).
+        _d = str(direction or "").upper()
+        if _d == "SHORT" and upper is not None and sub_u is not None:
+            if float(upper["slope"]) > 0 and float(sub_u["slope"]) <= 0:
+                upper, sub_u = sub_u, upper
+        elif _d == "LONG" and lower is not None and sub_l is not None:
+            if float(lower["slope"]) < 0 and float(sub_l["slope"]) >= 0:
+                lower, sub_l = sub_l, lower
+        gu = upper
+        gl = lower
+
+        def _ns(d, _fi=None, _li=None):
+            """Shim for the shared law. R99q39b: `last_index` used to be the
+            DRAWING end (always n), so the law believed every edge was tested
+            up to the live bar — that is how an edge whose last pivot sat 100
+            bars back was classified and painted as a boundary. The shim now
+            reports the EVIDENCE window (its own pivots), unless a caller
+            forces a window."""
+            _x0 = int(d.get("x0") or 0) if _fi is None else int(_fi)
+            if _li is not None:
+                _x1 = int(_li)
+            else:
+                _x1 = int(d.get("x1") or n)
+                try:
+                    _px = []
+                    for _q in (d.get("points") or []):
+                        _t = _q.get("ts") or _q.get("timestamp")
+                        if _t is None:
+                            continue
+                        _px.append(int(pd.Timestamp(str(_t)).to_datetime64().astype("datetime64[ns]").astype("int64") // 10**9))
+                    if _px:
+                        _arr = pd.to_datetime(df["timestamp"]).astype("int64").to_numpy() // 10**9
+                        _ix = [int(np.searchsorted(_arr, _v, side="left")) for _v in _px]
+                        if _ix:
+                            _x0 = max(0, min(_ix))
+                            _x1 = min(int(n), max(_ix))
+                except Exception:
+                    pass
+            import types as _t8
+            return _t8.SimpleNamespace(
+                slope=d["slope"], first_index=_x0, last_index=_x1,
+                price_at=lambda X, _d=d: line_y(_d, X))
+
+        _scissor62 = False
+        if gu is not None and gl is not None:
+            # r61 ROLE LAW (HYPE 09-30: the eye reads edges, not window OLS):
+            # at the live bar the UPPER edge must sit ABOVE the lower one. A
+            # scissored pair (the stale rally support now ABOVE the falling
+            # recent-highs edge) is not a pattern — fall back to its sub-line
+            # or to two honest trendlines.
+            if line_y(gu, n) < line_y(gl, n):
+                _gl_ok = None
+                if sub_l is not None and line_y(gu, n) >= line_y(sub_l, n):
+                    _gl_ok = sub_l
+                if _gl_ok is not None:
+                    gl = _gl_ok
+                else:
+                    # R62-ARENA (audit G2): honest = TWO TRENDLINES, not an
+                    # empty chart (the old code blanked both edges here).
+                    _scissor62 = True
+            _trim39 = False
+            if gu is not None and gl is not None and not _scissor62:
+                shape = classify_shape(_ns(gu), _ns(gl), n, df=df)
+                # ── R99q39b (his 10-21 evening: «هندسه گند و بیخوده … چرا یک
+                # پترن درست هم نمیده»). When the two sides were not tested over
+                # the same stretch of tape the law refuses the shape. Instead of
+                # dropping the pair into two «ترند لنگ در هوا» lines, the shape
+                # is re-read on the window BOTH sides really covered — the
+                # smaller, honest pattern that the eye can actually close.
+                if str(shape).upper() in ("NONE", ""):
+                    try:
+                        from analysis.pattern_law import common_window as _cw39
+                        _w39 = _cw39(gu, gl, n, df=df)
+                        if int(_w39.get("span") or 0) >= 12:
+                            _s39, _e39 = int(_w39["start"]), int(_w39["end"])
+                            # ONLY the measurement window moves. The two fitted
+                            # lines are passed through UNCHANGED — a re-fit over
+                            # a narrow window would invent a new, steeper edge
+                            # (the exact way «هندسه گند» happens).
+                            _shape39 = classify_shape(
+                                _ns(gu, _fi=_s39, _li=_e39),
+                                _ns(gl, _fi=_s39, _li=_e39), _e39, df=df)
+                            if str(_shape39).upper() not in ("NONE", "", "TRENDLINE"):
+                                shape = _shape39
+                                _trim39 = True
+                    except Exception:
+                        pass
+            else:
+                shape = 'NONE'
+            if shape in ("NONE", ""):
+                # converging pair = wedge (global coords! the old check mixed
+                # per-window local x and misfired on CRV)
+                _xs = max(gu["x0"], gl["x0"]) if (gu is not None and gl is not None) else 0
+                _g0 = line_y(gu, _xs) - line_y(gl, _xs)
+                _g1 = line_y(gu, n) - line_y(gl, n)
+                same_dir = (gu["slope"] < 0) == (gl["slope"] < 0) and gu["slope"] != 0
+                if same_dir and 0 < _g1 < _g0:
+                    shape = "WEDGE_FALLING" if gu["slope"] < 0 else "WEDGE_RISING"
+            if shape not in ("NONE", ""):
+                # R68: A pattern that has FRESHLY BROKEN OUT is the very trade to show
+                # (CryptoCove breakout signature) — do not kill the shape on a fresh break!
+                # Only demote if price has drifted astronomically far (>6.0×ATR) away.
+                _a = _atr(df)
+                _c = float(df["close"].iloc[-1])
+                _u = line_y(gu, n)
+                _l = line_y(gl, n)
+                if _a > 0 and (_c > max(_u, _l) + 6.0 * _a
+                               or _c < min(_u, _l) - 4.0 * _a):
+                    shape = "NONE"
+            if shape not in ("NONE", ""):
+                # ── R99q21 LAW STAMP (Viva 10-16: «شرایط درست تشخیص پترن‌ها
+                # … کد نشده»): every drawn shape carries the ONE reference
+                # law's own verdict — the final slug, its bias, its breakout
+                # side and whether the pattern is still actionable (near the
+                # break or freshly broken). Spot and the message layer read
+                # these fields instead of re-guessing from the name.
+                # R99q39b: the pair is painted EXACTLY as fitted — the evidence
+                # window only decided the classification (and is recorded).
+                _cmd20 = _law_stamp({"type": str(shape), "lines": [gu, gl]},
+                                      df, _ns(gu), _ns(gl), replace_type=True)
+                if _trim39:
+                    _cmd20["window_trimmed"] = True
+                    _cmd20["window"] = [int(_w39["start"]), int(_w39["end"])]
+                out.append(_cmd20)
+            else:
+                # No classified shape: BOTH lines still paint, each as its
+                # own TRENDLINE (CRV ruling 09-17: his two hand-drawn blue
+                # lines; FIL: the ascending support from the lows).
+                for _ln, _side in ((gu, "HIGH"), (gl, "LOW")):
+                    if _ln is None:
+                        continue
+                    if _line_contradicts(_ln, _side, direction, df, sub=bool(getattr(_ln, 'child', False))):
+                        continue
+                    out.append(_law_stamp({"type": "TRENDLINE", "lines": [_ln]},
+                                          df, _ns(_ln), None))
+        elif gu is not None or gl is not None:
+            _only = gu if gu is not None else gl
+            out.append(_law_stamp({"type": "TRENDLINE", "lines": [_only]},
+                                  df, _ns(_only), None))
+        for _sub in (sub_u, sub_l):
+            if _sub is not None:
+                # spec §13: child patterns paint thinner & lighter
+                out.append({"type": "TRENDLINE", "lines": [_sub], "child": True})
+        # ── Viva 09-22: «ترندها و خطوط مهم بمونه … خطوط بی‌معنی و متناقض نه».
+        # Two rules on the finished list, applied in ONE place:
+        #   (a) NAME it: every command carries the library's own name, bias,
+        #       shape and rule — the chart chip and the message read this, so
+        #       «همه چیز کانال» or an unlabelled wedge can never happen again;
+        #   (b) DIET it: at most two patterns (one main + one child), at most
+        #       two lines each, no near-duplicate line, nothing farther than
+        #       4×ATR from the live price (that line is history, not context).
+        _live = float(df["close"].iloc[-1])
+        _atr_l = _atr(df)
+        _kept: List[Dict] = []
+        _seen: List[Tuple[str, float, float]] = []
+        for _item in out:
+            _lns = list(_item.get("lines") or [])
+            _good = []
+            for _ln in _lns:
+                _sl = float(_ln.get("slope") or 0.0)
+                _ic = float(_ln.get("intercept") or 0.0)
+                _side = str(_ln.get("side") or "")
+                if (_atr_l > 0 and abs(float(line_y(_ln, n)) - _live) > 4.0 * _atr_l
+                    and not _recently_broken(_ln, n)):
+                    continue                     # dead line projected far away
+                _dup = False
+                for _s2, _sl2, _ic2 in _seen:
+                    if _s2 == _side and abs(_ic - _ic2) <= 0.12 * max(_atr_l, 1e-12) \
+                            and abs(_sl - _sl2) <= 0.10 * max(abs(_sl2), 1e-12):
+                        _dup = True
+                        break
+                if _dup:
+                    continue
+                _seen.append((_side, _sl, _ic))
+                _good.append(_ln)
+            if not _good:
+                continue
+            _kind = str(_item.get("type") or "NONE").upper()
+            _bd = ""
+            if len(_good) == 2:
+                _u = float(line_y(_good[0], n))     # R62 (G7): log-aware
+                _l = float(line_y(_good[1], n))
+                _hi, _lo = max(_u, _l), min(_u, _l)
+                if _atr_l > 0 and _live >= _hi + 0.30 * _atr_l:
+                    _bd = "UP"
+                elif _atr_l > 0 and _live <= _lo - 0.30 * _atr_l:
+                    _bd = "DOWN"
+            _info = _pats_lib.pattern_info(_kind)
+            _item.update({
+                "type": _kind,
+                "lines": _good[:2],
+                "name": _kind,
+                "name_fa": _info["fa"],
+                "bias": _info["bias"],
+                "shape": _info["shape"],
+                "rule_fa": _info["rule_fa"],
+                "break_direction": _bd,
+                "label": _pats_lib.state_label(_kind, _bd),
+            })
+            _kept.append(_item)
+        # main patterns before children; at most 2 main + 1 child
+        # Viva Law: Prioritize 2-line active enclosing patterns (Wedge, Channel, Triangle, Flag) over 1-line markers
+        _mains = [x for x in _kept if not x.get("child")]
+        _mains.sort(key=lambda x: len(x.get("lines") or []) >= 2, reverse=True)
+        _kids = [x for x in _kept if x.get("child")][:1]
+        out = _mains[:2] + _kids
+    except Exception as exc:
+        print(f"render-kit pattern warning: {exc}")
+    # ── Viva 09-20 round 10 post-pass ────────────────────────────────────
+    # His BNB chart: an ASCENDING pattern/trend line on a SHORT was drawn
+    # solid while the honest descending line he hand-drew stayed subtle. Every
+    # emitted line now passes the context filter; a shape that loses one side
+    # is demoted to its surviving TRENDLINE, and a fully contradicted pattern
+    # is dropped instead of crowding the canvas.
+    try:
+        _dir10 = str(direction or "").upper()
+        if _dir10 in ("LONG", "SHORT"):
+            _filtered: List[Dict] = []
+            for _p in out:
+                _lns = list(_p.get("lines") or [])
+                if not _lns:
+                    _filtered.append(_p)
+                    continue
+                # R62-ARENA (audit G3): a classified TWO-EDGE pattern keeps its
+                # geometry — a rising wedge's rising upper edge IS the pattern
+                # on its own SHORT; only loose trendlines face the filter.
+                if len(_lns) == 2 and str(_p.get("type") or "").upper() not in ("TRENDLINE", "NONE", ""):
+                    _filtered.append(_p)
+                    continue
+                _keep = [ln for ln in _lns
+                         if not _line_contradicts(ln, str(ln.get("side") or "HIGH"),
+                                                  _dir10, df)]
+                if not _keep:
+                    continue
+                if len(_keep) != len(_lns) and _p.get("type") not in ("TRENDLINE",):
+                    _filtered.append({"type": "TRENDLINE", "lines": _keep})
+                else:
+                    _filtered.append({**_p, "lines": _keep})
+            out = _filtered
+    except Exception:
+        pass
+    # trading range: two tested horizontals wide enough to matter
+    try:
+        from analysis.indicators import pivots as _piv
+        ph, pl = _piv(df.reset_index(drop=True), 2, 2)
+        atr = _atr(df)
+        if ph and pl and atr > 0:
+            last = float(df["close"].iloc[-1])
+            # R67 (ETC 15M round-7: the 8.75–8.91 rectangle never drew) — the
+            # last-8-pivot window floods with POST-BREAKOUT micro pivots and
+            # the real bound levels fall out of it. Bounds are now the widest
+            # TESTED clusters (≥2 touches within 0.4×ATR) among the last 16
+            # pivots: the top cluster with the highest price and the bottom
+            # cluster with the lowest, exactly the box the eye sees.
+            def _cluster_bound(pivots, want_high: bool):
+                pts = [float(p["price"]) for p in pivots[-16:]]
+                if not pts:
+                    return None
+                tol = 0.4 * _atr(df)
+                best = None
+                for v in sorted(set(round(x, 10) for x in pts), reverse=want_high):
+                    touches = sum(1 for x in pts if abs(x - v) <= tol)
+                    if touches >= 2:
+                        best = v
+                        break
+                if best is None:
+                    best = (max(pts) if want_high else min(pts))
+                return best
+            rhi = _cluster_bound(ph, want_high=True)
+            rlo = _cluster_bound(pl, want_high=False)
+            if rhi is None:
+                rhi = min((float(p["price"]) for p in ph[-8:]), default=None)
+            if rlo is None:
+                rlo = max((float(p["price"]) for p in pl[-8:]), default=None)
+            # R67 POST-BREAK RECTANGLE (Viva 10-03: «در چارت ۱۵ دقیقه اتریوم
+            # کلاسیک ما یک الگوی مستطیل داریم چرا رسم نشده؟؟») — the range the
+            # setup breaks out of IS the pattern; the old `rlo<=last<=rhi`
+            # gate dropped the box exactly at the breakout, i.e. precisely
+            # when he is watching. The box survives a FRESH break: a tested
+            # bound pivots within the last 25 bars and price still within
+            # 1.2×ATR of the broken edge.
+            _rect_brk = ""
+            if rhi and rlo and rhi - rlo >= 2.2 * atr and not (rlo <= last <= rhi):
+                _recent_px = [float(p["price"]) for p in ph[-8:] + pl[-8:]]
+                _recent_ix = [int(p.get("index", 0)) for p in ph[-8:] + pl[-8:]]
+                _fresh = bool(_recent_ix) and (len(df) - 1 - max(_recent_ix)) <= 25
+                _near = _atr(df) > 0 and min(abs(last - rhi), abs(last - rlo)) <= 1.2 * _atr(df)
+                if _fresh and _near:
+                    _rect_brk = "UP" if last > rhi else "DOWN"
+            if rhi and rlo and rhi - rlo >= 2.2 * atr and (rlo <= last <= rhi or _rect_brk):
+                # Viva 09-20 time-axis law: the range box is anchored to the
+                # oldest tested pivot's timestamp, never to the live candle.
+                _rx = min([int(p.get("index", 0)) for p in ph[-8:]]
+                          + [int(p.get("index", 0)) for p in pl[-8:]],
+                          default=0)
+                try:
+                    _rts = (str(df["timestamp"].iloc[max(0, min(_rx, len(df) - 1))])
+                            if "timestamp" in df.columns else "")
+                except Exception:
+                    _rts = ""
+                out.append(_law_stamp(
+                    {"type": "RANGE", "hi": rhi, "lo": rlo,
+                     "x0": int(max(0, _rx)), "ts0": _rts,
+                     **({"broken": _rect_brk} if _rect_brk else {})},
+                    df, {"slope": 0.0, "intercept": float(rhi)},
+                    {"slope": 0.0, "intercept": float(rlo)}))
+    except Exception:
+        pass
+    # ── Viva 09-20 (his AAVE correction chart): three near-parallel descending
+    # «TRENDLINE» labels on one canvas. Validated lines are still allowed to
+    # differ — but a line that reads as the SAME line (same side, within
+    # 0.35×ATR at both ends) is drawn once, and each side keeps at most two
+    # parent lines plus one child. This trims stacked twins, never the geometry.
+    try:
+        _atr_d = _atr(df)
+        _n_d = len(df)
+        if _atr_d > 0 and _n_d > 10:
+            _mid_x = _n_d / 2.0
+            _end_x = float(_n_d)
+            # r59.2 (Viva 09-29, «بعضی چارتها خط‌خطی و شلوغ شده .. برای یک
+            # ناحیه چند ترند میکشه»): ONE parent line per side — a second
+            # parent is the clutter he circled; a child survives only if it
+            # is CLEARLY separated (≥0.8×ATR at both ends) from the parent.
+            _kept = {"HIGH": [], "LOW": []}   # (p_mid, p_end, child)
+            _limits = {"HIGH": [1, 1], "LOW": [1, 1]}  # [parents, children]
+            _counts = {"HIGH": [0, 0], "LOW": [0, 0]}
+
+            def _same_line(side, sl, ic, child):
+                pm, pe = sl * _mid_x + ic, sl * _end_x + ic
+                _tol = 0.80 * _atr_d if child else 0.55 * _atr_d
+                for qm, qe, _c in _kept.get(side, []):
+                    if abs(pm - qm) <= _tol and abs(pe - qe) <= _tol:
+                        return True
+                return False
+
+            def _admit(side, sl, ic, child):
+                if side not in _counts:
+                    return False
+                idx = 1 if child else 0
+                if _counts[side][idx] >= _limits[side][idx]:
+                    return False
+                if _same_line(side, sl, ic, child):
+                    return False
+                _counts[side][idx] += 1
+                _kept[side].append((sl * _mid_x + ic, sl * _end_x + ic, child))
+                return True
+
+            _trimmed = []
+            for _p in out:
+                if _p.get("type") == "RANGE":
+                    _trimmed.append(_p)
+                    continue
+                _survive = [ln for ln in (_p.get("lines") or [])
+                            if _admit(str(ln.get("side") or ""), float(ln["slope"]),
+                                      float(ln["intercept"]), bool(_p.get("child")))]
+                if not _survive:
+                    continue
+                if len(_survive) == len(_p.get("lines") or []):
+                    _trimmed.append(_p)
+                elif _p.get("type") == "TRENDLINE":
+                    _trimmed.append({**_p, "lines": _survive})
+                else:
+                    # a wedge/channel that lost a side is honestly just a line
+                    _trimmed.append({**_p, "type": "TRENDLINE", "lines": _survive})
+            if _trimmed:
+                out = _trimmed
+    except Exception:
+        pass
+    # r61 THE 16-PATTERN LAW (Viva 09-30: poster rules from the international
+    # source, coded): the pivot-sequence family the two-line fitter can never
+    # see — double top/bottom, H&S (+inverse), cup & handle. At most ONE,
+    # alive near price, its neckline not a duplicate of a drawn line.
+    try:
+        _atr_p = _atr(df)
+        if _atr_p > 0 and len(df) >= 40:
+            # R67 FLAG/PENNANT vocabulary (Viva 10-03: «۱۶ تا الگو داریم چرا
+            # فقط چند مورد وج پیدا میکنه فقط؟؟») — pole + counter-drift mini
+            # channel (flag) or converging mini triangle (pennant); render
+            # vocabulary only, alert detection untouched this round.
+            try:
+                # Viva Rule: Mini flag/pennants must NEVER conflict with or clutter major patterns!
+                _MAJOR21 = ("TRIANGLE", "TRIANGLE_SYMMETRICAL", "TRIANGLE_ASCENDING",
+                            "TRIANGLE_DESCENDING", "WEDGE_FALLING", "WEDGE_RISING",
+                            "CHANNEL", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING",
+                            "CHANNEL_FLAT", "RECTANGLE", "BROADENING")
+                _has_major_shape = any(str(p.get("type")) in _MAJOR21 for p in out)
+                if not _has_major_shape:
+                    from analysis.patterns16 import detect_flag_pennant as _dfp67
+                    for _fp67 in _dfp67(df.reset_index(drop=True), _atr_p):
+                        _neck67 = float(_fp67.get("neckline") or 0.0)
+                        if abs(_neck67 - float(df["close"].iloc[-1])) > 4.0 * _atr_p:
+                            continue
+                        # R99q21: the flag/pennant carries the SAME law verdict
+                        # as every other shape (its mini-channel pair is the
+                        # pair the law reads) — no shape ships without one.
+                        _fl67 = [x for x in (_fp67.get("lines") or []) if isinstance(x, dict)]
+                        if len(_fl67) >= 2:
+                            _fp67 = _law_stamp(_fp67, df, _fl67[0], _fl67[1])
+                        elif _fl67:
+                            _fp67 = _law_stamp(_fp67, df, _fl67[0], None)
+                        out.append(_fp67)
+                        break
+            except Exception:
+                pass
+            from analysis.patterns16 import detect_pivot_patterns as _dpp16
+            _have_sides = [(float(ln["slope"]) * (len(df) - 1) + float(ln["intercept"]),
+                            str(ln.get("side") or ""))
+                           for it in out for ln in (it.get("lines") or [])
+                           if "slope" in ln and "intercept" in ln]
+            for _pp in _dpp16(df.reset_index(drop=True), _atr_p):
+                _neck_v = float(_pp.get("neckline") or 0.0)
+                if abs(_neck_v - float(df["close"].iloc[-1])) > 6.0 * _atr_p:
+                    continue                       # a fossil, not a live pattern
+                _my_side = str((_pp.get("lines") or [{}])[0].get("side") or "")
+                if any(abs(_neck_v - _v) <= 0.35 * _atr_p and _s == _my_side
+                       for _v, _s in _have_sides):
+                    continue                       # same line already drawn
+                out.append(_pp)
+                break                              # one pivot pattern per chart
+    except Exception:
+        pass
+    # 10-12 (his JUP/ZEC law — POST-classification BY DESIGN): the extension
+    # reshapes only EMITTED trend-family lines (scan edges, spot + setup
+    # charts). Classification, diet and vocabulary see pristine lines, so no
+    # manufactured shape can outrank real ones (R67 FLAG stays). Dead-far
+    # lines were already diet-cut — only LIVE lines extend. Necklines
+    # (H&S/DT/DB), ranges and minis are NOT trends: untouched.
+    try:
+        _EXT73 = {"TRENDLINE", "TRIANGLE", "TRIANGLE_ASCENDING",
+                  "TRIANGLE_DESCENDING", "TRIANGLE_SYMMETRICAL",
+                  "WEDGE", "WEDGE_FALLING", "WEDGE_RISING",
+                  "CHANNEL", "CHANNEL_ASCENDING", "CHANNEL_DESCENDING"}
+        for _p73 in out:
+            if str(_p73.get("type") or "").upper() not in _EXT73:
+                continue
+            _lns73 = list(_p73.get("lines") or [])
+            if not _lns73:
+                continue
+            _p73["lines"] = [extend_line_to_new_base(_ln, df, str((_ln or {}).get("side") or ""))
+                             for _ln in _lns73]
+    except Exception:
+        pass
+    # ── R99q21/R99q22 SELECTION LAW (his 10-16 «پترن‌ها گذشته مارکت هستند که
+    # هیچ فایده‌ای نداره» + his 10-17 seven conditions: price INSIDE the
+    # pattern · near an edge · retesting the broken upper edge from above ·
+    # retesting the broken lower edge from below · or a break that re-entered
+    # the pattern within a candle or two). The law names the state and the ONE
+    # veto is STALE — price has LEFT the pattern and the break is old.
+    try:
+        import os as _os22
+        from analysis.pattern_law import selection_for_shape as _sel22
+        _gate_on22 = str(_os22.getenv("VIVA_NEAR_BREAK_GATE", "1") or "1").strip().lower() \
+            not in ("0", "false", "off", "no")
+        _close22 = float(df["close"].iloc[-1])
+        _atr22 = _atr(df)
+        _kept22 = []
+        for _p22 in out:
+            _info22 = _sel22(_p22, df, _atr22)
+            _p22["select_state"] = _info22.get("state")
+            _p22["break_state"] = _info22.get("state")
+            _p22["near_break"] = bool(_info22.get("ok"))
+            _p22["dist_atr"] = _info22.get("dist_atr")
+            _p22["break_side"] = _info22.get("side") or _p22.get("break_side")
+            if _info22.get("retest_from"):
+                _p22["retest_from"] = _info22["retest_from"]
+            if _info22.get("candle"):
+                _p22["candle_evidence"] = _info22["candle"]
+            if _info22.get("role"):
+                _p22["line_role"] = _info22["role"]
+            _p22["select_why"] = _info22.get("why")
+            # R99q24: a STABLE id for this exact structure, so the engine that
+            # mints a candidate can name the shape it traded instead of «the
+            # first shape on the chart» (the audit's REF-001).
+            try:
+                from analysis.pattern_law import pattern_pid as _ppid24
+                _p22["pid"] = _ppid24(_p22, str(getattr(df, "attrs", {}).get("tf", "") or ""))
+            except Exception:
+                _p22["pid"] = ""
+            if _gate_on22 and not _info22.get("ok") and not include_past_market:
+                print(f"R99q22 past-market pattern dropped: {_p22.get('type')} "
+                      f"[{_p22.get('break_state')} · {_p22.get('dist_atr')} ATR]")
+                continue
+            _kept22.append(_p22)
+        out = _kept22
+    except Exception as _e22s:
+        print(f"selection stamp warning: {_e22s}")
+    # R99q22 cond.6 — the pattern's own lines must reach the live bar
+    try:
+        _atr6 = _atr(df)
+        for _p6 in out:
+            extend_lines_to_live(_p6, df, _atr6)
+    except Exception as _e6:
+        print(f"line-extension warning: {_e6}")
+    return out[:4]
+
+
+
+
+def pattern_live_index(md, bundle=None, tf=None, pats=None) -> int:
+    """R99q19 — the live bar index **in the PATTERN's own coordinate space**.
+
+    The render patterns are fitted on a tail window (render_count) and carry
+    x coords in THAT space; every validator that judged them against the full
+    frame's length silently dropped 100 % of the sloped geometry (his TC
+    «حتی یک پترن درست نمی‌ده»). The fit frame length is stamped by
+    `enrich_render` (`pattern_frame_bars`); legacy chains without it fall back
+    to the longest stored x1 — still the pattern's space — and only then to
+    the bundle frame.
+    """
+    try:
+        _fb = int((md or {}).get("pattern_frame_bars") or 0)
+        if _fb > 0:
+            return _fb - 1
+    except Exception:
+        pass
+    try:
+        _xs = [int(L.get("x1") or 0) for _p in (pats or ())
+               if isinstance(_p, dict)
+               for L in (_p.get("lines") or []) if isinstance(L, dict)]
+        if _xs:
+            return max(_xs)
+    except Exception:
+        pass
+    try:
+        if bundle is not None and tf:
+            _fr = bundle.get(tf)
+            if _fr is not None and len(_fr):
+                return int(len(_fr)) - 1
+    except Exception:
+        pass
+    return 0
+
+
+def enrich_render(candidate, trigger_df: pd.DataFrame,
+                  htf_df: Optional[pd.DataFrame] = None):
+    """THE order-to-render call every setup makes: zones + patterns of the
+    trigger TF, plus higher-TF zones so a 15m setup knows it stands under a
+    4h supply («اینجوری ستاپ اشتباه نمیکنه»)."""
+    md = candidate.metadata
+    # Viva 09-20 time-axis law: the tool's origin timestamp is stamped ONCE,
+    # at the moment the tool is drawn (the same 55-bar window the renderer
+    # paints), and never re-stamped later — so every re-render puts the tool
+    # back on the exact same time coordinate instead of sliding it right.
+    try:
+        if not md.get("tool_anchor_ts") and "timestamp" in trigger_df.columns \
+                and len(trigger_df):
+            md["tool_anchor_ts"] = str(
+                trigger_df["timestamp"].iloc[max(0, len(trigger_df) - 55)])
+    except Exception:
+        pass
+    md["render_zones"] = detect_zones(
+        trigger_df, getattr(candidate, "direction", ""),
+        float(getattr(candidate, "entry_zone_bottom", 0) or 0),
+        float(getattr(candidate, "entry_zone_top", 0) or 0))
+    _log_axis = _chart_will_be_log(candidate, trigger_df)
+    # R64 CANDLE-COUNT LAW: the render patterns are fitted on EXACTLY the
+    # candles the chart shows (analysis.candle_counts) — chart ≡ trade window.
+    try:
+        from analysis.candle_counts import render_count as _cc64
+        _rw64 = _cc64(str(getattr(candidate, "trigger_timeframe", "") or ""), 300)
+    except Exception:
+        _rw64 = 300
+    pats = detect_patterns(trigger_df.tail(_rw64),
+                           getattr(candidate, "direction", ""),
+                           log_axis=_log_axis,
+                           include_past_market=True)
+    # R99q21 NEAR-BREAK GATE (his 10-16: «پترن‌ها در ستاپ‌ها و اسپات هنوز هم
+    # گاهی گذشته مارکت هستند»): a pattern the law stamps `near_break=False`
+    # (FAR_INSIDE / STALE) is not drawn and not cited — past-market shapes were
+    # the single most repeated complaint in this round.
+    _pats_ungated21 = list(pats)      # the confirmation layer's own geometry
+    try:
+        from analysis.pattern_law import gate_patterns as _gate21
+        pats = _gate21(pats, tag=str(getattr(candidate, "signal_id", "") or ""))
+    except Exception as _e21g:
+        print(f"near-break gate warning: {_e21g}")
+    # The gate silences PATTERNS (nothing past-market is drawn or cited) — it
+    # must NEVER starve the confirmation/entry layer: `render_line_watch` (the
+    # calibrated projections the confirm turn reads) is built from the UNGATED
+    # set below, exactly as before this law.
+    # every judged shape (drawn or gated out) is kept here so the ENGINE gate
+    # can tell «this setup stands on a past-market pattern» from «this setup
+    # never had one» — the chart stays clean, the engines stay honest.
+    try:
+        md["pattern_law_all"] = [dict(p) for p in _pats_ungated21 if isinstance(p, dict)]
+    except Exception:
+        md["pattern_law_all"] = []
+    md["render_patterns"] = pats
+    # R99q21 ONE NAME (his 10-16: the same unique id was announced as one
+    # pattern and confirmed as another): every label key is set from the law's
+    # dominant drawn slug, never from three different detectors.
+    try:
+        from analysis.pattern_law import sync_labels as _sync21
+        _sync21(md, pats)
+    except Exception as _e21s:
+        print(f"label sync warning: {_e21s}")
+    # ── R99q19 COORDINATE-SPACE TRUTH (his 10-16, verbatim: «چرا تکنوکلاسیک
+    # هنوز حتی یک پترن درست نمی‌ده ؟؟ ترندلاین‌های ول از گذشته .. پترن رو
+    # نمی‌شناسه»). These patterns are FITTED ON tail(_rw64) — their x coords
+    # live in that window's index space. The setup validators (TC/ALBROX)
+    # compared them with the FULL trigger frame's live index (LIT 1h: 340-bar
+    # frame vs 205-bar fit window) so EVERY sloped pattern failed
+    # «stale-end» and was thrown away; only the RANGE band survived, and the
+    # chart then invented lines from a hull refit. The fit frame is stamped
+    # here so every validator measures in the space the geometry was born in.
+    try:
+        md["pattern_frame_bars"] = int(len(trigger_df.tail(_rw64)))
+        md["pattern_frame_offset"] = int(max(0, len(trigger_df) - _rw64))
+    except Exception:
+        pass
+    # broken legs need a TIME for their break bar too: on a higher display TF
+    # a bare bar index would land the break marker on the wrong candle.
+    try:
+        _slice = trigger_df.tail(_rw64).reset_index(drop=True)
+        _sts = [str(x) for x in _slice["timestamp"].tolist()] \
+            if "timestamp" in _slice.columns else []
+        if _sts:
+            for _pp in pats:
+                for _ln in (_pp.get("lines") or []):
+                    _bx = _ln.get("break_x")
+                    if _bx is not None and not _ln.get("break_ts"):
+                        try:
+                            _ln["break_ts"] = _sts[max(0, min(int(_bx), len(_sts) - 1))]
+                        except Exception:
+                            pass
+    except Exception:
+        pass
+    # Viva 09-20 «قیمت هنوز داخل وج یا کانال یا مثلث قرار داره اما سیگنال
+    # تایید شده .. چرا؟ این اشتباهه»: the confirmation gate needs the pattern's
+    # OWN edges at the alert bar — stored once here (value at the newest window
+    # bar + slope per trigger bar + that bar's timestamp and TF duration), so
+    # evaluate_confirmation can project them onto a later confirm candle and
+    # reject a close that never actually left the pattern.
+    try:
+        # ANY two-line shape is a pattern band: wedge, triangle, channel,
+        # broadening (megaphone), flag — the round-9 containment gate must see
+        # them ALL (Viva's WLD ALBROX chart confirmed a short while price sat
+        # inside a BROADENING shape, which the first version of this list
+        # missed). RANGE keeps its own horizontal band.
+        _band = None
+        _win_len = len(trigger_df.tail(_rw64))
+        for _p in pats:
+            _lns = _p.get("lines") or []
+            if _p.get("type") == "RANGE" and _p.get("hi") and _p.get("lo"):
+                _band = {"kind": "RECTANGLE", "lo": float(_p["lo"]), "hi": float(_p["hi"]),
+                         "slope_lo": 0.0, "slope_hi": 0.0}
+                break
+            if len(_lns) == 2 and str(_p.get("type") or "").upper() not in ("TRENDLINE", "RANGE") \
+                    and not _p.get("child"):
+                _x_last = float(max(0, _win_len - 1))
+                _y1 = line_y(_lns[0], _x_last)
+                _y2 = line_y(_lns[1], _x_last)
+                _lo_ln, _hi_ln = ((_lns[0], _lns[1]) if _y1 <= _y2 else (_lns[1], _lns[0]))
+                _band = {
+                    "kind": str(_p.get("type")),
+                    "lo": float(min(_y1, _y2)), "hi": float(max(_y1, _y2)),
+                    # Δprice/bar right now: identical to the old slope for a
+                    # linear pair, the local tangent for a log-calibrated one
+                    "slope_lo": float(line_tangent(_lo_ln, _x_last)),
+                    "slope_hi": float(line_tangent(_hi_ln, _x_last)),
+                    # R62-ARENA (audit C2): the log intercept lives at x=0 of
+                    # the FIT WINDOW — the projection must add bars to x_last,
+                    # not evaluate the curve at x=bars (≈ the window start).
+                    "log_lo": {"fit": bool(_lo_ln.get("log_fit")),
+                               "slope": float(_lo_ln.get("log_slope") or 0.0),
+                               "intercept": float(_lo_ln.get("log_intercept") or 0.0),
+                               "x_last": _x_last},
+                    "log_hi": {"fit": bool(_hi_ln.get("log_fit")),
+                               "slope": float(_hi_ln.get("log_slope") or 0.0),
+                               "intercept": float(_hi_ln.get("log_intercept") or 0.0),
+                               "x_last": _x_last},
+                }
+                break
+        if _band:
+            try:
+                _ts_series = pd.to_datetime(trigger_df["timestamp"])
+                _band["ts_last"] = str(_ts_series.iloc[-1])
+                _deltas = _ts_series.diff().dt.total_seconds().dropna()
+                _band["tf_minutes"] = float(_deltas.median() / 60.0) if len(_deltas) else 15.0
+            except Exception:
+                _band["ts_last"] = ""
+                _band["tf_minutes"] = 0.0
+            md["pattern_band"] = _band
+    except Exception:
+        pass
+    # Viva 09-21 (round 12: «چرا بعد از شکست ترند رو به بالا پوزیشن شورت
+    # اعلان میشه؟»): the confirmation layer must be able to project each
+    # validated line onto ANY later candle — so the watch carries the first
+    # and last anchor POINTS (timestamp + price), not just window indices.
+    md["render_line_watch"] = [
+        {"side": l.get("side"), "slope": l.get("slope"),
+         "intercept": l.get("intercept"),
+         "log_fit": bool(l.get("log_fit")),
+         "log_slope": float(l.get("log_slope") or 0.0),
+         "log_intercept": float(l.get("log_intercept") or 0.0),
+         "ts0": ((l.get("points") or [{}])[0].get("ts")),
+         "p0": ((l.get("points") or [{}])[0] if (l.get("points") or []) else {}),
+         "p1": ((l.get("points") or [{}])[-1] if (l.get("points") or []) else {}),
+         "break_x": l.get("break_x")}
+        for pp in _pats_ungated21 for l in (pp.get("lines") or [])][:4]
+    # Viva 09-18 (his CRV note): the higher-TF pattern must be ANNOUNCED on
+    # the trigger chart — «وج باید در ۴ ساعته یا روزانه پیدا بشه و اعلام بشه».
+    try:
+        _hp = detect_patterns(htf_df.tail(300),
+                              getattr(candidate, "direction", ""),
+                              log_axis=_chart_will_be_log(candidate, htf_df)) \
+            if htf_df is not None and len(htf_df) >= 60 else []
+        md["render_htf_pattern"] = str(_hp[0]["type"]) if _hp else None
+        # ── 10-12 STALE-BAR PACK (F7): the pill used to hardcode «4H» but
+        # htf_df falls back to 1h (and other callers pass other TFs) — stamp
+        # the real TF inferred from the frame's own step so the note can cite
+        # it honestly («HTF 1H · X» instead of a lying «PAT 4H · X»).
+        try:
+            import pandas as _pd
+            _step = float(_pd.to_datetime(htf_df["timestamp"]).diff().dt.total_seconds().div(60).median() or 0.0)
+            _tags = ((1, "1M"), (5, "5M"), (15, "15M"), (30, "30M"), (60, "1H"),
+                     (120, "2H"), (240, "4H"), (1440, "1D"), (10080, "1W"))
+            md["render_htf_tf"] = min(_tags, key=lambda t: abs(t[0] - _step))[1] if _step > 0 else "4H"
+        except Exception:
+            md["render_htf_tf"] = md.get("render_htf_tf") or "4H"
+    except Exception:
+        md["render_htf_pattern"] = None
+    # FLAG / FLAG-LIMIT: the flag's far edge IS a limit-entry zone
+    for _p in pats:
+        if _p.get("type") in ("FLAG_BULL", "FLAG_BEAR") and _p.get("lines"):
+            _ln = _p["lines"][0]
+            _xe = float(_ln.get("x1", 0))
+            _ye = line_y(_ln, _xe)
+            _atr_f = _atr(trigger_df)      # R62: was `_atr = _atr(...)` → UnboundLocalError on every FLAG
+            _band = max(0.15 * _atr_f, 1e-9)
+            md["render_zones"] = [{
+                "kind": "FLAG-LIMIT",
+                "bottom": _ye - _band, "top": _ye + _band,
+                "x0": max(0, int(_xe) - 6),
+                "bias": "DEMAND" if _p["type"] == "FLAG_BULL" else "SUPPLY",
+                "ts0": str(trigger_df["timestamp"].iloc[
+                    max(0, min(int(_xe) - 6, len(trigger_df) - 1))])
+                if "timestamp" in trigger_df.columns and len(trigger_df) else "",
+            }] + list(md["render_zones"])
+    base = detect_base(trigger_df)
+    if base:
+        md["base_watch"] = base
+        md["base_gate"] = base_gate(getattr(candidate, "direction", ""), base)
+        gate_ladder(candidate, base)
+    if htf_df is not None and len(htf_df) > 45:
+        md["htf_zones"] = detect_zones(htf_df, getattr(candidate, "direction", ""),
+                                       cap=3)
+    return candidate
+
+# ── base / continuation doctrine (Viva 09-16 night) ──────────────────────
+def detect_base(df, box_n: int = 24, atr_mult: float = 3.5,
+                pre_n: int = 20, drift_mult: float = 1.5,
+                tol_frac: float = 0.12):
+    """Spike/trend into a consolidation base (rectangle / wedge / triangle /
+    plain base / IFVG / supply cluster ...).  Returns None when price is not
+    coiling.  Dict: trend UP|DOWN|None, hi, lo, x0, side UP|DOWN|ABOVE|BELOW|
+    None(mid-box), touch_from ABOVE|BELOW|None."""
+    if df is None or len(df) < box_n + pre_n + 5:
+        return None
+    try:
+        hi_all = df["high"].to_numpy(float)
+        lo_all = df["low"].to_numpy(float)
+        cl = df["close"].to_numpy(float)
+    except Exception:
+        return None
+    n = len(df)
+    # the LAST candle is the actor, not part of the base: a break candle must
+    # be able to close outside the box it breaks
+    b_hi = float(hi_all[n - box_n - 1:n - 1].max())
+    b_lo = float(lo_all[n - box_n - 1:n - 1].min())
+    box_h = b_hi - b_lo
+    if box_h <= 0:
+        return None
+    tr = pd.DataFrame({"high": hi_all, "low": lo_all, "close": cl,
+                       "open": np.r_[cl[0], cl[:-1]]})
+    atr = _atr(tr)
+    if not np.isfinite(atr) or atr <= 0 or box_h > atr_mult * atr:
+        return None                                  # still trending, no base
+    drift = cl[n - box_n] - cl[n - box_n - pre_n]
+    if drift > drift_mult * atr:
+        trend = "UP"
+    elif drift < -drift_mult * atr:
+        trend = "DOWN"
+    else:
+        trend = None                                 # pure trading range
+    c = float(cl[-1])
+    tol = max(tol_frac * box_h, 0.35 * atr)
+    if c > b_hi + tol:
+        side, touch = "ABOVE", None
+    elif c < b_lo - tol:
+        side, touch = "BELOW", None
+    elif c >= b_hi - tol:
+        side, touch = "UP", ("ABOVE" if c >= b_hi else "BELOW")
+    elif c <= b_lo + tol:
+        side, touch = "DOWN", ("BELOW" if c <= b_lo else "ABOVE")
+    else:
+        side, touch = None, None
+    return {"trend": trend, "hi": b_hi, "lo": b_lo,
+            "x0": n - box_n, "side": side, "touch_from": touch}
+
+
+def base_gate(direction: str, base) -> str:
+    """Doctrine gate.  'سقف دنبال نزولی، کف دنبال صعودی' = inside a plain
+    range the CEILING feeds shorts and the FLOOR feeds longs (mean reversion
+    edge-to-edge only).  After a spike/trend the base edges are continuation
+    triggers: touch = warning only, break + first trigger-TF close (or the
+    pullback retest of the broken edge) = entry.  No swing high/low may by
+    itself forbid trend continuation."""
+    if not base:
+        return "ALLOW"
+    s, tr, tf = base.get("side"), base.get("trend"), base.get("touch_from")
+    if s is None:
+        return "REJECT-MID"                          # mid-box: no new entry
+    if tr is None:                                   # pure range / channel
+        if s in ("ABOVE", "BELOW"):
+            return "ALLOW"                           # breakout: setup rules
+        if s == "DOWN" and direction == "LONG":
+            return "ALLOW"                           # floor -> long
+        if s == "UP" and direction == "SHORT":
+            return "ALLOW"                           # ceiling -> short
+        return "REJECT-EDGE"                         # no cross-range trade
+    if tr == "UP":
+        if direction == "LONG":
+            if s == "ABOVE" or (s == "UP" and tf == "ABOVE"):
+                return "ALLOW"                       # break close / pullback
+            if s == "UP":
+                return "WARN-CONT"                   # touch: alert only
+            return "REJECT-SIDE"
+        if s == "BELOW" or (s == "DOWN" and tf == "BELOW"):
+            return "ALLOW"                           # base failed -> short
+        if s == "UP":
+            return "WARN-REV"
+        return "REJECT-SIDE"
+    if direction == "SHORT":
+        if s == "BELOW" or (s == "DOWN" and tf == "BELOW"):
+            return "ALLOW"
+        if s == "DOWN":
+            return "WARN-CONT"
+        return "REJECT-SIDE"
+    if s == "ABOVE" or (s == "UP" and tf == "ABOVE"):
+        return "ALLOW"                               # base failed -> long
+    if s == "DOWN":
+        return "WARN-REV"
+    return "REJECT-SIDE"
+
+
+def gate_ladder(candidate, base) -> None:
+    """TPs outside a live range/channel are POST-BREAK only: long ladders may
+    not reach past the ceiling, short ladders not past the floor, until the
+    opposite edge breaks (lifecycle re-activates them)."""
+    if not base or base.get("side") in ("ABOVE", "BELOW"):
+        return
+    lad = (candidate.metadata or {}).get("target_ladder") or {}
+    targets = lad.get("targets") or []
+    if not targets:
+        return
+    if candidate.direction == "LONG":
+        locked = [i for i, t in enumerate(targets) if t > base["hi"] + 1e-9]
+        level = base["hi"]
+    else:
+        locked = [i for i, t in enumerate(targets) if t < base["lo"] - 1e-9]
+        level = base["lo"]
+    if locked:
+        candidate.metadata["tp_gates"] = {"level": float(level),
+                                          "locked": locked}
+
+
+def merge_htf_zones(chart_zones, htf_zones, price, direction: str = "") -> list:
+    """r60.3 (Viva 09-30): «الگوی تایم بالاتر باید جدا رسم بشه» + «اون
+    باکس‌هایی که گفتم اگر در چارت هست باید رسم بشه چرا نمیشه؟». enrich_render
+    always stored the higher-TF zone inventory (md["htf_zones"]) but nothing
+    ever drew it — his 4h OB/supply boxes were invisible on LTF charts. Here
+    the NEAREST HTF box per side joins the draw list under its own «HTF·»
+    family: separate label, one parent per side (DECLUTTER), never trimmed by
+    the chart-TF diet. HTF boxes anchor targets above and stops behind."""
+    out = list(chart_zones or [])
+    sides = {"above": None, "below": None}
+    for z in (htf_zones or []):
+        try:
+            zlo = float(z.get("bottom", z.get("lo", 0)) or 0)
+            zhi = float(z.get("top", z.get("hi", 0)) or 0)
+        except Exception:
+            continue
+        if zhi <= 0 or zhi < zlo:
+            continue
+        mid = 0.5 * (zlo + zhi)
+        side = "above" if zlo > price else ("below" if zhi < price else None)
+        if side is None:
+            continue
+        d = abs(mid - price)
+        if sides[side] is None or d < sides[side][0]:
+            sides[side] = (d, z)
+    for side in ("above", "below"):
+        hit = sides[side]
+        if not hit:
+            continue
+        z = dict(hit[1])
+        z["kind"] = "HTF·" + str(z.get("kind") or "ZONE")
+        z["htf"] = True
+        out.append(z)
+    return out

@@ -1,0 +1,854 @@
+"""Rate-aware Bybit market-data client with caching and endpoint fallback."""
+from __future__ import annotations
+
+import os
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
+import pandas as pd
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+from config import get_settings
+
+TF_MAP = {"1d": "D", "12h": "720", "8h": "360", "4h": "240", "2h": "120", "1h": "60", "30m": "30", "15m": "15", "5m": "5", "3m": "3", "1m": "1"}
+
+_SETTINGS = get_settings()
+_BASE_URLS = [
+    item.strip().rstrip("/")
+    for item in os.getenv(
+        "BYBIT_BASE_URLS", "https://api.bybit.com,https://api.bytick.com"
+    ).split(",")
+    if item.strip()
+]
+
+_SESSION = requests.Session()
+_SESSION.headers.update({"User-Agent": "viva-signal-bot/7.0"})
+_PROXY_URL = os.getenv("BYBIT_PROXY_URL", "").strip()
+if _PROXY_URL:
+    # Optional static outbound proxy for cloud IPs explicitly approved for the
+    # deployment. Never put proxy credentials in source control.
+    _SESSION.proxies.update({"http": _PROXY_URL, "https": _PROXY_URL})
+_RETRY = Retry(
+    total=3,
+    connect=3,
+    read=3,
+    backoff_factor=0.5,
+    status_forcelist=(429, 500, 502, 503, 504),
+    allowed_methods=frozenset(["GET"]),
+    respect_retry_after_header=True,
+)
+_SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY, pool_connections=20, pool_maxsize=20))
+
+_RATE_LOCK = threading.Lock()
+_LAST_REQUEST_AT = 0.0
+_CACHE_LOCK = threading.Lock()
+_CACHE: Dict[Tuple, Tuple[float, object]] = {}
+_LAST_ERROR: Dict[str, float] = {}
+
+
+@dataclass
+class MarketBundle:
+    symbol: str
+    frames: Dict[str, Optional[pd.DataFrame]] = field(default_factory=dict)
+    ticker: Dict = field(default_factory=dict)
+
+    def get(self, timeframe: str) -> Optional[pd.DataFrame]:
+        return self.frames.get(timeframe)
+
+
+# ── Round-15 (Viva 09-21): «برای صرفه‌جویی مصرف هم ببین استفاده الکی نداشته
+# باشیم» — a CLOSED candle cannot change until its own timeframe closes, yet the
+# old cache lived 45 seconds, so every 5-minute discovery pass re-downloaded and
+# re-analysed the very same closed candles for all 40–47 symbols. The cache now
+# lives exactly as long as the candle itself (capped at 30 minutes for safety).
+_TF_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+               "1h": 3600, "2h": 7200, "4h": 14400, "8h": 28800, "12h": 43200,
+               "1d": 86400,
+               # ── round 15 (Viva 09-22): the SPOT engine scans 4h/1d/3d/1w and
+               # no venue serves 3d/1w, so those two are AGGREGATED locally
+               # from the daily tape (see _aggregate_daily).
+               "3d": 259200, "1w": 604800}
+_AGG_FROM_DAILY = {"3d": 3, "1w": 7}
+
+
+def _aggregate_daily(frame: pd.DataFrame, k: int) -> Optional[pd.DataFrame]:
+    """Fold k closed daily candles into one 3d/1w candle (no partial bucket).
+
+    Only COMPLETE buckets are emitted, so a 3d/1w candle is never a half-formed
+    bar pretending to be closed — the confirmation law («کلوز معتبر») stays
+    honest on the spot timeframes.
+    """
+    try:
+        if frame is None or frame.empty:
+            return None
+        d = frame.reset_index(drop=True).copy()
+        d["timestamp"] = pd.to_datetime(d["timestamp"])
+        d = d.sort_values("timestamp")
+        # ── buckets are EPOCH-ALIGNED (every calendar k-th day), never aligned
+        # to the fetch window: a window-aligned bucket would shift its open/
+        # close every time the lookback changed, which is exactly how a 3d bar
+        # can disagree with the daily tape it came from.
+        _ts = d["timestamp"]
+        if getattr(_ts.dt, "tz", None) is not None:
+            _ts = _ts.dt.tz_convert("UTC").dt.tz_localize(None)
+        _day_index = (_ts.astype("int64") // 86_400_000_000_000)
+        # R63: 1970-01-01 was a THURSDAY — a plain epoch bucket made every
+        # «1w» candle run Thu→Wed, while the venue/TradingView week runs
+        # Mon→Sun (a different open/close than the chart he reads). Weekly
+        # buckets are shifted to Monday; 3d stays epoch-aligned.
+        _shift = 3 if int(k) == 7 else 0
+        d["_g"] = ((_day_index + _shift) // k).astype("int64")
+        if d.empty or len(d) < k * 2:
+            return None
+        rows = []
+        for _, g in d.groupby("_g"):
+            if len(g) < k:
+                continue
+            rows.append({
+                "timestamp": pd.Timestamp(g["timestamp"].iloc[0]),
+                "open": float(g["open"].iloc[0]),
+                "high": float(g["high"].max()),
+                "low": float(g["low"].min()),
+                "close": float(g["close"].iloc[-1]),
+                "volume": float(g["volume"].sum()) if "volume" in g else 0.0,
+            })
+        if not rows:
+            return None
+        return pd.DataFrame(rows)
+    except Exception as exc:
+        print(f"aggregate warning: {exc}")
+        return None
+
+_COST = {"kline_calls": 0, "kline_cache_hits": 0, "tape_serves": 0,
+         "tape_syncs": 0, "candles_downloaded": 0}
+
+
+# ── Round-68 TAPE CACHE (Viva 10-11, verbatim: «اول ۳۰۰ تا بگیر نگه‌دار …
+# هر سایکل فقط کندل زنده رو سینک کن … وقتی کندل جدید اومد قدیمی‌ترین حذف»):
+# one canonical CLOSED tape per (venue-route, symbol, TF) is held in memory.
+# A cold tape costs ONE full fetch (≥300 bars); every later call syncs ≤3
+# bars (newly closed + forming) and slices whatever limit the caller asked.
+# All lanes (spot, futures discovery, candidate monitor, trade monitor,
+# pre-break, charts) call get_klines, so all of them inherit this
+# transparently — no caller changes. Freshness law: use_cache=False (the
+# monitor lanes) ALWAYS syncs; use_cache=True syncs at most once per
+# _TAPE_SYNC_MIN_SECONDS. Merge law: first-write-wins per timestamp, so
+# geometry the detector already read can never shift under it, even when a
+# sync falls back to the other venue.
+_TAPE_LOCK = threading.Lock()
+_TAPE: Dict[Tuple[str, str, str], pd.DataFrame] = {}
+_TAPE_LIVE: Dict[Tuple[str, str, str], pd.DataFrame] = {}   # last forming row
+_TAPE_SYNCED_AT: Dict[Tuple[str, str, str], float] = {}
+_TAPE_TOUCHED_AT: Dict[Tuple[str, str, str], float] = {}
+_TAPE_MAX_BARS = 1000
+_TAPE_MAX_TAPES = 500
+_TAPE_COLD_MIN_BARS = 300
+_TAPE_SYNC_BARS = 3
+_TAPE_SYNC_MIN_SECONDS = 10.0
+
+
+def _tape_route(symbol: str) -> str:
+    # Same venue precedence as the old inline path (Ourbit first, Bybit
+    # fallback) — imported locally so tests patching data.ourbit keep working.
+    provider = os.getenv("DATA_PROVIDER", "ourbit").strip().lower()
+    if provider != "bybit":
+        try:
+            from data.ourbit import ourbit_listed
+            if ourbit_listed(symbol):
+                return "ourbit"
+        except Exception:
+            pass
+    return "bybit"
+
+
+def _venue_tail(symbol: str, interval: str, limit: int, closed_only: bool,
+                end_ms: Optional[int] = None) -> Optional[pd.DataFrame]:
+    """ONE fresh venue fetch, bypassing every TTL cache (the tape owns
+    freshness). Ourbit first, Bybit fallback — the old precedence, kept."""
+    global _COST
+    route = _tape_route(symbol)
+    venues = (route,) if route == "bybit" else (route, "bybit")
+    for venue in venues:
+        try:
+            if venue == "ourbit":
+                from data.ourbit import get_ourbit_klines
+                _COST["kline_calls"] += 1
+                frame = get_ourbit_klines(
+                    symbol, interval, limit=limit, closed_only=closed_only,
+                    end_s=int(end_ms / 1000) if end_ms else None,
+                    use_cache=False)
+            else:
+                _COST["kline_calls"] += 1
+                frame = _get_klines_bybit(symbol, interval, limit,
+                                          closed_only, False, end_ms)
+            if frame is not None and not frame.empty:
+                try:
+                    _COST["candles_downloaded"] += int(len(frame))
+                except Exception:
+                    pass
+                return frame
+        except Exception as exc:
+            _log_error_once(f"tape-route:{symbol}:{interval}:{venue}",
+                            f"Tape route failed {symbol} {interval} {venue}: {exc}")
+    return None
+
+
+def _tape_merge(tape: Optional[pd.DataFrame],
+                fetched_closed: pd.DataFrame) -> pd.DataFrame:
+    """Union of tape + newly fetched CLOSED bars. Overlap is discarded
+    (first-write-wins: geometry never shifts); beyond 1000 bars the oldest
+    drop. A still-disjoint fetch (gap > window, e.g. hours without any call
+    on a fast TF) replaces the tape — honest newest-1000, like a refetch."""
+    try:
+        new = fetched_closed.reset_index(drop=True)
+        if tape is None or tape.empty:
+            return new.tail(_TAPE_MAX_BARS).reset_index(drop=True)
+        old = tape.reset_index(drop=True)
+        t_oldest = pd.Timestamp(old["timestamp"].iloc[0])
+        t_newest = pd.Timestamp(old["timestamp"].iloc[-1])
+        _nts = pd.to_datetime(new["timestamp"])
+        older = new[_nts < t_oldest]
+        newer = new[_nts > t_newest]
+        if older.empty and not newer.empty and len(old) >= 2:
+            # Fetched window sits entirely ABOVE the tape: contiguous only
+            # if it starts at the very next bar, else the middle is unknown
+            # (hours without any call) → cold restart, never a gapped tape.
+            step = (t_newest - t_oldest) / max(1, len(old) - 1)
+            try:
+                if (pd.Timestamp(newer["timestamp"].iloc[0]) - t_newest
+                        > step * 1.5):
+                    return new.tail(_TAPE_MAX_BARS).reset_index(drop=True)
+            except Exception:
+                pass
+        merged = pd.concat([older, old, newer], ignore_index=True)
+        merged = merged.drop_duplicates("timestamp").sort_values(
+            "timestamp").reset_index(drop=True)
+        return merged.tail(_TAPE_MAX_BARS).reset_index(drop=True)
+    except Exception as exc:
+        print(f"tape merge warning: {exc}")
+        return tape if tape is not None else fetched_closed
+
+
+def _tape_touch(key: Tuple[str, str, str]) -> None:
+    with _TAPE_LOCK:
+        _TAPE_TOUCHED_AT[key] = time.monotonic()
+        if len(_TAPE) > _TAPE_MAX_TAPES:
+            for _k in sorted(_TAPE_TOUCHED_AT,
+                             key=lambda k: _TAPE_TOUCHED_AT.get(k, 0)
+                             )[:len(_TAPE) - _TAPE_MAX_TAPES]:
+                _TAPE.pop(_k, None)
+                _TAPE_LIVE.pop(_k, None)
+                _TAPE_SYNCED_AT.pop(_k, None)
+                _TAPE_TOUCHED_AT.pop(_k, None)
+
+
+def _tape_serve(symbol: str, interval: str, limit: int, closed_only: bool,
+                fresh: bool) -> Optional[pd.DataFrame]:
+    """Serve `limit` bars from the canonical tape (syncing first).
+
+    fresh=True (use_cache=False callers: the monitor lanes) always syncs;
+    otherwise a sync runs at most once per _TAPE_SYNC_MIN_SECONDS."""
+    global _COST
+    sym = str(symbol).upper()
+    iv = str(interval).lower()
+    want = max(1, int(limit))
+    route = _tape_route(sym)
+    key = (route, sym, iv)
+    now = time.monotonic()
+    with _TAPE_LOCK:
+        tape = _TAPE.get(key)
+        last_sync = _TAPE_SYNCED_AT.get(key, 0.0)
+    have = 0 if tape is None or tape.empty else len(tape)
+    need_full = have <= 0 or (have < min(want, _TAPE_MAX_BARS))
+    do_sync = fresh or need_full or (now - last_sync >= _TAPE_SYNC_MIN_SECONDS)
+    live_row = None
+
+    def _sync_small():
+        # One ≤3-bar sync: merge newly closed, capture the forming bar,
+        # backfill anything missed while no lane called. Returns True when
+        # the venue answered.
+        global _COST
+        _ok = False
+        fetched = _venue_tail(sym, iv, _TAPE_SYNC_BARS, False)
+        if fetched is None or fetched.empty:
+            return False
+        f = fetched.reset_index(drop=True)
+        if len(f) > 1:
+            try:
+                with _TAPE_LOCK:
+                    _cur = _TAPE.get(key)
+                _prev_new = pd.Timestamp(_cur["timestamp"].iloc[-1])
+            except Exception:
+                _prev_new = None
+            # Backfill FIRST (a 15-min discovery gap is 3× 5m bars): bridging
+            # the hole before merging the sync rows keeps the disjoint-rule
+            # (cold restart) for genuinely unbridgeable (>1000-bar) gaps.
+            try:
+                if _prev_new is not None:
+                    _tf_sec = float(_TF_SECONDS.get(iv, 300)) or 300.0
+                    _s_old = pd.Timestamp(f["timestamp"].iloc[0])
+                    _missing = int(round((_s_old - _prev_new).total_seconds()
+                                         / _tf_sec)) - 1
+                    if _missing > 0:
+                        _bf = _venue_tail(
+                            sym, iv, min(_TAPE_MAX_BARS, _missing + 3), True)
+                        if _bf is not None and not _bf.empty:
+                            with _TAPE_LOCK:
+                                _TAPE[key] = _tape_merge(_TAPE.get(key), _bf)
+            except Exception:
+                pass
+            with _TAPE_LOCK:
+                _TAPE[key] = _tape_merge(_TAPE.get(key), f.iloc[:-1])
+            _ok = True
+        with _TAPE_LOCK:
+            _TAPE_LIVE[key] = f.iloc[[-1]].reset_index(drop=True)
+        return _ok
+
+    def _fetch_full(n):
+        fetched = _venue_tail(sym, iv, min(_TAPE_MAX_BARS, max(1, int(n))), True)
+        if fetched is not None and not fetched.empty:
+            with _TAPE_LOCK:
+                _TAPE[key] = _tape_merge(_TAPE.get(key), fetched)
+            return True
+        return False
+
+    if do_sync:
+        with _TAPE_LOCK:
+            _TAPE_SYNCED_AT[key] = now   # claim: concurrent lanes skip us
+        try:
+            if have <= 0:
+                # Cold: ONE full fetch (≥300 bars, his «اول ۳۰۰ تا بگیر»).
+                _fetch_full(max(want, _TAPE_COLD_MIN_BARS))
+                if not closed_only:
+                    _sync_small()   # capture the forming bar too
+            elif have < min(want, _TAPE_MAX_BARS):
+                # Growth: one full-window fetch brings the older bars
+                # (overlap discarded by the merge); live follows if needed.
+                _fetch_full(want)
+                if not closed_only:
+                    _sync_small()
+            else:
+                _sync_small()
+            with _TAPE_LOCK:
+                tape = _TAPE.get(key)
+            _COST["tape_syncs"] += 1
+        except Exception as exc:
+            print(f"tape sync warning {sym} {iv}: {exc}")
+            with _TAPE_LOCK:
+                _TAPE_SYNCED_AT[key] = last_sync   # failed: next lane retries
+                tape = _TAPE.get(key)
+    with _TAPE_LOCK:
+        tape = _TAPE.get(key)
+        if live_row is None:
+            live_row = _TAPE_LIVE.get(key)
+    if tape is None or tape.empty:
+        return None
+    _tape_touch(key)
+    _COST["tape_serves"] += 1
+    try:
+        closed_all = tape.tail(want).reset_index(drop=True).copy(deep=True)
+        if closed_only or live_row is None or live_row.empty:
+            return closed_all
+        live = live_row.reset_index(drop=True).copy(deep=True)
+        if pd.Timestamp(live["timestamp"].iloc[0]) <= pd.Timestamp(closed_all["timestamp"].iloc[-1]):
+            return closed_all   # forming bar already closed & merged — no dup
+        # Live contract (same as the old path): len INCLUDES the forming bar.
+        keep = (closed_all.iloc[-(want - 1):].reset_index(drop=True) if want > 1
+                else closed_all.iloc[0:0])
+        return pd.concat([keep, live], ignore_index=True)
+    except Exception as exc:
+        print(f"tape serve warning {sym} {iv}: {exc}")
+        return None
+
+
+def _venue_history(symbol: str, interval: str, limit: int, closed_only: bool,
+                   end_ms: int) -> Optional[pd.DataFrame]:
+    """Historical pages (end_ms): direct venue fetch, ourbit-then-bybit,
+    never cached — the old path for backfills/pagination."""
+    return _venue_tail(symbol, interval, limit, closed_only, end_ms=end_ms)
+
+
+def closed_candle_ttl(interval: str, cap: Optional[int] = None) -> int:
+    """Seconds until this timeframe's next close (min 20s).
+    HTF candles (4h, 8h, 12h, 1d, 3d, 1w) cache until their actual close
+    to prevent repetitive API calls and reduce Railway CPU / network costs."""
+    try:
+        sec = int(_TF_SECONDS.get(str(interval).lower(), 300))
+        remaining = int(sec - (time.time() % sec)) + 2
+        _cap = cap if cap is not None else sec
+        return int(max(20, min(remaining, _cap)))
+    except Exception:
+        return 45
+
+
+def cost_counters() -> dict:
+    return dict(_COST)
+
+
+def _throttle() -> None:
+    global _LAST_REQUEST_AT
+    with _RATE_LOCK:
+        wait = _SETTINGS.bybit_min_request_interval - (time.monotonic() - _LAST_REQUEST_AT)
+        if wait > 0:
+            time.sleep(wait)
+        _LAST_REQUEST_AT = time.monotonic()
+
+
+def _log_error_once(key: str, message: str, cooldown: int = 60) -> None:
+    now = time.monotonic()
+    if now - _LAST_ERROR.get(key, 0) >= cooldown:
+        print(message)
+        _LAST_ERROR[key] = now
+
+
+def _cache_get(key: Tuple):
+    with _CACHE_LOCK:
+        item = _CACHE.get(key)
+        if not item or item[0] <= time.monotonic():
+            if item:
+                _CACHE.pop(key, None)
+            return None
+        value = item[1]
+        return value.copy(deep=True) if isinstance(value, pd.DataFrame) else value
+
+
+def _cache_set(key: Tuple, value, ttl: int) -> None:
+    stored = value.copy(deep=True) if isinstance(value, pd.DataFrame) else value
+    with _CACHE_LOCK:
+        _CACHE[key] = (time.monotonic() + ttl, stored)
+        if len(_CACHE) > 400:   # Railway RAM guard (Viva 09-16): hard cap
+            for _k in sorted(_CACHE, key=lambda k: _CACHE[k][0])[:len(_CACHE) - 400]:
+                _CACHE.pop(_k, None)
+
+
+def clear_market_cache() -> None:
+    with _CACHE_LOCK:
+        _CACHE.clear()
+    with _TAPE_LOCK:   # round-68: the tapes are cache too (test determinism)
+        _TAPE.clear()
+        _TAPE_LIVE.clear()
+        _TAPE_SYNCED_AT.clear()
+        _TAPE_TOUCHED_AT.clear()
+
+
+_BYBIT_BLOCKED_UNTIL: float = 0.0
+
+def _request(path: str, params: Dict) -> Optional[Dict]:
+    global _BYBIT_BLOCKED_UNTIL
+    now_m = time.monotonic()
+    if now_m < _BYBIT_BLOCKED_UNTIL:
+        return None
+    last_error = ""
+    blocked = False
+    for base in _BASE_URLS:
+        url = f"{base}{path}"
+        try:
+            _throttle()
+            response = _SESSION.get(url, params=params, timeout=_SETTINGS.bybit_timeout_seconds)
+            if response.status_code in (403, 451):
+                last_error = f"HTTP {response.status_code} from {base}"
+                blocked = True
+                continue
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("retCode") != 0:
+                last_error = str(payload.get("retMsg") or "unknown Bybit error")
+                continue
+            return payload
+        except Exception as exc:
+            last_error = str(exc)
+    if blocked:
+        # Cooldown Bybit requests for 180s when geo-blocked (403/451) to save Railway CPU/traffic
+        _BYBIT_BLOCKED_UNTIL = time.monotonic() + 180.0
+    _log_error_once(
+        f"{path}:{params.get('symbol', '')}",
+        f"Bybit request failed {path} {params.get('symbol', '')}: {last_error}",
+    )
+    return None
+
+
+def _parse_klines(raw: List[List]) -> Optional[pd.DataFrame]:
+    if not raw:
+        return None
+    rows = list(reversed(raw))
+    df = pd.DataFrame(
+        rows,
+        columns=["timestamp", "open", "high", "low", "close", "volume", "turnover"],
+    )
+    for col in ["open", "high", "low", "close", "volume", "turnover"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["timestamp"] = pd.to_datetime(
+        pd.to_numeric(df["timestamp"], errors="coerce"), unit="ms", utc=True
+    ).dt.tz_localize(None)
+    return df.dropna().drop_duplicates("timestamp").sort_values("timestamp").reset_index(drop=True)
+
+
+def get_klines(
+    symbol: str,
+    interval: str,
+    limit: int = 200,
+    closed_only: bool = True,
+    use_cache: bool = True,
+    end_ms: Optional[int] = None,
+) -> Optional[pd.DataFrame]:
+    """Fetch candles for `symbol` — Ourbit first (execution venue), Bybit
+    fallback for symbols Ourbit doesn't list (env DATA_PROVIDER).
+
+    Round-68: the live path is served from the canonical per-symbol/TF tape
+    (cold-fetch once, then ≤3-bar syncs); historical end_ms pages still go
+    direct to the venue, exactly as before."""
+    global _COST
+    # ── 3d / 1w exist only as AGGREGATES of the daily tape (round 15 spot).
+    # The 1d leg now rides the tape too: no more 900-bar downloads.
+    _iv = str(interval).lower()
+    if _iv in _AGG_FROM_DAILY:
+        _k = int(_AGG_FROM_DAILY[_iv])
+        _base = get_klines(symbol, "1d", min(1000, int(limit) * _k + _k + 2),
+                           closed_only=closed_only, use_cache=use_cache)
+        _agg = _aggregate_daily(_base, _k)
+        if _agg is not None and int(limit) > 0:
+            _agg = _agg.tail(int(limit)).reset_index(drop=True)
+        return _agg
+    if end_ms is not None:
+        # Historical/backfill page — direct venue fetch, never cached.
+        return _venue_history(symbol, interval, limit, closed_only, end_ms)
+    _route_key = ("route", str(symbol).upper(), str(interval).lower(),
+                  int(limit), bool(closed_only))
+    if use_cache:
+        cached = _cache_get(_route_key)
+        if cached is not None and not cached.empty:
+            _COST["kline_cache_hits"] += 1
+            return cached
+    frame = _tape_serve(symbol, interval, limit, closed_only=closed_only,
+                        fresh=not use_cache)
+    if frame is not None and not frame.empty and use_cache:
+        _cache_set(_route_key, frame,
+                   closed_candle_ttl(interval) if closed_only
+                   else _SETTINGS.bybit_cache_seconds)
+    return frame
+
+
+def _get_klines_bybit(
+    symbol: str,
+    interval: str,
+    limit: int = 200,
+    closed_only: bool = True,
+    use_cache: bool = True,
+    end_ms: Optional[int] = None,
+) -> Optional[pd.DataFrame]:
+    """Fetch up to 1000 bars. Use get_klines_paginated for longer history."""
+    if interval not in TF_MAP:
+        _log_error_once(f"interval:{interval}", f"Unknown interval: {interval}")
+        return None
+    requested = min(max(int(limit), 1), 1000)
+    key = ("kline", symbol.upper(), interval, requested, closed_only, end_ms)
+    if use_cache and end_ms is None:
+        cached = _cache_get(key)
+        if cached is not None:
+            return cached
+
+    fetch_limit = min(requested + (1 if closed_only and end_ms is None else 0), 1000)
+    params = {
+        "category": "linear",
+        "symbol": symbol.upper(),
+        "interval": TF_MAP[interval],
+        "limit": fetch_limit,
+    }
+    if end_ms is not None:
+        params["end"] = int(end_ms)
+    payload = _request("/v5/market/kline", params)
+    raw = ((payload or {}).get("result") or {}).get("list") or []
+    df = _parse_klines(raw)
+    if df is None or df.empty:
+        return None
+
+    # With no historical end, the newest row is the currently forming candle.
+    if closed_only and end_ms is None and len(df) > 1:
+        df = df.iloc[:-1].reset_index(drop=True)
+    if len(df) > requested:
+        df = df.iloc[-requested:].reset_index(drop=True)
+    if use_cache and end_ms is None:
+        _cache_set(key, df, _SETTINGS.bybit_cache_seconds)
+    return df
+
+
+def get_klines_paginated(
+    symbol: str, interval: str, limit: int, closed_only: bool = True
+) -> Optional[pd.DataFrame]:
+    """Fetch historical bars backwards without silently truncating at 1000."""
+    remaining = max(1, int(limit))
+    frames: List[pd.DataFrame] = []
+    end_ms: Optional[int] = None
+    first = True
+    while remaining > 0:
+        batch_size = min(remaining + (1 if first and closed_only else 0), 1000)
+        frame = get_klines(
+            symbol,
+            interval,
+            batch_size,
+            closed_only=closed_only if first else False,
+            use_cache=first,
+            end_ms=end_ms,
+        )
+        if frame is None or frame.empty:
+            break
+        frames.append(frame)
+        remaining -= len(frame)
+        oldest = pd.Timestamp(frame["timestamp"].iloc[0])
+        end_ms = int(oldest.timestamp() * 1000) - 1
+        first = False
+        if len(frame) < min(batch_size, 1000):
+            break
+    if not frames:
+        return None
+    result = pd.concat(frames, ignore_index=True)
+    result = result.drop_duplicates("timestamp").sort_values("timestamp").reset_index(drop=True)
+    return result.iloc[-limit:].reset_index(drop=True)
+
+
+def get_tickers(use_cache: bool = True, category: str = "linear") -> List[Dict]:
+    # R64.4: category-aware — the spot line-watch reads the SPOT tape (one
+    # request covers every symbol), perps keep the legacy call shape.
+    cat = "spot" if str(category or "").lower() == "spot" else "linear"
+    key = ("tickers", cat)
+    if use_cache:
+        cached = _cache_get(key)
+        if cached is not None:
+            return [dict(item) for item in cached]
+    payload = _request("/v5/market/tickers", {"category": cat})
+    items = ((payload or {}).get("result") or {}).get("list") or []
+    result = [dict(item) for item in items]
+    if result:
+        _cache_set(key, result, 30 if cat == "spot" else 60)
+    return result
+
+
+def get_instruments(use_cache: bool = True) -> List[Dict]:
+    key = ("instruments", "linear")
+    if use_cache:
+        cached = _cache_get(key)
+        if cached is not None:
+            return [dict(item) for item in cached]
+    cursor = ""
+    result: List[Dict] = []
+    while True:
+        params = {"category": "linear", "limit": 1000}
+        if cursor:
+            params["cursor"] = cursor
+        payload = _request("/v5/market/instruments-info", params)
+        block = (payload or {}).get("result") or {}
+        result.extend(dict(item) for item in (block.get("list") or []))
+        cursor = block.get("nextPageCursor") or ""
+        if not cursor:
+            break
+    if result:
+        _cache_set(key, result, 6 * 3600)
+    return result
+
+
+def _resample_ohlcv(frame: Optional[pd.DataFrame], rule: str, min_bars: int) -> Optional[pd.DataFrame]:
+    """Build a higher closed candle locally from a lower structural tape.
+
+    The input timestamps are candle-open timestamps. Buckets are therefore
+    left-labeled/left-closed, and incomplete first/last buckets are discarded.
+    This is used only where the source timeframe has enough history; long
+    history (1D) remains a direct tape so 3D/1W patterns do not silently lose
+    context.
+    """
+    try:
+        if frame is None or frame.empty:
+            return None
+        d = frame.copy()
+        d["timestamp"] = pd.to_datetime(d["timestamp"])
+        d = d.sort_values("timestamp").drop_duplicates("timestamp")
+        d = d.set_index("timestamp")
+        agg = d.resample(rule, label="left", closed="left").agg(
+            {"open": "first", "high": "max", "low": "min",
+             "close": "last", "volume": "sum"}
+        )
+        counts = d["close"].resample(rule, label="left", closed="left").count()
+        expected = max(1, int(min_bars))
+        agg = agg[counts >= expected].dropna(subset=["open", "high", "low", "close"])
+        if agg.empty:
+            return None
+        return agg.reset_index().reset_index(drop=True)
+    except Exception as exc:
+        _log_error_once(f"resample:{rule}", f"local resample failed {rule}: {exc}")
+        return None
+
+
+def _derive_from_base(
+    base_15m: Optional[pd.DataFrame],
+    base_4h: Optional[pd.DataFrame],
+    daily: Optional[pd.DataFrame],
+    requested: tuple,
+    limits: Dict[str, int],
+    base_1h: Optional[pd.DataFrame] = None,
+) -> Dict[str, Optional[pd.DataFrame]]:
+    """Derive exact multiples locally where this saves a venue request.
+
+    5m is always a real venue tape (never reconstructed from 15m).
+    1h/30m come from 15m; 8h/12h come from 4h; 3d/1w come from 1d.
+    4h and 1d themselves remain direct because they carry the long structural
+    history required by the pattern engine.
+    """
+    out: Dict[str, Optional[pd.DataFrame]] = {}
+    for tf in requested:
+        if tf == "5m":
+            # 5m is filled by the caller from the direct venue tape.
+            out[tf] = None
+        elif tf == "15m":
+            out[tf] = base_15m
+        elif tf == "4h":
+            out[tf] = base_4h
+        elif tf == "1d":
+            out[tf] = daily
+        elif tf == "1h":
+            # R64: the direct 1h tape (300+ bars) wins when fetched — a 15m
+            # base can only ever give 250 hourly candles in one venue call.
+            out[tf] = base_1h.tail(int(limits.get("1h", 340))).reset_index(drop=True) \
+                if base_1h is not None and len(base_1h) else \
+                _resample_ohlcv(base_15m, "1h", 4)
+        elif tf == "30m":
+            out[tf] = _resample_ohlcv(base_15m, "30min", 2)
+        elif tf == "2h":
+            # r48: the 2h trigger lane rides the SAME 15m base (8×15m) — no
+            # extra venue request, honest OHLCV aggregation.
+            # R64: with the direct 1h tape present, 2h = 2×1h (500 candles
+            # from one call instead of 125 from the 15m base).
+            _h2 = _resample_ohlcv(base_1h, "2h", 2) \
+                if base_1h is not None and len(base_1h) else None
+            out[tf] = _h2.tail(int(limits.get("2h", 290))).reset_index(drop=True) \
+                if _h2 is not None and len(_h2) else \
+                _resample_ohlcv(base_15m, "2h", 8)
+        elif tf == "8h":
+            out[tf] = _resample_ohlcv(base_4h, "8h", 2)
+        elif tf == "12h":
+            out[tf] = _resample_ohlcv(base_4h, "12h", 3)
+        elif tf == "3d":
+            out[tf] = _aggregate_daily(daily, 3)
+        elif tf == "1w":
+            out[tf] = _aggregate_daily(daily, 7)
+    return out
+
+
+def get_market_bundle(
+    symbol: str,
+    timeframes=("1d", "4h", "1h", "15m", "5m"),
+    limits: Optional[Dict[str, int]] = None,
+    ticker: Optional[Dict] = None,
+) -> MarketBundle:
+    """Fetch the smallest honest base set, then derive safe higher multiples.
+
+    Cost/accuracy law:
+      * 5m is fetched directly — it cannot be reconstructed from 15m.
+      * 15m is fetched directly and is the operational LTF source.
+      * 1h/30m are resampled from 15m.
+      * 8h/12h are resampled from the direct 4h structural tape.
+      * 3d/1w are resampled from the direct 1d macro tape.
+      * 4h/1d stay direct because reconstructing enough long history from 5m/15m
+        would require pagination and more API calls, not fewer.
+
+    The returned API remains the same MarketBundle, so Telegram formats,
+    lineage links and unique IDs are untouched.
+    """
+    requested = tuple(dict.fromkeys(str(tf).lower() for tf in (timeframes or ())))
+    limits = dict(limits or {})
+    # R64 CANDLE-COUNT LAW: unspecified depths default to the dictated map
+    # (+40 warm-up bars) — detection and chart both read analysis.candle_counts.
+    try:
+        from analysis.candle_counts import CANDLE_COUNTS as _CC64
+        for _tf64 in requested:
+            if _tf64 not in limits and _tf64 in _CC64:
+                limits[_tf64] = int(_CC64[_tf64]) + 40
+    except Exception:
+        pass
+    # Fetch only the base tapes that the caller actually needs. In particular,
+    # a spot-only 4h/8h/12h/1d/3d/1w scan must not pull unused 5m/15m data.
+    need_5m = "5m" in requested
+    # R63 (audit W8): 2h is resampled from the 15m base too — requesting it
+    # alone used to return None (base never fetched).
+    # R64: 1h/2h ride a DIRECT 1h tape (one call, cached until the next 1h
+    # close) — 300 hourly / 250 two-hour candles cannot come from ≤1000 15m.
+    need_1h = any(tf in requested for tf in ("1h", "2h"))
+    need_15m = any(tf in requested for tf in ("15m", "30m"))
+    need_4h = any(tf in requested for tf in ("4h", "8h", "12h"))
+    need_1d = any(tf in requested for tf in ("1d", "3d", "1w"))
+
+    base_5m = get_klines(
+        symbol, "5m", max(300, int(limits.get("5m", 300))), closed_only=True
+    ) if need_5m else None
+
+    # Derived 30m/1h views must retain enough source bars for the detector's
+    # structural windows. Size the 15m base from the requested output history.
+    need_15m_bars = max(
+        int(limits.get("15m", 200)),
+        int(limits.get("30m", 200)) * 2 if "30m" in requested else 0,
+    )
+    base_15m = get_klines(
+        symbol, "15m", min(1000, max(200, need_15m_bars)), closed_only=True
+    ) if need_15m else None
+    need_1h_bars = max(
+        int(limits.get("1h", 340)) if "1h" in requested else 0,
+        int(limits.get("2h", 290)) * 2 + 2 if "2h" in requested else 0,
+    )
+    base_1h = get_klines(
+        symbol, "1h", min(1000, max(200, need_1h_bars)), closed_only=True
+    ) if need_1h else None
+    if need_1h and (base_1h is None or not len(base_1h)) and base_15m is None:
+        # venue without a 1h route: fall back to the legacy 15m-derived path
+        base_15m = get_klines(symbol, "15m", 1000, closed_only=True)
+
+    # Derived 8h/12h views must retain enough source 4h candles to preserve
+    # the same structural lookback that a direct feed would have provided.
+    # r52 CryptoCove counts (his dictation): 8h→170, 12h→210 candles.
+    need_4h_bars = max(
+        int(limits.get("4h", 200)),
+        int(limits.get("8h", 170)) * 2 if "8h" in requested else 0,
+        int(limits.get("12h", 210)) * 3 if "12h" in requested else 0,
+    )
+    base_4h = get_klines(
+        symbol, "4h", max(60, need_4h_bars), closed_only=True
+    ) if need_4h else None
+
+    # 1D is the economical long-history anchor. For 3D/1W, request enough
+    # daily bars to produce the requested number of complete higher bars.
+    # r52 (Viva 09-28): 3d→300 and 1w→210 candles need 906/1477 daily bars —
+    # beyond a single venue call, so anything deep rides the ONE-TIME
+    # history store (fetch deep once, tail-refresh after; Railway cost law).
+    daily_need = int(limits.get("1d", 200))
+    daily_need = max(daily_need, int(limits.get("3d", 300)) * 3 + 6)
+    daily_need = max(daily_need, int(limits.get("1w", 210)) * 7 + 7)
+    daily = None
+    if need_1d:
+        if daily_need > 900:
+            try:
+                from data.history_store import get_deep_daily
+                daily = get_deep_daily(symbol, daily_need)
+            except Exception:
+                daily = None
+        if daily is None:
+            daily = get_klines(symbol, "1d", min(daily_need, 1000),
+                               closed_only=True)
+
+    # Direct fallbacks for unusual requested frames not covered by the local
+    # resampler. They preserve backward compatibility without changing callers.
+    frames = _derive_from_base(base_15m, base_4h, daily, requested, limits,
+                               base_1h=base_1h)
+    for tf in requested:
+        if frames.get(tf) is None and tf not in ("5m", "15m", "4h", "1d", "1h", "30m", "8h", "12h", "3d", "1w"):
+            frames[tf] = get_klines(symbol, tf, int(limits.get(tf, 200)), closed_only=True)
+    # 5m is direct; keep it separate from _derive_from_base to make the
+    # impossible 15m→5m reconstruction explicit.
+    if "5m" in requested:
+        frames["5m"] = base_5m
+    return MarketBundle(symbol=symbol.upper(), frames=frames, ticker=ticker or {})
+
+
+def get_multi_tf(symbol: str) -> Dict[str, Optional[pd.DataFrame]]:
+    """Backward-compatible helper. New code should fetch one MarketBundle."""
+    return get_market_bundle(symbol, ("1d", "4h", "1h", "15m", "5m")).frames
