@@ -238,13 +238,89 @@ def _rel_drift(line, start: float, n: float) -> float:
     return (b / a) - 1.0
 
 
+
+def evidence_window(edge, n: int, df=None) -> Tuple[int, int, int]:
+    """R99q39b — the bars an edge has actually been TESTED over.
+
+    Returns (first, last, touches). An edge fitted on three early pivots and
+    then projected 100 bars into the future has first/last where its pivots
+    are — not where the drawing happens to end. His 10-21 evening, verbatim:
+    «هندسه گند و بیخوده … طبق هندسه درست اصلاحش کن»; the measured case was a
+    WLD 4h «symmetrical triangle» whose upper side was tested over 33 bars
+    while its lower side covered 149 — a shape the eye can never close.
+    """
+    try:
+        fi = getattr(edge, "first_index", None)
+        li = getattr(edge, "last_index", None)
+        pts = getattr(edge, "points", None) or ()
+        if isinstance(edge, dict):
+            # a render dict carries x0/x1 AND its pivots: the pivots are the
+            # evidence, x1 is only where the drawing was told to end.
+            if fi is None:
+                fi = edge.get("x0")
+            if li is None:
+                li = edge.get("x1")
+            pts = edge.get("points") or pts
+        xs = []
+        import pandas as _pd39
+        for q in (pts or ()):
+            try:
+                t = q.get("ts") or q.get("timestamp")
+                if t is None or df is None:
+                    continue
+                xs.append(int(_pd39.Timestamp(str(t)).value))
+            except Exception:
+                pass
+        if df is not None and "timestamp" in getattr(df, "columns", []) and xs:
+            import numpy as _np
+            arr = _pd39.to_datetime(df["timestamp"]).astype("int64").to_numpy()
+            idx = [int(_np.searchsorted(arr, v, side="left")) for v in xs]
+            idx = [min(max(0, i), int(n)) for i in idx]
+            if idx:
+                return min(idx), max(idx), len(idx)
+        first = int(fi or 0)
+        last = int(li if li is not None else n)
+        return max(0, first), max(first, min(int(last), int(n))), len(pts or ())
+    except Exception:
+        return 0, int(n), 0
+
+
+def common_window(upper, lower, n: int, df=None) -> Dict:
+    """R99q39b — the window BOTH edges were tested over.
+
+    A shape is a pair of boundaries drawn over the same stretch of tape. When
+    one side's evidence ends far before the other's, the old law measured and
+    classified the pair on the FULL window anyway, so the missing side was an
+    extrapolation presented as a boundary — the drawing that reads as «گند».
+    Returns {"start","end","span","common","ratio"}: `common` is False when the
+    two sides barely overlap, and then the caller must not publish a shape.
+    """
+    f_u, l_u, t_u = evidence_window(upper, n, df)
+    f_l, l_l, t_l = evidence_window(lower, n, df)
+    start = max(f_u, f_l)
+    end = min(l_u, l_l)
+    span_u = max(1, l_u - f_u)
+    span_l = max(1, l_l - f_l)
+    span = end - start
+    # the ratio is measured against the SHAPE's own union — a side that covers
+    # a fifth of the picture is an extrapolation, whatever the other side does.
+    union = max(1, max(l_u, l_l) - min(f_u, f_l))
+    ratio = span / union
+    ok = bool(span >= 12 and ratio >= 0.40)
+    return {"start": int(start), "end": int(end), "span": int(span),
+            "common": ok, "ratio": ratio,
+            "shrunk": bool(ok and union > span * 1.15),
+            "touches_u": t_u, "touches_l": t_l,
+            "win_u": (f_u, l_u), "win_l": (f_l, l_l), "union": int(union)}
+
+
 def pair_metrics(upper, lower, n: int, df=None, pole_bars: int = 24) -> Dict:
     """Everything the law reads, measured once, in one place."""
     m: Dict = {"ok": False}
     # one edge only = a single trendline (the legacy contract every caller
     # relies on: a lone validated line is TRENDLINE, never NONE)
     m["single"] = (upper is None) != (lower is None)
-    u0, l0 = _price_at(upper, n), _price_at(lower, n)
+    u0, l0 = _price_at(upper, n), _price_at(lower, n)   # role sanity at LIVE
     if u0 is None or l0 is None:
         return m
     # role sanity at the LIVE bar: the upper edge must be above (R62-ARENA P3)
@@ -269,10 +345,28 @@ def pair_metrics(upper, lower, n: int, df=None, pole_bars: int = 24) -> Dict:
     except Exception:
         start = 0
     start = max(0, min(int(start), int(n) - 2))
-    span = max(1, int(n) - start)
+    # ── R99q39b: a pair is only measured where BOTH edges were tested. When the
+    # two evidence windows barely overlap the pair is not a shape (the caller
+    # gets `common=False` and publishes no shape), never a boundary invented by
+    # extrapolation across a hundred bars.
+    _cw = common_window(upper, lower, int(n), df)
+    m["window"] = _cw
+    m["common"] = bool(_cw.get("common"))
+    _end = int(n)
+    if not m["common"]:
+        _end = min(int(n), max(int(_cw.get("end") or 0), start + 8))
+    span = max(1, int(_end) - start)
     w_then = (_price_at(upper, start) or 0.0) - (_price_at(lower, start) or 0.0)
     w_mid = (_price_at(upper, start + span / 2) or 0.0) - (_price_at(lower, start + span / 2) or 0.0)
-    w_now = float(u0) - float(l0)
+    # R99q39b: measure the live end where the EVIDENCE ends, not where the
+    # extrapolation happens to reach.
+    if _end != int(n):
+        _u_end = float(_price_at(upper, _end) or 0.0)
+        _l_end = float(_price_at(lower, _end) or 0.0)
+        w_now = _u_end - _l_end
+        _mid_now = 0.5 * (_u_end + _l_end)
+    else:
+        w_now = float(u0) - float(l0)
     if w_then <= 0 or w_now <= 0:
         return m
     height = max(w_then, w_now)
@@ -284,7 +378,8 @@ def pair_metrics(upper, lower, n: int, df=None, pole_bars: int = 24) -> Dict:
     # converging structure, which is how «کانال، وج شد». The eye compares the
     # band to the PRICE, so the law must too: conv_rel = (w/mid) now ÷ then.
     _mid_then = (_price_at(upper, start) + _price_at(lower, start)) / 2.0
-    _mid_now = (float(u0) + float(l0)) / 2.0
+    if _end == int(n):
+        _mid_now = (float(u0) + float(l0)) / 2.0
     _rel_then = (w_then / _mid_then) if _mid_then else 0.0
     _rel_now = (w_now / _mid_now) if _mid_now else 0.0
     m.update({
@@ -305,8 +400,8 @@ def pair_metrics(upper, lower, n: int, df=None, pole_bars: int = 24) -> Dict:
         # the TAIL (last 12 bars) is what the eye reads — r61 HYPE law: a stale
         # rally leg inflates the window drift while the edge price actually
         # tests is falling. Price-per-bar, plus the relative version.
-        "tail_u": _per_bar(upper, n, 12),
-        "tail_l": _per_bar(lower, n, 12),
+        "tail_u": _per_bar(upper, _end, 12),
+        "tail_l": _per_bar(lower, _end, 12),
     })
     # pole (only meaningful for flag/pennant): the run just BEFORE the pattern
     if df is not None:
@@ -395,6 +490,14 @@ def classify_pair(m: Dict, meta: Optional[Dict] = None) -> str:
     meta = meta if meta is not None else {}
     if not m.get("ok"):
         return "TRENDLINE" if m.get("single") else "NONE"
+    # ── R99q39b: two edges that were never tested over the same stretch of tape
+    # are not a shape. Publishing one was exactly «یک پترن درست هم نمیده» read
+    # backwards: a name with no bounded geometry under it.
+    if m.get("common") is False:
+        _w = m.get("window") or {}
+        _why(meta, f"edges share only {_w.get('span')} bars "
+                   f"(ratio {float(_w.get('ratio') or 0):.2f}) -> not one shape")
+        return "NONE"
     span = int(m["span"])
     if span < 8:
         _why(meta, f"span {span} < 8")

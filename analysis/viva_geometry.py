@@ -445,6 +445,26 @@ def fit_patterns(df: pd.DataFrame, offset: int = 0, lookback: Optional[int] = No
                 continue
             x0 = max(u.first_index, lo.first_index)
             x1 = offset + n - 1
+            # ── R99q39b (his 10-21 evening: «هندسه گند و بیخوده»). The pattern
+            # used to run to the newest bar even when one side's LAST TOUCH was
+            # a hundred bars earlier — the far side of the shape was pure
+            # extrapolation, and its class was read off that extrapolation (the
+            # WLD 4h «broadening wedge» whose upper side was tested only in the
+            # first quarter of the window). The shape is now bounded by the
+            # window BOTH sides were really tested over; only the drawing is
+            # extended (dashed) beyond it.
+            try:
+                _ev_u = max(u.touches) if u.touches else x1
+                _ev_l = max(lo.touches) if lo.touches else x1
+                _shared_end = int(min(_ev_u, _ev_l))
+                _union = max(1, max(_ev_u, _ev_l) - min(
+                    min(u.touches) if u.touches else x0,
+                    min(lo.touches) if lo.touches else x0))
+                if _shared_end - x0 >= MIN_PATTERN_BARS and \
+                        (_shared_end - x0) / _union >= 0.40:
+                    x1 = min(int(_shared_end), int(x1))
+            except Exception:
+                pass
             if x1 - x0 < MIN_PATTERN_BARS:
                 continue
             m = measure(u, lo, x0, x1)

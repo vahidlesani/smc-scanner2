@@ -738,10 +738,36 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
         gu = upper
         gl = lower
 
-        def _ns(d):
+        def _ns(d, _fi=None, _li=None):
+            """Shim for the shared law. R99q39b: `last_index` used to be the
+            DRAWING end (always n), so the law believed every edge was tested
+            up to the live bar — that is how an edge whose last pivot sat 100
+            bars back was classified and painted as a boundary. The shim now
+            reports the EVIDENCE window (its own pivots), unless a caller
+            forces a window."""
+            _x0 = int(d.get("x0") or 0) if _fi is None else int(_fi)
+            if _li is not None:
+                _x1 = int(_li)
+            else:
+                _x1 = int(d.get("x1") or n)
+                try:
+                    _px = []
+                    for _q in (d.get("points") or []):
+                        _t = _q.get("ts") or _q.get("timestamp")
+                        if _t is None:
+                            continue
+                        _px.append(int(pd.Timestamp(str(_t)).to_datetime64().astype("datetime64[ns]").astype("int64") // 10**9))
+                    if _px:
+                        _arr = pd.to_datetime(df["timestamp"]).astype("int64").to_numpy() // 10**9
+                        _ix = [int(np.searchsorted(_arr, _v, side="left")) for _v in _px]
+                        if _ix:
+                            _x0 = max(0, min(_ix))
+                            _x1 = min(int(n), max(_ix))
+                except Exception:
+                    pass
             import types as _t8
             return _t8.SimpleNamespace(
-                slope=d["slope"], first_index=d["x0"], last_index=d["x1"],
+                slope=d["slope"], first_index=_x0, last_index=_x1,
                 price_at=lambda X, _d=d: line_y(_d, X))
 
         _scissor62 = False
@@ -761,8 +787,33 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                     # R62-ARENA (audit G2): honest = TWO TRENDLINES, not an
                     # empty chart (the old code blanked both edges here).
                     _scissor62 = True
+            _trim39 = False
             if gu is not None and gl is not None and not _scissor62:
                 shape = classify_shape(_ns(gu), _ns(gl), n, df=df)
+                # ── R99q39b (his 10-21 evening: «هندسه گند و بیخوده … چرا یک
+                # پترن درست هم نمیده»). When the two sides were not tested over
+                # the same stretch of tape the law refuses the shape. Instead of
+                # dropping the pair into two «ترند لنگ در هوا» lines, the shape
+                # is re-read on the window BOTH sides really covered — the
+                # smaller, honest pattern that the eye can actually close.
+                if str(shape).upper() in ("NONE", ""):
+                    try:
+                        from analysis.pattern_law import common_window as _cw39
+                        _w39 = _cw39(gu, gl, n, df=df)
+                        if int(_w39.get("span") or 0) >= 12:
+                            _s39, _e39 = int(_w39["start"]), int(_w39["end"])
+                            # ONLY the measurement window moves. The two fitted
+                            # lines are passed through UNCHANGED — a re-fit over
+                            # a narrow window would invent a new, steeper edge
+                            # (the exact way «هندسه گند» happens).
+                            _shape39 = classify_shape(
+                                _ns(gu, _fi=_s39, _li=_e39),
+                                _ns(gl, _fi=_s39, _li=_e39), _e39, df=df)
+                            if str(_shape39).upper() not in ("NONE", "", "TRENDLINE"):
+                                shape = _shape39
+                                _trim39 = True
+                    except Exception:
+                        pass
             else:
                 shape = 'NONE'
             if shape in ("NONE", ""):
@@ -792,8 +843,13 @@ def detect_patterns(df: pd.DataFrame, direction: str = "",
                 # side and whether the pattern is still actionable (near the
                 # break or freshly broken). Spot and the message layer read
                 # these fields instead of re-guessing from the name.
+                # R99q39b: the pair is painted EXACTLY as fitted — the evidence
+                # window only decided the classification (and is recorded).
                 _cmd20 = _law_stamp({"type": str(shape), "lines": [gu, gl]},
                                       df, _ns(gu), _ns(gl), replace_type=True)
+                if _trim39:
+                    _cmd20["window_trimmed"] = True
+                    _cmd20["window"] = [int(_w39["start"]), int(_w39["end"])]
                 out.append(_cmd20)
             else:
                 # No classified shape: BOTH lines still paint, each as its

@@ -4709,6 +4709,27 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _xend8 = (min(float(count), float(_bx8))
                           if _bx8 is not None
                           else min(float(count) + _SOLID_PAST_LIVE36, float(_xe)))
+                # ── R99q39b (his 10-21 evening, verbatim: «هندسه گند و بیخوده
+                # … طبق هندسه درست اصلاحش کن»). A bold solid edge is a CLAIM
+                # that the trend is still testing price. The painter used to
+                # run it solid from its first pivot to the live bar no matter
+                # how long ago the last test was — on the WLD 4h spot card the
+                # upper edge's last touch was 105 bars back and the line kept
+                # climbing at ~2.4 %/bar, i.e. +10× by the right edge: a
+                # diagonal through empty space that made the whole picture
+                # unreadable. The solid run now ends where the EVIDENCE ends —
+                # one pivot-span of grace past the last test — and the rest is
+                # the faint dashed context it always was. A genuinely live
+                # edge (last pivot within a few bars of the live candle) is
+                # untouched, so his «ممتد تا بعد از کندل لایو» law still holds.
+                try:
+                    if _pts_x and float(count) > 0:
+                        _ev_span39 = max(_pts_x) - min(_pts_x)
+                        _solid_lim39 = max(_pts_x) + max(6.0, _ev_span39)
+                        if _xend8 > _solid_lim39:
+                            _xend8 = float(max(_solid_lim39, min(_pts_x) + 4.0))
+                except Exception:
+                    pass
                 # spec §13: parent patterns thick & solid, children thin;
                 # r59 far-majors sit between (a thin BLUE background major)
                 # R67.1: faint far / thin child / bold parent — same hue
