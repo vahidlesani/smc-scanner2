@@ -40,7 +40,8 @@ def stub_kv() -> None:
     kv.set_json = lambda k, v: store.__setitem__(k, v)
 
 
-def candidate(symbol: str, tf: str, code: str, side: str, df: pd.DataFrame, bars: int):
+def candidate(symbol: str, tf: str, code: str, side: str, df: pd.DataFrame, bars: int,
+              _spot: bool = False):
     from analysis.models import SignalCandidate
     last = float(df["close"].iloc[-1])
     hi = float(df["high"].tail(60).max())
@@ -58,7 +59,7 @@ def candidate(symbol: str, tf: str, code: str, side: str, df: pd.DataFrame, bars
         entry_zone_top=entry * 1.001, planned_entry=entry, sl=sl,
         tp1=tps[0], tp2=tps[1], rr_tp1=1.2, rr_tp2=2.0, bias=side.upper(),
         trigger_timeframe=tf, market={"asset_class": "CRYPTO", "venue": "BINANCE"},
-        metadata={"market": "FUTURES", "engine": "SWING",
+        metadata={"market": ("SPOT" if _spot else "FUTURES"), "engine": "SWING",
                   "public_code": f"{symbol}-PROBE", "target_ladder": {"targets": tps}})
 
 
@@ -72,6 +73,7 @@ def main() -> None:
     ap.add_argument("--bars", type=int, default=200)
     ap.add_argument("--paths", default="c",
                     help="a=analysis r=ready c=confirmed (csv)")
+    ap.add_argument("--spot", action="store_true", help="render as a SPOT card")
     args = ap.parse_args()
     stub_kv()
     import matplotlib
@@ -82,7 +84,8 @@ def main() -> None:
     for tag in [t.strip() for t in args.paths.split(",") if t.strip()]:
         conf, pre = (tag == "c"), (tag == "r")
         png = M.generate_chart(df, candidate(args.symbol, args.tf, args.setup,
-                                             args.side, df, args.bars),
+                                             args.side, df, args.bars,
+                                             _spot=args.spot),
                                confirmed=conf, preconfirm_tool=pre)
         out = args.out if len(args.paths) == 1 else args.out.replace(".png", f"_{tag}.png")
         open(out, "wb").write(png or b"")

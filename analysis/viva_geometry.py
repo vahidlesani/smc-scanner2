@@ -338,8 +338,24 @@ POLE_MIN_ATR = 3.0
 
 # ═══════════════════════════ فیت دوخطی ═══════════════════════════
 def _fit_line(xs: np.ndarray, ys: np.ndarray, side: str, touches: Sequence[int],
-              first_index: int) -> Line:
-    if len(xs) >= 2:
+              first_index: int, robust: bool = False) -> Line:
+    """THEIL–SEN, not least squares.
+
+    His 10-21 spot card: «چرا ترند کف رو این‌جوری گرفته؟؟ ... خط آبی که من
+    کشیدم» — he drew a FLAT support through the lows, the engine drew a line
+    diving away from them. Least squares lets ONE outlier touch drag the whole
+    edge (a single deep wick pivot tilts a flat floor by several percent over
+    a 150-bar span). The median of all pairwise slopes is unmoved by any
+    minority of outliers, so the edge follows the pivots he sees. The median
+    intercept of the residuals then puts the line through the cluster.
+    """
+    if len(xs) >= 2 and robust:
+        _slopes = [(float(ys[j] - ys[i]) / float(xs[j] - xs[i]))
+                   for i in range(len(xs)) for j in range(i + 1, len(xs))
+                   if float(xs[j] - xs[i]) != 0.0]
+        sl = float(np.median(_slopes)) if _slopes else 0.0
+        ic = float(np.median(ys - sl * xs))
+    elif len(xs) >= 2:
         sl, ic = np.polyfit(xs, ys, 1)
     else:
         sl, ic = 0.0, float(ys[0])
@@ -348,7 +364,7 @@ def _fit_line(xs: np.ndarray, ys: np.ndarray, side: str, touches: Sequence[int],
 
 def _side_lines(L: Dict[str, np.ndarray], pivots: Sequence[Dict], side: str,
                 atr: float, n: int, spikes: Optional[np.ndarray] = None,
-                max_cand: int = 10) -> List[Line]:
+                max_cand: int = 10, robust: bool = False) -> List[Line]:
     want = "H" if side == "upper" else "L"
     vals = L["high"] if side == "upper" else L["low"]
     pts = [p for p in pivots if p["kind"] == want and p["confirmed"]]
@@ -396,7 +412,7 @@ def _side_lines(L: Dict[str, np.ndarray], pivots: Sequence[Dict], side: str,
     for _, p, q, sl, ic, touch in scores[:max_cand]:
         out.append(_fit_line(np.array([t["index"] for t in pts if t["index"] in touch]),
                              np.array([t["price"] for t in pts if t["index"] in touch]),
-                             side, touch, p["index"]))
+                             side, touch, p["index"], robust=robust))
     return out
 
 
@@ -406,7 +422,7 @@ def _shift(ln: Line, off: int) -> Line:
 
 
 def fit_patterns(df: pd.DataFrame, offset: int = 0, lookback: Optional[int] = None,
-                 max_results: int = 6) -> List[PatternResult]:
+                 max_results: int = 6, robust: bool = False) -> List[PatternResult]:
     """کشف دوخطی پایدار: برش lookback فقط پنجرهٔ تحلیل است؛ offset ایندکس جهانی
     را حفظ می‌کند تا خطوط با تغییر زوم/TF جابه‌جا نشوند."""
     if lookback is not None and lookback < len(df):
@@ -419,8 +435,8 @@ def fit_patterns(df: pd.DataFrame, offset: int = 0, lookback: Optional[int] = No
     atr = atr_log(L)
     sp = spike_mask(L, atr)
     piv = zigzag_pivots(L, atr, spikes=sp, confirmed_only=True)
-    ups = _side_lines(L, piv, "upper", atr, n)
-    lows = _side_lines(L, piv, "lower", atr, n)
+    ups = _side_lines(L, piv, "upper", atr, n, robust=robust)
+    lows = _side_lines(L, piv, "lower", atr, n, robust=robust)
     results: List[PatternResult] = []
     for u_l in ups:
         for lo_l in lows:

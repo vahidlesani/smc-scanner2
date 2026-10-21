@@ -7,17 +7,13 @@
 SRC = open("tools/render_spot_cryptocove.py", encoding="utf-8").read()
 
 
-# ── the small setup-style box law ─────────────────────────────────────────
-def test_one_short_box_per_side_at_the_live_edge():
-    assert "_zw32 = int(min(max(12, n // 8), 26))" in SRC
-    assert "_x0z32 = max(_x1z32 - _zw32, x_from)" in SRC
-    assert "_keep32, _seen32 = [], set()" in SRC
-    # the wide full-width band is gone
-    assert '_x0z32 = max(int(_z32.get("x0") or x_from), x_from)' not in SRC
-
-
-def test_the_exit_label_rides_the_box_corner():
-    assert 'ax.text(_x0z32 + 0.6, _zt32, " " + _lbl32 + " "' in SRC
+# ── the small setup-style box law (SUPERSEDED 10-21: no spot zones at all) ─
+def test_the_spot_zone_boxes_are_retired():
+    """His 10-21: «آقا اسپات نباید نواحی رو رندر بگیره.. نواحی فقط ستاپ‌ها است».
+    The R99q33 small-box law targeted zone boxes that no longer exist; the spot
+    canvas keeps only the target strip and the trade box."""
+    assert "_zw32" not in SRC and "_lbl32" not in SRC
+    assert "SPOT RENDERS NO ZONES" in SRC
 
 
 # ── the live price tag sits BESIDE the price ladder ───────────────────────

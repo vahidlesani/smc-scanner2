@@ -105,7 +105,11 @@ def best_pattern(df: pd.DataFrame, tf: str, lookback: Optional[int] = None):
     (کانال = هر دو ضلع هم‌جهت؛ قانون خودش «ترند ماژور»). موتور فقط همین‌جای
     اسپات است — سراغ انجین‌های دیگر نمی‌رود (§5: جراحی در فایل خودِ ستاپ).
     """
-    two = vg.fit_patterns(df, lookback=lookback)
+    # R99q38l (his 10-21 spot card: «چرا ترند کف رو این‌جوری گرفته؟؟ درستش میشه
+    # خط آبی که من کشیدم»): the spot edges are fitted with the Theil–Sen
+    # estimator — the median pairwise slope is unmoved by one deep-wick pivot,
+    # so a flat floor stays flat. Futures keep their own calibration (untouched).
+    two = vg.fit_patterns(df, lookback=lookback, robust=True)
     piv = vg.detect_pivot_patterns(df, lookback=lookback)
     allp = sorted(two + piv, key=lambda r: -r.score)
     if not allp:

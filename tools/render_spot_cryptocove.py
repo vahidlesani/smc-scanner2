@@ -591,71 +591,12 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
             ax.scatter(_nix, [nk.price_at(t) for t in _nix], s=46, zorder=7,
                        facecolors="#FDF49F", edgecolors=INK, linewidths=1.3)
 
-    # ── 5b) R99q32a POI BOXES ON SPOT (his 10-20: «باکس‌های اسپات چرا نیست
-    # روی چارت؟؟»). The spot canvas used to be zone-free by an old
-    # CryptoCave-clean rule; the setup charts never were, and that asymmetry is
-    # what he photographed. The zones are the SAME objects the setup charts use
-    # (`render_kit.detect_zones`) and they go through the same same-TF
-    # refinement law (R99q31c) so a 4h band can never arrive 16× wide on a 1h
-    # spot chart. Only the nearest TWO per side are drawn — a zone stack reads
-    # as noise — and nothing is drawn when detection finds nothing.
-    try:
-        _live31 = float(c[-1])
-        _atr31 = float(np.mean(h[x_from:] - l[x_from:])) if n > x_from else 0.0
-        from analysis.render_kit import detect_zones as _dz32
-        from analysis.zone_refine import prepare_zones as _pz32
-        _zs32 = _dz32(df.reset_index(drop=True), str(a.get("direction") or ""),
-                      float(a.get("entry") or 0), float(a.get("entry") or 0)) or []
-        if _zs32:
-            _zs32 = _pz32(_zs32, df.reset_index(drop=True)) or []
-        _zs32 = [z for z in _zs32 if float(z.get("top") or 0) > float(z.get("bottom") or 0)]
-        _near32 = sorted(_zs32,
-                         key=lambda z: abs(0.5 * (float(z["top"]) + float(z["bottom"])) - _live31))
-        # one box per side, one per kind — «SUPPLY · FLIP» twice on the same
-        # price is not a second level, it is the same level drawn twice.
-        _keep32, _seen32 = [], set()
-        for _z in _near32:
-            _sd = "SUPPLY" if 0.5 * (float(_z["top"]) + float(_z["bottom"])) >= _live31 else "DEMAND"
-            _kk = (_sd, str(_z.get("kind") or "").upper())
-            if _kk in _seen32:
-                continue
-            _seen32.add(_kk)
-            _keep32.append(_z)
-            if len(_keep32) >= 2:
-                break
-        # ── R99q33a SMALL BOX LAW (his 10-20, verbatim: «گفتم یک باکس کوچک مثل
-        # ستاپ‌ها درست کن و بذار جایی که من به مربع کشیدم»). The first cut drew
-        # a full-width band from the zone's origin to the live edge — one pale
-        # wall behind the whole tape, exactly what he circled. A zone is now a
-        # SHORT box (≤ 26 bars) sitting at the live edge, one per side, so the
-        # canvas keeps the tape it had and the box only marks the level.
-        _zw32 = int(min(max(12, n // 8), 26))
-        _x1z32 = n + 1
-        _x0z32 = max(_x1z32 - _zw32, x_from)
-        for _z32 in _keep32:
-            _zb32, _zt32 = float(_z32["bottom"]), float(_z32["top"])
-            if _zt32 <= _zb32:
-                continue
-            _side32 = "SUPPLY" if 0.5 * (_zb32 + _zt32) >= _live31 else "DEMAND"
-            if _side32 == "SUPPLY":
-                _f32, _e32, _t32 = "#F6D6C6", "#E08A5B", "#B4531F"
-            else:
-                _f32, _e32, _t32 = "#D3E6C4", "#6DA35A", "#2F6B33"
-            ax.add_patch(Rectangle((_x0z32, _zb32), max(_x1z32 - _x0z32, 1),
-                                   _zt32 - _zb32, facecolor=_f32, edgecolor=_e32,
-                                   linewidth=0.9, alpha=0.30, zorder=1))
-            # the chip rides the box's own top-right corner, just outside it —
-            # never over a candle, never clipped by the panel edge.
-            _lbl32 = f"{_side32} · {str(_z32.get('kind') or '')}".strip()
-            ax.text(_x0z32 + 0.6, _zt32, " " + _lbl32 + " ",
-                    color=_t32, fontsize=5.8, va="bottom", ha="left",
-                    fontweight="bold", zorder=12,
-                    bbox={"boxstyle": "round,pad=0.20", "facecolor": "#FFFDF2",
-                          "edgecolor": "none", "alpha": 0.80})
-        if os.getenv("VIVA_SPOT_ZONE_DEBUG"):
-            print(f"[q32 spot zones] kept={len(_keep32)} of {len(_zs32)} atr={_atr31:.6g}")
-    except Exception as _z32e:
-        print(f"spot zone draw skipped: {_z32e}")
+    # ── 5b) SPOT RENDERS NO ZONES ─────────────────────────────────────────
+    # His 10-21, verbatim: «آقا اسپات نباید نواحی رو رندر بگیره.. نواحی فقط
+    # ستاپ‌ها است». The R99q32a POI boxes that lived here (SUPPLY/DEMAND/FVG/
+    # FLIP at the live edge) are gone: spot is a BREAK canvas — the shape's
+    # two edges, the target strip and the trade box. Zones belong to the five
+    # setup engines, and there only the same-TF refined ones are drawn.
 
     # ── 6) باکس هدف — نازک و دراز، چسبیده به آخرین کندل.
     #     لانگ = سبز با پیکان بالا؛ شکست نزولی = قرمز با پیکان پایین (قانون
