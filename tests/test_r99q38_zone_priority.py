@@ -79,6 +79,32 @@ def test_a_line_beyond_the_zone_still_confirms_a_pin_long(monkeypatch):
     assert cand2.metadata.get("confirm_edge_source") == "PIN_LINE_WATCH"
 
 
+def test_albrox_takes_the_first_edge_the_market_gives():
+    """q39a: ALBROX may confirm at its ZONE and at its LINE — whichever price
+    reaches first (his 10-21 evening: making it line-only «کند»د it)."""
+    from analysis.confirm_r62 import confirm_edge_at
+    from analysis.models import SignalCandidate
+    def _cand(lower_zone_top):
+        return SignalCandidate(
+            signal_id="R99Q39A-1", symbol="SUIUSDT", style="SWING",
+            setup_code="ALBROX", setup_name="t", strategy_fa="t",
+            direction="LONG", score=8, status="APPROACHING",
+            entry_zone_bottom=lower_zone_top - 0.004, entry_zone_top=lower_zone_top,
+            planned_entry=lower_zone_top - 0.002, sl=1.0100, tp1=1.0500, tp2=1.0600,
+            rr_tp1=1.0, rr_tp2=2.0, bias="BULL", trigger_timeframe="30m",
+            mandatory_gates={"zone": True}, created_at="2026-10-03T16:00:00+00:00",
+            metadata={"atr": 0.01,
+                      "break_line_geo": {"ts": "2026-10-03 10:00", "price": 1.0600,
+                                         "price_back": 1.0500, "back_bars": 8,
+                                         "tf_min": 30.0, "log": False}})
+    when = pd.Timestamp("2026-10-03 18:00")
+    # zone (1.024) nearer than the line (~1.060) -> the ZONE confirms first
+    assert abs(confirm_edge_at(_cand(1.0240), when) - 1.024) < 1e-9
+    # a zone above the line (1.100) -> the LINE (1.08 here) is the first edge
+    e = confirm_edge_at(_cand(1.1000), when)
+    assert abs(e - 1.08) < 1e-6, e
+
+
 def test_albrox_confirms_on_its_line_not_on_a_zone_behind_it():
     from analysis.confirm_r62 import confirm_edge_at
     from analysis.models import SignalCandidate
@@ -96,4 +122,7 @@ def test_albrox_confirms_on_its_line_not_on_a_zone_behind_it():
                                      "tf_min": 30.0, "log": False}})
     when = pd.Timestamp("2026-10-03 20:00")
     edge = confirm_edge_at(cand, when)
-    assert edge > 1.03, edge        # the projected line, not the 1.0240 zone top
+    # q39a: the zone (1.024) is nearer than the projected line, so the zone is
+    # the FIRST edge ALBROX gets — the line stays the preferred reference but
+    # never blocks a zone the market has already cleared.
+    assert abs(edge - 1.0240) < 1e-9, edge

@@ -223,9 +223,37 @@ def confirm_edge_at(candidate, when=None) -> float:
     # has nothing to do with. The line is projected from its own geometry; the
     # zone edge is NEVER the edge of a TECHCLASSIC/TLBREAK chain.
     _setup38 = str(getattr(candidate, "setup_code", "") or "").upper()
-    # ALBROX joins the LINE-first family (his 10-21: «آلبروکس … شکست ترندها
-    # اولویت داره») — a zone is its acceptable fallback, never its first edge.
-    if _setup38 in ("TECHCLASSIC", "TLBREAK", "ALBROX") and source != "LINE" and when is not None:
+    # ── R99q39a (his 10-21 evening: «آلبروکس که قابل تحمل بود هم کند زده
+    # شده»). q38m read «آلبروکس می‌تونه روی نواحی تایید بشه اما شکست ترندها
+    # اولویت داره» as «line ONLY», so a chain whose zone edge was already
+    # cleared kept waiting for a line further ahead — the setup went blunt.
+    # His sentence allows BOTH: the zone IS a valid ALBROX edge, and the trend
+    # break is the PREFERRED reference. The edge is therefore the FIRST one the
+    # market gives in the trade direction (min for LONG, max for SHORT): if the
+    # broken line sits nearer price it triggers first (trend priority), and if
+    # it sits further out the zone still confirms — never blocked, never slowed.
+    if _setup38 == "ALBROX" and when is not None:
+        _line39 = 0.0
+        try:
+            _geo39 = md.get("break_line_geo") or {}
+            if _geo39:
+                _line39 = float(project_line_geo(_geo39, when) or 0.0)
+            if _line39 <= 0:
+                _pg39 = md.get("pattern_geo") or {}
+                _side39 = "upper" if str(getattr(candidate, "direction", "")).upper() == "LONG" else "lower"
+                _g39 = _pg39.get(_side39) or {}
+                if _g39:
+                    _line39 = float(project_line_geo(_g39, when) or 0.0)
+        except Exception:
+            _line39 = 0.0
+        _zone39 = float(static or 0.0) if source == "ZONE" else 0.0
+        if _line39 > 0 and _zone39 > 0:
+            _long39 = str(getattr(candidate, "direction", "") or "").upper() == "LONG"
+            return float(min(_line39, _zone39) if _long39 else max(_line39, _zone39))
+        if _line39 > 0:
+            return float(_line39)
+        return float(_zone39 or static or 0.0)
+    if _setup38 in ("TECHCLASSIC", "TLBREAK") and source != "LINE" and when is not None:
         _geo38 = md.get("break_line_geo") or {}
         if _geo38:
             _v38 = project_line_geo(_geo38, when)
