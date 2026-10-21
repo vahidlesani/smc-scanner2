@@ -38,8 +38,9 @@ def test_the_ladder_is_printed_inside_and_measured():
     assert "_pad36 = 5.0" in MSG
     assert "_ladder_x0 = min(_xs36) / float(fig.bbox.width)" in MSG
     # ranks stay at the last candle; value pills start where the digits end
-    # value pills stand LEFT of the measured ladder edge
-    assert '_atag_px = max(4.0, float(_ladder_x0) * _fw0 - 8.0) if _ladder_x0 else _fw0 - _est0 - 6.0' in MSG
+    # his 10-21 (supersedes «beside the numbers»): the value pills stand ON
+    # the price axis, right-aligned at the canvas edge — like the spot LIVE tag
+    assert "_atag_px = _fw0 - 5.0" in MSG
     assert 'ha="right", zorder=13' in MSG
     assert "_led_x = (float(_ladder_x0) - 0.010) if _ladder_x0 else (_pl32.x1 - 0.012)" in MSG
 

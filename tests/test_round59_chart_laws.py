@@ -49,9 +49,9 @@ def test_far_patterns_paint_blue_near_keep_red_green():
 
 def test_range_near_red_green_far_blue():
     src = open(os.path.join(ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()
-    seg = src.split('if _pat.get("type") == "RANGE":')[1][:1500]
+    seg = src.split('if _pat.get("type") == "RANGE":')[1][:2400]
     assert "_rgfar9" in seg
-    assert 'CHART_THEME["supply"], CHART_THEME["demand"]' in seg
+    assert 'CHART_THEME["supply"]' in seg and 'CHART_THEME["demand"]' in seg
 
 
 def test_solid_to_live_dashed_after_everywhere():
@@ -63,8 +63,10 @@ def test_solid_to_live_dashed_after_everywhere():
 
 def test_zone_far_uses_side_margin_label_no_border():
     src = open(os.path.join(ROOT, "bot", "messages_v7.py"), encoding="utf-8").read()
-    seg = src.split("_away9 = (_zb9 > _cl9z)")[1][:1600]
-    assert "ax.text(count + future * 0.45" in seg   # the notes-side legend
+    seg = src.split("_away9 = (_zb9 > _cl9z)")[1][:2600]
+    # R99q38h (his 10-21): the legend sits at the RIGHT end of its own box —
+    # the old mid-strip anchor landed on the live candles.
+    assert "ax.text(count + future * 0.88" in seg   # the notes-side legend
     assert "linewidth=0" in seg                     # fill only — no border
 
 

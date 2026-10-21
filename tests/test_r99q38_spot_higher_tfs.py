@@ -52,8 +52,9 @@ def test_the_long_tf_confirm_lane_exists():
     from analysis.spot_engine import confirm_frame_break, _confirm_fresh
     src = open(os.path.join(ROOT, "analysis", "spot_engine.py"), encoding="utf-8").read()
     assert "def confirm_frame_break(" in src
-    assert "tf in SPOT_LONG_TFS" in src
-    assert "_bts, _bsb = str(_cf38[\"bar_ts\"]), 0" in src
+    assert "for tf in SPOT_LONG_TFS:" in src
+    assert "def scan_spot_long_frame_confirms(" in src         # the dedicated lane
+    assert "_full = getattr(frames, \"_b\", None) or frames" in src
     # a real first-close beyond a rising lower edge never fires (LONG needs HIGH)
     d = _frame(20, "2026-08-01", "3D")
     cf = _frame(20, "2026-09-20", "1D")

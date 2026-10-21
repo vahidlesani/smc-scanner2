@@ -33,8 +33,7 @@ def test_setup_announce_routing_table(monkeypatch):
     assert mid == "-1002" and r("TLBREAK") == mid
     assert mid != short
     # R99q32b (his 10-20): TECHCLASSIC moved onto the MID board.
-    assert r("TECHCLASSIC") == mid
-    assert r("TECHCLASSIC") != "-1003"
+    assert r("TECHCLASSIC") == "-1003"     # his 10-21: TC rides the LONG board
     assert r("SPOTBREAK") == "" and r("LSR") == "" and r("") == ""
 
 

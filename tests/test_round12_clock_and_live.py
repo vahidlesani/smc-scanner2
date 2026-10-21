@@ -157,7 +157,9 @@ def test_chart_source_marks_the_forming_candle():
     assert "FORMING" in src and "_live_candle(candidate, df)" in src
     # Viva 09-23: live price is a TV-style tag ON the price ladder (never a
     # floating mid-chart pill) + a live date/time stamp under the youngest candle
-    assert '" LIVE {_price(_live_px)} "' in src
+    # R99q38g (his 10-21: «قیمت لایو هم روی محور قیمت تگ بکن»): the LIVE
+    # read-out is an AXIS tag now, not a pill floating in the panel.
+    assert '_axis_tags.append((float(frame["close"].iloc[-1]),' in src
     assert "_live_stamp" in src
     # Viva 09-23/24 (13-chart audit): the LIVE tag sits in the IN-PANEL label
     # column — the old axes-fraction x=1.0 anchor printed it OVER the price

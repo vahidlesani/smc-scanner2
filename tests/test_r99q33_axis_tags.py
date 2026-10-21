@@ -73,21 +73,33 @@ def _inter(a, b):
 
 
 def _tags(fig, r):
-    return [(t.get_text(), t.get_window_extent(r)) for t in fig.axes[0].texts
-            if t.get_text().replace(",", "").replace(".", "").isdigit()]
+    """Value pills only — the single-digit TP RANK chips are not axis pills."""
+    out = []
+    for t in fig.axes[0].texts:
+        txt = t.get_text()
+        if txt.replace(",", "").replace(".", "").isdigit() and len(txt.strip()) > 1:
+            out.append((txt, t.get_window_extent(r)))
+    return out
 
 
 # ── A — the pills live in the band, never on the ladder ───────────────────
-def test_value_pills_never_touch_the_price_numbers():
+def test_value_pills_live_on_the_price_axis():
+    """His 10-21 (supersedes the 10-20 «beside the numbers» law): «تی پی ها روی
+    محور قیمت‌ها همون اعداد تی پی رو روشن بکنه ... دیگه جداگونه لیبل نزن
+    دقیقا شبیه قیمت لایو اسپات». The pills own the axis band — right-aligned at
+    the canvas edge, inside the 3.5 % band, never over the candles."""
     fig = _render()
     r = fig.canvas.get_renderer()
-    ticks = [t.get_window_extent(r) for t in fig.axes[0].get_yticklabels()
-             if t.get_text().strip()]
+    ax = fig.axes[0]
+    ax_right = ax.get_window_extent(r).x1
     tags = _tags(fig, r)
     assert tags, "the confirmed chart must carry its value tags"
     for name, b in tags:
-        assert not any(_inter(b, tb) for tb in ticks), f"{name} on a tick number"
-        assert b.x1 <= fig.bbox.width + 0.5      # and inside the canvas
+        assert b.x1 <= fig.bbox.width + 0.5          # inside the canvas
+        # a pill wider than the 3.5 % band may overhang it by a few pixels —
+        # it is still anchored to the axis edge, never floating in the tape
+        assert b.x0 >= ax_right - 14.0, f"{name} sits left of the axis band"
+        assert b.y0 >= -1 and b.y1 <= fig.bbox.height + 1
 
 
 # ── B — no two pills on top of each other ────────────────────────────────

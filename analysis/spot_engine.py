@@ -449,13 +449,7 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
             # 3d/1w break is only published at ITS OWN close — otherwise the
             # «entry» would be a days-old price. Everything else stays context.
             if not _fresh(d, tf):
-                # ── R99q38c: a 3d/1w shape whose own bucket is older than the
-                # 30 h window is still tradeable while its CONFIRM frame (1d)
-                # has just printed the first close beyond the edge — the exact
-                # law SPOT_CONFIRM_TF encodes. Everything else stays stale.
-                if not (tf in SPOT_LONG_TFS
-                        and _confirm_fresh(frames.get(SPOT_CONFIRM_TF.get(tf, "1d")))):
-                    continue
+                continue
             close = float(d["close"].iloc[-1])
             n = len(d) - 1
             pats = detect_patterns(d, "LONG", log_axis=True)
@@ -486,18 +480,6 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 if not bullish_pattern_ok(_pat62, close, upper):
                     continue
                 eps = 0.02 * atr
-                # ── R99q38c (his 10-21: «۳ روزه و هفتگی هیچ هشداری نمیده»):
-                # on 3d/1w the confirming close is the CONFIRM frame's close —
-                # its first cross of the projected edge. The pattern frame's
-                # own close keeps its own lane below.
-                _cf38 = None
-                if tf in SPOT_LONG_TFS:
-                    _cf38 = confirm_frame_break(d, frames.get(SPOT_CONFIRM_TF.get(tf, "1d")),
-                                                pat, tf, "LONG")
-                    if _cf38:
-                        upper = float(_cf38["edge"])
-                        close = float(_cf38["entry"])
-                        eps = 0.02 * float(_cf38["atr"])
                 if upper is None or close <= upper + eps:
                     continue                      # no valid close above the area yet
                 kind = str(pat.get("type") or "NONE").upper()
@@ -560,10 +542,6 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                 # and must not chase — anything older/أبعد belongs to the
                 # retest lanes, not to a fresh-break confirmation.
                 _chase = (close - float(upper)) / atr if atr > 0 else 99.0
-                if _cf38:
-                    # the confirming close IS the break bar of this lane
-                    _bts, _bsb = str(_cf38["bar_ts"]), 0
-                    _chase = (close - float(upper)) / max(float(_cf38["atr"]), 1e-12)
                 if not spot_break_recency_ok(_bsb, _chase):
                     if len(SPOT_BREAK_BLOCKS) < 200:
                         SPOT_BREAK_BLOCKS.append(
@@ -582,8 +560,6 @@ def scan_spot_symbol(symbol: str, frames: Dict[str, pd.DataFrame],
                     "break_bar_ts": _bts,
                     "break_close": close,
                     "bars_since_break": _bsb,
-                    "confirm_tf": (SPOT_CONFIRM_TF.get(tf) if _cf38 else "same_tf"),
-                    "confirm_bar_ts": (_bts if _cf38 else ""),
                     "pattern_commands": [pat],
                     "spot_pattern_id": spot_pattern_fingerprint(pat),
                     "atr": float(atr),
@@ -1121,6 +1097,120 @@ def build_spot_candidate(item: dict):
         metadata=meta,
     )
     return cand
+
+
+def scan_spot_long_frame_confirms(symbol: str, frames: Dict[str, pd.DataFrame]) -> List[dict]:
+    """R99q38c — the 3d/1w CONFIRM lane (no pin required).
+
+    His 10-21: «ببین چرا اسپات روزانه و ۳ روزه و هفتگی و ۱۲ ساعته هیچ هشداری
+    نمیده؟». 3d/1w buckets only exist once COMPLETE, so their newest bar is up
+    to 3 (7) days old and the same-TF lane (own close, ≤30 h old, break on that
+    very bar) could practically never fire. The urgent/TOHOM lanes that DO read
+    the confirm frame only run for symbols that already carry a watch pin — and
+    the ladder that mints those pins is itself fed by the same stale frame.
+
+    This lane closes the loop without touching either existing law: for each
+    3d/1w shape it asks the CONFIRM frame (SPOT_CONFIRM_TF: 1d) for the FIRST
+    close beyond the projected edge, and publishes it as a normal spot item.
+    Same bullish filters, same risk engine, same freshness rule (the confirm
+    frame's newest closed bar is the one that just printed).
+    """
+    from analysis.render_kit import detect_patterns
+    from analysis.patterns import pattern_info, state_label
+    out: List[dict] = []
+    if not frames:
+        return out
+    # ── R99q38c-2: `frames` may be the per-pass _TfSubset (only the TFs that
+    # were DUE). The pattern frame is due only at its own bucket boundary, so
+    # a view without it must borrow it from the full bundle instead of skipping.
+    _full = getattr(frames, "_b", None) or frames
+
+    def _get(tf):
+        try:
+            v = frames.get(tf)
+            if v is not None and len(v):
+                return v
+        except Exception:
+            pass
+        try:
+            return _full.get(tf)
+        except Exception:
+            return None
+
+    for tf in SPOT_LONG_TFS:
+        d = _get(tf)
+        cf = _get(SPOT_CONFIRM_TF.get(tf, "1d"))
+        if d is None or cf is None or len(d) < 45 or len(cf) < 20:
+            continue
+        if not _confirm_fresh(cf):
+            continue
+        try:
+            d = _sane_ohlcv(d.reset_index(drop=True)).tail(_spot_count(tf)).reset_index(drop=True)
+            atr = _atr(d)
+            if atr <= 0:
+                continue
+            pats = detect_patterns(d, "LONG", log_axis=True)
+            for pat in pats:
+                if pat.get("child") or not pat.get("lines"):
+                    continue
+                _shape = str(pat.get("shape") or "single")
+                if _shape in ("converging", "parallel") and len(pat["lines"]) < 2:
+                    continue
+                if _shape == "single" and str(pat["lines"][0].get("side") or "").upper() != "HIGH":
+                    continue
+                kind = str(pat.get("type") or "NONE").upper()
+                if kind in ("DOUBLE_TOP", "HEAD_SHOULDERS", "WEDGE_RISING", "FLAG_BEAR"):
+                    continue
+                _hit = confirm_frame_break(d, cf, pat, tf, "LONG")
+                if not _hit:
+                    continue
+                upper, entry = float(_hit["edge"]), float(_hit["entry"])
+                _pat62 = pat if pat.get("bias") else {
+                    **pat, "bias": pattern_info(kind).get("bias")}
+                if not bullish_pattern_ok(_pat62, entry, upper):
+                    continue
+                _lower = []
+                for _l in pat["lines"]:
+                    try:
+                        from analysis.render_kit import line_y as _ly3
+                        _lower.append(float(_ly3(_l, len(d) - 1)))
+                    except Exception:
+                        pass
+                sl_struct = _minor_swing_low(d)
+                path = max(entry + (upper - min(_lower)) - entry if _lower else entry * 0.06,
+                           entry * MIN_PATH_PCT_BY_TF.get(tf, 20.0) / 100.0)
+                _risk = spot_risk_levels(entry, upper, _lower, atr, path,
+                                         sl_struct, df_highs=list(d["high"].tail(120)))
+                sl = float(_risk["sl"]) * (1.0 - 0.10 / 100.0)
+                if sl >= entry:
+                    sl = entry * 0.98
+                out.append({
+                    "symbol": symbol.upper(), "tf": tf, "pattern": kind,
+                    "horizon": "LONG",
+                    "pattern_fa": pattern_info(kind)["fa"],
+                    "label": state_label(kind, str(pat.get("break_direction") or "")),
+                    "rule_fa": pattern_info(kind)["rule_fa"],
+                    "entry": entry, "sl": float(sl), "targets": list(_risk["targets"]),
+                    "weights": list(SPOT_WEIGHTS),
+                    "path_pct": round(path / entry * 100.0, 3),
+                    "broken_level": upper,
+                    "break_bar_ts": str(_hit["bar_ts"]),
+                    "break_close": entry,
+                    "bars_since_break": 0,
+                    "confirm_tf": SPOT_CONFIRM_TF.get(tf, "1d"),
+                    "confirm_bar_ts": str(_hit["bar_ts"]),
+                    "long_frame_confirm": True,
+                    "pattern_commands": [pat],
+                    "spot_pattern_id": spot_pattern_fingerprint(pat),
+                    "atr": float(atr),
+                    "mtf_fa": _mtf_bias_fa(frames),
+                    "detected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                })
+                break            # one setup per (symbol, tf)
+        except Exception as exc:
+            print(f"spot long-frame confirm warning {symbol} {tf}: {exc}")
+            continue
+    return out
 
 
 def spot_signals_for(symbol: str, bundle) -> List:

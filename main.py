@@ -1458,6 +1458,25 @@ def run_spot_scan() -> Dict[str, int]:
             for cand in spot_signals_for(symbol, _view15):
                 stats["found"] += 1
                 pending.append(cand)
+            # ── R99q38c: 3d/1w confirm lane. Their buckets are complete-only,
+            # so the same-TF lane can practically never fire on them; their
+            # confirmation is the CONFIRM frame's first close beyond the edge
+            # (his 10-21: «۳ روزه و هفتگی هیچ هشداری نمیده»). Needs no pin.
+            try:
+                from analysis.spot_engine import (scan_spot_long_frame_confirms
+                                                  as _lfc38,
+                                                  build_spot_candidate as _bsc38)
+                if any(str(_t) in ("3d", "1w") for _t in (_tfs_due or ())):
+                    for _it38 in _lfc38(symbol, bundle):
+                        try:
+                            pending.append(_bsc38(_it38))
+                            stats["found"] += 1
+                            stats["long_frame_confirms"] = \
+                                stats.get("long_frame_confirms", 0) + 1
+                        except Exception as _b38:
+                            print(f"long-frame candidate warning {symbol}: {_b38}")
+            except Exception as _l38:
+                print(f"spot long-frame lane warning {symbol}: {_l38}")
             # the ladder rides the SAME fetched frames — zero extra downloads
             try:
                 from analysis.spot_engine import scan_spot_alerts

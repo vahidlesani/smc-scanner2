@@ -1260,6 +1260,30 @@ def _slot_alloc(taken: List[float], y: float, span: float, step: float = 0.034) 
     return y
 
 
+# ── R99q38f ZONE-WIDTH LAW (his 10-21, verbatim: «من حتی در ستاپ‌ها هم نباید
+# نواحی پهن‌تر از عرض ۱ سانتی‌متر ببینم»). A supply/demand box that starts at
+# its detection time and runs to the canvas edge hosed 40-60 % of the width —
+# on his SUI card the teal POI box covered the whole middle of the tape. The
+# DRAWN box is now a compact chip at the live edge: at most ~1 cm of his own
+# screenshot (≈ 14 % of the panel), always ending at the live strip. The
+# detection geometry is untouched — this is paint-side only.
+ZONE_MAX_WIDTH_FRAC = 0.14
+
+
+def _zone_left_edge(zone_end: float, x0: float, span: float = None) -> float:
+    """Clamp a zone's left edge so the drawn box is never wider than the law."""
+    try:
+        _end = float(zone_end)
+        _left = float(x0)
+        _span = float(span) if span else max(20.0, _end + 1.0)
+        _max_w = max(4.0, ZONE_MAX_WIDTH_FRAC * _span)
+        if _end - _left > _max_w:
+            _left = _end - _max_w
+        return max(0.0, _left)
+    except Exception:
+        return float(x0)
+
+
 def _enforce_block_share(ax, px_lo: float, px_hi: float,
                          target: float = 0.72) -> bool:
     """R99q36d — «۷۰ تا ۷۵ درصد ارتفاع چارت» enforced on the FINAL axis.
@@ -3400,9 +3424,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # tool column (LTC/BCH 09-26 screenshots). r37: spot has NO
             # ledger (no tool), so its live price rides the ladder tag.
             if (not confirmed) and (not _is_spot):
-                _right_specs.append((float(_live_px), f" LIVE {_price(_live_px)} ", "#2b2f3a"))
+                # R99q38g: the LIVE read-out is an AXIS tag now (his 10-21:
+                # «قیمت لایو هم روی محور قیمت تگ بکن هم تمیز تر میشه هم روی
+                # پترن و کندل و ابزار نمی‌افته») — no pill inside the panel.
                 _right_slots.append(float(_live_px))
-                # (no axis tag for LIVE — it printed over the axis numbers)
         except Exception as _exc:
             print(f"Chart live-price tag warning: {_exc}")
         ax.tick_params(
@@ -3862,6 +3887,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _x0 = max(0, int(_anchored_x(_z.get("ts0"), zone_start)) - 2)
             else:
                 _x0 = max(zone_start, int(_z.get("x0", zone_start)) - 2)
+            _x0 = _zone_left_edge(zone_end, _x0)
             _bias8 = _z.get("bias") or ("DEMAND" if _dir_key == "LONG" else "SUPPLY")
             _fam8 = _zone_family(_z.get("kind", ""))
             _zb9, _zt9 = float(_z["bottom"]), float(_z["top"])
@@ -3902,9 +3928,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # R99k: diamond glyph (DejaVu-safe; the emoji drew tofu).
                     _lbl9 = ("◆ TARGET · " + _lbl9) if _dir_key == "LONG" \
                         else ("◆ TARGET · " + _lbl9)
-                ax.text(count + future * 0.45, 0.5 * (_zb9 + _zt9),
+                # ── R99q38h (his 10-21: «هیچ لیبل و برچسبی نباید روی کندل‌ها و
+                # هیستوگرام و قیمت‌ها رو بپوشونه»): the TARGET tag used to be
+                # centred in the future strip, so on a short strip it landed
+                # over the live candles. It now sits at the RIGHT end of its
+                # own box, hard against the price ladder — always in the empty
+                # strip, never on a candle.
+                ax.text(count + future * 0.88, 0.5 * (_zb9 + _zt9),
                         _lbl9, color=_t8, fontsize=6.5,
-                        va="center", ha="center", fontweight="bold", zorder=12,
+                        va="center", ha="right", fontweight="bold", zorder=12,
                         bbox={"boxstyle": "round,pad=0.24",
                               "facecolor": CHART_THEME["panel"],
                               "edgecolor": "none", "alpha": 0.82})
@@ -4227,7 +4259,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         for _pat in _draw_pats:
             if _pat.get("type") == "RANGE":
                 # anchored to its oldest tested pivot when it carries a time
-                _range_start = int(_anchored_x(_pat.get("ts0"), zone_start))
+                _range_start = _zone_left_edge(
+                    zone_end, int(_anchored_x(_pat.get("ts0"), zone_start)))
                 _atrR9 = float((frame["high"] - frame["low"]).tail(14).mean())
                 _clR9 = float(frame["close"].iloc[-1])
                 _r_height = float(_pat["hi"]) - float(_pat["lo"])
@@ -5053,6 +5086,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             # the entry triangle and LONG/SHORT position label are gone. The
             # chart keeps only clean price lines/fills; direction remains in
             # the Telegram text and metadata, not over the candles.
+            # ── R99q38f (his 10-21: «نواحی پهن‌تر از عرض ۱ سانتی‌متر نباید
+            # ببینم»): the risk/reward slabs ran up to 20 bars back and hosed
+            # the tape with two giant translucent rectangles. They are compact
+            # chips at the live edge now (≤14 % of the panel); the entry /
+            # stop / TP LINES and the ledger still describe the whole trade.
+            tool_start = int(_zone_left_edge(tool_end, tool_start, span=count))
             ax.fill_between(
                 [tool_start, tool_end],
                 candidate.planned_entry,
@@ -5146,6 +5185,13 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 for _lb, _pc, _c in _items:
                     if (str(_lb).isdigit() or str(_lb) in ("SL", "ENTRY", "FIRST STOP")):
                         _axis_tags.append((float(_pc), _price(_pc), _c))
+            # R99q38g: the live price lights on the axis in every card (the
+            # dark TV tag), placed last so the allocator never hides it.
+            try:
+                _axis_tags.append((float(frame["close"].iloc[-1]),
+                                   _price(float(frame["close"].iloc[-1])), "#2b2f3a"))
+            except Exception:
+                pass
 
             # (Viva 2026-09-11) slanted PROJECTED-SCENARIO arrows removed from
             # confirmed charts too — the tagged TP ladder lines above are the
@@ -6249,7 +6295,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # ladder's measured left edge, over the empty future strip
                     # (his reference charts: the coloured value boxes stand beside
                     # the numbers, never on them, never over a candle).
-                    _atag_px = max(4.0, float(_ladder_x0) * _fw0 - 8.0) if _ladder_x0 else _fw0 - _est0 - 6.0
+                    # ── R99q38g (his 10-21, verbatim: «تی پی ها روی محور قیمت‌ها
+                    # همون اعداد تی پی رو روشن بکنه ... دیگه جداگونه لیبل نزن
+                    # دقیقا شبیه قیمت لایو اسپات که تگ شده روی محور قیمت»).
+                    # The coloured value tags stand ON the price axis now — they
+                    # own the digit slot of their own level (like the spot LIVE
+                    # tag and his own reference charts) instead of floating in
+                    # the tape or beside the numbers.
+                    _atag_px = _fw0 - 5.0
                     _atag_x = max(_atag_px, 1.0) / _fw0
                 except Exception:
                     _atag_x = None
@@ -6263,7 +6316,10 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _rows9: List[List[float]] = []
                 try:
                     _axh0 = float(ax.get_window_extent(_rend0).height) or 1.0
-                    _gap9 = (_hi2 - _lo2) * 13.0 / _axh0
+                    # R99q38g: the pills own the axis band now — their gap is a
+                    # real pixel gap (17 px ≈ one ladder line), not a fixed
+                    # slice of the price span, so nothing hides a ladder number.
+                    _gap9 = (_hi2 - _lo2) * 17.0 / _axh0
                     for _lv9, _pv9, _cv9 in sorted(_axis_tags, key=lambda t: float(t[0])):
                         _rows9.append([min(max(float(_lv9), _lo2), _hi2), _pv9, _cv9])
                     _relayout_pills(_rows9, _lo2, _hi2, _gap9)
@@ -6276,7 +6332,7 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                     # R99l (Viva 10-15: black tags unreadable): the tag
                     # wears its line color, white bold text, larger.
                     ax.text(_atag_x, _yv9, _pv9, transform=_tr9, color="white",
-                            fontsize=7.2, fontweight="bold", va="top",
+                            fontsize=7.2, fontweight="bold", va="center",
                             ha="right", zorder=13,
                             clip_on=False,
                             bbox={"boxstyle": "round,pad=0.28",
@@ -6378,8 +6434,21 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # ── R99q36a: the ledger is anchored to the ladder's MEASURED
                 # left edge, so it ends before the price digits instead of under
                 # them (the value pills of ENTRY/TP now live in that band).
+                # ── R99q38e (his 10-21 SUIIUSDT card, marked with a pink box):
+                # «جای اون قسمتی که اطلاعات ورود و خروج رو پایین سمت چپ نشون
+                # میده کمی بیاد پایین تر روبروی پنل ولوم و هیستوگرام‌ها».
+                # The ledger sat at the BOTTOM OF THE PRICE PANEL, on top of the
+                # histogram; it now lives opposite the volume panel, in the
+                # empty future strip under the last candles — exactly where he
+                # drew the arrow, and where spot's trade box already lives.
                 _led_x = (float(_ladder_x0) - 0.010) if _ladder_x0 else (_pl32.x1 - 0.012)
-                fig.text(_led_x, _pl32.y0 + 0.022,
+                try:
+                    _vpos38 = axes[2].get_position() if len(axes) > 2 else None
+                    _led_y38 = (float(_vpos38.y0) + 0.006) if _vpos38 is not None \
+                        else (_pl32.y0 + 0.022)
+                except Exception:
+                    _led_y38 = _pl32.y0 + 0.022
+                fig.text(_led_x, _led_y38,
                          "\n".join(_rows32),
                          ha="right", va="bottom", fontsize=7.6, linespacing=1.5,
                          color=CHART_THEME["text"], fontweight="bold",
