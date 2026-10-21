@@ -12,9 +12,10 @@ Two jobs, both fail-open (a dead push layer must NEVER touch trading):
   and stored in bot_kv (durable, prod-side) — never in the repo, same law as
   every other token.
 
-* TAIL — a 5s poller over the `signals` lifecycle stamps (confirmed_at,
-  tp1_hit_at, closed_at). Whatever writes a row (any lane, any code path),
-  the app sees it within seconds and the phone gets the push. The pure
+* TAIL — while at least one phone is subscribed, a 5s poller over the
+  `signals` lifecycle stamps (confirmed_at, tp1_hit_at, closed_at). With zero
+  subscribers it sleeps (there is nowhere to push). Whatever writes a row,
+  the subscribed app sees it within seconds. The pure
   classifier lives in `classify_tail_events` so tests need no DB.
 """
 from __future__ import annotations
@@ -30,7 +31,9 @@ _KV_SUBS = "push_subs"
 _KV_SEEN = "push_seen"
 _KV_TAIL = "push_tail"
 _TAIL_SECONDS = 5.0
+_IDLE_TAIL_SECONDS = 300.0
 _SEEN_MAX = 800
+_TAIL_WAKE = threading.Event()
 
 
 # ────────────────────────────── VAPID keys ──────────────────────────────
@@ -88,9 +91,18 @@ def subscribe(subscription: Dict[str, Any]) -> bool:
     if not isinstance(subscription, dict) or not subscription.get("endpoint"):
         return False
     subs = _kv_get(_KV_SUBS, {}) or {}
+    was_empty = not subs
     subs[_endpoint_hash(subscription)] = {
         "sub": subscription, "added_at": time.strftime("%Y-%m-%d %H:%M:%S")}
     _kv_set(_KV_SUBS, subs)
+    if was_empty:
+        # A first subscriber starts from NOW; never replay lifecycle events that
+        # happened while nobody could receive them.
+        _kv_set(_KV_TAIL, {
+            "since": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+    _TAIL_WAKE.set()  # wake the zero-subscriber 5-minute sleep immediately
     return True
 
 
@@ -100,6 +112,7 @@ def unsubscribe(endpoint: str) -> bool:
     if h in subs:
         subs.pop(h)
         _kv_set(_KV_SUBS, subs)
+        _TAIL_WAKE.set()
         return True
     return False
 
@@ -237,16 +250,38 @@ _tail_thread: Optional[threading.Thread] = None
 _tail_stats: Dict[str, Any] = {"at": "", "events": 0, "pushed": 0, "error": "", "subs": 0}
 
 
+def _tail_pass_if_subscribed() -> bool:
+    """Run the expensive DB tail only when a phone can receive its output."""
+    try:
+        count = subscriber_count()
+    except Exception:
+        count = 0
+    if count <= 0:
+        _tail_stats.update({
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "events": 0, "pushed": 0, "error": "", "subs": 0, "idle": 1,
+        })
+        return False
+    try:
+        stats = tail_once()
+        stats["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        stats["subs"] = count
+        stats["idle"] = 0
+        _tail_stats.update(stats)
+    except Exception:
+        pass
+    return True
+
+
 def _tail_loop() -> None:
     while True:
-        try:
-            s = tail_once()
-            s["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            s["subs"] = subscriber_count()
-            _tail_stats.update(s)
-        except Exception:
-            pass
-        time.sleep(_TAIL_SECONDS)
+        active = _tail_pass_if_subscribed()
+        # Measured production state had ZERO push_subs, yet this loop queried
+        # Supabase every 5s (235,031 lifecycle SELECTs). With nobody listening,
+        # sleep 5 minutes; subscribe() wakes the event immediately. Active
+        # subscribers retain the original five-second delivery clock.
+        _TAIL_WAKE.wait(_TAIL_SECONDS if active else _IDLE_TAIL_SECONDS)
+        _TAIL_WAKE.clear()
 
 
 def start_push_tailer() -> None:
