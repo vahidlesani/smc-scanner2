@@ -78,6 +78,29 @@ def find_service(token: str, project_id: str) -> dict | None:
     return None
 
 
+def _wait_deploy(token: str, env_id: str, svc_id: str, minutes: int = 12) -> None:
+    """Print the deployment's life so a failed build is never a mystery."""
+    import time
+    seen = None
+    for _ in range(int(minutes * 6)):
+        d = (((gql(token, 'query($e:String!,$s:String!){serviceInstance(environmentId:$e,serviceId:$s)'
+                         '{latestDeployment{id status createdAt}}',
+                   {"e": env_id, "s": svc_id}).get("data") or {})
+              .get("serviceInstance") or {}).get("latestDeployment") or {})
+        st = d.get("status")
+        if st and st != seen:
+            print("   deploy status:", st, d.get("id", "")[:8], d.get("createdAt", ""))
+            seen = st
+        if st in ("SUCCESS", "ACTIVE", "FAILED", "CRASHED", "REMOVED"):
+            if st in ("SUCCESS", "ACTIVE"):
+                print("   ✅ live")
+            else:
+                print("   check the build logs before retrying")
+            return
+        time.sleep(10)
+    print("   (status poll timed out — Railway may still be queuing; the pause is platform-wide)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
@@ -85,6 +108,8 @@ def main() -> None:
     ap.add_argument("--repo", default="vahidlesani/smc-scanner2")
     ap.add_argument("--branch", default="release")
     ap.add_argument("--env-file", default=os.path.join(os.path.dirname(__file__), "env_r99q41.json"))
+    ap.add_argument("--allow-no-telegram", action="store_true",
+                    help="deploy even when TELEGRAM_TOKEN is empty (service up, bot silent)")
     args = ap.parse_args()
     token = os.environ.get("RAILWAY_API_TOKEN", "").strip()
     if not token:
@@ -138,6 +163,12 @@ def main() -> None:
     if os.path.exists(args.env_file):
         variables = json.load(open(args.env_file))
         print("variables:", len(variables), "from", args.env_file)
+        _empty = [k for k, v in variables.items() if v in ("", None)]
+        if _empty:
+            print("variables WITHOUT a value:", ", ".join(_empty))
+        if "TELEGRAM_TOKEN" in _empty and args.deploy and not args.allow_no_telegram:
+            raise SystemExit("TELEGRAM_TOKEN is empty — the bot would come up silent. "
+                             "Fill it in the env file, or pass --allow-no-telegram.")
         if args.apply:
             ok(gql(token,
                    'mutation($i:VariableCollectionUpsertInput!){variableCollectionUpsert(input:$i)}',
@@ -182,6 +213,7 @@ def main() -> None:
                {"e": env_id, "s": svc_id}),
            "serviceInstanceDeploy")
         print("deploy: requested")
+        _wait_deploy(token, env_id, svc_id)
 
     state.update({"projectId": proj["id"], "environmentId": env_id, "serviceId": svc_id})
     json.dump(state, open(STATE_PATH, "w"), indent=1)
