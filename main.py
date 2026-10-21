@@ -2526,9 +2526,36 @@ def _expected_closed_bar(tf: str) -> str:
         return ""
 
 
+def _candidate_persist_fingerprint(candidate) -> str:
+    """Exact durable payload; unchanged monitor ticks must not rewrite 30 KB."""
+    try:
+        return candidate.to_json()
+    except Exception:
+        return ""
+
+
+def _candidate_lock_fingerprint(candidate) -> tuple:
+    """Only these two fields exist in the durable candidate lock."""
+    return (str(getattr(candidate, "status", "") or ""),
+            str(getattr(candidate, "expires_at", "") or ""))
+
+
 def monitor_candidates() -> Dict[str, int]:
     """Approaching → closed-candle confirmation → confirmed persistence."""
     candidates = get_active_candidates()
+    # Supabase egress/transaction guard (2026-10-22): this loop runs every 10s.
+    # It used to rewrite every ~30 KB candidate and its lock even when not one
+    # byte changed: measured totals were 3,226,798 candidate UPDATEs and
+    # 5,396,448 lock UPDATEs.  Capture the durable state before evaluation and
+    # write only a real transition. Confirmation cadence remains exactly 10s.
+    _persisted_payload = {
+        str(candidate.signal_id): _candidate_persist_fingerprint(candidate)
+        for candidate in candidates
+    }
+    _persisted_lock = {
+        str(candidate.signal_id): _candidate_lock_fingerprint(candidate)
+        for candidate in candidates
+    }
     stats = {"active": len(candidates), "approaching": 0, "confirmed": 0, "cancelled": 0}
     if not candidates:
         return stats
@@ -3113,10 +3140,15 @@ def monitor_candidates() -> Dict[str, int]:
                             f"{candidate.setup_code} | {candidate.signal_id} — retrying next cycle "
                             "(R99q14: a failed post is retried, never silent)"
                         )
-            update_candidate(candidate)
+            _sid42 = str(candidate.signal_id)
+            _payload42 = _candidate_persist_fingerprint(candidate)
+            if _payload42 != _persisted_payload.get(_sid42, ""):
+                update_candidate(candidate)
             try:
+                _lock42 = _candidate_lock_fingerprint(candidate)
                 if candidate.status in {"EDUCATIONAL", "APPROACHING", "CONFIRMED"}:
-                    update_symbol_lock(candidate)
+                    if _lock42 != _persisted_lock.get(_sid42):
+                        update_symbol_lock(candidate)
                 else:
                     release_symbol_lock(candidate.symbol, candidate.signal_id)
             except Exception as exc:
