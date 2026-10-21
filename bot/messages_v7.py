@@ -4059,8 +4059,12 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
         try:
             _geo39c = (_md65.get("pattern_geo") or {})
             _setup39c = str(getattr(candidate, "setup_code", "") or "").upper()
+            _ctx39c = str(_md65.get("tl_context_tf") or "").lower()
+            _trg39c = str(getattr(candidate, "trigger_timeframe", "") or "").lower()
+            _native39c = (not _ctx39c) or (not _trg39c) or (_ctx39c == _trg39c)
             if (not os.getenv("VIVA_LEGACY_CHART_REFIT")
                     and _setup39c in ("TECHCLASSIC", "TLBREAK", "ALBROX")
+                    and _native39c            # R99q40c: trigger-TF geometry only
                     and isinstance(_geo39c, dict) and _geo39c):
                 from analysis.confirm_r62 import project_line_geo as _plg39c
                 _eng39c = []
@@ -6596,7 +6600,11 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             0.055,
             0.922,
             f"{candidate.setup_code}  ·  {_chart_market_label(candidate)}  ·  TRIG {candidate.trigger_timeframe.upper()}"
-            f"{' · PAT ' + str(md.get('tl_context_tf')).upper() if md.get('tl_context_tf') else ''}"
+            # ── R99q40c (his 10-21, verbatim: «فقط بدون باید پترن‌ها و هندسه
+            # درون همون تایم تریگر باشه.... نه از تایم دیگه بیاد»). The header
+            # used to print «PAT 1H» on a 30M card — announcing that the drawn
+            # shape came from another frame. A pattern that is not the
+            # trigger's own is not this chart's geometry, so the token is gone.
             f"  ·  {_setup_identity(candidate)['brand']} ✦ "
             f"{'CONFIRMED' if confirmed else ('READY' if preconfirm_tool else 'ANALYSIS')}",
             color=CHART_THEME["muted"],
