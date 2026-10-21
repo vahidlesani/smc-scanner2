@@ -914,11 +914,35 @@ def evaluate_confirmation(
                 except Exception:
                     _bar_close_ts = None
                 _edge_t = _edge_at(_bar_close_ts, _edge if _edge > 0 else _zone_edge)
+                if _pure_break_setup and not _pre_internal and not _major_src:
+                    # the resolved pattern line wins over the zone fallback
+                    try:
+                        from analysis.confirm_r62 import pattern_line_edge_at as _ple38b
+                        _v38b = float(_ple38b(candidate, _bar_close_ts) or 0)
+                        if _v38b > 0:
+                            _edge_t = _v38b
+                    except Exception:
+                        pass
                 if _pure_break_setup and not _pre_internal and not (_edge > 0):
                     # 10-09 pure-break law: no LINE on the chain → no fast
-                    # lane (a pure-break setup never confirms on a zone edge)
-                    _prev_row = _r
-                    continue
+                    # lane (a pure-break setup never confirms on a zone edge).
+                    # ── R99q38b (his 10-21: «هنوز گیر میکنن پشت نواحی»):
+                    # «no scalar line» is not «no line». Resolve the broken
+                    # edge from the chain's own geometry ONCE, here, and only
+                    # give up when even that is missing.
+                    if _bar_close_ts is not None:
+                        try:
+                            from analysis.confirm_r62 import pattern_line_edge_at as _ple38
+                            _v38 = float(_ple38(candidate, _bar_close_ts) or 0)
+                        except Exception:
+                            _v38 = 0.0
+                        if _v38 > 0:
+                            _edge = _v38
+                            candidate.metadata["confirm_edge_source"] = "PATTERN_LINE"
+                            fast_lane_edge = _v38
+                    if not (_edge > 0):
+                        _prev_row = _r
+                        continue
                 if _pin_line67 is not None and not _major_src:
                     try:
                         _lv67 = float(_project_watch_level(

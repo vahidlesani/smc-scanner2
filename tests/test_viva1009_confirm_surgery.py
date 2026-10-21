@@ -230,3 +230,32 @@ def test_tohom_with_line_edge_still_confirms_early():
     ok, c2, reason = evaluate_tohom_confirmation(cand, df, sub_tf="5m", now=_now)
     assert ok is True, reason
     assert c2.metadata.get("tohom") == 1
+
+
+# ── 6. R99q38b — the LINE, never a zone, when only geometry is stored ─────
+def test_a_techclassic_line_break_confirms_without_the_scalar_line():
+    """His 10-21: «تایید های تی‌ال‌بریک و تکنوکلاسیک هیچ ربطی به نواحی نداره
+    .. هنوز گیر میکنن پشت نواحی». The chain stored the broken LINE as geometry
+    (break_line_geo) but no scalar viva_break_line — the old code fell back to
+    the ZONE edge and waited for a zone. The line close must confirm."""
+    from analysis.quality_engine import evaluate_confirmation
+    rows = (_pad(24, 99.55)
+            + [(99.60, 99.90, 99.50, 99.80, 1000.0),
+               (99.90, 100.45, 99.80, 100.30, 1400.0)])
+    cand = _cand(setup_code="TECHCLASSIC", sl=98.5, tp1=104.0, tp2=107.0,
+                 entry_zone_bottom=95.0, entry_zone_top=95.5,     # a FAR zone
+                 metadata={"atr": 1.0, "touched": True,
+                           "strategy_variant": "VIVA_TLBREAK",
+                           "break_line_geo": {"ts": "2026-10-09 14:00", "price": 99.30,
+                                              "price_back": 99.60, "back_bars": 4.0,
+                                              "tf_min": 15.0, "log": False}})
+    ok, c2, reason = evaluate_confirmation(cand, _frame(rows))
+    assert ok is True, reason
+    assert c2.metadata.get("confirm_edge_source") in ("PATTERN_LINE", "LINE")
+
+
+def test_the_zone_is_still_never_an_edge_for_techclassic():
+    from analysis.confirm_r62 import pattern_line_edge_at
+    cand = _cand(setup_code="TECHCLASSIC", metadata={"atr": 1.0})
+    # a chain with a zone but no line geometry resolves to NOTHING
+    assert pattern_line_edge_at(cand, pd.Timestamp("2026-10-09 08:30")) == 0.0

@@ -195,6 +195,30 @@ def confirm_edge_at(candidate, when=None) -> float:
     """
     md = getattr(candidate, "metadata", None) or {}
     static, source = _static_edge(candidate)
+    # ── R99q38b (his 10-21, verbatim: «تایید های تی‌ال‌بریک و تکنوکلاسیک هیچ
+    # ربطی به نواحی نداره .. هنوز گیر میکنن پشت نواحی»). When the chain stores
+    # the broken LINE as geometry (break_line_geo / pattern_geo) but never
+    # wrote the scalar viva_break_line, _static_edge fell through to the ZONE
+    # edge — so a pure-break setup confirmed only when price reached a zone it
+    # has nothing to do with. The line is projected from its own geometry; the
+    # zone edge is NEVER the edge of a TECHCLASSIC/TLBREAK chain.
+    _setup38 = str(getattr(candidate, "setup_code", "") or "").upper()
+    if _setup38 in ("TECHCLASSIC", "TLBREAK") and source != "LINE" and when is not None:
+        _geo38 = md.get("break_line_geo") or {}
+        if _geo38:
+            _v38 = project_line_geo(_geo38, when)
+            if _v38 > 0:
+                return float(_v38)
+        try:
+            _pg38 = md.get("pattern_geo") or {}
+            _side38 = "upper" if str(getattr(candidate, "direction", "")).upper() == "LONG" else "lower"
+            _g38 = _pg38.get(_side38) or {}
+            if _g38:
+                _v38 = project_line_geo(_g38, when)
+                if _v38 > 0:
+                    return float(_v38)
+        except Exception:
+            pass
     if source == "PIN" or when is None:
         return float(static or 0.0)
     geo = md.get("break_line_geo") or {}
@@ -217,6 +241,51 @@ def confirm_edge_at(candidate, when=None) -> float:
     except Exception:
         pass
     return float(static or 0.0)
+
+
+def pattern_line_edge_at(candidate, when=None) -> float:
+    """R99q38b — the LINE a pure-break setup (TECHCLASSIC/TLBREAK) broke at
+    ``when``, resolved from geometry only. Returns 0.0 when the chain has no
+    line: a ZONE edge is never a substitute for these setups (his 10-21:
+    «تایید های تی‌ال‌بریک و تکنوکلاسیک هیچ ربطی به نواحی نداره»)."""
+    md = getattr(candidate, "metadata", None) or {}
+    for _k in ("viva_breakout_line", "viva_break_line", "viva_watch_line"):
+        try:
+            _v = float(md.get(_k) or 0)
+            if _v > 0:
+                return _v
+        except Exception:
+            pass
+    _geo = md.get("break_line_geo") or {}
+    if _geo and when is not None:
+        try:
+            _v = project_line_geo(_geo, when)
+            if _v > 0:
+                return float(_v)
+        except Exception:
+            pass
+    try:
+        _pg = md.get("pattern_geo") or {}
+        _side = "upper" if str(getattr(candidate, "direction", "")).upper() == "LONG" else "lower"
+        _g = _pg.get(_side) or {}
+        if _g and when is not None:
+            _v = project_line_geo(_g, when)
+            if _v > 0:
+                return float(_v)
+    except Exception:
+        pass
+    try:
+        if md.get("tl_a_ts") and md.get("tl_b_ts") and when is not None:
+            ta, tb = _naive(md["tl_a_ts"]), _naive(md["tl_b_ts"])
+            pa, pb = float(md["tl_a_price"]), float(md["tl_b_price"])
+            dt = (tb - ta).total_seconds()
+            if dt > 0 and pa > 0 and pb > 0:
+                v = pb + (pb - pa) / dt * (_naive(when) - tb).total_seconds()
+                if v > 0:
+                    return float(v)
+    except Exception:
+        pass
+    return 0.0
 
 
 def break_established(md: Dict[str, Any]) -> bool:
