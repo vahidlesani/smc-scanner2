@@ -12,11 +12,24 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from analysis.models import SignalCandidate, iso_now
+
+# Supabase egress guard (2026-10-22): an active payload is ~30 KB and the
+# 10-second confirmation loop used to download every active payload afresh on
+# every pass (plus several more times during discovery).  This process is the
+# sole owner of candidate writes, so keep an immutable JSON write-through cache
+# and reconcile it with Postgres periodically.  Confirmation still runs every
+# 10 seconds; only the redundant network read disappears.
+_ACTIVE_CACHE_LOCK = threading.RLock()
+_ACTIVE_CACHE_NAMESPACE = None
+_ACTIVE_CACHE_LOADED_AT = 0.0
+_ACTIVE_CACHE_ROWS = None  # {signal_id: (created_at, payload_json)} once loaded
 
 def _db_path() -> str:
     # resolved per call: tests and deploy env may set CANDIDATE_DB_PATH AFTER
@@ -37,6 +50,50 @@ def _use_pg() -> bool:
         return bool(getattr(_legacy, "USE_POSTGRES", False))
     except Exception:
         return False
+
+
+def _active_cache_namespace():
+    """Separate test SQLite files and production Postgres in one interpreter."""
+    if _use_pg():
+        try:
+            from database.db import DATABASE_URL
+            return ("postgres", DATABASE_URL)
+        except Exception:
+            return ("postgres", "")
+    return ("sqlite", os.path.abspath(_db_path()))
+
+
+def _active_cache_seconds() -> float:
+    try:
+        return max(10.0, float(os.getenv("CANDIDATE_ACTIVE_CACHE_SECONDS", "300") or 300))
+    except (TypeError, ValueError):
+        return 300.0
+
+
+def _reset_active_cache() -> None:
+    """Force the next read to reconcile with durable storage (tests/maintenance)."""
+    global _ACTIVE_CACHE_NAMESPACE, _ACTIVE_CACHE_LOADED_AT, _ACTIVE_CACHE_ROWS
+    with _ACTIVE_CACHE_LOCK:
+        _ACTIVE_CACHE_NAMESPACE = None
+        _ACTIVE_CACHE_LOADED_AT = 0.0
+        _ACTIVE_CACHE_ROWS = None
+
+
+def _cache_candidate(candidate: SignalCandidate, payload: str) -> None:
+    """Write through only when this namespace already has a complete snapshot."""
+    global _ACTIVE_CACHE_ROWS
+    namespace = _active_cache_namespace()
+    with _ACTIVE_CACHE_LOCK:
+        if _ACTIVE_CACHE_ROWS is None or _ACTIVE_CACHE_NAMESPACE != namespace:
+            return
+        active = str(candidate.status or "").upper() in {"EDUCATIONAL", "APPROACHING"}
+        unexpired = str(candidate.expires_at or "") > iso_now()
+        if active and unexpired:
+            _ACTIVE_CACHE_ROWS[str(candidate.signal_id)] = (
+                str(candidate.created_at or ""), payload,
+            )
+        else:
+            _ACTIVE_CACHE_ROWS.pop(str(candidate.signal_id), None)
 
 
 def _pg_sql(sql: str) -> str:
@@ -185,6 +242,7 @@ def init_candidate_store() -> None:
         _guarded_ddl(conn, "CREATE INDEX IF NOT EXISTS idx_candidates_dedupe "
                            "ON signal_candidates(dedupe_key, status)",
                      "idx_candidates_dedupe")
+    _reset_active_cache()
 
 
 def _trigger_tf(candidate: SignalCandidate) -> str:
@@ -463,6 +521,7 @@ def add_candidate(candidate: SignalCandidate) -> bool:
     if find_similar(candidate):
         return False
     now = iso_now()
+    payload = candidate.to_json()
     with _connection() as conn:
         insert_sql = """
             INSERT INTO signal_candidates
@@ -488,19 +547,23 @@ def add_candidate(candidate: SignalCandidate) -> bool:
                 candidate.score,
                 candidate.status,
                 int(candidate.approaching_sent),
-                candidate.to_json(),
+                payload,
                 candidate.created_at,
                 now,
                 candidate.expires_at,
                 _trigger_tf(candidate),
             ),
         )
-        return conn.total_changes > 0
+        inserted = conn.total_changes > 0
+    if inserted:
+        _cache_candidate(candidate, payload)
+    return inserted
 
 
 def update_candidate(candidate: SignalCandidate, status: Optional[str] = None) -> None:
     if status:
         candidate.status = status
+    payload = candidate.to_json()
     with _connection() as conn:
         conn.execute(
             """
@@ -512,27 +575,59 @@ def update_candidate(candidate: SignalCandidate, status: Optional[str] = None) -
                 candidate.score,
                 candidate.status,
                 int(candidate.approaching_sent),
-                candidate.to_json(),
+                payload,
                 iso_now(),
                 candidate.expires_at,
                 _trigger_tf(candidate),
                 candidate.signal_id,
             ),
         )
+    _cache_candidate(candidate, payload)
 
 
 def get_active_candidates() -> List[SignalCandidate]:
-    now = iso_now()
-    with _connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT payload FROM signal_candidates
-            WHERE status IN ('EDUCATIONAL', 'APPROACHING') AND expires_at>?
-            ORDER BY created_at
-            """,
-            (now,),
-        ).fetchall()
-    return [SignalCandidate.from_json(row["payload"]) for row in rows]
+    """Return active chains without re-downloading their 30 KB payloads.
+
+    The cache contains serialized JSON, not mutable candidate objects, so a
+    caller cannot accidentally alter another thread's state.  All writes in
+    this module update it synchronously; the periodic durable reconciliation is
+    only a safety net for manual SQL or a future second process.
+    """
+    global _ACTIVE_CACHE_NAMESPACE, _ACTIVE_CACHE_LOADED_AT, _ACTIVE_CACHE_ROWS
+    namespace = _active_cache_namespace()
+    now_mono = time.monotonic()
+    now_iso = iso_now()
+    with _ACTIVE_CACHE_LOCK:
+        refresh = (
+            _ACTIVE_CACHE_ROWS is None
+            or _ACTIVE_CACHE_NAMESPACE != namespace
+            or now_mono - _ACTIVE_CACHE_LOADED_AT >= _active_cache_seconds()
+        )
+        if refresh:
+            with _connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT signal_id, created_at, payload FROM signal_candidates
+                    WHERE status IN ('EDUCATIONAL', 'APPROACHING') AND expires_at>?
+                    ORDER BY created_at
+                    """,
+                    (now_iso,),
+                ).fetchall()
+            _ACTIVE_CACHE_NAMESPACE = namespace
+            _ACTIVE_CACHE_LOADED_AT = now_mono
+            _ACTIVE_CACHE_ROWS = {
+                str(row["signal_id"]): (str(row["created_at"] or ""), row["payload"])
+                for row in rows
+            }
+        payloads = [
+            payload for _, payload in sorted(_ACTIVE_CACHE_ROWS.values(), key=lambda item: item[0])
+        ]
+    candidates = [SignalCandidate.from_json(payload) for payload in payloads]
+    return [
+        candidate for candidate in candidates
+        if str(candidate.status or "").upper() in {"EDUCATIONAL", "APPROACHING"}
+        and str(candidate.expires_at or "") > now_iso
+    ]
 
 
 def open_chains_for(symbol: str, setup_code: str, trigger_tf: str | None = None) -> List[SignalCandidate]:
@@ -604,10 +699,12 @@ def set_status(signal_id: str, status: str) -> None:
             return
         candidate = SignalCandidate.from_json(row["payload"])
         candidate.status = status
+        payload = candidate.to_json()
         conn.execute(
             "UPDATE signal_candidates SET status=?, payload=?, updated_at=? WHERE signal_id=?",
-            (status, candidate.to_json(), iso_now(), signal_id),
+            (status, payload, iso_now(), signal_id),
         )
+    _cache_candidate(candidate, payload)
 
 
 def cleanup_candidates(retention_days: int = 7) -> int:
@@ -633,7 +730,9 @@ def cleanup_candidates(retention_days: int = 7) -> int:
             """,
             (resolved_cutoff, confirmed_cutoff, legacy_cutoff),
         )
-        return cursor.rowcount
+        removed = cursor.rowcount
+    _reset_active_cache()
+    return removed
 
 
 def get_resolved_candidates(limit: int = 400) -> List[SignalCandidate]:
