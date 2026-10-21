@@ -1,0 +1,164 @@
+name: railway-bootstrap
+
+# R99q41 — build the service on the NEW Railway account, in one run.
+#
+# Why a workflow and not my sandbox: Railway's own queue decides when
+# `projectCreate` is allowed («Deploys have been paused temporarily» during
+# Free/Hobby pauses). This job can be re-run with one click whenever the queue
+# opens, and it is idempotent — an existing project/service/variable set is
+# reused, never duplicated.
+#
+# Secrets / variables used:
+#   secrets.RAILWAY_API_TOKEN   account token of the NEW Railway account
+#   secrets.VIVA_ENV_JSON       the 62 service variables, as one JSON object
+#
+# Inputs:
+#   deploy=yes   also connect the repo and trigger exactly ONE deployment
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "yes = connect source + deploy one build; no = create only"
+        required: true
+        default: "no"
+      branch:
+        description: "branch to deploy (release = squashed single commit)"
+        required: true
+        default: "release"
+      repo:
+        description: "GitHub repo"
+        required: true
+        default: "vahidlesani/smc-scanner2"
+
+concurrency:
+  group: railway-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: create project + service + variables (one deploy max)
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_JSON: ${{ secrets.VIVA_ENV_JSON }}
+          DO_DEPLOY: ${{ github.event.inputs.deploy }}
+          BRANCH: ${{ github.event.inputs.branch }}
+          REPO: ${{ github.event.inputs.repo }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys, time, urllib.request, urllib.error
+
+          API = "https://backboard.railway.com/graphql/v2"
+          TOKEN = os.environ["RAILWAY_API_TOKEN"]
+          PROJECT_NAME, SERVICE_NAME, ENV_NAME = "viva-signals", "smc-scanner2", "production"
+
+          def gql(q, v=None):
+              req = urllib.request.Request(
+                  API, data=json.dumps({"query": q, "variables": v or {}}).encode(),
+                  method="POST",
+                  headers={"Authorization": "Bearer " + TOKEN,
+                           "Content-Type": "application/json",
+                           "User-Agent": "viva-ops/1.0"})
+              try:
+                  with urllib.request.urlopen(req, timeout=120) as r:
+                      return json.loads(r.read().decode())
+              except urllib.error.HTTPError as e:
+                  return {"http": e.code, "body": e.read().decode(errors="replace")[:600]}
+
+          def must(resp, what):
+              if resp.get("errors") or resp.get("http"):
+                  msg = json.dumps(resp, ensure_ascii=False)[:500]
+                  if "paused temporarily" in msg:
+                      print(f"::warning::{what}: Railway's deploy queue is paused — rerun later")
+                      print("PAUSED"); sys.exit(0)
+                  sys.exit(f"{what} FAILED: {msg}")
+              return resp.get("data") or {}
+
+          # 1 ── project
+          d = gql("{ projects { edges { node { id name } } } }")
+          proj = next((e["node"] for e in (d.get("data") or {}).get("projects", {}).get("edges", [])
+                       if e["node"]["name"] == PROJECT_NAME), None)
+          if proj is None:
+              print("project: creating", PROJECT_NAME)
+              proj = must(gql('mutation($i:ProjectCreateInput!){projectCreate(input:$i)'
+                              '{id name environments{edges{node{id name}}}}}',
+                              {"i": {"name": PROJECT_NAME, "defaultEnvironmentName": ENV_NAME,
+                                     "description": "Viva Signals Pro (migrated 2026-10-21)"}}),
+                          "projectCreate")["projectCreate"]
+          pid = proj["id"]
+          env_id = next((e["node"]["id"] for e in (proj.get("environments") or {}).get("edges", [])
+                         if e["node"]["name"] == ENV_NAME), None)
+          if not env_id:
+              dd = must(gql('query($id:String!){project(id:$id){environments{edges{node{id name}}}}}',
+                            {"id": pid}), "environments")
+              env_id = next(e["node"]["id"] for e in dd["project"]["environments"]["edges"]
+                            if e["node"]["name"] == ENV_NAME)
+          print("project:", pid, "| environment:", env_id)
+
+          # 2 ── service
+          dd = must(gql('query($id:String!){project(id:$id){services{edges{node{id name}}}}}',
+                        {"id": pid}), "services")
+          svc = next((e["node"] for e in dd["project"]["services"]["edges"]
+                      if e["node"]["name"] == SERVICE_NAME), None)
+          if svc is None:
+              print("service: creating", SERVICE_NAME)
+              svc = must(gql('mutation($i:ServiceCreateInput!){serviceCreate(input:$i){id name}}',
+                             {"i": {"projectId": pid, "name": SERVICE_NAME}}),
+                         "serviceCreate")["serviceCreate"]
+          sid = svc["id"]
+          print("service:", sid)
+
+          # 3 ── ALL variables in ONE call (skipDeploys → zero builds here)
+          raw = os.environ.get("ENV_JSON", "").strip()
+          if raw.startswith("${{"):
+              sys.exit("secret VIVA_ENV_JSON is not set")
+          variables = json.loads(raw)
+          must(gql('mutation($i:VariableCollectionUpsertInput!){variableCollectionUpsert(input:$i)}',
+                   {"i": {"projectId": pid, "environmentId": env_id, "serviceId": sid,
+                          "replace": False, "skipDeploys": True, "variables": variables}}),
+               "variables")
+          print(f"variables: {len(variables)} written in one call (no deploy triggered)")
+
+          # 4 ── instance policy: cheap, single replica, health-gated
+          must(gql('mutation($e:String!,$s:String!,$i:ServiceInstanceUpdateInput!)'
+                   '{serviceInstanceUpdate(environmentId:$e,serviceId:$s,input:$i)}',
+                   {"e": env_id, "s": sid,
+                    "i": {"restartPolicyType": "ON_FAILURE", "restartPolicyMaxRetries": 10,
+                          "numReplicas": 1, "healthcheckPath": "/health",
+                          "healthcheckTimeout": 120}}), "serviceInstanceUpdate")
+          print("policy: ON_FAILURE×10 · 1 replica · /health")
+
+          # 5 ── the ONE build
+          if os.environ.get("DO_DEPLOY") == "yes":
+              repo, branch = os.environ["REPO"], os.environ["BRANCH"]
+              print("connecting source:", repo, "@", branch)
+              r = gql('mutation($id:String!,$i:ServiceConnectInput!){serviceConnect(id:$id,input:$i){id}}',
+                      {"id": sid, "i": {"repo": repo, "branch": branch}})
+              if r.get("errors"):
+                  print("::warning::serviceConnect refused (GitHub App not installed on the new "
+                        "account). Fallback: RAILWAY_API_TOKEN=… railway link && railway up --ci")
+                  print(json.dumps(r)[:400])
+              else:
+                  must(gql('mutation($e:String!,$s:String!){serviceInstanceDeploy('
+                           'environmentId:$e,serviceId:$s)}', {"e": env_id, "s": sid}), "deploy")
+                  print("deploy: requested — polling status")
+                  for _ in range(60):
+                      time.sleep(10)
+                      q = gql('query($e:String!,$s:String!){serviceInstance(environmentId:$e,'
+                              'serviceId:$s){latestDeployment{id status}}}',
+                              {"e": env_id, "s": sid})
+                      dep = (((q.get("data") or {}).get("serviceInstance") or {})
+                             .get("latestDeployment") or {})
+                      st = dep.get("status")
+                      if st in ("SUCCESS", "ACTIVE", "FAILED", "CRASHED", "REMOVED"):
+                          print("deployment:", st)
+                          break
+                  else:
+                      print("deployment: still queuing (platform pause)")
+
+          print("DONE  project=%s environment=%s service=%s" % (pid, env_id, sid))
+          print("repo variables for railway-deploy.yml: "
+                f"RAILWAY_PROJECT_ID={pid} RAILWAY_ENVIRONMENT_ID={env_id} RAILWAY_SERVICE_ID={sid}")
+          PY
