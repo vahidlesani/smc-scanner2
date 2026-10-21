@@ -112,7 +112,7 @@ jobs:
 
           # 3 ── ALL variables in ONE call (skipDeploys → zero builds here)
           raw = os.environ.get("ENV_JSON", "").strip()
-          if raw.startswith("${{"):
+          if raw.startswith("$" + "{{"):
               sys.exit("secret VIVA_ENV_JSON is not set")
           variables = json.loads(raw)
           must(gql('mutation($i:VariableCollectionUpsertInput!){variableCollectionUpsert(input:$i)}',

@@ -53,7 +53,7 @@ jobs:
           MISSING = [n for n, v in (("RAILWAY_PROJECT_ID", PID),
                                     ("RAILWAY_ENVIRONMENT_ID", EID),
                                     ("RAILWAY_SERVICE_ID", SID)) if not v]
-          if TOKEN.startswith("${{") or not TOKEN:
+          if TOKEN.startswith("$" + "{{") or not TOKEN:
               sys.exit("RAILWAY_API_TOKEN secret is not set")
           if MISSING:
               sys.exit("missing repository variables: " + ", ".join(MISSING))
