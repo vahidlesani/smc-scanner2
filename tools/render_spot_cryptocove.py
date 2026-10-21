@@ -81,6 +81,60 @@ SPOT_PAD_BELOW_FRAC = 0.60
 SPOT_ENVELOPE_TARGET = 0.72
 
 
+def spot_spike_band(low, high, open_, close, sl, lo: float, hi: float,
+                    k: float = 2.6, recent: int = 40) -> tuple:
+    """R99q38n — vertical zoom when ONE spike owns the window (his 10-21 #17:
+    «کیفیت پترن‌ها رو با زوم عمودی بهتر کن وقتی یک اسپایک کل پنجره رو گرفته»).
+
+    A single 10× wick (a listing pump, a liquidation candle) inside an otherwise
+    quiet 150-bar window drags the candle block to a hairline: the shape, the
+    pivots and the slope are unreadable. When at least one bar's RANGE is
+    > k· the median range, its OPEN and CLOSE both sit inside the normal band
+    (so only a WICK is involved — never a real body), the spike is in the older
+    part of the window (the live tape is never touched) and the remaining band
+    is at most ~55 % of the full span, the band of the normal bars becomes the
+    price window and the spike's wick is what gets clipped.
+
+    Returns (lo, hi, applied).
+    """
+    try:
+        import numpy as _np
+        L = _np.asarray(low[sl], dtype=float)
+        H = _np.asarray(high[sl], dtype=float)
+        O = _np.asarray(open_[sl], dtype=float)
+        C = _np.asarray(close[sl], dtype=float)
+        if len(L) < 60:
+            return lo, hi, False
+        rng = H - L
+        med = float(_np.median(rng))
+        if not (med > 0):
+            return lo, hi, False
+        hot = _np.where(rng > k * med)[0]
+        if len(hot) == 0:
+            return lo, hi, False
+        if int(hot.max()) >= len(L) - 3:                 # a spike at the live edge
+            return lo, hi, False
+        keep = _np.ones(len(L), dtype=bool)
+        keep[hot] = False
+        if int(keep.sum()) < 40:
+            return lo, hi, False
+        b_lo = float(_np.min(L[keep]))
+        b_hi = float(_np.max(H[keep]))
+        r_lo = float(_np.min(L[-recent:]))
+        r_hi = float(_np.max(H[-recent:]))
+        b_lo, b_hi = min(b_lo, r_lo), max(b_hi, r_hi)    # the live tape is never cut
+        # a real BODY outside the band would be cut — refuse that case
+        _oc = _np.concatenate([O[hot], C[hot]])
+        if _oc.min() < b_lo or _oc.max() > b_hi:
+            return lo, hi, False
+        span = float(hi) - float(lo)
+        if span <= 0 or (b_hi - b_lo) >= 0.55 * span:
+            return lo, hi, False                          # nothing to gain
+        return b_lo, b_hi, True
+    except Exception:
+        return lo, hi, False
+
+
 def spot_y_window(d_lo: float, d_hi: float, d_span: float = None) -> tuple:
     """(y_lo, y_hi) with the candle block ≤72% of the panel. Log-space span."""
     try:
@@ -353,6 +407,14 @@ def render(df: pd.DataFrame, a: dict, path: str = None, symbol: str = "",
         x_to = (n - 1) + _need_pad35
     n_show = slice(x_from, n)
     d_lo, d_hi = float(np.min(l[n_show])), float(np.max(h[n_show]))
+    # ── R99q38n: one spike may not flatten the whole picture (his 10-21 #17)
+    _sp_lo, _sp_hi, _sp_applied = spot_spike_band(l, h, o, c, n_show, d_lo, d_hi)
+    if _sp_applied:
+        d_lo, d_hi = _sp_lo, _sp_hi
+        try:
+            a["_spot_spike_zoom"] = True
+        except Exception:
+            pass
     d_span = math.log(max(d_hi, 1e-12)) - math.log(max(d_lo, 1e-12))
     y_lo, y_hi = spot_y_window(d_lo, d_hi, d_span)
 
