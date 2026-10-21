@@ -41,3 +41,7 @@ experiments/results/
 tokens.env
 backup-out/
 *.tgz.gpg
+
+# R99q41 — Railway env payloads carry secrets; never commit them
+ops/railway/env_*.json
+!ops/railway/env_*.example.json

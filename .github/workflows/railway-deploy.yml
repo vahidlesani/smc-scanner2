@@ -1,132 +1,91 @@
 name: railway-deploy
 
-# Manual deploy lane. Railway's GitHub auto-deploy has not created a
-# deployment since a2e29b7 (2026-10-19 03:56), so this workflow calls the
-# Railway GraphQL API directly with the account token.
+# R99q41 — ONE DEPLOY PER RELEASE (his 10-21 order: «کامیت‌ها رو در قالب یک پچ
+# پوش و دیپلوی کن تا دوباره لیمیت نشه»).
 #
-# Verified ids (read from the API, not guessed):
-#   project     dfa19d15-6e78-41b5-8a0c-8ccfc3807add  (delightful-success)
-#   environment a787e251-94d1-4665-8ab4-dc9b92a10a2a  (production)
-#   service     84f5a4ef-117f-4c2d-a460-83bd290ce58a  (smc-scanner2)
+# Discipline encoded here:
+#   * this workflow never runs on push — only on an explicit dispatch;
+#   * it refuses any ref that is not the squashed `release` branch, so a dev
+#     commit on `main` can never reach the platform;
+#   * it refuses to do anything unless confirm=DEPLOY is typed;
+#   * IDs come from repository VARIABLES (Railway account changed on 10-21) —
+#     nothing is hardcoded to the old, limited workspace any more.
+#
+# Repository variables required:
+#   RAILWAY_PROJECT_ID · RAILWAY_ENVIRONMENT_ID · RAILWAY_SERVICE_ID
+# Repository secret required:
+#   RAILWAY_API_TOKEN   (account token of the NEW Railway account)
 on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: "Type DEPLOY to trigger a real deploy"
+        description: "Type DEPLOY to build and deploy (anything else = inspect only)"
         required: true
         default: "inspect"
 
+concurrency:
+  group: railway-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
+    if: github.ref_name == 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PID: ${{ vars.RAILWAY_PROJECT_ID }}
+      EID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+      SID: ${{ vars.RAILWAY_SERVICE_ID }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: inspect + deploy
+      - name: guard + deploy
+        env:
+          CONFIRM: ${{ github.event.inputs.confirm }}
         run: |
           python3 - <<'PY'
-          import json, os, urllib.request, urllib.error
+          import json, os, sys, urllib.request, urllib.error
 
           API = "https://backboard.railway.com/graphql/v2"
-          PID = "dfa19d15-6e78-41b5-8a0c-8ccfc3807add"
-          EID = "a787e251-94d1-4665-8ab4-dc9b92a10a2a"
-          SID = "84f5a4ef-117f-4c2d-a460-83bd290ce58a"
+          TOKEN = os.environ.get("RAILWAY_API_TOKEN", "")
+          PID, EID, SID = os.environ.get("PID", ""), os.environ.get("EID", ""), os.environ.get("SID", "")
+          MISSING = [n for n, v in (("RAILWAY_PROJECT_ID", PID),
+                                    ("RAILWAY_ENVIRONMENT_ID", EID),
+                                    ("RAILWAY_SERVICE_ID", SID)) if not v]
+          if TOKEN.startswith("${{") or not TOKEN:
+              sys.exit("RAILWAY_API_TOKEN secret is not set")
+          if MISSING:
+              sys.exit("missing repository variables: " + ", ".join(MISSING))
 
           def gql(q, v=None):
-              body = json.dumps({"query": q, "variables": v or {}}).encode()
               req = urllib.request.Request(
-                  API, data=body, method="POST",
-                  headers={"Authorization": "Bearer " + os.environ["RAILWAY_API_TOKEN"],
+                  API, data=json.dumps({"query": q, "variables": v or {}}).encode(),
+                  method="POST",
+                  headers={"Authorization": "Bearer " + TOKEN,
                            "Content-Type": "application/json",
-                           # Railway's edge rejects the default python-urllib
-                           # agent with a bare 403 — same reason
-                           # ops/railway/rw_api.py sets one.
                            "User-Agent": "viva-ops/1.0"})
               try:
                   with urllib.request.urlopen(req, timeout=90) as r:
                       return json.loads(r.read().decode())
-              except urllib.error.HTTPError as _he:
-                  _body = _he.read().decode(errors="replace")
-                  print("   !! HTTP", _he.code, "body:", _body[:900])
+              except urllib.error.HTTPError as e:
+                  print("!! HTTP", e.code, e.read().decode(errors="replace")[:600])
                   raise
 
-          print("── project:", json.dumps(
-              gql('query($id:String!){project(id:$id){name}}', {"id": PID}))[:200])
-          # R99q30: WHERE does this service build FROM? Every deploy has been
-          # reporting SUCCESS while the container kept running code older than
-          # the pushed commits (no R99q29 marker, no hourly keys). If the
-          # source is a pinned image or a dead repo link, serviceInstanceDeploy
-          # only restarts it.
-          for _label, _q in (
-              ("service", 'query($id:String!){service(id:$id){id name serviceInstances{edges{node{id source{repo image} }}}}}'),
-              ("instance", 'query($e:String!,$s:String!){serviceInstance(environmentId:$e, serviceId:$s){id source{repo image branch} } }'),
-          ):
-              try:
-                  if _label == "service":
-                      r = gql(_q, {"id": SID})
-                  else:
-                      r = gql(_q, {"e": EID, "s": SID})
-                  print("── " + _label + ":", json.dumps(r)[:1200])
-              except Exception as _qe:
-                  print("── " + _label + " query failed:", str(_qe)[:200])
-          print("── latest deployments:")
-          d = gql("""query($p:String!,$e:String!){
-                     deployments(first:3, input:{projectId:$p, environmentId:$e}){
-                       edges{ node{ id status createdAt } } } }""",
-                  {"p": PID, "e": EID})
-          print(json.dumps(d)[:700])
-
-          # ── R99q30 THE REAL FIX ───────────────────────────────────────
-          # `source.repo` and `source.image` are BOTH null: this service has
-          # no build source at all, so serviceInstanceDeploy only RESTARTS the
-          # last image. That is why every deploy reported SUCCESS while the
-          # container kept running code with no R99q29 marker and no hourly
-          # keys — nothing has been shipped for days.
-          if os.environ.get("CONFIRM") == "SCHEMA":
-              try:
-                  r = gql('{ __schema { mutationType { fields { name args { name type { name kind ofType { name } } } } } } }')
-                  for f in r["data"]["__schema"]["mutationType"]["fields"]:
-                      if f["name"] in ("serviceConnect", "serviceInstanceUpdate"):
-                          print("MUT", f["name"], [(a["name"], a["type"].get("name") or (a["type"].get("ofType") or {}).get("name")) for a in f["args"]])
-              except Exception as _e:
-                  print("schema failed:", str(_e)[:300])
-              for _tn in ("ServiceConnectInput", "ServiceSourceInput", "ServiceInstanceUpdateInput"):
-                  try:
-                      q = '{ __type(name: "%s") { kind inputFields { name type { name kind ofType { name } } } } }' % _tn
-                      rt = gql(q)
-                      _t = (rt.get("data") or {}).get("__type")
-                      if _t:
-                          print("TYPE", _tn, [(f["name"], f["type"].get("name") or (f["type"].get("ofType") or {}).get("name")) for f in (_t.get("inputFields") or [])])
-                  except Exception as _e2:
-                      print("type", _tn, "failed:", str(_e2)[:160])
-              raise SystemExit(0)
-
-          if os.environ.get("CONFIRM") == "CONNECT":
-              src = {"repo": "vahidlesani/smc-scanner2", "branch": "main"}
-              print("── connecting source:", src)
-              out = gql("""mutation($id:String!,$i:ServiceConnectInput!){
-                             serviceConnect(id:$id, input:$i){ id name } }""",
-                        {"id": SID, "i": src})
-              print("── connect result:", json.dumps(out)[:900])
-              chk = gql('query($id:String!){service(id:$id){serviceInstances{edges{node{source{repo image} }}}}}',
-                        {"id": SID})
-              print("── source now:", json.dumps(chk)[:600])
-              raise SystemExit(0)
+          inst = gql('query($e:String!,$s:String!){serviceInstance(environmentId:$e,serviceId:$s)'
+                     '{latestDeployment{id status meta}}}', {"e": EID, "s": SID})
+          print("── instance:", json.dumps(inst)[:400])
+          if inst.get("errors"):
+              sys.exit("cannot read the service instance — check the variables")
 
           if os.environ.get("CONFIRM") != "DEPLOY":
               print("inspect-only run; pass confirm=DEPLOY to deploy")
               raise SystemExit(0)
 
-          m = """mutation($e:String!,$s:String!){
-                   serviceInstanceDeploy(environmentId:$e, serviceId:$s) }"""
-          out = gql(m, {"e": EID, "s": SID})
-          print("── deploy mutation:", json.dumps(out)[:500])
+          out = gql('mutation($e:String!,$s:String!){serviceInstanceDeploy('
+                    'environmentId:$e,serviceId:$s)}', {"e": EID, "s": SID})
+          print("── deploy:", json.dumps(out)[:400])
           if out.get("errors"):
-              raise SystemExit("DEPLOY FAILED: " + json.dumps(out["errors"])[:400])
+              sys.exit("DEPLOY FAILED: " + json.dumps(out["errors"])[:400])
           print("── deploy accepted ✅")
           PY
-        env:
-          CONFIRM: ${{ github.event.inputs.confirm }}
