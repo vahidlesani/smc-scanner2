@@ -5079,8 +5079,14 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             _entry_ts = ((candidate.metadata or {}).get("tool_entry_ts")
                          or getattr(candidate, "confirmed_at", "")
                          or (candidate.metadata or {}).get("tool_anchor_ts"))
-            tool_start = int(_anchored_x(_entry_ts, max(0, count - 20)))
-            tool_start = max(0, min(tool_start, count - 1))
+            # ── R99q38j (his 10-21, twice: «ابزار لانگ و شورت در ابتدای تایید
+            # باید به کندل لایو لنگر بشه» + «حدود ۳ دهم درصد مانده به اینتری به
+            # کندل لایو لنگر میشه»). No fill timestamp → the tool starts ON the
+            # live candle of the confirmation card (it used to float 20 bars
+            # back into the tape); the dashed connector to the entry still
+            # shows where the trade is, so nothing is lost.
+            tool_start = int(_anchored_x(_entry_ts, max(0, count)))
+            tool_start = max(0, min(tool_start, count))
             tool_end = count + 4.5
             # Viva 09-22: «اون فلش سبزِ کوچولو رو روی کندل‌ها و ابزار ننویس» —
             # the entry triangle and LONG/SHORT position label are gone. The
@@ -6397,6 +6403,15 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 _log_axis_decorate(ax)
             except Exception:
                 pass
+        # R99q38i: the tier chip rides the corner stack (his «باید برچسب بخوره»)
+        try:
+            _tier38 = str((candidate.metadata or {}).get("signal_tier") or "").upper()
+            if _tier38 == "GOLDEN":
+                # no emoji in the chart region (DejaVu tofu law) — the chip
+                # speaks text; the Telegram caption carries the star glyph.
+                notes.insert(0, ("◆ GOLDEN SIGNAL", "#B7791F"))
+        except Exception:
+            pass
         if not _is_spot:
             _render_corner_notes(
                 ax, notes, frame, confirmed=confirmed, fig=fig,
@@ -8714,7 +8729,10 @@ def _confirmed_chart_caption(candidate: SignalCandidate) -> str:
     advisory = _fa_advisory(str((candidate.metadata or {}).get("gemini_advisory") or "").strip())
     rows = [
         f"🏷 <b>{_e(badge)}</b>",
-        f"✅ <b>سیگنال تأییدشده</b> • {_e(candidate.setup_code)}",
+        f"✅ <b>سیگنال تأییدشده</b> • {_e(candidate.setup_code)}"
+        + (" • ⭐ <b>گلدن سیگنال</b>"
+           if str((candidate.metadata or {}).get("signal_tier") or "").upper() == "GOLDEN"
+           else ""),
         f"🪙 <b>{_e(candidate.symbol)}</b> • {_e(candidate.trigger_timeframe)} • {_e(style_fa)} • {_e(candidate.direction)}",
         f"🕓 زمان تأیید — ایران: {_iran_time(candidate)}",
         f"📨 زمان ارسال — ایران: {_iran_now()}",

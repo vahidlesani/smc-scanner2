@@ -2191,4 +2191,65 @@ def evaluate_confirmation(
     candidate.status = "CONFIRMED"
     candidate.confirmed_at = candidate.confirmed_at or iso_now()
     candidate.metadata["technical_confirmation_complete"] = True
+    # ── R99q38i GOLDEN SIGNAL (his 10-21, verbatim): «اگر بریک یک ترندلاین و
+    # ناحیه در هریک از ستاپ ها با هم اتفاق بیافته .. و قیمت بالای موینگ ۲۱ و
+    # ۵۱ باشه یا یک سیگنال طلایی محسوب میشه که باید برچسب بخوره». A chain
+    # whose confirmation is BOTH a line break and a zone break, with the price
+    # on the trend side of MA21 and MA51, wears the GOLDEN chip. He named the
+    # family himself (platinum/diamond follow later) — this is the first tier;
+    # the ladder is metadata["signal_tier"] so the next tiers can be added
+    # without touching the confirmation law.
+    try:
+        candidate.metadata["signal_tier"] = _grade_signal_tier(candidate, closed_df)
+    except Exception as _gt38:
+        candidate.metadata.setdefault("signal_tier", "")
+        candidate.metadata["signal_tier_error"] = str(_gt38)[:120]
     return True, candidate, "تأیید ورود با کندل بسته‌شده صادر شد."
+
+
+def _grade_signal_tier(candidate, closed_df) -> str:
+    """GOLDEN when the confirmation breaks a LINE **and** a ZONE with the price
+    above MA21 and MA51 (LONG; mirrored for SHORT). Otherwise "" (no chip)."""
+    try:
+        import pandas as _pd
+        md = candidate.metadata or {}
+        long_side = str(getattr(candidate, "direction", "")).upper() == "LONG"
+        close = float(closed_df["close"].iloc[-1])
+        # (1) a LINE break: the confirmation edge resolved from geometry
+        _line = 0.0
+        try:
+            from analysis.confirm_r62 import pattern_line_edge_at as _ple
+            _line = float(_ple(candidate, _pd.Timestamp(closed_df["timestamp"].iloc[-1])) or 0)
+        except Exception:
+            _line = 0.0
+        if _line <= 0:
+            for _k in ("viva_breakout_line", "viva_break_line", "viva_watch_line"):
+                try:
+                    _line = float(md.get(_k) or 0)
+                except Exception:
+                    _line = 0.0
+                if _line > 0:
+                    break
+        _line_ok = bool(_line > 0)
+        # (2) a ZONE at the same break: the chain's own zone edge lies behind
+        # the confirming close (price left the zone through its far side)
+        _zl = float(getattr(candidate, "entry_zone_bottom", 0) or 0)
+        _zh = float(getattr(candidate, "entry_zone_top", 0) or 0)
+        _zone_ok = bool((long_side and _zh > 0 and close >= _zh)
+                        or ((not long_side) and _zl > 0 and close <= _zl))
+        # (3) trend side of MA21 and MA51
+        _c = closed_df["close"].astype(float)
+        _ma21 = float(_c.rolling(21).mean().iloc[-1])
+        _ma51 = float(_c.rolling(51).mean().iloc[-1])
+        if not (_ma21 == _ma21 and _ma51 == _ma51):      # NaN guard
+            return ""
+        _ma_ok = (close > _ma21 and close > _ma51) if long_side else \
+                 (close < _ma21 and close < _ma51)
+        md["signal_tier_checks"] = {"line": _line_ok, "zone": _zone_ok,
+                                    "ma21": round(_ma21, 8), "ma51": round(_ma51, 8),
+                                    "ma_ok": _ma_ok}
+        if _line_ok and _zone_ok and _ma_ok:
+            return "GOLDEN"
+        return ""
+    except Exception:
+        return ""
