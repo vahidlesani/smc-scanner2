@@ -153,6 +153,26 @@ def project_line_geo(geo: Dict[str, Any], when) -> float:
         return 0.0
 
 
+def line_respects_zone(lv: float, zone_edge: float, is_long: bool) -> bool:
+    """R99q38m — may a drawn line set the trigger for a ZONE-first setup?
+
+    His 10-21, verbatim: «پین وال برعکسش .. ممکنه روی شکست ترند یا پترن تایید
+    بشه اما نواحی اولویت دارن». A pin trade is born at a zone, so a line may
+    only *replace* the zone edge when it sits AT or BEYOND that edge in the
+    trade direction (the ENA K142040 TL broke above the zone and he praised
+    it). A line on the near side of the zone would fire the alert before the
+    price ever left the area the setup names — that is the preemption this
+    guard removes. Fail-open when the zone is unknown.
+    """
+    try:
+        _lv, _ze = float(lv), float(zone_edge or 0.0)
+    except Exception:
+        return True
+    if not (_lv > 0) or _ze <= 0:
+        return True
+    return (_lv >= _ze - 1e-12) if is_long else (_lv <= _ze + 1e-12)
+
+
 def _static_edge(candidate) -> Tuple[float, str]:
     """The priority the one-close law has always used (pin → viva lines →
     major line → zone edge). Returns (level, source)."""
@@ -203,7 +223,9 @@ def confirm_edge_at(candidate, when=None) -> float:
     # has nothing to do with. The line is projected from its own geometry; the
     # zone edge is NEVER the edge of a TECHCLASSIC/TLBREAK chain.
     _setup38 = str(getattr(candidate, "setup_code", "") or "").upper()
-    if _setup38 in ("TECHCLASSIC", "TLBREAK") and source != "LINE" and when is not None:
+    # ALBROX joins the LINE-first family (his 10-21: «آلبروکس … شکست ترندها
+    # اولویت داره») — a zone is its acceptable fallback, never its first edge.
+    if _setup38 in ("TECHCLASSIC", "TLBREAK", "ALBROX") and source != "LINE" and when is not None:
         _geo38 = md.get("break_line_geo") or {}
         if _geo38:
             _v38 = project_line_geo(_geo38, when)

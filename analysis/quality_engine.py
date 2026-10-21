@@ -947,9 +947,25 @@ def evaluate_confirmation(
                     try:
                         _lv67 = float(_project_watch_level(
                             _pin_line67, pd.Timestamp(str(_bar_ts))))
-                        # first of (pin level, drawn line) the market gives
-                        _edge_t = min(_edge_t, _lv67) if _is_long else max(_edge_t, _lv67)
-                        candidate.metadata["confirm_edge_source"] = "PIN_LINE_WATCH"
+                        # ── R99q38m (his 10-21, verbatim): «آلبروکس میتونه روی
+                        # نواحی تایید بشه اما شکست ترندها اولویت داره؛ پین‌وال
+                        # برعکس: ممکنه روی شکست ترند/پترن تایید بشه اما نواحی
+                        # اولویت دارن». The pin family is ZONE-first: a drawn
+                        # line may set the trigger only when it sits AT or
+                        # BEYOND the zone edge in the trade direction (the ENA
+                        # K142040 case — the praised TL broke above the zone).
+                        # A line on the near side of the zone would fire the
+                        # alert before price ever left the zone the setup names.
+                        _zt67 = float(candidate.entry_zone_top if _is_long
+                                      else candidate.entry_zone_bottom) or 0.0
+                        from analysis.confirm_r62 import line_respects_zone as _lrz67
+                        _line_ok67 = _lrz67(_lv67, _zt67, _is_long)
+                        if _line_ok67:
+                            _edge_t = min(_edge_t, _lv67) if _is_long else max(_edge_t, _lv67)
+                            candidate.metadata["confirm_edge_source"] = "PIN_LINE_WATCH"
+                        else:
+                            candidate.metadata["pin_line_blocked_by_zone"] = float(_lv67)
+                            candidate.metadata.setdefault("confirm_edge_source", "ZONE")
                     except Exception:
                         pass
                 if _stale_after:
