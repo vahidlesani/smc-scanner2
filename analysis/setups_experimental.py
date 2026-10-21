@@ -309,6 +309,29 @@ def _intrabar_base(bundle: MarketBundle, context_df, trigger_tf: str, direction:
     return {"bottom": lo, "top": hi, "kind": "INTRABAR_BASE", "bars": n_in}
 
 
+def plan_already_past_target(direction: str, close: float, tp1: float) -> bool:
+    """R99q40e MINT-DISTANCE LAW — «چرا هشدار نمیاد» half two.
+
+    Measured on his ZEC card (viva-ZEC-SW-TLBREAK-10210301-18AF, minted
+    2026-10-21T03:01:46Z): the TLBREAK LONG plan was entry 1147.6914 /
+    TP1 1159.168 / TP2 1205.076 while the tape closed at 1260.58 — the FIRST
+    target was already 100 points behind the market when the card was born.
+    A watch whose own first target is behind price is not a plan; it is a
+    post-mortem. RENDERUSDT, minted four minutes later, was fine (close 1.851
+    vs TP1 1.8625) and did confirm.
+
+    The rule is the mint-time twin of `ENTRY_AFTER_TARGET`: never publish a
+    chain whose first target is already on the wrong side of the live close.
+    """
+    try:
+        c, t = float(close), float(tp1)
+    except Exception:
+        return False
+    if c <= 0 or t <= 0:
+        return False
+    return (c >= t) if str(direction).upper() == "LONG" else (c <= t)
+
+
 def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCandidate]:
     """Live-paper adapter for isolated Viva-TLBREAK v1.
 
@@ -482,6 +505,15 @@ def detect_viva_tlbreak(bundle: MarketBundle, style: str) -> Optional[SignalCand
                               + (final_target - candidate.planned_entry) / 5.0)
         candidate.rr_tp1 = abs(candidate.tp1 - candidate.planned_entry) / max(risk, 1e-12)
         candidate.rr_tp2 = rr_final
+        # ── R99q40e: the plan must be ahead of the market, not behind it.
+        try:
+            if plan_already_past_target(direction, float(trigger_df["close"].iloc[-1]), candidate.tp1):
+                print(f"TLBREAK mint skipped {bundle.symbol} {trigger_tf} {direction}: "
+                      f"close {float(trigger_df['close'].iloc[-1]):.8g} already past TP1 "
+                      f"{float(candidate.tp1):.8g}")
+                continue
+        except Exception:
+            pass
         candidate.score = min(10, max(0, round(viva_score)))
         # Counter trend is allowed only after the lifecycle gets full retest/BOS.
         candidate.mandatory_gates["htf_alignment"] = True  # counter-trend is enforced by retest/BOS lifecycle, not a dead gate
