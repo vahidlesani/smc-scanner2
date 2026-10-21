@@ -4047,6 +4047,83 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
             log_axis=bool(use_log),
             locked=bool(_md65.get("snapshot_locked")),
             allow_refit=_allow_refit65)
+        # ── R99q39c (his 10-21 evening, verbatim: «باید بفهمی چرا تکنو کلاسیک
+        # کلا توی هندسه گیجه؟؟ چرا یک پترن درست هم نمیده؟»). MEASURED: the break
+        # family stores its OWN fitted edges (pattern_geo / break_line_geo) but
+        # never stores render_patterns — so the card re-fitted the shape from
+        # scratch on the chart frame. Two fits, two geometries: the engine
+        # waited for a close beyond line A while the picture drew shape B (or
+        # nothing at all). That is the «گیجه». The engine's own edges are now
+        # drawn (they are timestamp-anchored, so a TF change re-anchors them
+        # exactly); a fresh refit is used only when the chain has no geometry.
+        try:
+            _geo39c = (_md65.get("pattern_geo") or {})
+            _setup39c = str(getattr(candidate, "setup_code", "") or "").upper()
+            if (not os.getenv("VIVA_LEGACY_CHART_REFIT")
+                    and _setup39c in ("TECHCLASSIC", "TLBREAK", "ALBROX")
+                    and isinstance(_geo39c, dict) and _geo39c):
+                from analysis.confirm_r62 import project_line_geo as _plg39c
+                _eng39c = []
+                for _side39c, _key in (("HIGH", "upper"), ("LOW", "lower")):
+                    _g39c = _geo39c.get(_key) or {}
+                    if not isinstance(_g39c, dict) or not _g39c.get("ts"):
+                        continue
+                    _ts39c, _p139c = str(_g39c["ts"]), float(_g39c.get("price") or 0.0)
+                    _a39c = str(_g39c.get("a_ts") or _ts39c)
+                    _pa39c = float(_plg39c(_g39c, _a39c) or 0.0)
+                    if not (_p139c > 0 and _pa39c > 0):
+                        continue
+                    _eng39c.append({"side": _side39c,
+                                    "log_fit": bool(_g39c.get("log")),
+                                    "points": [{"ts": _a39c, "price": _pa39c},
+                                               {"ts": _ts39c, "price": _p139c}]})
+                if _eng39c:
+                    # the engine's OWN label first: `pattern_type` is rewritten
+                    # by the naming layer, and a renamed FLAG would make the
+                    # painter treat a validated channel as a mini-flag (skipped).
+                    # NEVER `pattern_type`: the chart refit rewrites it, so it
+                    # carries the shape the refit guessed, not the one the
+                    # engine validated.
+                    # The LABEL is the law's verdict on the ENGINE'S OWN two
+                    # lines (never a stale name the refit left in metadata):
+                    # the same two lines the engine traded, named by the same
+                    # classifier every other lane uses.
+                    _ptype39c = "TRENDLINE"
+                    try:
+                        if len(_eng39c) >= 2:
+                            import types as _t39
+                            def _shim39(_ln):
+                                _p0, _p1 = _ln["points"][0], _ln["points"][-1]
+                                _x0 = float(np.searchsorted(
+                                    pd.to_datetime(frame["timestamp"]).to_numpy(),
+                                    pd.Timestamp(str(_p0["ts"])).to_datetime64(), side="left"))
+                                _x1 = float(np.searchsorted(
+                                    pd.to_datetime(frame["timestamp"]).to_numpy(),
+                                    pd.Timestamp(str(_p1["ts"])).to_datetime64(), side="left"))
+                                _sl = ((float(_p1["price"]) - float(_p0["price"])) /
+                                       (_x1 - _x0)) if abs(_x1 - _x0) > 1e-9 else 0.0
+                                return _t39.SimpleNamespace(
+                                    slope=_sl, first_index=_x0, last_index=_x1,
+                                    price_at=lambda X, _a=_p0, _s=_sl, _x=_x0:
+                                        float(_a["price"]) + _s * (float(X) - _x))
+                            from analysis.pattern_engine import classify_shape as _cs39
+                            _slug39 = str(_cs39(_shim39(_eng39c[0]), _shim39(_eng39c[1]),
+                                                len(frame) - 1, df=frame) or "")
+                            if _slug39 and _slug39.upper() not in ("NONE", "TRENDLINE"):
+                                _ptype39c = _slug39
+                    except Exception as _n39:
+                        _ptype39c = "TRENDLINE"
+                    _draw_pats = ([{"type": _ptype39c, "lines": _eng39c,
+                                    "engine_geometry": True}]
+                                  if len(_eng39c) >= 2 else
+                                  [{"type": "TRENDLINE", "child": True,
+                                    "lines": _eng39c, "engine_geometry": True}])
+        except Exception as _e39c:
+            print(f"[q39c] engine geometry skipped: {_e39c}")
+        if os.getenv("VIVA_Q39C_DEBUG"):
+            print(f"[q39c] setup={locals().get('_setup39c')} ptype={locals().get('_ptype39c')} n_eng={len(locals().get('_eng39c') or [])} "
+                  f"geo={(list((_md65.get('pattern_geo') or {}).keys()) if isinstance(_md65.get('pattern_geo'), dict) else None)} "
+                  f"draw={[(p.get('type'), len(p.get('lines') or []), p.get('engine_geometry')) for p in _draw_pats]}")
         # r59 FAR-MAJOR PRESERVE (Viva: «الگوی ماژورِ دورتر معتبرتر است» +
         # «الگوهای ماژور آبی کشیده بشن»): when the r51 window-refit replaced
         # the stored set, a classic shape FAR from the live price (>2.5×ATR,
@@ -4757,7 +4834,8 @@ def generate_chart(df: pd.DataFrame, candidate: SignalCandidate, confirmed: bool
                 # two-point segment they always had.
                 _ln["x1"] = float(count)      # r59.2: paint THROUGH live
                 # Viva Anti-Vertical & Mini-Pattern Guard:
-                _is_mini_flag = str(_pat.get("type") or "").upper().startswith(("FLAG", "PENNANT"))
+                _is_mini_flag = (str(_pat.get("type") or "").upper().startswith(("FLAG", "PENNANT"))
+                                 and not _pat.get("engine_geometry"))
                 # Relax slope limit to 2.2 ATR per bar to allow authentic momentum breakout lines
                 _is_too_steep = (_atr9 > 0 and abs(_sl) > 2.2 * _atr9)
                 _is_too_short = (_xend8 - _xa < 12 and not _ln.get("points"))
