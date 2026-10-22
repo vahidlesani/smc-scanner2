@@ -10,7 +10,8 @@ Supabase egress guard (2026-10-22): scanner, spot and web paths used to perform
 more than two million one-key SELECTs over the measured statistics window.
 The combined service is the writer for these keys, so durable values are kept
 as immutable JSON strings in a process-local write-through cache and reconciled
-periodically. Decoding on every return prevents callers from mutating the cache.
+periodically. Decoding on every return prevents callers from mutating the cache;
+a bounded LRU retains only the hot working set from the large historical table.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ import json
 import os
 import threading
 import time
+from collections import OrderedDict
 from typing import Any
 
 from database.candidate_store import _active_cache_namespace, _connection, _use_pg
@@ -25,7 +27,7 @@ from database.candidate_store import _active_cache_namespace, _connection, _use_
 _TABLE_READY = {"done": False}
 _KV_CACHE_LOCK = threading.RLock()
 _KV_CACHE_NAMESPACE = None
-_KV_CACHE = {}  # key -> (raw JSON string or None for missing, loaded monotonic time)
+_KV_CACHE = OrderedDict()  # key -> (raw JSON or None, loaded monotonic time)
 
 
 def _cache_seconds() -> float:
@@ -35,15 +37,30 @@ def _cache_seconds() -> float:
         return 900.0
 
 
+def _cache_max_entries() -> int:
+    try:
+        return max(64, int(os.getenv("BOT_KV_CACHE_MAX_ENTRIES", "4096") or 4096))
+    except (TypeError, ValueError):
+        return 4096
+
+
 def _cache_namespace_locked():
     """Reset automatically when tests switch SQLite files/backends."""
     global _KV_CACHE_NAMESPACE, _KV_CACHE
     namespace = _active_cache_namespace()
     if namespace != _KV_CACHE_NAMESPACE:
         _KV_CACHE_NAMESPACE = namespace
-        _KV_CACHE = {}
+        _KV_CACHE = OrderedDict()
         _TABLE_READY["done"] = False
     return namespace
+
+
+def _cache_put_locked(key: str, blob: Any, loaded_at: float) -> None:
+    """Update one immutable value and bound memory for long-lived workers."""
+    _KV_CACHE[key] = (blob, loaded_at)
+    _KV_CACHE.move_to_end(key)
+    while len(_KV_CACHE) > _cache_max_entries():
+        _KV_CACHE.popitem(last=False)
 
 
 def _reset_cache() -> None:
@@ -51,7 +68,7 @@ def _reset_cache() -> None:
     global _KV_CACHE_NAMESPACE, _KV_CACHE
     with _KV_CACHE_LOCK:
         _KV_CACHE_NAMESPACE = None
-        _KV_CACHE = {}
+        _KV_CACHE = OrderedDict()
 
 
 def _decode(blob: Any, default: Any) -> Any:
@@ -86,6 +103,7 @@ def get_json(key: str, default: Any = None) -> Any:
         _cache_namespace_locked()
         cached = _KV_CACHE.get(key)
         if cached is not None:
+            _KV_CACHE.move_to_end(key)
             stale = cached[0]
             if now - cached[1] < _cache_seconds():
                 return _decode(stale, default)
@@ -96,7 +114,7 @@ def get_json(key: str, default: Any = None) -> Any:
         blob = str(row["value"]) if row else None
         with _KV_CACHE_LOCK:
             _cache_namespace_locked()
-            _KV_CACHE[key] = (blob, now)
+            _cache_put_locked(key, blob, now)
         return _decode(blob, default)
     except Exception as exc:
         print(f"bot_kv get {key} degraded: {exc}")
@@ -115,6 +133,7 @@ def set_json(key: str, value: Any) -> bool:
             cached = _KV_CACHE.get(key)
             if (cached is not None and cached[0] == blob
                     and time.monotonic() - cached[1] < _cache_seconds()):
+                _KV_CACHE.move_to_end(key)
                 return True  # unchanged fresh local state needs no Supabase write
         upsert = (
             """INSERT INTO bot_kv (key, value, updated_at) VALUES (?, ?, ?)
@@ -128,7 +147,7 @@ def set_json(key: str, value: Any) -> bool:
             conn.execute(upsert, (key, blob, iso_now()))
         with _KV_CACHE_LOCK:
             _cache_namespace_locked()
-            _KV_CACHE[key] = (blob, time.monotonic())
+            _cache_put_locked(key, blob, time.monotonic())
         return True
     except Exception as exc:
         print(f"bot_kv set {key} degraded: {exc}")

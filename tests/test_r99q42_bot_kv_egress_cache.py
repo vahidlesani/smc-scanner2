@@ -56,3 +56,13 @@ def test_bot_kv_is_immutable_write_through_and_periodically_reconciled(tmp_path,
     clock["now"] += 901
     assert kv.get_json("probe", {})["nested"]["value"] == 2
     assert calls["select"] == 2
+
+    # Production has tens of thousands of historical keys; the process cache
+    # must retain only the hot working set rather than grow for its lifetime.
+    monkeypatch.setenv("BOT_KV_CACHE_MAX_ENTRIES", "64")
+    with kv._KV_CACHE_LOCK:
+        for n in range(65):
+            kv._cache_put_locked(f"bound-{n}", "{}", clock["now"])
+        assert len(kv._KV_CACHE) == 64
+        assert "bound-0" not in kv._KV_CACHE
+        assert "bound-64" in kv._KV_CACHE
