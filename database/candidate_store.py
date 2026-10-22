@@ -65,9 +65,11 @@ def _active_cache_namespace():
 
 def _active_cache_seconds() -> float:
     try:
-        return max(10.0, float(os.getenv("CANDIDATE_ACTIVE_CACHE_SECONDS", "300") or 300))
+        # One scanner process owns every write and updates the cache instantly;
+        # this 15-minute read is reconciliation for manual SQL only.
+        return max(10.0, float(os.getenv("CANDIDATE_ACTIVE_CACHE_SECONDS", "900") or 900))
     except (TypeError, ValueError):
-        return 300.0
+        return 900.0
 
 
 def _reset_active_cache() -> None:

@@ -37,16 +37,16 @@ def test_pending_plan_rows_are_reused_until_a_lifecycle_write(monkeypatch):
     realtime.invalidate_pending_rows()
 
 
-def test_phantom_integrity_sweep_is_five_minute_not_five_second(monkeypatch):
+def test_phantom_integrity_sweep_defaults_to_fifteen_minutes(monkeypatch):
     clock = {"now": 100.0}
     monkeypatch.setattr(realtime.time, "monotonic", lambda: clock["now"])
-    monkeypatch.setenv("PHANTOM_SWEEP_SECONDS", "300")
+    monkeypatch.delenv("PHANTOM_SWEEP_SECONDS", raising=False)
     realtime._PHANTOM_SWEEP_AT = 0.0
 
     assert realtime._phantom_sweep_due() is True
     clock["now"] += 5
     assert realtime._phantom_sweep_due() is False
-    clock["now"] += 296
+    clock["now"] += 896
     assert realtime._phantom_sweep_due() is True
 
 

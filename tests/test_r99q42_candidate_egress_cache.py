@@ -34,6 +34,12 @@ def _candidate() -> SignalCandidate:
     )
 
 
+def test_active_payload_reconciliation_defaults_to_fifteen_minutes(monkeypatch):
+    monkeypatch.delenv("CANDIDATE_ACTIVE_CACHE_SECONDS", raising=False)
+    import database.candidate_store as store
+    assert store._active_cache_seconds() == 900.0
+
+
 def test_active_payload_is_read_once_then_kept_write_through(tmp_path, monkeypatch):
     monkeypatch.setenv("CANDIDATE_DB_BACKEND", "sqlite")
     monkeypatch.setenv("CANDIDATE_DB_PATH", str(tmp_path / "candidate-cache.sqlite"))

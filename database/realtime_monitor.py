@@ -49,9 +49,10 @@ def _phantom_sweep_due() -> bool:
     """Integrity repair is periodic, not a 5-second full-table monitor."""
     global _PHANTOM_SWEEP_AT
     try:
-        interval = max(60.0, float(os.getenv("PHANTOM_SWEEP_SECONDS", "300") or 300))
+        # Lifecycle writers already invalidate locally; this is a safety net.
+        interval = max(60.0, float(os.getenv("PHANTOM_SWEEP_SECONDS", "900") or 900))
     except (TypeError, ValueError):
-        interval = 300.0
+        interval = 900.0
     now = time.monotonic()
     with _PHANTOM_SWEEP_LOCK:
         if _PHANTOM_SWEEP_AT and now - _PHANTOM_SWEEP_AT < interval:
