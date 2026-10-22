@@ -159,29 +159,16 @@ def void_phantom_positions() -> int:
 
 
 def pending_filled_count() -> int:
-    """R67.2 cost gate: how many filled PENDING positions exist right now.
+    """Cost gate backed by the same durable plan cache as the price lane.
 
-    The 5-second realtime lane exists ONLY to catch price-touch TP/SL/trail
-    events for LIVE positions («fresh ticker path»). With zero filled
-    positions it has nothing to detect — the caller skips the venue ticker
-    fetch entirely (one bulk HTTP + JSON parse every 5s = ~17k calls/day of
-    pure waste). One indexed COUNT is the replacement cost. Fail-open: any
-    DB problem returns 1 so the lane keeps running exactly as before.
+    Local fill/TP/SL/candle writers invalidate that cache immediately, so a
+    live position keeps the five-second ticker clock without paying for a
+    separate PostgreSQL COUNT every five seconds.  External/manual SQL is
+    reconciled on the short ``REALTIME_DB_CACHE_SECONDS`` interval. Fail-open
+    preserves the execution lane if the cache cannot be read.
     """
     try:
-        truth = "TRUE" if legacy_db.USE_POSTGRES else "1"
-        with legacy_db.db_cursor() as cursor:
-            # Viva Railway Cost Control: Only monitor live positions from last 48 hours
-            # Stale unclosed signals from months ago must not trigger infinite 5s venue ticker fetches!
-            cursor.execute(f"""
-                SELECT COUNT(*) FROM signals
-                WHERE confirmed={truth} AND confirmation_sent={truth}
-                  AND status='CONFIRMED' AND result='PENDING'
-                  AND entry_filled={truth} AND strategy_version={legacy_db._ph()}
-                  AND confirmed_at >= NOW() - INTERVAL '48 hours'
-            """, (SETTINGS.strategy_version,))
-            row = cursor.fetchone()
-        return int(row[0] or 0)
+        return len(_pending_filled_rows())
     except Exception:
         return 1
 

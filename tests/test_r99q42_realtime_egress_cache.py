@@ -5,6 +5,21 @@ import database.realtime_monitor as realtime
 import database.repository_v7 as repository
 
 
+def test_five_second_cost_gate_reuses_the_durable_plan_cache(monkeypatch):
+    calls = {"rows": 0}
+
+    def cached_rows():
+        calls["rows"] += 1
+        return [("sig-1",)]
+
+    monkeypatch.setattr(realtime, "_pending_filled_rows", cached_rows)
+    assert realtime.pending_filled_count() == 1
+    assert calls["rows"] == 1
+    source = inspect.getsource(realtime.pending_filled_count)
+    assert "_pending_filled_rows()" in source
+    assert "SELECT" not in source
+
+
 def test_pending_plan_rows_are_reused_until_a_lifecycle_write(monkeypatch):
     calls = {"select": 0}
     sample = [("sig-1", "BTCUSDT", "LONG", 100.0, 98.0, 5, 20.0,
